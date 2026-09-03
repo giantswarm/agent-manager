@@ -1,0 +1,26 @@
+apiVersion: v2
+name: agent-manager
+description: Agent lifecycle service for the Agent Platform — creates, updates, deletes and inspects kagent agents as Flux HelmReleases of the agent chart, validated against the chart schema, exposed as REST and MCP
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://github.com/giantswarm/agent-manager
+icon: https://s.giantswarm.io/app-icons/giantswarm/1/dark.svg
+sources:
+  - https://github.com/giantswarm/agent-manager
+keywords:
+  - mcp
+  - agents
+  - kagent
+  - flux
+  - agent-platform
+maintainers:
+  - name: Giant Swarm
+    email: team-bumblebee@giantswarm.io
+annotations:
+  # Team ownership (OCI-compliant format)
+  io.giantswarm.application.team: bumblebee
+  # Target audience: customers (default catalog)
+  io.giantswarm.application.audience: customers
+  # App is managed/supported by Giant Swarm
+  io.giantswarm.application.managed: "true"

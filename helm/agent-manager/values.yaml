@@ -1,0 +1,202 @@
+# Default values for agent-manager.
+
+# -- Number of replicas. The service is stateless (every read goes to the API
+# server); more than one is fine.
+replicaCount: 1
+
+image:
+  # -- Image registry.
+  registry: gsoci.azurecr.io
+  # -- Image repository.
+  repository: giantswarm/agent-manager
+  # -- Image pull policy.
+  pullPolicy: IfNotPresent
+  # -- Image tag. Defaults to the chart appVersion.
+  tag: ""
+
+# -- Image pull secrets.
+imagePullSecrets: []
+# -- Override the chart name.
+nameOverride: ""
+# -- Override the fully qualified release name (the umbrella chart pins the
+# Service name through this).
+fullnameOverride: ""
+
+kagent:
+  # -- Namespace agents are created in and listed from by default — the
+  # namespace kagent watches and the platform admin provisions ModelConfigs
+  # into. The Role for HelmReleases, OCIRepositories, Agents, ModelConfigs,
+  # Deployments, pods and events is created here.
+  namespace: kagent
+  # -- Additional namespaces agents may live in (multi-tenant installs). Each
+  # gets the same Role; requests naming any other namespace are refused.
+  additionalNamespaces: []
+  # -- kagent.dev API version for Agents and ModelConfigs; `auto` discovers
+  # the server's preferred version.
+  apiVersion: auto
+
+agentChart:
+  # -- OCI URL of the `agent` chart every agent renders from. Written into the
+  # shared per-namespace OCIRepository, and read at run time for the chart's
+  # values.schema.json that validates every create/update before it is
+  # applied (the pod needs egress to this registry; the embedded copy of the
+  # schema is the offline fallback).
+  ociUrl: oci://gsoci.azurecr.io/charts/giantswarm/agent
+  # -- Semver range the OCIRepository tracks. `x.x.x` follows every published
+  # release, the platform convention for agents.
+  semver: x.x.x
+  # -- How often the registry is re-read for the latest version and schema.
+  refresh: 10m
+
+flux:
+  # -- HelmRelease.spec.interval of every composed agent.
+  helmReleaseInterval: 10m
+  # -- OCIRepository.spec.interval of the shared chart source.
+  ociRepositoryInterval: 30m
+  # -- HelmRelease.spec.serviceAccountName, required by a Flux multi-tenancy
+  # admission policy in tenant namespaces; empty omits it.
+  helmReleaseServiceAccount: ""
+  # -- helm.toolkit.fluxcd.io API version composed into HelmReleases; `auto`
+  # discovers it.
+  helmReleaseApiVersion: auto
+  # -- source.toolkit.fluxcd.io API version composed into OCIRepositories;
+  # `auto` discovers it.
+  ociRepositoryApiVersion: auto
+
+skills:
+  # -- GitHub repositories whose SKILL.md files list_skills offers (the same
+  # list the portal's create flow reads). Empty turns the skills capability off.
+  repositories:
+    - https://github.com/giantswarm/agent-skills
+  github:
+    # -- GitHub API base URL.
+    apiUrl: https://api.github.com
+    tokenSecret:
+      # -- Existing Secret in the release namespace with a GitHub token
+      # (private skill repositories, higher rate limit). Empty: anonymous.
+      name: ""
+      # -- Key of the token in that Secret.
+      key: token
+  # -- How long a repository's discovered skills are reused.
+  cacheTTL: 5m
+
+mcp:
+  # -- Serve the MCP streamable-HTTP endpoint alongside the REST API.
+  enabled: true
+  # -- MCP endpoint path.
+  path: /mcp
+
+muster:
+  mcpServer:
+    # -- Register this server with muster by rendering an
+    # `mcpservers.muster.giantswarm.io` CR in the release namespace. Tools then
+    # appear as `x_<name>_<tool>`.
+    enabled: false
+    # -- MCPServer CR name (drives the tool prefix).
+    name: agent-manager
+    # -- Start the server connection when muster initializes.
+    autoStart: true
+    # -- Human-readable description shown by muster.
+    description: Agent lifecycle (create, update, delete, status, skills, model configs) for the Agent Platform
+    # -- Extra labels on the MCPServer CR.
+    labels: {}  # @schema additionalProperties: true
+
+httpRoute:
+  # -- Expose the service through a Gateway API HTTPRoute.
+  enabled: false
+  # -- parentRefs of the HTTPRoute (required when enabled).
+  parentRefs: []  # @schema item: object ; itemProperties: {name: {type: string}, namespace: {type: string}, sectionName: {type: string}, kind: {type: string}, group: {type: string}, port: {type: integer}}
+  # -- Hostnames matched by the route.
+  hostnames: []
+  # -- Annotations on the HTTPRoute.
+  annotations: {}  # @schema additionalProperties: true
+  # -- Labels on the HTTPRoute.
+  labels: {}  # @schema additionalProperties: true
+
+networkPolicy:
+  # -- Create a Kubernetes NetworkPolicy for the pod (off when an umbrella
+  # chart renders the policies).
+  enabled: false
+  # -- Namespaces allowed to reach the API (label kubernetes.io/metadata.name).
+  # Empty allows ingress from the release namespace only.
+  ingressNamespaces: []
+  # -- Allow egress to the Kubernetes API server.
+  allowKubeAPI: true
+  # -- Allow egress on 443 to every destination: the chart registry (schema
+  # and version) and GitHub (skills). Vanilla NetworkPolicy cannot select by
+  # name; narrow with egressCIDRs instead when the addresses are known.
+  allowInternet: true
+  # -- Extra egress CIDRs.
+  egressCIDRs: []
+
+serviceAccount:
+  # -- Create a ServiceAccount.
+  create: true
+  # -- Annotations on the ServiceAccount.
+  annotations: {}  # @schema additionalProperties: true
+  # -- ServiceAccount name (generated when empty).
+  name: ""
+
+rbac:
+  # -- Create the Role/RoleBinding in `kagent.namespace` (and every
+  # `kagent.additionalNamespaces` entry): HelmReleases and OCIRepositories
+  # read/write; Agents, ModelConfigs, Deployments, pods and events read.
+  create: true
+
+# -- Annotations on the pod.
+podAnnotations: {}  # @schema additionalProperties: true
+# -- Labels on the pod.
+podLabels: {}  # @schema additionalProperties: true
+
+# -- Pod security context.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
+  seccompProfile:
+    type: RuntimeDefault
+
+# -- Container security context.
+securityContext:
+  readOnlyRootFilesystem: true
+  allowPrivilegeEscalation: false
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  capabilities:
+    drop:
+      - ALL
+  seccompProfile:
+    type: RuntimeDefault
+
+service:
+  # -- Service type.
+  type: ClusterIP
+  # -- Service port (container listens on 8080).
+  port: 8080
+
+# -- Container resources.
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+
+logging:
+  # -- Enable debug logging.
+  verbose: false
+
+# -- Extra container arguments.
+extraArgs: []
+# -- Extra environment variables.
+extraEnv: []  # @schema item: object ; itemProperties: {name: {type: string}, value: {type: string}, valueFrom: {type: object, additionalProperties: true}}
+
+# -- Node selector.
+nodeSelector: {}  # @schema additionalProperties: true
+# -- Tolerations.
+tolerations: []  # @schema item: object ; itemProperties: {key: {type: string}, operator: {type: string}, value: {type: string}, effect: {type: string}, tolerationSeconds: {type: integer}}
+# -- Affinity.
+affinity: {}  # @schema additionalProperties: true

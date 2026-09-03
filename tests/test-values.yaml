@@ -1,0 +1,7 @@
+# Values for chart tests / local installs on kind (agentlab): agents live in
+# the kagent namespace, no muster registration (the umbrella turns it on).
+kagent:
+  namespace: kagent
+muster:
+  mcpServer:
+    enabled: false

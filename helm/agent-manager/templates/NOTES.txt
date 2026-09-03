@@ -1,0 +1,17 @@
+agent-manager is running; agents are managed in {{ include "agent-manager.managedNamespaces" . }}.
+
+  REST API : http://{{ include "agent-manager.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.service.port }}/api/v1
+  Contract : http://{{ include "agent-manager.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.service.port }}/api/v1/openapi.yaml
+{{- if .Values.mcp.enabled }}
+  MCP      : http://{{ include "agent-manager.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.service.port }}{{ .Values.mcp.path }}
+{{- end }}
+
+Try it:
+
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "agent-manager.fullname" . }} 8080:{{ .Values.service.port }}
+  curl -s localhost:8080/api/v1/info
+  curl -s localhost:8080/api/v1/agents
+{{- if .Values.muster.mcpServer.enabled }}
+
+muster registers the server as MCPServer "{{ .Values.muster.mcpServer.name }}"; tools appear as x_{{ .Values.muster.mcpServer.name }}_<tool>.
+{{- end }}

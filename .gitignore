@@ -1,0 +1,11 @@
+# local builds
+/agent-manager
+/agent-manager-linux-*
+/agent-manager-darwin-*
+/agent-manager-windows-*
+/build/
+/dist/
+# editor / OS
+.idea/
+.vscode/
+.DS_Store

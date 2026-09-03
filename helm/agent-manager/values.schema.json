@@ -1,0 +1,545 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+        "affinity": {
+            "type": "object",
+            "description": "Affinity.",
+            "additionalProperties": true
+        },
+        "agentChart": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "ociUrl": {
+                    "type": "string",
+                    "description": "OCI URL of the `agent` chart every agent renders from. Written into the shared per-namespace OCIRepository, and read at run time for the chart's values.schema.json that validates every create/update before it is applied (the pod needs egress to this registry; the embedded copy of the schema is the offline fallback)."
+                },
+                "refresh": {
+                    "type": "string",
+                    "description": "How often the registry is re-read for the latest version and schema."
+                },
+                "semver": {
+                    "type": "string",
+                    "description": "Semver range the OCIRepository tracks. `x.x.x` follows every published release, the platform convention for agents."
+                }
+            }
+        },
+        "baseDomain": {
+            "type": "string"
+        },
+        "bootstrapMode": {
+            "type": "object",
+            "additionalProperties": true
+        },
+        "chartOperator": {
+            "type": "object",
+            "additionalProperties": true
+        },
+        "ciliumNetworkPolicy": {
+            "type": "object",
+            "additionalProperties": true
+        },
+        "cluster": {
+            "type": "object",
+            "additionalProperties": true
+        },
+        "clusterCA": {
+            "type": "string"
+        },
+        "clusterCIDR": {
+            "type": "string"
+        },
+        "clusterDNSIP": {
+            "type": "string"
+        },
+        "clusterID": {
+            "type": "string"
+        },
+        "extraArgs": {
+            "type": "array",
+            "description": "Extra container arguments."
+        },
+        "extraEnv": {
+            "type": "array",
+            "description": "Extra environment variables.",
+            "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "name": {
+                        "type": "string"
+                    },
+                    "value": {
+                        "type": "string"
+                    },
+                    "valueFrom": {
+                        "type": "object",
+                        "additionalProperties": true
+                    }
+                }
+            }
+        },
+        "flux": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "helmReleaseApiVersion": {
+                    "type": "string",
+                    "description": "helm.toolkit.fluxcd.io API version composed into HelmReleases; `auto` discovers it."
+                },
+                "helmReleaseInterval": {
+                    "type": "string",
+                    "description": "HelmRelease.spec.interval of every composed agent."
+                },
+                "helmReleaseServiceAccount": {
+                    "type": "string",
+                    "description": "HelmRelease.spec.serviceAccountName, required by a Flux multi-tenancy admission policy in tenant namespaces; empty omits it."
+                },
+                "ociRepositoryApiVersion": {
+                    "type": "string",
+                    "description": "source.toolkit.fluxcd.io API version composed into OCIRepositories; `auto` discovers it."
+                },
+                "ociRepositoryInterval": {
+                    "type": "string",
+                    "description": "OCIRepository.spec.interval of the shared chart source."
+                }
+            }
+        },
+        "fullnameOverride": {
+            "type": "string",
+            "description": "Override the fully qualified release name (the umbrella chart pins the Service name through this)."
+        },
+        "gcpProject": {
+            "type": "string"
+        },
+        "global": {
+            "type": [
+                "object",
+                "null"
+            ],
+            "description": "Global values shared between all subcharts",
+            "$comment": "Added automatically by 'helm schema' to allow this chart to be used as a Helm dependency, as this schema would otherwise not allow Helm's special 'global' values key."
+        },
+        "httpRoute": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "annotations": {
+                    "type": "object",
+                    "description": "Annotations on the HTTPRoute.",
+                    "additionalProperties": true
+                },
+                "enabled": {
+                    "type": "boolean",
+                    "description": "Expose the service through a Gateway API HTTPRoute."
+                },
+                "hostnames": {
+                    "type": "array",
+                    "description": "Hostnames matched by the route."
+                },
+                "labels": {
+                    "type": "object",
+                    "description": "Labels on the HTTPRoute.",
+                    "additionalProperties": true
+                },
+                "parentRefs": {
+                    "type": "array",
+                    "description": "parentRefs of the HTTPRoute (required when enabled).",
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": {
+                            "group": {
+                                "type": "string"
+                            },
+                            "kind": {
+                                "type": "string"
+                            },
+                            "name": {
+                                "type": "string"
+                            },
+                            "namespace": {
+                                "type": "string"
+                            },
+                            "port": {
+                                "type": "integer"
+                            },
+                            "sectionName": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "image": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "pullPolicy": {
+                    "type": "string",
+                    "description": "Image pull policy."
+                },
+                "registry": {
+                    "type": "string",
+                    "description": "Image registry."
+                },
+                "repository": {
+                    "type": "string",
+                    "description": "Image repository."
+                },
+                "tag": {
+                    "type": "string",
+                    "description": "Image tag. Defaults to the chart appVersion."
+                }
+            }
+        },
+        "imagePullSecrets": {
+            "type": "array",
+            "description": "Image pull secrets."
+        },
+        "kagent": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "additionalNamespaces": {
+                    "type": "array",
+                    "description": "Additional namespaces agents may live in (multi-tenant installs). Each gets the same Role; requests naming any other namespace are refused."
+                },
+                "apiVersion": {
+                    "type": "string",
+                    "description": "kagent.dev API version for Agents and ModelConfigs; `auto` discovers the server's preferred version."
+                },
+                "namespace": {
+                    "type": "string",
+                    "description": "Namespace agents are created in and listed from by default — the namespace kagent watches and the platform admin provisions ModelConfigs into. The Role for HelmReleases, OCIRepositories, Agents, ModelConfigs, Deployments, pods and events is created here."
+                }
+            }
+        },
+        "logging": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "verbose": {
+                    "type": "boolean",
+                    "description": "Enable debug logging."
+                }
+            }
+        },
+        "mcp": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "enabled": {
+                    "type": "boolean",
+                    "description": "Serve the MCP streamable-HTTP endpoint alongside the REST API."
+                },
+                "path": {
+                    "type": "string",
+                    "description": "MCP endpoint path."
+                }
+            }
+        },
+        "muster": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "mcpServer": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "description": {
+                            "type": "string",
+                            "description": "Human-readable description shown by muster."
+                        },
+                        "autoStart": {
+                            "type": "boolean",
+                            "description": "Start the server connection when muster initializes."
+                        },
+                        "enabled": {
+                            "type": "boolean",
+                            "description": "Register this server with muster by rendering an `mcpservers.muster.giantswarm.io` CR in the release namespace. Tools then appear as `x_<name>_<tool>`."
+                        },
+                        "labels": {
+                            "type": "object",
+                            "description": "Extra labels on the MCPServer CR.",
+                            "additionalProperties": true
+                        },
+                        "name": {
+                            "type": "string",
+                            "description": "MCPServer CR name (drives the tool prefix)."
+                        }
+                    }
+                }
+            }
+        },
+        "nameOverride": {
+            "type": "string",
+            "description": "Override the chart name."
+        },
+        "networkPolicy": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "allowInternet": {
+                    "type": "boolean",
+                    "description": "Allow egress on 443 to every destination: the chart registry (schema and version) and GitHub (skills). Vanilla NetworkPolicy cannot select by name; narrow with egressCIDRs instead when the addresses are known."
+                },
+                "allowKubeAPI": {
+                    "type": "boolean",
+                    "description": "Allow egress to the Kubernetes API server."
+                },
+                "egressCIDRs": {
+                    "type": "array",
+                    "description": "Extra egress CIDRs."
+                },
+                "enabled": {
+                    "type": "boolean",
+                    "description": "Create a Kubernetes NetworkPolicy for the pod (off when an umbrella chart renders the policies)."
+                },
+                "ingressNamespaces": {
+                    "type": "array",
+                    "description": "Namespaces allowed to reach the API (label kubernetes.io/metadata.name). Empty allows ingress from the release namespace only."
+                }
+            }
+        },
+        "nodeSelector": {
+            "type": "object",
+            "description": "Node selector.",
+            "additionalProperties": true
+        },
+        "podAnnotations": {
+            "type": "object",
+            "description": "Annotations on the pod.",
+            "additionalProperties": true
+        },
+        "podLabels": {
+            "type": "object",
+            "description": "Labels on the pod.",
+            "additionalProperties": true
+        },
+        "podSecurityContext": {
+            "type": "object",
+            "description": "Pod security context.",
+            "additionalProperties": false,
+            "properties": {
+                "fsGroup": {
+                    "type": "integer"
+                },
+                "runAsGroup": {
+                    "type": "integer"
+                },
+                "runAsNonRoot": {
+                    "type": "boolean"
+                },
+                "runAsUser": {
+                    "type": "integer"
+                },
+                "seccompProfile": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "type": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "provider": {
+            "type": "string"
+        },
+        "rbac": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "create": {
+                    "type": "boolean",
+                    "description": "Create the Role/RoleBinding in `kagent.namespace` (and every `kagent.additionalNamespaces` entry): HelmReleases and OCIRepositories read/write; Agents, ModelConfigs, Deployments, pods and events read."
+                }
+            }
+        },
+        "replicaCount": {
+            "type": "integer",
+            "description": "Number of replicas. The service is stateless (every read goes to the API server); more than one is fine."
+        },
+        "resources": {
+            "type": "object",
+            "description": "Container resources.",
+            "additionalProperties": false,
+            "properties": {
+                "limits": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "cpu": {
+                            "type": "string"
+                        },
+                        "memory": {
+                            "type": "string"
+                        }
+                    }
+                },
+                "requests": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "cpu": {
+                            "type": "string"
+                        },
+                        "memory": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "securityContext": {
+            "type": "object",
+            "description": "Container security context.",
+            "additionalProperties": false,
+            "properties": {
+                "allowPrivilegeEscalation": {
+                    "type": "boolean"
+                },
+                "capabilities": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "drop": {
+                            "type": "array",
+                            "items": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                },
+                "readOnlyRootFilesystem": {
+                    "type": "boolean"
+                },
+                "runAsGroup": {
+                    "type": "integer"
+                },
+                "runAsNonRoot": {
+                    "type": "boolean"
+                },
+                "runAsUser": {
+                    "type": "integer"
+                },
+                "seccompProfile": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "type": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "service": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "type": {
+                    "type": "string",
+                    "description": "Service type."
+                },
+                "port": {
+                    "type": "integer",
+                    "description": "Service port (container listens on 8080)."
+                }
+            }
+        },
+        "serviceAccount": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "annotations": {
+                    "type": "object",
+                    "description": "Annotations on the ServiceAccount.",
+                    "additionalProperties": true
+                },
+                "create": {
+                    "type": "boolean",
+                    "description": "Create a ServiceAccount."
+                },
+                "name": {
+                    "type": "string",
+                    "description": "ServiceAccount name (generated when empty)."
+                }
+            }
+        },
+        "skills": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "cacheTTL": {
+                    "type": "string",
+                    "description": "How long a repository's discovered skills are reused."
+                },
+                "github": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "apiUrl": {
+                            "type": "string",
+                            "description": "GitHub API base URL."
+                        },
+                        "tokenSecret": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "properties": {
+                                "key": {
+                                    "type": "string",
+                                    "description": "Key of the token in that Secret."
+                                },
+                                "name": {
+                                    "type": "string",
+                                    "description": "Existing Secret in the release namespace with a GitHub token (private skill repositories, higher rate limit). Empty: anonymous."
+                                }
+                            }
+                        }
+                    }
+                },
+                "repositories": {
+                    "type": "array",
+                    "description": "GitHub repositories whose SKILL.md files list_skills offers (the same list the portal's create flow reads). Empty turns the skills capability off.",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "subscriptionID": {
+            "type": "string"
+        },
+        "tolerations": {
+            "type": "array",
+            "description": "Tolerations.",
+            "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "effect": {
+                        "type": "string"
+                    },
+                    "key": {
+                        "type": "string"
+                    },
+                    "operator": {
+                        "type": "string"
+                    },
+                    "tolerationSeconds": {
+                        "type": "integer"
+                    },
+                    "value": {
+                        "type": "string"
+                    }
+                }
+            }
+        }
+    }
+}

@@ -1,29 +1,154 @@
-# General Go template repository
+# agent-manager
 
-This is a general template repository containing some basic files every GitHub repo owned by Giant Swarm should have.
+[![CircleCI](https://dl.circleci.com/status-badge/img/gh/giantswarm/agent-manager/tree/main.svg?style=shield)](https://dl.circleci.com/status-badge/redirect/gh/giantswarm/agent-manager/tree/main)
 
-Note also these more specific repositories:
+Agent lifecycle service for the Giant Swarm Agent Platform: the write surface
+for **agents themselves**, the sibling of [model-manager](https://github.com/giantswarm/model-manager)
+(models) next to muster's own management tools (MCP servers, workflows).
 
-- [template-app](https://github.com/giantswarm/template-app)
-- [gitops-template](https://github.com/giantswarm/gitops-template)
-- [python-app-template](https://github.com/giantswarm/python-app-template)
+On the platform an agent is a Flux `HelmRelease` of the
+[`agent` chart](https://github.com/giantswarm/agent) — one release renders one
+kagent `Agent` — that renders from the shared per-namespace `OCIRepository` of
+that chart, tracking it by semver range. That is exactly what the portal's
+create flow composes; agent-manager composes the same two objects from a
+small, curated argument set, validates the values against the chart's
+`values.schema.json` **before** anything is applied, and reads an agent back
+from its Agent CR, its owning HelmRelease (Flux provenance labels) and the
+Deployment kagent runs for it.
 
-## Creating a new repository
+The same operations are exposed twice from one process:
 
-Please do not use the `Use this template` function in the GitHub web UI.
+- **REST/JSON** under `/api/v1` for the portal backend — contract in
+  [`api/openapi.yaml`](api/openapi.yaml), also served at `/api/v1/openapi.yaml`.
+- **MCP** (streamable HTTP, `/mcp`) for muster — tools `get_info`,
+  `list_agents`, `get_agent`, `create_agent`, `update_agent`, `delete_agent`,
+  `get_agent_status`, `validate_agent`, `list_model_configs`, `list_skills`
+  (through muster: `x_agent-manager_<tool>`). Every tool description says
+  whether it writes and what it writes; the read-only and destructive
+  annotations are set.
 
-Check out the according [handbook article](https://handbook.giantswarm.io/docs/dev-and-releng/repository/go/) for better instructions.
+Part of the [Agent Control Plane epic](https://github.com/giantswarm/giantswarm/issues/36796)
+("create and manage versioned agents"): the reconciler half is the `agent`
+chart plus Flux helm-controller, this is the MCP-server-writer half.
 
-### Some suggestions for your README
+## API at a glance
 
-After you have created your new repository, you may want to add some of these badges to the top of your README.
+| Operation | REST | MCP tool | Writes |
+|---|---|---|---|
+| Version, chart (OCI URL, semver range, latest version, schema in use), managed namespaces, capabilities, identity | `GET /api/v1/info` | `get_info` | no |
+| Agents of a namespace (Agent CRs + HelmReleases of the chart not rendered yet) | `GET /api/v1/agents?namespace=` | `list_agents` | no |
+| One agent with its HelmRelease values | `GET /api/v1/agents/{ns}/{name}` | `get_agent` | no |
+| Create: OCIRepository (when missing) + HelmRelease, after schema and ModelConfig validation | `POST /api/v1/agents` | `create_agent` | HelmRelease, OCIRepository |
+| Update: merge into the HelmRelease values, validate, update | `PATCH /api/v1/agents/{ns}/{name}[?force=true]` | `update_agent` | HelmRelease |
+| Delete: the HelmRelease; the OCIRepository only when nothing else references it | `DELETE /api/v1/agents/{ns}/{name}[?force=true]` | `delete_agent` | HelmRelease, OCIRepository, (bare Agent with force) |
+| Status verdict: Agent + HelmRelease conditions/history, Deployment, pods (waiting reasons), Warning events | `GET /api/v1/agents/{ns}/{name}/status` | `get_agent_status` | no |
+| Dry run of create/update: composed manifests + every violation | `POST /api/v1/agents/validate` | `validate_agent` | no |
+| kagent ModelConfigs of a namespace | `GET /api/v1/modelconfigs?namespace=` | `list_model_configs` | no |
+| Skills (`SKILL.md`) of the configured GitHub repositories | `GET /api/v1/skills[?repository=&ref=&refresh=]` | `list_skills` | no |
+| Health | `GET /healthz`, `GET /readyz` | — | no |
 
-- **CircleCI:** After enabling builds for this repo via [this link](https://circleci.com/setup-project/gh/giantswarm/agent-manager), you can find badge code on [this page](https://app.circleci.com/settings/project/github/giantswarm/agent-manager/status-badges).
+Errors are `{"error":{"code":"not_found|invalid_request|conflict|forbidden|unsupported|backend_error","message":"…"}}`;
+`conflict` (409) covers "exists already", "GitOps-owned", "suspended" and
+"bare Agent CR" — the cases `force` overrides where documented.
 
-- **Go reference:** use [this helper](https://pkg.go.dev/badge/) to create the markdown code.
+## What an agent is made of
 
-- **Go report card:** enter the module name on the [front page](https://goreportcard.com/) and hit "Generate report". Then use this markdown code for your badge: `[![Go report card](https://goreportcard.com/badge/github.com/giantswarm/agent-manager)](https://goreportcard.com/report/github.com/giantswarm/agent-manager)`
+`create_agent` takes the technical **name** (a DNS-1123 label the caller
+chose and confirmed — the service never derives one from a display name, per
+the creating-agents PRD), the **modelConfig** (must exist in the namespace;
+the error lists the valid ones), and optionally `displayName`, `description`,
+`systemMessage`, `iconUrl`, `runtime` (go|python), `skills` (`gitRefs` from
+`list_skills`, OCI `refs`), `toolNames` (narrow the muster tools; none means
+every tool the gateway exposes), `labels`, `annotations`, `namespace`. It
+emits only what was set so the chart's defaults apply to everything else —
+the portal's rule — and composes:
 
-- **OpenSSF Scorecard Report:** for public repos only: `[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/giantswarm/{APP-NAME}/badge)](https://securityscorecards.dev/viewer/?uri=github.com/giantswarm/{APP-NAME})`
+```yaml
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: OCIRepository
+metadata: {name: agent, namespace: kagent}
+spec: {interval: 30m, url: oci://gsoci.azurecr.io/charts/giantswarm/agent, ref: {semver: x.x.x}}
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata: {name: sre, namespace: kagent}
+spec:
+  interval: 10m
+  chartRef: {kind: OCIRepository, name: agent, namespace: kagent}
+  values:
+    agent: {name: sre, displayName: SRE Assistant, systemMessage: …}
+    modelConfig: {name: default-model-config}
+    skills: {gitRefs: [{url: https://github.com/giantswarm/agent-skills, path: runbooks, ref: main, name: runbooks}]}
+```
 
-- **Sourcegraph "used by N projects" badge**: for public Go repos only: `[![Sourcegraph](https://sourcegraph.com/github.com/giantswarm/agent-manager/-/badge.svg)](https://sourcegraph.com/github.com/giantswarm/agent-manager)`
+ModelConfigs, their Secrets and the shared muster `RemoteMCPServer` are
+platform-admin owned: agent-manager only reads ModelConfigs.
+
+## Ownership and the meta agent's rule
+
+`list_agents` says how each agent is managed:
+
+- `helmrelease` — a HelmRelease agent-manager (or the portal, or a hand-applied
+  manifest) owns: writable here.
+- `gitops` — the HelmRelease carries `kustomize.toolkit.fluxcd.io/name`: its
+  desired state lives in git and a live write would be undone on the next
+  reconciliation. `update_agent` and `delete_agent` refuse it unless `force`.
+  A meta agent opens a pull request in the GitOps repository instead.
+- `none` — a bare Agent CR with no HelmRelease behind it: nothing to write to;
+  `delete_agent` removes it only with `force`.
+
+A suspended HelmRelease is refused the same way: Flux drops its finalizer
+without uninstalling, so deleting it would leave the Agent behind (with `force`
+the Agent is deleted too).
+
+## Validation
+
+Every create and update is validated against the `agent` chart's
+`values.schema.json` before it is applied. The schema comes from the chart
+registry (`agentChart.ociUrl`, the newest version in `agentChart.semver`, the
+same resolution Flux's OCIRepository performs) and is re-read every
+`agentChart.refresh`; when the registry cannot be reached the copy compiled
+into the binary (chart 0.5.2) validates and `get_info` reports
+`chart.schemaSource: embedded` with the error. `validate_agent` returns the
+composed manifests and every violation without writing.
+
+## Identity
+
+Writes run under agent-manager's own ServiceAccount (the Role in the managed
+namespaces: HelmReleases and OCIRepositories read/write; Agents, ModelConfigs,
+Deployments, pods and events read; Agents delete for the forced bare-CR case).
+The service checks no identity itself: on the platform the agentgateway JWT
+policy in front of the route and muster in front of the MCP endpoint are the
+trust boundary — the same model as model-manager. The Kubernetes client sits
+behind `internal/kube.Provider`, so a per-call client authenticated with the
+caller's own token (muster's `callerwrite` pattern, epic
+[giantswarm#37459](https://github.com/giantswarm/giantswarm/issues/37459)) can
+replace it without touching the service; `get_info` reports
+`capabilities.writesAsCaller: false` until it does.
+
+## Running
+
+```sh
+agent-manager serve \
+  --kubeconfig ~/.kube/config --kube-context kind-agentlab \
+  --kagent-namespace kagent \
+  --agent-chart-oci-url oci://gsoci.azurecr.io/charts/giantswarm/agent \
+  --skills-repositories https://github.com/giantswarm/agent-skills
+```
+
+Every flag has an environment variable (`agent-manager serve --help`).
+Kubernetes access is required; the kagent.dev and Flux API versions are
+discovered from the server (`--*-api-version auto`).
+
+## Helm chart
+
+`helm/agent-manager` — see its [README](helm/agent-manager/README.md). Keys
+the umbrella chart (`agent-platform-standalone`) sets: `kagent.namespace`,
+`image.*`, `mcp.enabled`, `muster.mcpServer.*`, `skills.repositories`.
+Optional, off by default: `muster.mcpServer.enabled` (renders an
+`mcpservers.muster.giantswarm.io` CR), `httpRoute.enabled`,
+`networkPolicy.enabled`.
+
+## Development
+
+See [docs/development.md](docs/development.md).

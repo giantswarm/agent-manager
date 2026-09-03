@@ -1,0 +1,124 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "agent-manager.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "agent-manager.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "agent-manager.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "agent-manager.labels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "agent-manager.serviceAccountName" . }}
+      {{- /* Every operation talks to the API server: the token is always mounted. */}}
+      automountServiceAccountToken: true
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: {{ .Chart.Name }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.image.registry }}/{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - serve
+            - --listen=:8080
+            - --in-cluster=true
+            - --kagent-namespace={{ .Values.kagent.namespace }}
+            {{- with .Values.kagent.additionalNamespaces }}
+            - --managed-namespaces={{ join "," . }}
+            {{- end }}
+            - --kagent-api-version={{ .Values.kagent.apiVersion }}
+            - --flux-helmrelease-api-version={{ .Values.flux.helmReleaseApiVersion }}
+            - --flux-ocirepository-api-version={{ .Values.flux.ociRepositoryApiVersion }}
+            - --agent-chart-oci-url={{ .Values.agentChart.ociUrl }}
+            - --agent-chart-semver={{ .Values.agentChart.semver }}
+            - --agent-chart-refresh={{ .Values.agentChart.refresh }}
+            - --helmrelease-interval={{ .Values.flux.helmReleaseInterval }}
+            - --ocirepository-interval={{ .Values.flux.ociRepositoryInterval }}
+            {{- with .Values.flux.helmReleaseServiceAccount }}
+            - --helmrelease-service-account={{ . }}
+            {{- end }}
+            {{- with .Values.skills.repositories }}
+            - --skills-repositories={{ join "," . }}
+            {{- end }}
+            - --skills-github-api={{ .Values.skills.github.apiUrl }}
+            - --skills-cache-ttl={{ .Values.skills.cacheTTL }}
+            - --mcp-enabled={{ .Values.mcp.enabled }}
+            - --mcp-path={{ .Values.mcp.path }}
+            {{- if .Values.logging.verbose }}
+            - --verbose
+            {{- end }}
+            {{- with .Values.extraArgs }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- if or .Values.skills.github.tokenSecret.name .Values.extraEnv }}
+          env:
+            {{- with .Values.skills.github.tokenSecret.name }}
+            - name: GITHUB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ . }}
+                  key: {{ $.Values.skills.github.tokenSecret.key }}
+            {{- end }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- end }}
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
