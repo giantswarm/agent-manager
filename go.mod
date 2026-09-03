@@ -69,3 +69,7 @@ require (
 // not imported by agent-manager, so a plain `go get` bump is dropped by
 // `go mod tidy`; the replace pins the graph to a fixed version instead.
 replace golang.org/x/mod => golang.org/x/mod v0.40.0
+
+// Same for golang.org/x/crypto < v0.55.0 (CVE-2026-56854, ssh source-address
+// permissions): pulled in through the Kubernetes client, never imported here.
+replace golang.org/x/crypto => golang.org/x/crypto v0.55.0
