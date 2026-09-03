@@ -1,0 +1,275 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+        "agent": {
+            "type": "object",
+            "description": "Identity and prompt of the agent.",
+            "additionalProperties": false,
+            "properties": {
+                "description": {
+                    "type": "string",
+                    "description": "Rendered into the Agent's spec.description."
+                },
+                "displayName": {
+                    "type": "string",
+                    "description": "Human-friendly name, Unicode allowed. Rendered as the ui.giantswarm.io/display-name annotation on the Agent. Size-limited so it cannot become a description.",
+                    "maxLength": 63
+                },
+                "iconUrl": {
+                    "type": "string",
+                    "description": "Fully qualified URL of the agent's avatar icon. Rendered into the Agent's spec.iconUrl and surfaced on the A2A AgentCard. Populated by the Backstage agent-creation flow with the canonical avatar URL."
+                },
+                "name": {
+                    "type": "string",
+                    "description": "Technical resource name (DNS-1123). Defaults to the Helm release name.",
+                    "maxLength": 63,
+                    "pattern": "^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+                },
+                "runtime": {
+                    "type": "string",
+                    "description": "kagent runtime for the agent. Mirrors the Agent CRD's spec.declarative.runtime enum.",
+                    "enum": [
+                        "go",
+                        "python"
+                    ]
+                },
+                "systemMessage": {
+                    "type": "string",
+                    "description": "The agent's system prompt.",
+                    "minLength": 1
+                }
+            }
+        },
+        "annotations": {
+            "type": "object",
+            "description": "Extra annotations merged next to the display-name annotation.",
+            "additionalProperties": {
+                "type": "string"
+            }
+        },
+        "baseDomain": {
+            "type": "string"
+        },
+        "bootstrapMode": {
+            "type": "object",
+            "additionalProperties": true
+        },
+        "chartOperator": {
+            "type": "object",
+            "additionalProperties": true
+        },
+        "ciliumNetworkPolicy": {
+            "type": "object",
+            "additionalProperties": true
+        },
+        "cluster": {
+            "type": "object",
+            "additionalProperties": true
+        },
+        "clusterCA": {
+            "type": "string"
+        },
+        "clusterCIDR": {
+            "type": "string"
+        },
+        "clusterDNSIP": {
+            "type": "string"
+        },
+        "clusterID": {
+            "type": "string"
+        },
+        "extraAgentSpec": {
+            "type": "object",
+            "description": "Escape hatch: deep-merged over the curated Agent spec (this wins), so any kagent Agent field is reachable when the curated surface omits something.",
+            "additionalProperties": true
+        },
+        "extraTools": {
+            "type": "array",
+            "description": "Additional raw kagent tool entries appended after the muster gateway."
+        },
+        "gcpProject": {
+            "type": "string"
+        },
+        "global": {
+            "type": [
+                "object",
+                "null"
+            ],
+            "description": "Global values shared between all subcharts",
+            "$comment": "Added automatically by 'helm schema' to allow this chart to be used as a Helm dependency, as this schema would otherwise not allow Helm's special 'global' values key."
+        },
+        "labels": {
+            "type": "object",
+            "description": "Extra labels merged over the standard set, e.g. tenant/owner dimensions.",
+            "additionalProperties": {
+                "type": "string"
+            }
+        },
+        "modelConfig": {
+            "type": "object",
+            "description": "Which platform-admin-provisioned ModelConfig the agent uses, referenced by name. kagent resolves it in the agent's own namespace. The chart never creates or mutates a ModelConfig, and tenants never handle LLM credentials.",
+            "additionalProperties": false,
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "Name of the admin-provisioned ModelConfig in the agent's namespace.",
+                    "minLength": 1
+                }
+            }
+        },
+        "muster": {
+            "type": "object",
+            "description": "The platform's shared muster gateway, referenced cross-namespace. The RemoteMCPServer is admin-owned; its spec.allowedNamespaces must admit this agent's namespace.",
+            "additionalProperties": false,
+            "properties": {
+                "allowedHeaders": {
+                    "type": "array",
+                    "description": "HTTP headers forwarded to the gateway.",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "enabled": {
+                    "type": "boolean",
+                    "description": "Wire the shared muster gateway into the agent's tools."
+                },
+                "serverRef": {
+                    "type": "object",
+                    "description": "Reference to the admin-owned RemoteMCPServer.",
+                    "additionalProperties": false,
+                    "properties": {
+                        "apiGroup": {
+                            "type": "string",
+                            "description": "API group of the referenced resource."
+                        },
+                        "kind": {
+                            "type": "string",
+                            "description": "Kind of the referenced resource."
+                        },
+                        "name": {
+                            "type": "string",
+                            "description": "Name of the referenced resource."
+                        },
+                        "namespace": {
+                            "type": "string",
+                            "description": "Namespace of the referenced resource."
+                        }
+                    }
+                },
+                "stsWellKnownUri": {
+                    "type": "string",
+                    "description": "OAuth authorization server discovery URI of muster's STS. Leave empty (the default): under the platform's dex-only trust model (muster does not sign tokens) the propagated caller token is presented directly as the MCP bearer and no exchange happens — a configured URI would attempt an RFC 8693 exchange that muster refuses. Set only against a muster that runs in JWT mode; its in-cluster discovery URL is http://muster.agent-platform.svc.cluster.local:8090/.well-known/oauth-authorization-server"
+                },
+                "toolNames": {
+                    "type": "array",
+                    "description": "Set to narrow the tool surface; leave empty for all tools. muster's tools are dynamic and no toolNames means no tool filter — the agent gets every tool the gateway exposes.",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "nodeSelector": {
+            "type": "object",
+            "description": "Node selector for agent pod scheduling.",
+            "additionalProperties": {
+                "type": "string"
+            }
+        },
+        "provider": {
+            "type": "string"
+        },
+        "replicas": {
+            "type": "integer",
+            "description": "Number of agent pod replicas.",
+            "minimum": 0
+        },
+        "resources": {
+            "type": "object",
+            "description": "Compute resources of the agent deployment.",
+            "additionalProperties": true,
+            "properties": {
+                "limits": {
+                    "type": "object",
+                    "description": "Resource limits.",
+                    "additionalProperties": true,
+                    "properties": {
+                        "cpu": {
+                            "type": [
+                                "string",
+                                "number"
+                            ],
+                            "description": "CPU limit."
+                        },
+                        "memory": {
+                            "type": [
+                                "string",
+                                "number"
+                            ],
+                            "description": "Memory limit."
+                        }
+                    }
+                },
+                "requests": {
+                    "type": "object",
+                    "description": "Resource requests.",
+                    "additionalProperties": true,
+                    "properties": {
+                        "cpu": {
+                            "type": [
+                                "string",
+                                "number"
+                            ],
+                            "description": "CPU request."
+                        },
+                        "memory": {
+                            "type": [
+                                "string",
+                                "number"
+                            ],
+                            "description": "Memory request."
+                        }
+                    }
+                }
+            }
+        },
+        "skills": {
+            "type": "object",
+            "description": "kagent-native skills, pulled by the skills-init container and mounted under /skills. Prefer immutable refs (image tag/digest, git tag/SHA) in long-lived installs; git branches are a development convenience.",
+            "additionalProperties": false,
+            "properties": {
+                "gitAuthSecretRef": {
+                    "type": "object",
+                    "description": "Auth for private `gitRefs` repositories. Applies to all gitRefs entries; the chart never creates this Secret. Leave name empty for public repositories.",
+                    "additionalProperties": false,
+                    "properties": {
+                        "name": {
+                            "type": "string",
+                            "description": "Name of a Secret in the agent's namespace. Supply key `token` for an HTTPS PAT/deploy token, or a `kubernetes.io/ssh-auth` secret (key `ssh-privatekey`) for SSH deploy-key auth."
+                        }
+                    }
+                },
+                "gitRefs": {
+                    "type": "array",
+                    "description": "Git repository references for development iteration."
+                },
+                "refs": {
+                    "type": "array",
+                    "description": "OCI skill image references, e.g. [\"registry.example.io/skills/runbooks:1.4.0\"]",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "subscriptionID": {
+            "type": "string"
+        },
+        "tolerations": {
+            "type": "array",
+            "description": "Tolerations for agent pod scheduling."
+        }
+    }
+}

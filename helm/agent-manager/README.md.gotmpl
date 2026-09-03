@@ -1,0 +1,43 @@
+{{ template "chart.header" . }}
+{{ template "chart.deprecationWarning" . }}
+
+{{ template "chart.badgesSection" . }}
+
+{{ template "chart.description" . }}
+
+The chart deploys one Deployment that serves the REST/JSON API under `/api/v1`
+(contract: `/api/v1/openapi.yaml`) and the MCP streamable-HTTP endpoint under
+`/mcp`. An agent is a Flux `HelmRelease` of the `agent` chart (one release
+renders one kagent `Agent`) plus the shared per-namespace `OCIRepository` of
+that chart; agent-manager composes both the way the portal's create flow does,
+validates the values against the chart's `values.schema.json` before applying,
+and reads agents back from the Agent CR, the HelmRelease and the workload.
+
+- `kagent.namespace` (plus `kagent.additionalNamespaces`) are the namespaces
+  agents live in; the Role is created there. Requests naming another
+  namespace are refused.
+- `agentChart.ociUrl` / `agentChart.semver` are what the composed
+  OCIRepository carries; the same registry is read at run time for the latest
+  version and its values schema (`GET /api/v1/info` says which schema is in
+  use — the embedded copy is the offline fallback).
+- `skills.repositories` are the GitHub repositories `list_skills` discovers
+  `SKILL.md` files in; `skills.github.tokenSecret` names a Secret with a token
+  for private repositories.
+- Writes run under the chart's ServiceAccount; the service checks no identity
+  itself. On the platform the agentgateway JWT policy in front of the route
+  (rendered by `agent-platform-standalone`) and muster in front of the MCP
+  endpoint are the trust boundary.
+
+Used as a dependency of `agent-platform-standalone` behind a `condition`;
+standalone installs set `kagent.namespace`, `image.*`, `mcp.enabled`,
+`muster.mcpServer.*` and `skills.repositories`.
+
+{{ template "chart.homepageLine" . }}
+
+{{ template "chart.maintainersSection" . }}
+
+{{ template "chart.sourcesSection" . }}
+
+{{ template "chart.requirementsSection" . }}
+
+{{ template "chart.valuesSection" . }}

@@ -1,0 +1,614 @@
+openapi: 3.1.0
+info:
+  title: agent-manager API
+  version: 1.0.0
+  description: |
+    Agent lifecycle for the Giant Swarm Agent Platform.
+
+    An agent is a Flux `HelmRelease` of the `agent` chart (one release renders
+    one kagent `Agent`) that renders from the shared per-namespace
+    `OCIRepository` of that chart, tracking it by semver range. agent-manager
+    composes those two objects exactly like the portal's create flow, validates
+    the values against the chart's `values.schema.json` before anything is
+    applied, and reads an agent back from its Agent CR, its owning HelmRelease
+    and the workload kagent runs.
+
+    Clients MUST call `GET /api/v1/info` first: it reports the managed
+    namespaces, the chart version whose schema validates right now, and the
+    capability flags (a false flag means the operation answers `501
+    unsupported`). Writes run under agent-manager's own ServiceAccount; the
+    agentgateway JWT policy in front of the route is the trust boundary.
+
+    The same operations are available as MCP tools (streamable HTTP at `/mcp`,
+    tool names in `x-mcp-tool` below; through muster they appear as
+    `x_<server>_<tool>`).
+
+    Ownership rules: an agent whose HelmRelease is applied by a Flux
+    Kustomization (`managed: gitops`) is refused for update and delete unless
+    `force` — its desired state lives in git. A bare Agent CR (`managed: none`)
+    has no HelmRelease to write to and is only deleted with `force`.
+servers:
+  - url: /
+tags:
+  - name: info
+  - name: agents
+  - name: modelconfigs
+  - name: skills
+  - name: health
+paths:
+  /healthz:
+    get:
+      tags: [health]
+      summary: Liveness
+      operationId: healthz
+      responses:
+        "200":
+          description: alive
+          content:
+            text/plain:
+              schema: { type: string, example: ok }
+  /readyz:
+    get:
+      tags: [health]
+      summary: Readiness (the API is serving)
+      description: |
+        Does not depend on the API server or the chart registry: the API stays
+        reachable so clients read a failure from the response itself.
+      operationId: readyz
+      responses:
+        "200":
+          description: ready
+          content:
+            text/plain:
+              schema: { type: string, example: ok }
+  /api/v1/info:
+    get:
+      tags: [info]
+      summary: Service version, agent chart, managed namespaces and capability flags
+      operationId: getInfo
+      x-mcp-tool: get_info
+      responses:
+        "200":
+          description: the installation's identity
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Info" }
+  /api/v1/openapi.yaml:
+    get:
+      tags: [info]
+      summary: This document
+      operationId: getOpenAPI
+      responses:
+        "200":
+          description: the contract
+          content:
+            application/yaml:
+              schema: { type: string }
+  /api/v1/agents:
+    get:
+      tags: [agents]
+      summary: List the agents of a namespace
+      description: |
+        Every Agent CR with its owning HelmRelease (found through the Flux
+        provenance labels), plus every HelmRelease of the agent chart that has
+        not rendered an Agent yet (`exists: false`).
+      operationId: listAgents
+      x-mcp-tool: list_agents
+      parameters:
+        - $ref: "#/components/parameters/namespaceQuery"
+      responses:
+        "200":
+          description: agents
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  agents:
+                    type: array
+                    items: { $ref: "#/components/schemas/Agent" }
+        "400": { $ref: "#/components/responses/Error" }
+    post:
+      tags: [agents]
+      summary: Create an agent
+      description: |
+        Composes the OCIRepository (created when missing) and the HelmRelease,
+        validates the values against the chart schema and the modelConfig
+        against the namespace, then applies. A validation failure writes
+        nothing (`400 invalid_request`, the message lists the valid model
+        configs). `409 conflict` when a HelmRelease or Agent of that name
+        exists.
+      operationId: createAgent
+      x-mcp-tool: create_agent
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Spec" }
+      responses:
+        "201":
+          description: created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CreateResult" }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /api/v1/agents/validate:
+    post:
+      tags: [agents]
+      summary: Dry run of create (or update)
+      description: |
+        Composes and validates without writing. With `update: true` the
+        non-empty fields of the body are validated as a change to the existing
+        agent's values.
+      operationId: validateAgent
+      x-mcp-tool: validate_agent
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: "#/components/schemas/Spec"
+                - type: object
+                  properties:
+                    update: { type: boolean, description: Validate as an update of the existing agent }
+                    force: { type: boolean, description: With update, ignore the GitOps/suspended guards }
+      responses:
+        "200":
+          description: the verdict (valid may be false)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ValidateResult" }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /api/v1/agents/{namespace}/{name}:
+    parameters:
+      - $ref: "#/components/parameters/namespacePath"
+      - $ref: "#/components/parameters/namePath"
+    get:
+      tags: [agents]
+      summary: Get one agent
+      operationId: getAgent
+      x-mcp-tool: get_agent
+      responses:
+        "200":
+          description: the agent
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Agent" }
+        "404": { $ref: "#/components/responses/Error" }
+    patch:
+      tags: [agents]
+      summary: Update an agent
+      description: |
+        Merges the given fields into the HelmRelease values (absent fields stay,
+        an empty string clears a field back to the chart default, `skills` and
+        `toolNames` replace their whole block), validates and updates the
+        HelmRelease. `409 conflict` for GitOps-owned or suspended releases and
+        bare Agent CRs unless `force`.
+      operationId: updateAgent
+      x-mcp-tool: update_agent
+      parameters:
+        - name: force
+          in: query
+          schema: { type: boolean }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Update" }
+      responses:
+        "200":
+          description: before / after
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UpdateResult" }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+    delete:
+      tags: [agents]
+      summary: Delete an agent
+      description: |
+        Deletes the owning HelmRelease (helm-controller uninstalls the Agent)
+        and the shared OCIRepository when no other HelmRelease references it.
+        Bare Agent CRs, GitOps-owned and suspended releases need `force`.
+      operationId: deleteAgent
+      x-mcp-tool: delete_agent
+      parameters:
+        - name: force
+          in: query
+          schema: { type: boolean }
+      responses:
+        "200":
+          description: what was removed
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DeleteResult" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /api/v1/agents/{namespace}/{name}/status:
+    parameters:
+      - $ref: "#/components/parameters/namespacePath"
+      - $ref: "#/components/parameters/namePath"
+    get:
+      tags: [agents]
+      summary: Compact status verdict
+      description: |
+        Agent conditions, HelmRelease conditions and history, Deployment
+        readiness, pods with waiting reasons (a CrashLoopBackOff pod is phase
+        Running — container statuses tell) and recent Warning events, folded
+        into `verdict` (ready | progressing | failed | unknown) and `summary`.
+      operationId: getAgentStatus
+      x-mcp-tool: get_agent_status
+      responses:
+        "200":
+          description: the status
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Status" }
+        "404": { $ref: "#/components/responses/Error" }
+  /api/v1/modelconfigs:
+    get:
+      tags: [modelconfigs]
+      summary: List the kagent ModelConfigs of a namespace
+      operationId: listModelConfigs
+      x-mcp-tool: list_model_configs
+      parameters:
+        - $ref: "#/components/parameters/namespaceQuery"
+      responses:
+        "200":
+          description: model configs
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  modelConfigs:
+                    type: array
+                    items: { $ref: "#/components/schemas/ModelConfig" }
+  /api/v1/skills:
+    get:
+      tags: [skills]
+      summary: Discover skills in the configured repositories
+      description: |
+        Every `SKILL.md` of a GitHub repository is one skill (frontmatter
+        `name`/`description`), returned as the `gitRefs` entry an agent mounts.
+        Cached briefly; `refresh=true` re-reads GitHub. `501 unsupported` when
+        no repositories are configured.
+      operationId: listSkills
+      x-mcp-tool: list_skills
+      parameters:
+        - name: repository
+          in: query
+          description: Only this repository (https://github.com/<owner>/<repo>)
+          schema: { type: string }
+        - name: ref
+          in: query
+          description: Git ref; default the default branch
+          schema: { type: string }
+        - name: refresh
+          in: query
+          schema: { type: boolean }
+      responses:
+        "200":
+          description: skills
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SkillsResult" }
+        "400": { $ref: "#/components/responses/Error" }
+        "501": { $ref: "#/components/responses/Error" }
+components:
+  parameters:
+    namespaceQuery:
+      name: namespace
+      in: query
+      description: Namespace; default the installation's kagent namespace
+      schema: { type: string }
+    namespacePath:
+      name: namespace
+      in: path
+      required: true
+      schema: { type: string }
+    namePath:
+      name: name
+      in: path
+      required: true
+      schema: { type: string }
+  responses:
+    Error:
+      description: error
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+              enum: [not_found, invalid_request, conflict, forbidden, unsupported, backend_error]
+            message: { type: string }
+    Info:
+      type: object
+      properties:
+        version: { type: string }
+        chart:
+          type: object
+          properties:
+            ociUrl: { type: string }
+            semver: { type: string, description: The range the OCIRepository tracks }
+            latestVersion: { type: string, description: Newest published version in range ("" when the registry is unreachable) }
+            schemaVersion: { type: string, description: Chart version whose values.schema.json validates right now }
+            schemaSource: { type: string, enum: [registry, embedded] }
+            resolvedAt: { type: string, format: date-time }
+            error: { type: string }
+        namespaces:
+          type: object
+          properties:
+            default: { type: string }
+            managed: { type: array, items: { type: string } }
+        capabilities:
+          type: object
+          additionalProperties: { type: boolean }
+          description: "list, get, create, update, delete, status, validate, modelConfigs, skills, writesAsCaller"
+        identity: { type: string, enum: [serviceAccount] }
+        apiVersions:
+          type: object
+          properties:
+            agent: { type: string }
+            modelConfig: { type: string }
+            helmRelease: { type: string }
+            ociRepository: { type: string }
+        flux:
+          type: object
+          properties:
+            helmReleaseInterval: { type: string }
+            ociRepositoryInterval: { type: string }
+            serviceAccountName: { type: string }
+        skillsRepositories: { type: array, items: { type: string } }
+    SkillGitRef:
+      type: object
+      required: [url]
+      properties:
+        url: { type: string }
+        path: { type: string, description: Skill directory; empty for the repository root }
+        ref: { type: string }
+        name: { type: string, description: Mount name under /skills; defaults to the directory name }
+    Skills:
+      type: object
+      properties:
+        refs: { type: array, items: { type: string }, description: OCI skill image references }
+        gitRefs: { type: array, items: { $ref: "#/components/schemas/SkillGitRef" } }
+        gitAuthSecretName: { type: string }
+    Spec:
+      type: object
+      required: [name, modelConfig]
+      properties:
+        namespace: { type: string }
+        name: { type: string, description: DNS-1123 technical name (HelmRelease and Agent name), max 63 chars }
+        displayName: { type: string, maxLength: 63 }
+        description: { type: string }
+        systemMessage: { type: string }
+        modelConfig: { type: string, description: An existing ModelConfig of the namespace }
+        iconUrl: { type: string }
+        runtime: { type: string, enum: [go, python] }
+        skills: { $ref: "#/components/schemas/Skills" }
+        toolNames: { type: array, items: { type: string } }
+        labels: { type: object, additionalProperties: { type: string } }
+        annotations: { type: object, additionalProperties: { type: string } }
+    Update:
+      type: object
+      description: Partial change; absent fields stay, "" clears, skills/toolNames replace their block
+      properties:
+        displayName: { type: string }
+        description: { type: string }
+        systemMessage: { type: string }
+        modelConfig: { type: string }
+        iconUrl: { type: string }
+        runtime: { type: string, enum: [go, python] }
+        skills: { $ref: "#/components/schemas/Skills" }
+        toolNames: { type: array, items: { type: string } }
+        labels: { type: object, additionalProperties: { type: string } }
+        annotations: { type: object, additionalProperties: { type: string } }
+        force: { type: boolean }
+    Condition:
+      type: object
+      properties:
+        type: { type: string }
+        status: { type: string }
+        reason: { type: string }
+        message: { type: string }
+        lastTransitionTime: { type: string }
+    HelmReleaseRef:
+      type: object
+      properties:
+        name: { type: string }
+        namespace: { type: string }
+        ready: { type: [boolean, "null"] }
+        reason: { type: string }
+        message: { type: string }
+        chartVersion: { type: string }
+        lastAttemptedRevision: { type: string }
+        suspended: { type: boolean }
+        gitOpsOwned: { type: boolean }
+        deleting: { type: boolean, description: helm-controller is uninstalling the release }
+        chartRef:
+          type: object
+          properties:
+            kind: { type: string }
+            name: { type: string }
+            namespace: { type: string }
+    Agent:
+      type: object
+      properties:
+        name: { type: string }
+        namespace: { type: string }
+        exists: { type: boolean, description: The Agent CR exists (false while the HelmRelease has not rendered it) }
+        displayName: { type: string }
+        description: { type: string }
+        modelConfig: { type: string }
+        runtime: { type: string }
+        iconUrl: { type: string }
+        systemMessage: { type: string }
+        skills: { $ref: "#/components/schemas/Skills" }
+        toolNames: { type: array, items: { type: string } }
+        ready: { type: [boolean, "null"] }
+        accepted: { type: [boolean, "null"] }
+        conditions: { type: array, items: { $ref: "#/components/schemas/Condition" } }
+        managed: { type: string, enum: [helmrelease, gitops, none] }
+        helmRelease: { $ref: "#/components/schemas/HelmReleaseRef" }
+        values: { type: object, description: The HelmRelease's inline values (the chart contract) }
+    Manifests:
+      type: object
+      properties:
+        ociRepository: { type: string, description: YAML }
+        helmRelease: { type: string, description: YAML }
+        values: { type: object }
+    ValidateResult:
+      type: object
+      properties:
+        valid: { type: boolean }
+        mode: { type: string, enum: [create, update] }
+        errors: { type: array, items: { type: string } }
+        schemaVersion: { type: string }
+        schemaSource: { type: string, enum: [registry, embedded] }
+        manifests: { $ref: "#/components/schemas/Manifests" }
+    CreateResult:
+      type: object
+      properties:
+        agent: { $ref: "#/components/schemas/Agent" }
+        manifests: { $ref: "#/components/schemas/Manifests" }
+        created:
+          type: object
+          properties:
+            ociRepository: { type: boolean }
+            helmRelease: { type: boolean }
+        status: { $ref: "#/components/schemas/Status" }
+    UpdateResult:
+      type: object
+      properties:
+        agent: { $ref: "#/components/schemas/Agent" }
+        before: { type: object }
+        after: { type: object }
+        changed: { type: array, items: { type: string }, description: Dotted value paths that changed }
+        manifests: { $ref: "#/components/schemas/Manifests" }
+    DeleteResult:
+      type: object
+      properties:
+        name: { type: string }
+        namespace: { type: string }
+        helmReleaseDeleted: { type: boolean }
+        agentDeleted: { type: boolean, description: A bare Agent CR was deleted directly (force) }
+        ociRepositoryDeleted: { type: boolean }
+        ociRepositoryKept: { type: string, description: Why the shared chart source stays }
+    Status:
+      type: object
+      properties:
+        name: { type: string }
+        namespace: { type: string }
+        verdict: { type: string, enum: [ready, progressing, failed, unknown] }
+        summary: { type: string }
+        agent:
+          type: object
+          properties:
+            exists: { type: boolean }
+            ready: { type: [boolean, "null"] }
+            accepted: { type: [boolean, "null"] }
+            conditions: { type: array, items: { $ref: "#/components/schemas/Condition" } }
+        helmRelease:
+          type: object
+          properties:
+            exists: { type: boolean }
+            ready: { type: [boolean, "null"] }
+            suspended: { type: boolean }
+            gitOpsOwned: { type: boolean }
+            deleting: { type: boolean }
+            conditions: { type: array, items: { $ref: "#/components/schemas/Condition" } }
+            history:
+              type: array
+              items:
+                type: object
+                properties:
+                  version: { type: integer }
+                  chartVersion: { type: string }
+                  status: { type: string }
+                  lastDeployed: { type: string }
+            lastAttemptedRevision: { type: string }
+        deployment:
+          type: object
+          properties:
+            exists: { type: boolean }
+            replicas: { type: integer }
+            readyReplicas: { type: integer }
+            availableReplicas: { type: integer }
+            conditions: { type: array, items: { $ref: "#/components/schemas/Condition" } }
+        pods:
+          type: array
+          items:
+            type: object
+            properties:
+              name: { type: string }
+              phase: { type: string }
+              ready: { type: boolean }
+              restarts: { type: integer }
+              containers:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    name: { type: string }
+                    state: { type: string, enum: [waiting, terminated, running] }
+                    reason: { type: string }
+                    message: { type: string }
+                    init: { type: boolean }
+        events:
+          type: array
+          items:
+            type: object
+            properties:
+              type: { type: string }
+              reason: { type: string }
+              message: { type: string }
+              object: { type: string }
+              count: { type: integer }
+              lastTimestamp: { type: string }
+    ModelConfig:
+      type: object
+      properties:
+        name: { type: string }
+        namespace: { type: string }
+        provider: { type: string }
+        model: { type: string }
+        accepted: { type: [boolean, "null"] }
+        message: { type: string }
+        managedBy: { type: string }
+    Skill:
+      type: object
+      properties:
+        name: { type: string }
+        description: { type: string }
+        repoUrl: { type: string }
+        path: { type: string }
+        ref: { type: string }
+    SkillsResult:
+      type: object
+      properties:
+        repositories:
+          type: array
+          items:
+            type: object
+            properties:
+              repoUrl: { type: string }
+              ref: { type: string }
+              skills: { type: array, items: { $ref: "#/components/schemas/Skill" } }
+              truncated: { type: boolean }
+              error: { type: string }
+              fetchedAt: { type: string, format: date-time }
+        skills: { type: array, items: { $ref: "#/components/schemas/Skill" } }

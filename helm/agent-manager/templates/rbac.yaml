@@ -1,0 +1,56 @@
+{{- if .Values.rbac.create }}
+{{- /*
+One Role per managed namespace. agent-manager writes the two Flux objects an
+agent consists of (HelmRelease + the shared OCIRepository of the agent chart)
+and reads everything it reports on: the Agent kagent renders, the ModelConfigs
+an agent may reference (platform-admin owned, never written), and the
+Deployment, pods and events behind an agent for get_agent_status.
+*/}}
+{{- range $ns := (include "agent-manager.managedNamespaces" . | fromJsonArray) }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "agent-manager.fullname" $ }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "agent-manager.labels" $ | nindent 4 }}
+rules:
+  - apiGroups: ["helm.toolkit.fluxcd.io"]
+    resources: ["helmreleases"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["source.toolkit.fluxcd.io"]
+    resources: ["ocirepositories"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["kagent.dev"]
+    resources: ["agents", "modelconfigs"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["kagent.dev"]
+    resources: ["agents"]
+    # A bare Agent CR (no HelmRelease behind it) is only ever deleted with
+    # force; helm-controller removes the ones agent-manager created.
+    verbs: ["delete"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "replicasets"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods", "events"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "agent-manager.fullname" $ }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "agent-manager.labels" $ | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "agent-manager.fullname" $ }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "agent-manager.serviceAccountName" $ }}
+    namespace: {{ $.Release.Namespace }}
+{{- end }}
+{{- end }}
