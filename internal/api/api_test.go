@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -257,4 +259,24 @@ func TestMCPToolsMirrorREST(t *testing.T) {
 	text, isErr = callTool(t, srv, ToolGetAgent, map[string]any{"name": "sre"})
 	assert.True(t, isErr)
 	assert.True(t, strings.HasPrefix(text, "not_found:"), text)
+}
+
+func TestStatusForMapsEverySentinel(t *testing.T) {
+	for _, tc := range []struct {
+		err    error
+		status int
+		code   string
+	}{
+		{agents.ErrNotFound, http.StatusNotFound, "not_found"},
+		{agents.ErrInvalid, http.StatusBadRequest, "invalid_request"},
+		{agents.ErrConflict, http.StatusConflict, "conflict"},
+		{agents.ErrForbidden, http.StatusForbidden, "forbidden"},
+		{agents.ErrUnauthenticated, http.StatusUnauthorized, "unauthenticated"},
+		{agents.ErrUnsupported, http.StatusNotImplemented, "unsupported"},
+		{errors.New("boom"), http.StatusBadGateway, "backend_error"},
+	} {
+		status, code := statusFor(fmt.Errorf("%w: detail", tc.err))
+		assert.Equal(t, tc.status, status, tc.code)
+		assert.Equal(t, tc.code, code)
+	}
 }

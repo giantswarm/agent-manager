@@ -1,4 +1,10 @@
-{{- if .Values.rbac.create }}
+{{- /*
+No RBAC at all with oauth.downstream: every Kubernetes call then carries the
+caller's IdP token and the caller's RBAC governs; the ServiceAccount keeps only
+what every authenticated principal has (API discovery). The token stays
+mounted for the in-cluster API address and CA.
+*/}}
+{{- if include "agent-manager.serviceAccountRBAC" . }}
 {{- /*
 One Role per managed namespace. agent-manager writes the two Flux objects an
 agent consists of (HelmRelease + the shared OCIRepository of the agent chart)

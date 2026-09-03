@@ -71,3 +71,81 @@ deduplicated. Rendered as a JSON list.
 {{- end -}}
 {{- $all | uniq | toJson -}}
 {{- end }}
+
+{{/*
+The platform identity contract (global.identity), an empty dict when absent.
+*/}}
+{{- define "agent-manager.globalIdentity" -}}
+{{- dig "identity" (dict) (.Values.global | default dict) | toJson }}
+{{- end }}
+
+{{/*
+Whether the ServiceAccount holds any RBAC: not with downstream OAuth, where
+every Kubernetes call carries the caller's token.
+*/}}
+{{- define "agent-manager.serviceAccountRBAC" -}}
+{{- if and .Values.rbac.create (not (and .Values.oauth.enabled .Values.oauth.downstream.enabled)) }}true{{ end }}
+{{- end }}
+
+{{/*
+Existing Secret with the provider credentials: oauth.existingSecret, else the
+platform's global.identity.existingSecret, else the chart-rendered one.
+*/}}
+{{- define "agent-manager.oauthSecretName" -}}
+{{- $g := include "agent-manager.globalIdentity" . | fromJson -}}
+{{- .Values.oauth.existingSecret | default (dig "existingSecret" "" $g) | default (printf "%s-oauth" (include "agent-manager.fullname" .)) }}
+{{- end }}
+
+{{/*
+Whether the chart renders its own OAuth Secret (no existing one named).
+*/}}
+{{- define "agent-manager.oauthRendersSecret" -}}
+{{- $g := include "agent-manager.globalIdentity" . | fromJson -}}
+{{- if and .Values.oauth.enabled (not .Values.oauth.existingSecret) (not (dig "existingSecret" "" $g)) }}true{{ end }}
+{{- end }}
+
+{{/*
+OAuth base URL: oauth.baseURL, else https://<fullname>.<global.domain>.
+*/}}
+{{- define "agent-manager.oauthBaseURL" -}}
+{{- $domain := dig "domain" "" (.Values.global | default dict) -}}
+{{- $derived := "" -}}
+{{- if $domain }}{{ $derived = printf "https://%s.%s" (include "agent-manager.fullname" .) $domain }}{{ end -}}
+{{- required "oauth.baseURL is required when oauth.enabled (or set global.domain)" (.Values.oauth.baseURL | default $derived) }}
+{{- end }}
+
+{{/*
+Dex issuer / client id with the global.identity fallbacks.
+*/}}
+{{- define "agent-manager.oauthDexIssuerURL" -}}
+{{- $g := include "agent-manager.globalIdentity" . | fromJson -}}
+{{- required "oauth.dex.issuerURL (or global.identity.issuerUrl) is required for the dex provider" (.Values.oauth.dex.issuerURL | default (dig "issuerUrl" "" $g)) }}
+{{- end }}
+
+{{- define "agent-manager.oauthDexClientID" -}}
+{{- $g := include "agent-manager.globalIdentity" . | fromJson -}}
+{{- required "oauth.dex.clientID (or global.identity.clientId) is required for the dex provider" (.Values.oauth.dex.clientID | default (dig "clientId" "" $g)) }}
+{{- end }}
+
+{{/*
+CA Secret of a private-certificate Dex: oauth.dex.caSecret, else
+global.identity.ca. Name empty means system trust.
+*/}}
+{{- define "agent-manager.oauthDexCASecretName" -}}
+{{- $g := include "agent-manager.globalIdentity" . | fromJson -}}
+{{- .Values.oauth.dex.caSecret.name | default (dig "ca" "secretName" "" $g) }}
+{{- end }}
+
+{{- define "agent-manager.oauthDexCASecretKey" -}}
+{{- $g := include "agent-manager.globalIdentity" . | fromJson -}}
+{{- if .Values.oauth.dex.caSecret.name }}{{ .Values.oauth.dex.caSecret.key | default "ca.crt" }}{{ else }}{{ dig "ca" "key" "" $g | default .Values.oauth.dex.caSecret.key | default "ca.crt" }}{{ end }}
+{{- end }}
+
+{{/*
+Trusted audiences, comma-separated: oauth.trustedAudiences, else the platform
+client id.
+*/}}
+{{- define "agent-manager.oauthTrustedAudiences" -}}
+{{- $g := include "agent-manager.globalIdentity" . | fromJson -}}
+{{- if .Values.oauth.trustedAudiences }}{{ join "," .Values.oauth.trustedAudiences }}{{ else }}{{ dig "clientId" "" $g }}{{ end }}
+{{- end }}

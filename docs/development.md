@@ -11,10 +11,14 @@ make helm-docs          # regenerate helm/agent-manager/README.md
 ## Layout
 
 - `cmd/` — cobra CLI (`serve`, `version`); every flag has an environment variable.
-- `internal/kube` — the Kubernetes client behind the `Client` / `Provider`
-  interfaces. `ServiceAccountProvider` is today's identity; a caller-identity
-  provider (per-call client from the bearer token, muster's `callerwrite`
-  pattern) plugs in here without touching the service.
+- `internal/kube` — the Kubernetes clients behind the `Client` / `Provider`
+  interfaces: `CallerProvider` builds one client set per caller token
+  (`rest.AnonymousClientConfig` + the bearer the OAuth layer put on the
+  context; no ServiceAccount fallback), `ServiceAccountProvider` is the
+  one shared client of a server without OAuth.
+- `internal/identity` — the authenticated caller on the request context
+  (subject, email, groups, source) and the IdP token downstream OAuth presents
+  to the apiserver.
 - `internal/chart` — the agent chart: a minimal OCI distribution client
   (anonymous bearer challenge, tag list, one file out of the chart archive), the
   resolver that tracks the latest in-range version and its `values.schema.json`,
@@ -27,7 +31,13 @@ make helm-docs          # regenerate helm/agent-manager/README.md
 - `internal/skills` — SKILL.md discovery in GitHub repositories, the portal
   backend's `/agent-skills` semantics, with a per-repository cache.
 - `internal/api` — REST handlers and MCP tools over the service.
-- `internal/server` — the HTTP listener.
+- `internal/server` — the HTTP listener; `oauth.go` is the mcp-oauth resource
+  server (Dex or Google provider, forwarded-id_token validation through
+  `TrustedAudiences`, the caller onto the context) that guards the REST API
+  and the MCP endpoint while the probes and the OAuth metadata stay public.
+  `oauth_test.go` runs a fake OIDC issuer on `https://localhost` with a
+  self-signed certificate — mcp-oauth rejects IP-literal issuers even with
+  private IPs allowed.
 - `api/openapi.yaml` — the REST contract; served at `/api/v1/openapi.yaml`.
 - `helm/agent-manager` — the chart.
 
@@ -61,3 +71,16 @@ helm upgrade --install agent-manager helm/agent-manager -n agent-platform \
 The lab muster then lists the tools as `x_agent-manager_*`; the proof is a
 `create_agent` → `get_agent_status` (ready) → `delete_agent` round trip
 through `call_tool` while another agent keeps the shared OCIRepository alive.
+
+With the agent-platform-standalone umbrella the lab runs agent-manager as the
+caller (`oauth.enabled` + `oauth.downstream.enabled` from the umbrella
+contract, `requiredAudiences: [kubernetes]`, the `dex-localhost` sidecar
+agentlab's post-renderer adds so the pod reaches the lab issuer): swap the
+image on the umbrella's Deployment instead of installing a second release
+(`kubectl -n agent-platform set image deploy/agent-manager
+agent-manager=docker.io/library/agent-manager:dev-<sha>`) and run
+`agentlab agents-test` — the admin's round trip succeeds with
+`requestedBy=admin@lab.local`, a `viewers`-group user's create is refused by
+the apiserver as `User "oidc:viewer@lab.local"`, and
+`kubectl auth can-i --list --as=system:serviceaccount:agent-platform:agent-manager -n kagent`
+shows nothing beyond discovery.

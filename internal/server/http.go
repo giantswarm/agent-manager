@@ -1,7 +1,9 @@
 // Package server assembles the single HTTP listener: health endpoints, the
-// REST API and the MCP streamable-HTTP endpoint. There is no authentication
-// here on purpose: on the platform the agentgateway JWT policy in front of the
-// route and muster in front of the MCP endpoint are the trust boundary.
+// REST API and the MCP streamable-HTTP endpoint, both behind the same OAuth
+// guard when configured. Without OAuth there is no authentication here: only
+// a server nothing but a trusted proxy can reach (the agentgateway JWT policy
+// in front of the route, muster in front of the MCP endpoint) runs that way,
+// and it then acts as its ServiceAccount.
 package server
 
 import (
@@ -23,12 +25,19 @@ type Config struct {
 	Addr       string
 	MCPEnabled bool
 	MCPPath    string
+	// OAuth, when set, makes the server an OAuth 2.1 resource server: the MCP
+	// endpoint and the REST API require a bearer token the platform IdP
+	// issued (forwarded by muster / sent by the portal) or this server's own,
+	// and every call carries the caller's identity. Off: anonymous, acting as
+	// the ServiceAccount.
+	OAuth *OAuthConfig
 }
 
 // Server is the assembled HTTP server.
 type Server struct {
-	http *http.Server
-	log  *slog.Logger
+	http  *http.Server
+	oauth *oauthRuntime
+	log   *slog.Logger
 }
 
 // New builds the server.
@@ -52,11 +61,25 @@ func New(cfg Config, svc *agents.Service, mcpSrv *mcpserver.MCPServer, log *slog
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	})
-	api.NewREST(svc, log).Register(mux)
 
 	s := &Server{log: log}
+	if cfg.OAuth != nil {
+		o, err := newOAuth(*cfg.OAuth, cfg.MCPPath, log)
+		if err != nil {
+			return nil, err
+		}
+		o.register(mux)
+		s.oauth = o
+	}
+
+	// The REST API on its own mux so one guard covers every route; the
+	// health endpoints above and the OAuth metadata stay open.
+	rest := http.NewServeMux()
+	api.NewREST(svc, log).Register(rest)
+	mux.Handle(api.Prefix+"/", s.guard(rest))
+
 	if cfg.MCPEnabled && mcpSrv != nil {
-		mux.Handle(cfg.MCPPath, mcpserver.NewStreamableHTTPServer(mcpSrv, mcpserver.WithEndpointPath(cfg.MCPPath)))
+		mux.Handle(cfg.MCPPath, s.guard(mcpserver.NewStreamableHTTPServer(mcpSrv, mcpserver.WithEndpointPath(cfg.MCPPath))))
 	}
 	s.http = &http.Server{
 		Addr:              cfg.Addr,
@@ -66,6 +89,14 @@ func New(cfg Config, svc *agents.Service, mcpSrv *mcpserver.MCPServer, log *slog
 		IdleTimeout: 120 * time.Second,
 	}
 	return s, nil
+}
+
+// guard requires an authenticated caller when OAuth is on.
+func (s *Server) guard(next http.Handler) http.Handler {
+	if s.oauth == nil {
+		return next
+	}
+	return s.oauth.protect(next)
 }
 
 // Handler exposes the mux (tests).
@@ -91,6 +122,9 @@ func (s *Server) Run(ctx context.Context) error {
 	}
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
+	if s.oauth != nil {
+		s.oauth.shutdown(shutdownCtx)
+	}
 	if err := s.http.Shutdown(shutdownCtx); err != nil {
 		return fmt.Errorf("shutdown: %w", err)
 	}
