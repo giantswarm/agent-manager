@@ -15,6 +15,7 @@ import (
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	kubefake "k8s.io/client-go/kubernetes/fake"
 
+	"github.com/giantswarm/agent-manager/internal/identity"
 	"github.com/giantswarm/agent-manager/internal/kube"
 )
 
@@ -458,4 +459,39 @@ func TestListModelConfigsAndInfo(t *testing.T) {
 
 	_, err = f.svc.ListSkills(ctx, "", "", false)
 	assert.ErrorIs(t, err, ErrUnsupported)
+}
+
+// TestMutationsCarryTheCaller: with OAuth in front, every write is attributed
+// to the authenticated caller — on the result (requestedBy) and in the log —
+// and a caller-only server refuses to act for a request without a token.
+func TestMutationsCarryTheCaller(t *testing.T) {
+	f := seeded(t)
+	ctx := identity.ContextWith(context.Background(), &identity.Identity{Subject: "sub-1", Email: "admin@lab.local", Source: identity.SourceSSO})
+
+	created, err := f.svc.Create(ctx, Spec{Name: "sre", ModelConfig: "default-model-config"})
+	require.NoError(t, err)
+	assert.Equal(t, "admin@lab.local", created.RequestedBy)
+
+	desc := "on call"
+	updated, err := f.svc.Update(ctx, Update{Name: "sre", Description: &desc})
+	require.NoError(t, err)
+	assert.Equal(t, "admin@lab.local", updated.RequestedBy)
+
+	deleted, err := f.svc.Delete(ctx, "", "sre", false)
+	require.NoError(t, err)
+	assert.Equal(t, "admin@lab.local", deleted.RequestedBy)
+
+	anonymous, err := f.svc.Create(context.Background(), Spec{Name: "sre", ModelConfig: "default-model-config"})
+	require.NoError(t, err)
+	assert.Empty(t, anonymous.RequestedBy, "without OAuth there is no caller to report")
+
+	// The caller provider (downstream OAuth): no token on the request, no
+	// Kubernetes call — 401, not a ServiceAccount fallback.
+	callerOnly := New(kube.NewCallerProvider(kube.FromInterfaces(f.dyn, f.typed, f.typed.Discovery()), nil), embeddedChart{}, nil, Config{DefaultNamespace: "kagent", Version: "test"}, nil)
+	assert.True(t, callerOnly.Info(context.Background()).Capabilities["writesAsCaller"])
+	assert.Equal(t, kube.IdentityCaller, callerOnly.Info(context.Background()).Identity)
+	_, err = callerOnly.List(context.Background(), "")
+	assert.ErrorIs(t, err, ErrUnauthenticated)
+	_, err = callerOnly.Create(context.Background(), Spec{Name: "sre", ModelConfig: "default-model-config"})
+	assert.ErrorIs(t, err, ErrUnauthenticated)
 }

@@ -114,17 +114,43 @@ composed manifests and every violation without writing.
 
 ## Identity
 
-Writes run under agent-manager's own ServiceAccount (the Role in the managed
-namespaces: HelmReleases and OCIRepositories read/write; Agents, ModelConfigs,
-Deployments, pods and events read; Agents delete for the forced bare-CR case).
-The service checks no identity itself: on the platform the agentgateway JWT
-policy in front of the route and muster in front of the MCP endpoint are the
-trust boundary — the same model as model-manager. The Kubernetes client sits
-behind `internal/kube.Provider`, so a per-call client authenticated with the
-caller's own token (muster's `callerwrite` pattern, epic
-[giantswarm#37459](https://github.com/giantswarm/giantswarm/issues/37459)) can
-replace it without touching the service; `get_info` reports
-`capabilities.writesAsCaller: false` until it does.
+The caller, not the ServiceAccount. With `--enable-oauth` agent-manager is an
+OAuth 2.1 resource server ([mcp-oauth](https://github.com/giantswarm/mcp-oauth))
+in front of **both** the MCP endpoint and the REST API; providers `dex` (with
+`--dex-ca-file` and `--allow-private-oauth-urls` for an in-cluster Dex) and
+`google`. Nobody logs in to agent-manager itself: muster forwards the session's
+IdP id_token byte-identical (MCPServer `auth: {type: oauth, forwardToken: true,
+requiredAudiences}`, rendered by the chart under `muster.mcpServer.auth`) and
+the portal sends the signed-in user's id_token through the gateway; both are
+validated against the IdP's JWKS because their audience — the platform OAuth
+client — is in `--oauth-trusted-audiences`. The caller (`internal/identity`:
+subject, email, groups, source `sso|oauth`) is on every write's log line
+(`caller=`) and on every create/update/delete result as `requestedBy`.
+
+`--downstream-oauth` presents the caller's token to the kube-apiserver for
+everything a request does — the HelmRelease and OCIRepository writes, the
+Agent, ModelConfig, Deployment, pod and event reads — through per-caller
+clients (`internal/kube.CallerProvider`, built from
+`rest.AnonymousClientConfig` + the caller's bearer, cached until the token's
+`exp`). The user's RBAC governs; the ServiceAccount holds **no** permissions
+(the chart renders no Role or RoleBinding with `oauth.downstream.enabled`) and
+there is no fallback: a request without an IdP token is refused with `401`, a
+token that expires mid-request keeps being presented and the apiserver's `401`
+fails the request, attributed to the caller. agent-manager has no background
+Kubernetes work — API version discovery at startup is what every authenticated
+principal may read — so the ServiceAccount token stays mounted only for the
+in-cluster address and CA. The apiserver must trust the token: with Dex the
+audience it trusts (`dex-k8s-authenticator` on Giant Swarm clusters,
+`kubernetes` in agentlab) is requested as a cross-client scope through
+`requiredAudiences`; a Google IdP has no cross-client scopes and the platform
+client id *is* the apiserver's `--oidc-client-id` (`requiredAudiences: []`).
+`get_info` reports `identity: caller` and `capabilities.writesAsCaller: true`.
+
+Without `--enable-oauth` the service checks no identity and acts as its
+ServiceAccount (the Role per managed namespace: HelmReleases and
+OCIRepositories read/write; Agents, ModelConfigs, Deployments, pods and events
+read; Agents delete for the forced bare-CR case) — only for a server nothing
+but a trusted proxy (the agentgateway JWT policy, muster) can reach.
 
 ## Running
 

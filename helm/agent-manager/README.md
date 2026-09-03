@@ -55,6 +55,7 @@ standalone installs set `kagent.namespace`, `image.*`, `mcp.enabled`,
 | imagePullSecrets | list | `[]` | Image pull secrets. |
 | nameOverride | string | `""` | Override the chart name. |
 | fullnameOverride | string | `""` | Override the fully qualified release name (the umbrella chart pins the Service name through this). |
+| global | object | `{}` |  |
 | kagent.namespace | string | `"kagent"` | Namespace agents are created in and listed from by default — the namespace kagent watches and the platform admin provisions ModelConfigs into. The Role for HelmReleases, OCIRepositories, Agents, ModelConfigs, Deployments, pods and events is created here. |
 | kagent.additionalNamespaces | list | `[]` | Additional namespaces agents may live in (multi-tenant installs). Each gets the same Role; requests naming any other namespace are refused. |
 | kagent.apiVersion | string | `"auto"` | kagent.dev API version for Agents and ModelConfigs; `auto` discovers the server's preferred version. |
@@ -73,11 +74,27 @@ standalone installs set `kagent.namespace`, `image.*`, `mcp.enabled`,
 | skills.cacheTTL | string | `"5m"` | How long a repository's discovered skills are reused. |
 | mcp.enabled | bool | `true` | Serve the MCP streamable-HTTP endpoint alongside the REST API. |
 | mcp.path | string | `"/mcp"` | MCP endpoint path. |
+| oauth.enabled | bool | `false` | Make agent-manager an OAuth 2.1 resource server (mcp-oauth): the MCP endpoint and the REST API require a bearer token the platform identity provider issued, and every call carries the caller's identity (logged on every write, returned as `requestedBy`). On the Agent Platform muster forwards the session's IdP id_token to this server (MCPServer `auth.forwardToken`, rendered below) and the portal sends the signed-in user's id_token through the gateway; both are validated against the IdP's JWKS when their audience is in `trustedAudiences`. Off: anonymous, acting as the ServiceAccount — only for a server nothing but a trusted proxy can reach. |
+| oauth.baseURL | string | `""` | Public base URL of this server: the issuer of its own OAuth metadata (https, or http on loopback). Empty derives `https://<fullname>.<global.domain>` when `global.domain` is set. |
+| oauth.provider | string | `"dex"` | Identity provider: `dex` or `google`. |
+| oauth.dex.issuerURL | string | `""` | Dex issuer URL. Empty falls back to `global.identity.issuerUrl`. |
+| oauth.dex.clientID | string | `""` | Dex OAuth client ID. Empty falls back to `global.identity.clientId`. |
+| oauth.dex.clientSecret | string | `""` | Dex OAuth client secret (prefer `oauth.existingSecret`). |
+| oauth.dex.allowPrivateURLs | bool | `false` | Let the issuer resolve to a private or loopback address (an in-cluster Dex). |
+| oauth.dex.caSecret | object | `{"key":"ca.crt","name":""}` | Secret with the CA of a Dex that serves a private certificate; mounted and passed as `--dex-ca-file`. Empty name falls back to `global.identity.ca.secretName` / `global.identity.ca.key`. |
+| oauth.google.clientID | string | `""` | Google OAuth client ID (not secret; may also come from the Secret key `google-client-id` when empty). |
+| oauth.google.clientSecret | string | `""` | Google OAuth client secret (prefer `oauth.existingSecret`). |
+| oauth.existingSecret | string | `""` | Existing Secret with the provider credentials: `dex-client-secret` (dex) or `google-client-secret` (+ optional `google-client-id`) (google). Empty falls back to `global.identity.existingSecret`, whose `dex-client-secret` is the platform client's; without that, the chart renders a Secret from the values above. |
+| oauth.trustedAudiences | list | `[]` | OAuth client IDs whose IdP id_tokens are accepted as bearer tokens (SSO token forwarding): the platform client muster forwards tokens for and the portal logs in with. Empty falls back to `[global.identity.clientId]`. |
+| oauth.sso.allowPrivateIPs | bool | `false` | Let the IdP's JWKS endpoint resolve to a private address when validating forwarded tokens (an in-cluster Dex). |
+| oauth.allowPublicClientRegistration | bool | `false` | Accept unauthenticated dynamic client registration (labs only). |
+| oauth.downstream.enabled | bool | `false` | Call the Kubernetes API as the caller: everything a request does (HelmReleases and OCIRepositories, the Agents, ModelConfigs, Deployments, pods and events it reads) presents the caller's IdP token, so the caller's RBAC governs — the apiserver must trust the IdP and the token's audience (a Dex install lists that audience in `muster.mcpServer.auth.requiredAudiences`; a Google install's client id is the apiserver's `--oidc-client-id`). The ServiceAccount then holds no permissions: the chart renders none of its Roles (`rbac.create` is moot) and the token stays mounted only for the in-cluster API address and CA plus API discovery at startup, which every authenticated principal may read. agent-manager has no background work, so nothing is lost: a request without a token is refused with 401 instead of running as the ServiceAccount. |
 | muster.mcpServer.enabled | bool | `false` | Register this server with muster by rendering an `mcpservers.muster.giantswarm.io` CR in the release namespace. Tools then appear as `x_<name>_<tool>`. |
 | muster.mcpServer.name | string | `"agent-manager"` | MCPServer CR name (drives the tool prefix). |
 | muster.mcpServer.autoStart | bool | `true` | Start the server connection when muster initializes. |
 | muster.mcpServer.description | string | `"Agent lifecycle (create, update, delete, status, skills, model configs) for the Agent Platform"` | Human-readable description shown by muster. |
 | muster.mcpServer.labels | object | `{}` | Extra labels on the MCPServer CR. |
+| muster.mcpServer.auth | object | `{"forwardToken":true,"requiredAudiences":[]}` | How muster authenticates to this server; rendered only with `oauth.enabled`. `forwardToken` makes muster forward the session's IdP id_token byte-identical (the SSO path this chart trusts through `oauth.trustedAudiences`). `requiredAudiences` are extra audiences that token must carry — the Dex cross-client audience the kube-apiserver trusts (`dex-k8s-authenticator` on Giant Swarm clusters; agentlab's is `kubernetes`) so `oauth.downstream` works; muster requests them at login, so users re-login after a change. A Google IdP has no cross-client audiences: leave the list empty. |
 | httpRoute.enabled | bool | `false` | Expose the service through a Gateway API HTTPRoute. |
 | httpRoute.parentRefs | list | `[]` | parentRefs of the HTTPRoute (required when enabled). |
 | httpRoute.hostnames | list | `[]` | Hostnames matched by the route. |
@@ -91,7 +108,7 @@ standalone installs set `kagent.namespace`, `image.*`, `mcp.enabled`,
 | serviceAccount.create | bool | `true` | Create a ServiceAccount. |
 | serviceAccount.annotations | object | `{}` | Annotations on the ServiceAccount. |
 | serviceAccount.name | string | `""` | ServiceAccount name (generated when empty). |
-| rbac.create | bool | `true` | Create the Role/RoleBinding in `kagent.namespace` (and every `kagent.additionalNamespaces` entry): HelmReleases and OCIRepositories read/write; Agents, ModelConfigs, Deployments, pods and events read. |
+| rbac.create | bool | `true` | Create the Role/RoleBinding in `kagent.namespace` (and every `kagent.additionalNamespaces` entry): HelmReleases and OCIRepositories read/write; Agents, ModelConfigs, Deployments, pods and events read — the ServiceAccount's own permissions. Ignored with `oauth.downstream.enabled`: the ServiceAccount then gets no RBAC at all, the caller's RBAC governs. |
 | podAnnotations | object | `{}` | Annotations on the pod. |
 | podLabels | object | `{}` | Labels on the pod. |
 | podSecurityContext | object | `{"fsGroup":1000,"runAsGroup":1000,"runAsNonRoot":true,"runAsUser":1000,"seccompProfile":{"type":"RuntimeDefault"}}` | Pod security context. |

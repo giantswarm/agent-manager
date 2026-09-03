@@ -261,6 +261,8 @@ func statusFor(err error) (int, string) {
 		return http.StatusConflict, "conflict"
 	case errors.Is(err, agents.ErrForbidden):
 		return http.StatusForbidden, "forbidden"
+	case errors.Is(err, agents.ErrUnauthenticated):
+		return http.StatusUnauthorized, "unauthenticated"
 	case errors.Is(err, agents.ErrUnsupported):
 		return http.StatusNotImplemented, "unsupported"
 	default:

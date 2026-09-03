@@ -15,6 +15,7 @@ import (
 	"k8s.io/client-go/dynamic"
 
 	"github.com/giantswarm/agent-manager/internal/chart"
+	"github.com/giantswarm/agent-manager/internal/identity"
 	"github.com/giantswarm/agent-manager/internal/kube"
 	"github.com/giantswarm/agent-manager/internal/skills"
 )
@@ -102,8 +103,9 @@ type InfoResponse struct {
 	// Capabilities are explicit flags; a false flag means the matching
 	// operation answers 501 unsupported.
 	Capabilities map[string]bool `json:"capabilities"`
-	// Identity says how writes reach the API server: serviceAccount (the
-	// service's own identity behind the gateway's JWT policy).
+	// Identity says how calls reach the API server: `caller` (every call
+	// presents the signed-in user's IdP token; the user's RBAC governs) or
+	// `serviceAccount` (the service's own identity behind a trusted proxy).
 	Identity string `json:"identity"`
 	// APIVersions are the served CRD versions the service composes and reads.
 	APIVersions struct {
@@ -133,7 +135,7 @@ func (s *Service) Info(ctx context.Context) InfoResponse {
 		"list": true, "get": true, "create": true, "update": true, "delete": true,
 		"status": true, "validate": true, "modelConfigs": true,
 		"skills":         s.skills != nil,
-		"writesAsCaller": false,
+		"writesAsCaller": s.kube.Identity() == kube.IdentityCaller,
 	}
 	out.Identity = s.kube.Identity()
 	out.APIVersions.Agent = "kagent.dev/" + s.cfg.KagentAPIVersion
@@ -195,6 +197,9 @@ func (s *Service) Namespace(ns string) (string, error) {
 func (s *Service) dyn(ctx context.Context) (dynamic.Interface, kube.Client, error) {
 	c, err := s.kube.Client(ctx)
 	if err != nil {
+		if errorsIs(err, kube.ErrNoCallerToken) {
+			return nil, nil, fmt.Errorf("%w: the request carries no identity token to act with: %v", ErrUnauthenticated, err)
+		}
 		return nil, nil, fmt.Errorf("kubernetes client: %w", err)
 	}
 	return c.Dynamic(), c, nil
@@ -579,7 +584,7 @@ func (s *Service) Create(ctx context.Context, spec Spec) (*CreateResult, error) 
 		return nil, invalidf("values do not satisfy the agent chart schema %s (%s): %s", sch.Version, sch.Source, strings.Join(violations, "; "))
 	}
 
-	res := &CreateResult{}
+	res := &CreateResult{RequestedBy: identity.Caller(ctx)}
 	res.Manifests = ComposeManifests(spec.Name, ns, values, s.cfg.Compose)
 
 	// The chart source is shared per namespace: create it once, reuse it after.
@@ -611,7 +616,7 @@ func (s *Service) Create(ctx context.Context, spec Spec) (*CreateResult, error) 
 	if st, err := s.Status(ctx, ns, spec.Name); err == nil {
 		res.Status = st
 	}
-	s.log.Info("agent created", "namespace", ns, "name", spec.Name, "modelConfig", spec.ModelConfig, "ociRepositoryCreated", res.Created.OCIRepository)
+	s.log.Info("agent created", identity.LogAttr(ctx), "namespace", ns, "name", spec.Name, "modelConfig", spec.ModelConfig, "ociRepositoryCreated", res.Created.OCIRepository)
 	return res, nil
 }
 
@@ -761,7 +766,7 @@ func (s *Service) Update(ctx context.Context, upd Update) (*UpdateResult, error)
 		return nil, invalidf("values do not satisfy the agent chart schema %s (%s): %s", sch.Version, sch.Source, strings.Join(violations, "; "))
 	}
 	changed := changedPaths("", before, after)
-	res := &UpdateResult{Before: before, After: after, Changed: changed}
+	res := &UpdateResult{Before: before, After: after, Changed: changed, RequestedBy: identity.Caller(ctx)}
 	res.Manifests = ComposeManifests(upd.Name, ns, after, s.cfg.Compose)
 	if len(changed) == 0 {
 		agent, err := s.get(ctx, dyn, ns, upd.Name)
@@ -784,7 +789,7 @@ func (s *Service) Update(ctx context.Context, upd Update) (*UpdateResult, error)
 		applyHelmRelease(agent, updated)
 	}
 	res.Agent = *agent
-	s.log.Info("agent updated", "namespace", ns, "name", upd.Name, "changed", changed)
+	s.log.Info("agent updated", identity.LogAttr(ctx), "namespace", ns, "name", upd.Name, "changed", changed)
 	return res, nil
 }
 
@@ -840,7 +845,7 @@ func (s *Service) Delete(ctx context.Context, ns, name string, force bool) (*Del
 	if err != nil {
 		return nil, err
 	}
-	res := &DeleteResult{Name: name, Namespace: ns}
+	res := &DeleteResult{Name: name, Namespace: ns, RequestedBy: identity.Caller(ctx)}
 	hr, cr, err := s.writableHelmRelease(ctx, dyn, ns, name, force)
 	if err != nil {
 		if hr == nil && cr != nil && force && errorsIs(err, ErrConflict) {
@@ -849,7 +854,7 @@ func (s *Service) Delete(ctx context.Context, ns, name string, force bool) (*Del
 				return nil, wrapKube(err, fmt.Sprintf("delete Agent %s/%s", ns, name))
 			}
 			res.AgentDeleted = true
-			s.log.Info("bare agent deleted", "namespace", ns, "name", name)
+			s.log.Info("bare agent deleted", identity.LogAttr(ctx), "namespace", ns, "name", name)
 			return res, nil
 		}
 		return nil, err
@@ -894,7 +899,7 @@ func (s *Service) Delete(ctx context.Context, ns, name string, force bool) (*Del
 		return res, nil
 	}
 	res.OCIRepositoryDeleted = true
-	s.log.Info("agent deleted", "namespace", ns, "name", name, "ociRepositoryDeleted", true)
+	s.log.Info("agent deleted", identity.LogAttr(ctx), "namespace", ns, "name", name, "ociRepositoryDeleted", true)
 	return res, nil
 }
 

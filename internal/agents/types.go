@@ -27,6 +27,9 @@ var (
 	ErrForbidden = errors.New("forbidden")
 	// ErrUnsupported: the operation is not available on this installation.
 	ErrUnsupported = errors.New("unsupported")
+	// ErrUnauthenticated: the request reached the service without the caller
+	// token it needs to act (the server runs as the caller only). 401.
+	ErrUnauthenticated = errors.New("unauthenticated")
 )
 
 // Labels and annotations the platform agrees on.
@@ -248,6 +251,9 @@ type CreateResult struct {
 		HelmRelease   bool `json:"helmRelease"`
 	} `json:"created"`
 	Status *Status `json:"status,omitempty"`
+	// RequestedBy is the authenticated caller the write ran as (email, else
+	// subject); empty when the server runs without OAuth.
+	RequestedBy string `json:"requestedBy,omitempty"`
 }
 
 // UpdateResult reports before/after values of an update.
@@ -257,6 +263,8 @@ type UpdateResult struct {
 	After     map[string]any `json:"after"`
 	Changed   []string       `json:"changed"`
 	Manifests Manifests      `json:"manifests"`
+	// RequestedBy is the authenticated caller the write ran as.
+	RequestedBy string `json:"requestedBy,omitempty"`
 }
 
 // DeleteResult reports what a delete removed.
@@ -269,6 +277,8 @@ type DeleteResult struct {
 	// OCIRepositoryKept explains why the chart source stays (other agents
 	// reference it, or it could not be checked).
 	OCIRepositoryKept string `json:"ociRepositoryKept,omitempty"`
+	// RequestedBy is the authenticated caller the delete ran as.
+	RequestedBy string `json:"requestedBy,omitempty"`
 }
 
 // Verdicts of a status check.

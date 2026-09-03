@@ -16,8 +16,14 @@ info:
     Clients MUST call `GET /api/v1/info` first: it reports the managed
     namespaces, the chart version whose schema validates right now, and the
     capability flags (a false flag means the operation answers `501
-    unsupported`). Writes run under agent-manager's own ServiceAccount; the
-    agentgateway JWT policy in front of the route is the trust boundary.
+    unsupported`) and `identity`: `caller` means the server is an OAuth 2.1
+    resource server — every request needs a bearer token the platform IdP
+    issued (muster forwards the session's id_token, the portal sends the
+    user's through the gateway) and every Kubernetes call is made as that
+    user, so the user's RBAC decides and writes report `requestedBy`;
+    `serviceAccount` means no OAuth, the service's own identity behind a
+    trusted proxy. Without a valid token the OAuth layer answers `401` with a
+    `WWW-Authenticate: Bearer` challenge (RFC 9728) before any handler runs.
 
     The same operations are available as MCP tools (streamable HTTP at `/mcp`,
     tool names in `x-mcp-tool` below; through muster they appear as
@@ -333,7 +339,7 @@ components:
           properties:
             code:
               type: string
-              enum: [not_found, invalid_request, conflict, forbidden, unsupported, backend_error]
+              enum: [not_found, invalid_request, conflict, forbidden, unauthenticated, unsupported, backend_error]
             message: { type: string }
     Info:
       type: object
@@ -357,8 +363,16 @@ components:
         capabilities:
           type: object
           additionalProperties: { type: boolean }
-          description: "list, get, create, update, delete, status, validate, modelConfigs, skills, writesAsCaller"
-        identity: { type: string, enum: [serviceAccount] }
+          description: "list, get, create, update, delete, status, validate, modelConfigs, skills, writesAsCaller (true when identity is caller)"
+        identity:
+          type: string
+          enum: [caller, serviceAccount]
+          description: >-
+            How calls reach the Kubernetes API. `caller`: the server runs as an OAuth 2.1 resource
+            server (mcp-oauth) with downstream OAuth — every call presents the signed-in user's IdP
+            id_token (forwarded by muster, or sent by the portal through the gateway) and the user's
+            RBAC governs; the ServiceAccount holds no permissions. `serviceAccount`: no OAuth, the
+            service's own identity behind a trusted proxy.
         apiVersions:
           type: object
           properties:
@@ -491,6 +505,7 @@ components:
             ociRepository: { type: boolean }
             helmRelease: { type: boolean }
         status: { $ref: "#/components/schemas/Status" }
+        requestedBy: { type: string, description: The authenticated caller the write ran as (email, else subject); absent without OAuth }
     UpdateResult:
       type: object
       properties:
@@ -498,6 +513,7 @@ components:
         before: { type: object }
         after: { type: object }
         changed: { type: array, items: { type: string }, description: Dotted value paths that changed }
+        requestedBy: { type: string, description: The authenticated caller the write ran as }
         manifests: { $ref: "#/components/schemas/Manifests" }
     DeleteResult:
       type: object
@@ -508,6 +524,7 @@ components:
         agentDeleted: { type: boolean, description: A bare Agent CR was deleted directly (force) }
         ociRepositoryDeleted: { type: boolean }
         ociRepositoryKept: { type: string, description: Why the shared chart source stays }
+        requestedBy: { type: string, description: The authenticated caller the delete ran as }
     Status:
       type: object
       properties:

@@ -27,6 +27,8 @@ func (embeddedChart) Name() string                        { return "agent" }
 func (embeddedChart) OCIURL() string                      { return agents.DefaultChartOCIURL }
 func (embeddedChart) SemverRange() string                 { return "x.x.x" }
 
+// Without OAuth nothing guards the API: the deployment in front of it is the
+// trust boundary and the service acts as its ServiceAccount.
 func TestServerMountsHealthRESTAndMCP(t *testing.T) {
 	dyn := dynamicfake.NewSimpleDynamicClient(runtime.NewScheme())
 	typed := kubefake.NewClientset()
