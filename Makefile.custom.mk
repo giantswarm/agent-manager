@@ -25,6 +25,19 @@ helm-lint: ## Lint the chart.
 helm-template: ## Render the chart with defaults.
 	helm template agent-manager helm/agent-manager
 
+HELM_UNITTEST_VERSION := 1.0.3
+
+.PHONY: helm-test
+helm-test: helm-lint helm-unittest ## Run every chart check (what the chart-test CI job runs).
+
+.PHONY: helm-unittest
+helm-unittest: helm-plugin-unittest ## Run the helm-unittest suites in helm/agent-manager/tests/.
+	helm unittest helm/agent-manager
+
+.PHONY: helm-plugin-unittest
+helm-plugin-unittest:
+	@helm plugin list | grep -q '^unittest' || helm plugin install https://github.com/helm-unittest/helm-unittest --version $(HELM_UNITTEST_VERSION)
+
 .PHONY: helm-schema
 helm-schema: ## Regenerate values.schema.json (needs the helm schema plugin and schemalint).
 	helm schema --config helm/agent-manager/.schema.yaml

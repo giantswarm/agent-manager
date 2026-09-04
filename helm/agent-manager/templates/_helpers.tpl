@@ -142,10 +142,21 @@ global.identity.ca. Name empty means system trust.
 {{- end }}
 
 {{/*
-Trusted audiences, comma-separated: oauth.trustedAudiences, else the platform
-client id.
+Trusted audiences, comma-separated: oauth.trustedAudiences (else the platform
+client id, global.identity.clientId) plus muster.mcpServer.auth.requiredAudiences,
+de-duplicated, order kept. Every token muster forwards carries the required
+audiences by construction, and they are the audiences the kube-apiserver
+trusts — the trust anchor for a server whose only use of the token is to
+present it downstream. The platform client alone refuses a portal session:
+its id_token names the portal's own client next to the required audiences,
+never the platform client. A Google installation requires no audiences, so
+the union adds nothing there.
 */}}
 {{- define "agent-manager.oauthTrustedAudiences" -}}
 {{- $g := include "agent-manager.globalIdentity" . | fromJson -}}
-{{- if .Values.oauth.trustedAudiences }}{{ join "," .Values.oauth.trustedAudiences }}{{ else }}{{ dig "clientId" "" $g }}{{ end }}
+{{- $all := .Values.oauth.trustedAudiences | default (compact (list (dig "clientId" "" $g))) -}}
+{{- range .Values.muster.mcpServer.auth.requiredAudiences -}}
+{{- $all = append $all . -}}
+{{- end -}}
+{{- $all | uniq | join "," -}}
 {{- end }}

@@ -4,6 +4,7 @@
 go build ./...          # the binary
 go test ./...           # unit tests (fake dynamic + typed kube clients, httptest registry and GitHub)
 make lint               # golangci-lint with the pre-commit linters (gosec, goconst, govet)
+make helm-test          # helm lint + the helm-unittest suites in helm/agent-manager/tests (the chart-test CI job)
 make helm-schema        # regenerate helm/agent-manager/values.schema.json
 make helm-docs          # regenerate helm/agent-manager/README.md
 ```

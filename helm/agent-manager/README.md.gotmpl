@@ -23,10 +23,21 @@ and reads agents back from the Agent CR, the HelmRelease and the workload.
 - `skills.repositories` are the GitHub repositories `list_skills` discovers
   `SKILL.md` files in; `skills.github.tokenSecret` names a Secret with a token
   for private repositories.
-- Writes run under the chart's ServiceAccount; the service checks no identity
-  itself. On the platform the agentgateway JWT policy in front of the route
-  (rendered by `agent-platform-standalone`) and muster in front of the MCP
-  endpoint are the trust boundary.
+- With `oauth.enabled` the service is an OAuth 2.1 resource server: every
+  request carries the caller's identity, and with `oauth.downstream.enabled`
+  every Kubernetes call is made as the caller (the ServiceAccount holds no
+  RBAC). The bearer tokens it accepts are the IdP id_tokens muster forwards,
+  whose audience must be trusted: `oauth.trustedAudiences` (default: the
+  platform client, `global.identity.clientId`) plus, always,
+  `muster.mcpServer.auth.requiredAudiences` — every forwarded token carries
+  those by construction and they are what the kube-apiserver trusts, so a
+  portal session, whose id_token names the portal's own client, is accepted
+  without a per-installation list. A token for none of them is refused with
+  `401`, naming its `aud` next to the trusted audiences.
+- Without OAuth writes run under the chart's ServiceAccount and the service
+  checks no identity itself; the agentgateway JWT policy in front of the
+  route (rendered by `agent-platform-standalone`) and muster in front of the
+  MCP endpoint are then the trust boundary.
 
 Used as a dependency of `agent-platform-standalone` behind a `condition`;
 standalone installs set `kagent.namespace`, `image.*`, `mcp.enabled`,
