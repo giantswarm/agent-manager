@@ -122,10 +122,19 @@ in front of **both** the MCP endpoint and the REST API; providers `dex` (with
 IdP id_token byte-identical (MCPServer `auth: {type: oauth, forwardToken: true,
 requiredAudiences}`, rendered by the chart under `muster.mcpServer.auth`) and
 the portal sends the signed-in user's id_token through the gateway; both are
-validated against the IdP's JWKS because their audience — the platform OAuth
-client — is in `--oauth-trusted-audiences`. The caller (`internal/identity`:
-subject, email, groups, source `sso|oauth`) is on every write's log line
-(`caller=`) and on every create/update/delete result as `requestedBy`.
+validated against the IdP's JWKS because their audience is in
+`--oauth-trusted-audiences`. Which audience that is depends on the session:
+muster's own sessions and MCP clients sign in through the platform OAuth
+client, a portal session forwards the id_token of the portal's own client —
+and every forwarded token carries the audiences the MCPServer requires, the
+ones the kube-apiserver trusts. So the chart trusts both: `oauth.trustedAudiences`
+(default `[global.identity.clientId]`) plus `muster.mcpServer.auth.requiredAudiences`,
+always. A token for none of them is refused with `401`; the log line and the
+`WWW-Authenticate` description name its `aud` next to the trusted audiences
+(muster shows the description in its session hint). The caller
+(`internal/identity`: subject, email, groups, source `sso|oauth`) is on every
+write's log line (`caller=`) and on every create/update/delete result as
+`requestedBy`.
 
 `--downstream-oauth` presents the caller's token to the kube-apiserver for
 everything a request does — the HelmRelease and OCIRepository writes, the

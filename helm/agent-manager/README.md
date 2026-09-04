@@ -22,10 +22,21 @@ and reads agents back from the Agent CR, the HelmRelease and the workload.
 - `skills.repositories` are the GitHub repositories `list_skills` discovers
   `SKILL.md` files in; `skills.github.tokenSecret` names a Secret with a token
   for private repositories.
-- Writes run under the chart's ServiceAccount; the service checks no identity
-  itself. On the platform the agentgateway JWT policy in front of the route
-  (rendered by `agent-platform-standalone`) and muster in front of the MCP
-  endpoint are the trust boundary.
+- With `oauth.enabled` the service is an OAuth 2.1 resource server: every
+  request carries the caller's identity, and with `oauth.downstream.enabled`
+  every Kubernetes call is made as the caller (the ServiceAccount holds no
+  RBAC). The bearer tokens it accepts are the IdP id_tokens muster forwards,
+  whose audience must be trusted: `oauth.trustedAudiences` (default: the
+  platform client, `global.identity.clientId`) plus, always,
+  `muster.mcpServer.auth.requiredAudiences` — every forwarded token carries
+  those by construction and they are what the kube-apiserver trusts, so a
+  portal session, whose id_token names the portal's own client, is accepted
+  without a per-installation list. A token for none of them is refused with
+  `401`, naming its `aud` next to the trusted audiences.
+- Without OAuth writes run under the chart's ServiceAccount and the service
+  checks no identity itself; the agentgateway JWT policy in front of the
+  route (rendered by `agent-platform-standalone`) and muster in front of the
+  MCP endpoint are then the trust boundary.
 
 Used as a dependency of `agent-platform-standalone` behind a `condition`;
 standalone installs set `kagent.namespace`, `image.*`, `mcp.enabled`,
@@ -85,7 +96,7 @@ standalone installs set `kagent.namespace`, `image.*`, `mcp.enabled`,
 | oauth.google.clientID | string | `""` | Google OAuth client ID (not secret; may also come from the Secret key `google-client-id` when empty). |
 | oauth.google.clientSecret | string | `""` | Google OAuth client secret (prefer `oauth.existingSecret`). |
 | oauth.existingSecret | string | `""` | Existing Secret with the provider credentials: `dex-client-secret` (dex) or `google-client-secret` (+ optional `google-client-id`) (google). Empty falls back to `global.identity.existingSecret`, whose `dex-client-secret` is the platform client's; without that, the chart renders a Secret from the values above. |
-| oauth.trustedAudiences | list | `[]` | OAuth client IDs whose IdP id_tokens are accepted as bearer tokens (SSO token forwarding): the platform client muster forwards tokens for and the portal logs in with. Empty falls back to `[global.identity.clientId]`. |
+| oauth.trustedAudiences | list | `[]` | OAuth client IDs whose IdP id_tokens are accepted as bearer tokens (SSO token forwarding). Empty falls back to `[global.identity.clientId]`, the platform client MCP clients and the muster CLI log in with. The server trusts the union of this list and `muster.mcpServer.auth.requiredAudiences` (in that order, without duplicates): every token muster forwards carries the required audiences by construction and they are what the kube-apiserver trusts, so a portal session — whose id_token carries them but not the platform client — is accepted without listing its client here. |
 | oauth.sso.allowPrivateIPs | bool | `false` | Let the IdP's JWKS endpoint resolve to a private address when validating forwarded tokens (an in-cluster Dex). |
 | oauth.allowPublicClientRegistration | bool | `false` | Accept unauthenticated dynamic client registration (labs only). |
 | oauth.downstream.enabled | bool | `false` | Call the Kubernetes API as the caller: everything a request does (HelmReleases and OCIRepositories, the Agents, ModelConfigs, Deployments, pods and events it reads) presents the caller's IdP token, so the caller's RBAC governs — the apiserver must trust the IdP and the token's audience (a Dex install lists that audience in `muster.mcpServer.auth.requiredAudiences`; a Google install's client id is the apiserver's `--oidc-client-id`). The ServiceAccount then holds no permissions: the chart renders none of its Roles (`rbac.create` is moot) and the token stays mounted only for the in-cluster API address and CA plus API discovery at startup, which every authenticated principal may read. agent-manager has no background work, so nothing is lost: a request without a token is refused with 401 instead of running as the ServiceAccount. |
@@ -94,7 +105,7 @@ standalone installs set `kagent.namespace`, `image.*`, `mcp.enabled`,
 | muster.mcpServer.autoStart | bool | `true` | Start the server connection when muster initializes. |
 | muster.mcpServer.description | string | `"Agent lifecycle (create, update, delete, status, skills, model configs) for the Agent Platform"` | Human-readable description shown by muster. |
 | muster.mcpServer.labels | object | `{}` | Extra labels on the MCPServer CR. |
-| muster.mcpServer.auth | object | `{"forwardToken":true,"requiredAudiences":[]}` | How muster authenticates to this server; rendered only with `oauth.enabled`. `forwardToken` makes muster forward the session's IdP id_token byte-identical (the SSO path this chart trusts through `oauth.trustedAudiences`). `requiredAudiences` are extra audiences that token must carry — the Dex cross-client audience the kube-apiserver trusts (`dex-k8s-authenticator` on Giant Swarm clusters; agentlab's is `kubernetes`) so `oauth.downstream` works; muster requests them at login, so users re-login after a change. A Google IdP has no cross-client audiences: leave the list empty. |
+| muster.mcpServer.auth | object | `{"forwardToken":true,"requiredAudiences":[]}` | How muster authenticates to this server; rendered only with `oauth.enabled`. `forwardToken` makes muster forward the session's IdP id_token byte-identical (the SSO path this chart trusts through its trusted audiences). `requiredAudiences` are extra audiences that token must carry — the Dex cross-client audience the kube-apiserver trusts (`dex-k8s-authenticator` on Giant Swarm clusters; agentlab's is `kubernetes`) so `oauth.downstream` works; muster requests them at login, so users re-login after a change. They are trusted as bearer audiences by construction, since the server's trusted audiences are `oauth.trustedAudiences` plus this list. A Google IdP has no cross-client audiences: leave the list empty. |
 | httpRoute.enabled | bool | `false` | Expose the service through a Gateway API HTTPRoute. |
 | httpRoute.parentRefs | list | `[]` | parentRefs of the HTTPRoute (required when enabled). |
 | httpRoute.hostnames | list | `[]` | Hostnames matched by the route. |

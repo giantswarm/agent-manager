@@ -1,0 +1,76 @@
+# The OAuth arguments the Deployment renders — above all the trusted
+# audiences, which decide whose forwarded id_tokens the server accepts.
+#
+# Run with: make helm-test (helm unittest helm/agent-manager)
+suite: deployment oauth arguments
+templates:
+  - templates/deployment.yaml
+set:
+  oauth:
+    enabled: true
+    existingSecret: platform-oauth
+  global:
+    domain: example.com
+    identity:
+      issuerUrl: https://dex.example.com
+      clientId: platform-client
+tests:
+  - it: trusts the platform client and the audiences the MCPServer requires by default
+    set:
+      muster:
+        mcpServer:
+          auth:
+            requiredAudiences:
+              - dex-k8s-authenticator
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --oauth-trusted-audiences=platform-client,dex-k8s-authenticator
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --dex-client-id=platform-client
+
+  - it: trusts only the platform client when no audience is required (a Google-shaped installation)
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --oauth-trusted-audiences=platform-client
+
+  - it: adds the required audiences to an explicit list, de-duplicated, order kept
+    set:
+      oauth:
+        trustedAudiences:
+          - platform-client
+          - portal-client
+          - dex-k8s-authenticator
+      muster:
+        mcpServer:
+          auth:
+            requiredAudiences:
+              - dex-k8s-authenticator
+              - kubernetes
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --oauth-trusted-audiences=platform-client,portal-client,dex-k8s-authenticator,kubernetes
+
+  - it: trusts the required audiences even when they are the only ones named
+    set:
+      global:
+        identity:
+          clientId: ""
+      oauth:
+        dex:
+          clientID: explicit-client
+      muster:
+        mcpServer:
+          auth:
+            requiredAudiences:
+              - kubernetes
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --oauth-trusted-audiences=kubernetes
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --dex-client-id=explicit-client
