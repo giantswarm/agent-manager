@@ -13,14 +13,15 @@
 app-tests-app-config-file: tests/test-values.yaml
 app-tests-deploy-namespace: agent-platform
 
-# CRDs applied before the install. ATS passes the value to one
+# Manifests applied before the install. ATS passes the value to one
 # `kubectl apply --server-side -f`, so a comma-separated list works: ATS's
-# bundled set (/etc/ats/crds) plus the APIs agent-manager discovers at startup
+# bundled CRDs (/etc/ats/crds), the `kagent` namespace the test values point
+# the chart at (tests/ats/cluster-prerequisites), plus the APIs agent-manager discovers at startup
 # and composes agents from, the Flux HelmRelease/OCIRepository and the kagent
 # Agent/ModelConfig CRDs. Without them the service logs a discovery warning and
 # falls back to its default API versions; with them the smoke covers the
 # discovery path. Bump the pins together with the platform's Flux and kagent.
-cluster-crds: /etc/ats/crds,https://raw.githubusercontent.com/fluxcd/helm-controller/v1.6.4/config/crd/bases/helm.toolkit.fluxcd.io_helmreleases.yaml,https://raw.githubusercontent.com/fluxcd/source-controller/v1.9.5/config/crd/bases/source.toolkit.fluxcd.io_ocirepositories.yaml,https://raw.githubusercontent.com/giantswarm/kagent/v0.1.42/helm/kagent/crds/kagent.dev/kagent.dev_agents.yaml,https://raw.githubusercontent.com/giantswarm/kagent/v0.1.42/helm/kagent/crds/kagent.dev/kagent.dev_modelconfigs.yaml
+cluster-crds: /etc/ats/crds,tests/ats/cluster-prerequisites,https://raw.githubusercontent.com/fluxcd/helm-controller/v1.6.4/config/crd/bases/helm.toolkit.fluxcd.io_helmreleases.yaml,https://raw.githubusercontent.com/fluxcd/source-controller/v1.9.5/config/crd/bases/source.toolkit.fluxcd.io_ocirepositories.yaml,https://raw.githubusercontent.com/giantswarm/kagent/v0.1.42/helm/kagent/crds/kagent.dev/kagent.dev_agents.yaml,https://raw.githubusercontent.com/giantswarm/kagent/v0.1.42/helm/kagent/crds/kagent.dev/kagent.dev_modelconfigs.yaml
 
 # functional: no second scenario. upgrade: an upgrade from the last release in
 # the catalog is a follow-up (agent-platform-standalone has the recipe).
