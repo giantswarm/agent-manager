@@ -12,11 +12,15 @@ metadata:
   name: {{ .Values.muster.mcpServer.name }}
   namespace: {{ .Release.Namespace }}
   labels:
-    muster.giantswarm.io/type: agent-manager
-    {{- include "agent-manager.labels" . | nindent 4 }}
-    {{- with .Values.muster.mcpServer.labels }}
-    {{- toYaml . | nindent 4 }}
-    {{- end }}
+    {{- /*
+    agent-platform.giantswarm.io/tool-group puts this server into the platform's
+    Agent Platform tier (the MCP servers page, the `agent-platform` toolset
+    preset). muster.mcpServer.labels is merged last, so it can add or override
+    any of these.
+    */}}
+    {{- $labels := dict "muster.giantswarm.io/type" "agent-manager" "agent-platform.giantswarm.io/tool-group" "agent-platform" }}
+    {{- $labels = mergeOverwrite $labels (include "agent-manager.labels" . | fromYaml) (default (dict) .Values.muster.mcpServer.labels) }}
+    {{- toYaml $labels | nindent 4 }}
 spec:
   autoStart: {{ .Values.muster.mcpServer.autoStart }}
   type: streamable-http
