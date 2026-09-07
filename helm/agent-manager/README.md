@@ -126,7 +126,7 @@ standalone installs set `kagent.namespace`, `image.*`, `mcp.enabled`,
 | securityContext | object | `{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]},"readOnlyRootFilesystem":true,"runAsGroup":1000,"runAsNonRoot":true,"runAsUser":1000,"seccompProfile":{"type":"RuntimeDefault"}}` | Container security context. |
 | service.type | string | `"ClusterIP"` | Service type. |
 | service.port | int | `8080` | Service port (container listens on 8080). |
-| resources | object | `{"limits":{"cpu":"500m","memory":"256Mi"},"requests":{"cpu":"50m","memory":"64Mi"}}` | Container resources. |
+| resources | object | `{"limits":{"cpu":"500m","ephemeral-storage":"100Mi","memory":"256Mi"},"requests":{"cpu":"50m","ephemeral-storage":"50Mi","memory":"64Mi"}}` | Container resources. |
 | logging.verbose | bool | `false` | Enable debug logging. |
 | extraArgs | list | `[]` | Extra container arguments. |
 | extraEnv | list | `[]` | Extra environment variables. |

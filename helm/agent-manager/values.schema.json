@@ -485,6 +485,9 @@
                         "cpu": {
                             "type": "string"
                         },
+                        "ephemeral-storage": {
+                            "type": "string"
+                        },
                         "memory": {
                             "type": "string"
                         }
@@ -495,6 +498,9 @@
                     "additionalProperties": false,
                     "properties": {
                         "cpu": {
+                            "type": "string"
+                        },
+                        "ephemeral-storage": {
                             "type": "string"
                         },
                         "memory": {
