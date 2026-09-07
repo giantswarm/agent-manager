@@ -74,20 +74,18 @@ func TestParseToolsetHeader(t *testing.T) {
 	assert.Nil(t, ParseToolsetHeader(" , "))
 }
 
-// declaringChart is a schema source whose schema declares `toolset` the way
-// the agent chart does once it ships the value (top-level array, 1..32
-// strings) — the registry schema after that chart release.
-type declaringChart struct{}
+// legacyChart is a schema source serving the schema of an agent chart from
+// before `toolset` existed (top-level additionalProperties: false, no
+// toolset): the embedded copy of an older service build, or a registry that
+// still resolves to such a version.
+type legacyChart struct{}
 
-func (declaringChart) Schema(context.Context) chart.Schema {
+func (legacyChart) Schema(context.Context) chart.Schema {
 	s := chart.EmbeddedSchema()
 	doc := s.Document.(map[string]any)
 	props := doc["properties"].(map[string]any)
-	props[ToolsetValuesKey] = map[string]any{
-		"type": "array", "minItems": 1, "maxItems": MaxToolsetSelectors,
-		"items": map[string]any{"type": "string", "pattern": `^(preset|server|workflow|tool):[^\s,]+$`},
-	}
-	s.Version, s.Source = "0.6.0", chart.SourceRegistry
+	delete(props, ToolsetValuesKey)
+	s.Version, s.Source = "0.5.6", chart.SourceRegistry
 	return s
 }
 
@@ -98,20 +96,27 @@ func TestToolsetValidationDoesNotDependOnTheSchemaKnowingTheKey(t *testing.T) {
 	_, hasMuster := values["muster"]
 	assert.False(t, hasMuster, "never muster.toolNames")
 
-	// The embedded schema (additionalProperties: false, no toolset) predates
-	// the value: the key is left out of the schema check, the rest is judged.
+	// The embedded schema is the agent chart's first release with toolset: it
+	// declares the key and validates it as well.
 	sch, violations := ValidateValues(ctx, embeddedChart{}, values)
 	assert.Equal(t, chart.SourceEmbedded, sch.Source)
+	assert.True(t, schemaDeclares(sch, ToolsetValuesKey), "embedded schema %s declares toolset", sch.Version)
 	assert.Empty(t, violations)
-	bad := BuildValues(Spec{Name: "sre", ModelConfig: "mc", Runtime: "rust", Toolset: []string{"preset:read-only"}})
-	_, violations = ValidateValues(ctx, embeddedChart{}, bad)
-	require.Len(t, violations, 1)
-	assert.Contains(t, violations[0], "/agent/runtime")
-
-	// A schema that declares toolset validates it as well.
-	_, violations = ValidateValues(ctx, declaringChart{}, values)
-	assert.Empty(t, violations)
-	_, violations = ValidateValues(ctx, declaringChart{}, map[string]any{"agent": map[string]any{"name": "sre"}, "modelConfig": map[string]any{"name": "mc"}, ToolsetValuesKey: []any{}})
+	_, violations = ValidateValues(ctx, embeddedChart{}, map[string]any{"agent": map[string]any{"name": "sre"}, "modelConfig": map[string]any{"name": "mc"}, ToolsetValuesKey: "preset:read-only"})
 	require.Len(t, violations, 1)
 	assert.Contains(t, violations[0], "/toolset")
+
+	// A schema from before the value (additionalProperties: false, no toolset)
+	// would refuse the key as an additional property: it is left out of that
+	// schema check, everything else is still judged.
+	sch, violations = ValidateValues(ctx, legacyChart{}, values)
+	assert.Equal(t, "0.5.6", sch.Version)
+	assert.Empty(t, violations)
+	bad := BuildValues(Spec{Name: "sre", ModelConfig: "mc", Runtime: "rust", Toolset: []string{"preset:read-only"}})
+	_, violations = ValidateValues(ctx, legacyChart{}, bad)
+	require.Len(t, violations, 1)
+	assert.Contains(t, violations[0], "/agent/runtime")
+	_, violations = ValidateValues(ctx, legacyChart{}, map[string]any{"agent": map[string]any{"name": "sre"}, "modelConfig": map[string]any{"name": "mc"}, "unknownKey": true})
+	require.Len(t, violations, 1)
+	assert.Contains(t, violations[0], "unknownKey", "only toolset is exempt")
 }

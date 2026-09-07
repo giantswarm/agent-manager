@@ -18,6 +18,7 @@ import (
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	kubefake "k8s.io/client-go/kubernetes/fake"
 
+	"github.com/giantswarm/agent-manager/internal/chart"
 	"github.com/giantswarm/agent-manager/internal/identity"
 	"github.com/giantswarm/agent-manager/internal/kube"
 )
@@ -305,7 +306,7 @@ func TestValidateCreateIsADryRun(t *testing.T) {
 	assert.Contains(t, joined, "toolset is required", "a create without a toolset is invalid")
 	assert.Contains(t, joined, "preset:none")
 	assert.Contains(t, joined, "preset:full")
-	assert.Equal(t, "0.5.2", res.SchemaVersion)
+	assert.Equal(t, chart.EmbeddedSchemaVersion, res.SchemaVersion)
 
 	// The toolset grammar is judged in the dry run too.
 	many := make([]string, MaxToolsetSelectors+1)
