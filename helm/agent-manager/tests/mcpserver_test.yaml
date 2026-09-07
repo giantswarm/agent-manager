@@ -42,3 +42,33 @@ tests:
     asserts:
       - notExists:
           path: spec.auth
+
+  - it: carries the tool-group label next to the muster type label
+    asserts:
+      - equal:
+          path: metadata.labels["muster.giantswarm.io/type"]
+          value: agent-manager
+      - equal:
+          path: metadata.labels["agent-platform.giantswarm.io/tool-group"]
+          value: agent-platform
+      - equal:
+          path: metadata.labels["app.kubernetes.io/name"]
+          value: agent-manager
+
+  - it: lets muster.mcpServer.labels add and override labels
+    set:
+      muster:
+        mcpServer:
+          labels:
+            agent-platform.giantswarm.io/tool-group: infrastructure
+            example.com/extra: "yes"
+    asserts:
+      - equal:
+          path: metadata.labels["agent-platform.giantswarm.io/tool-group"]
+          value: infrastructure
+      - equal:
+          path: metadata.labels["example.com/extra"]
+          value: "yes"
+      - equal:
+          path: metadata.labels["muster.giantswarm.io/type"]
+          value: agent-manager
