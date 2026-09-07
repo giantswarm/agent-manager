@@ -7,6 +7,7 @@ metadata:
     {{- include "agent-manager.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.replicaCount }}
+  revisionHistoryLimit: {{ .Values.revisionHistoryLimit }}
   selector:
     matchLabels:
       {{- include "agent-manager.selectorLabels" . | nindent 6 }}

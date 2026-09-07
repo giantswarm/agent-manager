@@ -510,6 +510,10 @@
                 }
             }
         },
+        "revisionHistoryLimit": {
+            "type": "integer",
+            "description": "Number of old ReplicaSets retained for rollback. Keep tight so frequent rollouts don't leak zero-replica ReplicaSets across the cluster (each one still carries the pod template of an older chart version, and a Kyverno background scan reports every stale ReplicaSet that fails a newer policy)."
+        },
         "securityContext": {
             "type": "object",
             "description": "Container security context.",
