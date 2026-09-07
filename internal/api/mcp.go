@@ -44,7 +44,7 @@ const (
 	argIconURL       = "iconUrl"
 	argRuntime       = "runtime"
 	argSkills        = "skills"
-	argToolNames     = "toolNames"
+	argToolset       = "toolset"
 	argLabels        = "labels"
 	argAnnotations   = "annotations"
 	argForce         = "force"
@@ -59,7 +59,7 @@ const (
 func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 	s := mcpserver.NewMCPServer("agent-manager", version,
 		mcpserver.WithToolCapabilities(false),
-		mcpserver.WithInstructions("Manage the agents of the Agent Platform. An agent is a Flux HelmRelease of the agent chart (one release renders one kagent Agent) plus the shared per-namespace OCIRepository of that chart. Call get_info first for the managed namespaces and the chart version; list_model_configs before create_agent (the modelConfig must exist in the namespace); list_skills for the skills an agent can mount. Names are DNS-1123 labels the caller chooses and confirms — the service never derives a name from a display name. validate_agent is a dry run of create/update. Agents whose HelmRelease is applied from git (managed: gitops) are read-only here unless force is passed: change them in the GitOps repository instead."),
+		mcpserver.WithInstructions("Manage the agents of the Agent Platform. An agent is a Flux HelmRelease of the agent chart (one release renders one kagent Agent) plus the shared per-namespace OCIRepository of that chart. Call get_info first for the managed namespaces and the chart version; list_model_configs before create_agent (the modelConfig must exist in the namespace); list_skills for the skills an agent can mount. Names are DNS-1123 labels the caller chooses and confirms — the service never derives a name from a display name. validate_agent is a dry run of create/update. Every agent declares a toolset — create_agent requires it: the selectors (preset:<name>, server:<name>, workflow:<name>, tool:<name>) that bound which of the gateway's tools the agent's meta-tools can see and call; presets shipped on every installation: read-only, none, infrastructure, agent-platform, full. list_agents reports the toolset of each agent, or implicitFullAccess: true for agents created before toolsets existed — assign them one with update_agent. Agents whose HelmRelease is applied from git (managed: gitops) are read-only here unless force is passed: change them in the GitOps repository instead."),
 	)
 	t := &tools{svc: svc}
 
@@ -80,7 +80,10 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 			"gitAuthSecretName": schemaProp("string", "Secret in the agent's namespace for private gitRefs (key token, or a kubernetes.io/ssh-auth secret)"),
 		}),
 	)
-	toolNamesProp := mcp.WithArray(argToolNames, mcp.Description("Narrow the muster tools the agent sees to these names; omit (or pass []) for every tool the gateway exposes, the chart default."), mcp.WithStringItems())
+	toolsetDesc := "Toolset: the selectors that bound which of the gateway's tools the agent's meta-tools can see and call. Each is preset:<name>, server:<name>, workflow:<name> or tool:<name> (exact names; at most 32 — define a preset for more). Shipped presets: preset:read-only, preset:none (a chat-only agent without tools), preset:infrastructure, preset:agent-platform, preset:full (every tool the gateway exposes). Composed as the chart's top-level toolset value; muster resolves it per caller. The former toolNames argument is gone: it never narrowed anything against muster."
+	toolsetProp := mcp.WithArray(argToolset, mcp.Description(toolsetDesc), mcp.WithStringItems())
+	toolsetRequiredProp := mcp.WithArray(argToolset, mcp.Required(), mcp.Description("REQUIRED. "+toolsetDesc), mcp.WithStringItems())
+	toolsetReplaceProp := mcp.WithArray(argToolset, mcp.Description("Replaces the agent's whole toolset with this list (an empty list is refused: use [\"preset:none\"] for no tools). "+toolsetDesc), mcp.WithStringItems())
 	labelsProp := mcp.WithObject(argLabels, mcp.Description("Extra labels on the Agent (string values)."), mcp.AdditionalProperties(map[string]any{"type": "string"}))
 	annotationsProp := mcp.WithObject(argAnnotations, mcp.Description("Extra annotations on the Agent (string values)."), mcp.AdditionalProperties(map[string]any{"type": "string"}))
 	nsProp := mcp.WithString(argNamespace, mcp.Description("Namespace of the agent; default: the installation's kagent namespace (get_info reports the managed ones)."))
@@ -91,20 +94,20 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 	), t.getInfo)
 
 	s.AddTool(mcp.NewTool(ToolListAgents,
-		mcp.WithDescription("Read-only. List the agents of a namespace: display name, description, model config, runtime, skills, tool names, Agent Ready/Accepted conditions, the owning HelmRelease (Ready, chart version) and how each is managed (helmrelease: writable here; gitops: applied from git, read-only without force; none: a bare Agent CR). HelmReleases of the agent chart that have not rendered an Agent yet are listed too (exists: false)."),
+		mcp.WithDescription("Read-only. List the agents of a namespace: display name, description, model config, runtime, skills, the declared toolset (or implicitFullAccess: true for an agent without one — it sees every tool the gateway exposes and still needs a toolset), Agent Ready/Accepted conditions, the owning HelmRelease (Ready, chart version) and how each is managed (helmrelease: writable here; gitops: applied from git, read-only without force; none: a bare Agent CR). HelmReleases of the agent chart that have not rendered an Agent yet are listed too (exists: false)."),
 		nsProp,
 		mcp.WithReadOnlyHintAnnotation(true),
 	), t.listAgents)
 
 	s.AddTool(mcp.NewTool(ToolGetAgent,
-		mcp.WithDescription("Read-only. Get one agent with its HelmRelease values (the chart contract) and conditions."),
+		mcp.WithDescription("Read-only. Get one agent with its HelmRelease values (the chart contract), its declared toolset (or implicitFullAccess: true) and conditions."),
 		mcp.WithString(argName, mcp.Required(), mcp.Description("Agent name")),
 		nsProp,
 		mcp.WithReadOnlyHintAnnotation(true),
 	), t.getAgent)
 
 	s.AddTool(mcp.NewTool(ToolCreateAgent,
-		mcp.WithDescription("WRITES: creates a Flux HelmRelease of the agent chart named after the agent (and the shared OCIRepository of the chart in the namespace when it does not exist yet); helm-controller then renders the kagent Agent and kagent runs it. The values are validated against the chart's values.schema.json and the modelConfig must exist in the namespace before anything is applied — a failure writes nothing and lists the valid model configs. Returns the applied manifests and the initial status; poll get_agent_status until the verdict is ready. The name is the DNS-1123 technical name the caller chose (confirm it with the user; it is never derived from displayName)."),
+		mcp.WithDescription("WRITES: creates a Flux HelmRelease of the agent chart named after the agent (and the shared OCIRepository of the chart in the namespace when it does not exist yet); helm-controller then renders the kagent Agent and kagent runs it. A toolset is required (refused without one). The values are validated against the chart's values.schema.json and the modelConfig must exist in the namespace before anything is applied — a failure writes nothing and lists the valid model configs. Returns the applied manifests and the initial status; poll get_agent_status until the verdict is ready. The name is the DNS-1123 technical name the caller chose (confirm it with the user; it is never derived from displayName)."),
 		mcp.WithString(argName, mcp.Required(), mcp.Description("DNS-1123 technical name (max 63 chars): the HelmRelease and Agent name")),
 		mcp.WithString(argModelConfig, mcp.Required(), mcp.Description("Name of an existing kagent ModelConfig in the namespace (list_model_configs)")),
 		mcp.WithString(argDisplayName, mcp.Description("Friendly Unicode name (max 63 chars), shown by the portal")),
@@ -112,15 +115,15 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 		mcp.WithString(argSystemMessage, mcp.Description("System prompt; omit for the chart's default prompt")),
 		mcp.WithString(argIconURL, mcp.Description("Avatar URL (chart agent.iconUrl); omit unless the installation serves avatars")),
 		mcp.WithString(argRuntime, mcp.Description("kagent runtime: go (default) or python"), mcp.Enum("go", "python")),
+		toolsetRequiredProp,
 		skillsProp,
-		toolNamesProp,
 		labelsProp,
 		annotationsProp,
 		nsProp,
 	), t.createAgent)
 
 	s.AddTool(mcp.NewTool(ToolUpdateAgent,
-		mcp.WithDescription("WRITES: merges the given fields into the agent's HelmRelease values (only the arguments passed change; skills and toolNames replace their whole block; an empty string clears a field back to the chart default), validates the result against the chart schema and updates the HelmRelease — helm-controller upgrades the Agent. Returns the values before and after and the changed paths. Refused for GitOps-owned (managed: gitops) or suspended releases unless force is true."),
+		mcp.WithDescription("WRITES: merges the given fields into the agent's HelmRelease values (only the arguments passed change; skills replace their whole block, toolset replaces the whole list — the way to assign a toolset to an agent that reports implicitFullAccess; an empty string clears a field back to the chart default), validates the result against the chart schema and updates the HelmRelease — helm-controller upgrades the Agent. Returns the values before and after and the changed paths. Refused for GitOps-owned (managed: gitops) or suspended releases unless force is true."),
 		mcp.WithString(argName, mcp.Required(), mcp.Description("Agent name")),
 		mcp.WithString(argDisplayName, mcp.Description("New friendly name; \"\" clears it")),
 		mcp.WithString(argDescription, mcp.Description("New description; \"\" clears it")),
@@ -129,7 +132,7 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 		mcp.WithString(argIconURL, mcp.Description("New avatar URL; \"\" clears it")),
 		mcp.WithString(argRuntime, mcp.Description("kagent runtime: go or python"), mcp.Enum("go", "python")),
 		skillsProp,
-		toolNamesProp,
+		toolsetReplaceProp,
 		labelsProp,
 		annotationsProp,
 		mcp.WithBoolean(argForce, mcp.Description("Write even when the HelmRelease is GitOps-owned or suspended (default false)")),
@@ -153,7 +156,7 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 	), t.getAgentStatus)
 
 	s.AddTool(mcp.NewTool(ToolValidateAgent,
-		mcp.WithDescription("Read-only dry run of create_agent (or of update_agent when update is true): composes the OCIRepository and HelmRelease, checks the name, the modelConfig and the values against the agent chart's values.schema.json, and returns the manifests and every violation. Nothing is written."),
+		mcp.WithDescription("Read-only dry run of create_agent (or of update_agent when update is true): composes the OCIRepository and HelmRelease, checks the name, the modelConfig, the toolset (required for a create; validated when given for an update) and the values against the agent chart's values.schema.json, and returns the manifests and every violation. Nothing is written."),
 		mcp.WithString(argName, mcp.Required(), mcp.Description("Agent name")),
 		mcp.WithString(argModelConfig, mcp.Description("ModelConfig name (required for a create)")),
 		mcp.WithString(argDisplayName, mcp.Description("Friendly name")),
@@ -161,8 +164,8 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 		mcp.WithString(argSystemMessage, mcp.Description("System prompt")),
 		mcp.WithString(argIconURL, mcp.Description("Avatar URL")),
 		mcp.WithString(argRuntime, mcp.Description("kagent runtime: go or python"), mcp.Enum("go", "python")),
+		toolsetProp,
 		skillsProp,
-		toolNamesProp,
 		labelsProp,
 		annotationsProp,
 		mcp.WithBoolean(argUpdate, mcp.Description("Validate as an update of the existing agent instead of a create (default false)")),

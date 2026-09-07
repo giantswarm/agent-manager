@@ -56,12 +56,11 @@ Errors are `{"error":{"code":"not_found|invalid_request|conflict|forbidden|unsup
 `create_agent` takes the technical **name** (a DNS-1123 label the caller
 chose and confirmed — the service never derives one from a display name, per
 the creating-agents PRD), the **modelConfig** (must exist in the namespace;
-the error lists the valid ones), and optionally `displayName`, `description`,
-`systemMessage`, `iconUrl`, `runtime` (go|python), `skills` (`gitRefs` from
-`list_skills`, OCI `refs`), `toolNames` (narrow the muster tools; none means
-every tool the gateway exposes), `labels`, `annotations`, `namespace`. It
-emits only what was set so the chart's defaults apply to everything else —
-the portal's rule — and composes:
+the error lists the valid ones), the **toolset** (required, see below), and
+optionally `displayName`, `description`, `systemMessage`, `iconUrl`, `runtime`
+(go|python), `skills` (`gitRefs` from `list_skills`, OCI `refs`), `labels`,
+`annotations`, `namespace`. It emits only what was set so the chart's
+defaults apply to everything else — the portal's rule — and composes:
 
 ```yaml
 apiVersion: source.toolkit.fluxcd.io/v1
@@ -79,10 +78,48 @@ spec:
     agent: {name: sre, displayName: SRE Assistant, systemMessage: …}
     modelConfig: {name: default-model-config}
     skills: {gitRefs: [{url: https://github.com/giantswarm/agent-skills, path: runbooks, ref: main, name: runbooks}]}
+    toolset: [preset:read-only, workflow:incident-triage]
 ```
 
 ModelConfigs, their Secrets and the shared muster `RemoteMCPServer` are
 platform-admin owned: agent-manager only reads ModelConfigs.
+
+## The toolset
+
+Every agent declares a **toolset**: the list of selectors that bounds which of
+the gateway's tools its meta-tools can see and call. It is the agent chart's
+top-level `toolset` value, which the chart renders as the `X-Muster-Toolset`
+header on the agent's muster tool entry; muster resolves it per request and
+per caller. agent-manager validates the inline grammar and composes the list
+exactly as given — it never resolves a toolset, and it never writes
+`muster.toolNames` (that key only filters muster's meta-tools, so the former
+`toolNames` argument narrowed nothing; a caller still passing it is told so).
+
+- Selectors: `preset:<name>`, `server:<name>`, `workflow:<name>`,
+  `tool:<name>` — exact, case-sensitive names; at most 32 inline (define a
+  preset for more). `toolset:<name>` is reserved; `label:` selectors exist
+  inside presets only.
+- Presets every installation has: `read-only`, `none`, `infrastructure`,
+  `agent-platform`, `full`. `create_agent` refuses a request without a
+  toolset and names them: `preset:none` for a chat-only agent without tools,
+  `preset:full` for the deliberate choice of every tool the gateway exposes.
+  An empty list is refused too, so "no tools" is never confused with implicit
+  full access.
+- `update_agent` replaces the whole list — the edit path, and the way agents
+  that predate toolsets get one. `get_agent` / `list_agents` report the
+  declared `toolset`, or `implicitFullAccess: true` for a release without one.
+- The toolset is agent-manager's own contract: it is validated the same way
+  whichever chart version's schema is in use. A schema that does not declare
+  the key yet (the embedded fallback of an older chart, or a registry version
+  before the chart release that added `toolset`) would refuse it as an
+  additional property, so the key is left out of that schema check; as soon
+  as the tracked chart declares `toolset`, its schema validates it as well.
+  The HelmRelease still carries `toolset`, so against a chart that does not
+  know it helm-controller reports the release as failed — the rollout order
+  is: the agent chart release with `toolset` first, then this service.
+
+It is composition, not authorization: the invoking human's identity and the
+backends' own authorization remain the boundary.
 
 ## Ownership and the meta agent's rule
 

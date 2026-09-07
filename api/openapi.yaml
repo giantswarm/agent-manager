@@ -191,10 +191,12 @@ paths:
       summary: Update an agent
       description: |
         Merges the given fields into the HelmRelease values (absent fields stay,
-        an empty string clears a field back to the chart default, `skills` and
-        `toolNames` replace their whole block), validates and updates the
-        HelmRelease. `409 conflict` for GitOps-owned or suspended releases and
-        bare Agent CRs unless `force`.
+        an empty string clears a field back to the chart default, `skills`
+        replaces its whole block, `toolset` replaces the whole list — the way
+        to assign a toolset to an agent that reports `implicitFullAccess`),
+        validates and updates the HelmRelease. `409 conflict` for GitOps-owned
+        or suspended releases and bare Agent CRs unless `force`. `400` for a
+        body still carrying the removed `toolNames`.
       operationId: updateAgent
       x-mcp-tool: update_agent
       parameters:
@@ -401,9 +403,27 @@ components:
         refs: { type: array, items: { type: string }, description: OCI skill image references }
         gitRefs: { type: array, items: { $ref: "#/components/schemas/SkillGitRef" } }
         gitAuthSecretName: { type: string }
+    Toolset:
+      type: array
+      minItems: 1
+      maxItems: 32
+      items: { type: string, pattern: '^(preset|server|workflow|tool):[^\s,]+$' }
+      description: |
+        The selectors that bound which of the gateway's tools the agent's
+        meta-tools can see and call — composed as the agent chart's top-level
+        `toolset` value, rendered as the `X-Muster-Toolset` header on the
+        agent's muster tool entry, resolved by muster per caller. Each selector
+        is `preset:<name>`, `server:<name>`, `workflow:<name>` or `tool:<name>`
+        (exact names, at most 32 — define a preset for more). Shipped presets:
+        `read-only`, `none` (a chat-only agent without tools), `infrastructure`,
+        `agent-platform`, `full` (every tool the gateway exposes). `toolset:` is
+        reserved, `label:` exists inside presets only, an empty list is refused
+        (use `preset:none`). The former `toolNames` never narrowed anything
+        against muster (kagent filters muster's meta-tools only) and is refused
+        with that explanation.
     Spec:
       type: object
-      required: [name, modelConfig]
+      required: [name, modelConfig, toolset]
       properties:
         namespace: { type: string }
         name: { type: string, description: DNS-1123 technical name (HelmRelease and Agent name), max 63 chars }
@@ -414,12 +434,12 @@ components:
         iconUrl: { type: string }
         runtime: { type: string, enum: [go, python] }
         skills: { $ref: "#/components/schemas/Skills" }
-        toolNames: { type: array, items: { type: string } }
+        toolset: { $ref: "#/components/schemas/Toolset" }
         labels: { type: object, additionalProperties: { type: string } }
         annotations: { type: object, additionalProperties: { type: string } }
     Update:
       type: object
-      description: Partial change; absent fields stay, "" clears, skills/toolNames replace their block
+      description: Partial change; absent fields stay, "" clears, skills replace their block, toolset replaces the whole list
       properties:
         displayName: { type: string }
         description: { type: string }
@@ -428,7 +448,7 @@ components:
         iconUrl: { type: string }
         runtime: { type: string, enum: [go, python] }
         skills: { $ref: "#/components/schemas/Skills" }
-        toolNames: { type: array, items: { type: string } }
+        toolset: { $ref: "#/components/schemas/Toolset" }
         labels: { type: object, additionalProperties: { type: string } }
         annotations: { type: object, additionalProperties: { type: string } }
         force: { type: boolean }
@@ -472,7 +492,8 @@ components:
         iconUrl: { type: string }
         systemMessage: { type: string }
         skills: { $ref: "#/components/schemas/Skills" }
-        toolNames: { type: array, items: { type: string } }
+        toolset: { $ref: "#/components/schemas/Toolset", description: The declared toolset (the HelmRelease's `toolset` value; for a bare Agent CR the X-Muster-Toolset header it carries); absent when none is declared }
+        implicitFullAccess: { type: boolean, description: True when the agent declares no toolset but wires the gateway — its meta-tools see every tool the gateway exposes to the caller; such agents predate toolsets and still need one (update_agent) }
         ready: { type: [boolean, "null"] }
         accepted: { type: [boolean, "null"] }
         conditions: { type: array, items: { $ref: "#/components/schemas/Condition" } }

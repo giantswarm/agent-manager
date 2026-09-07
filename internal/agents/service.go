@@ -481,8 +481,14 @@ func (s *Service) ValidateCreate(ctx context.Context, spec Spec) (*ValidateResul
 	if err != nil {
 		return nil, err
 	}
+	if err := rejectToolNames(spec.RemovedToolNames); err != nil {
+		return nil, err
+	}
 	res := &ValidateResult{Mode: "create"}
 	if err := ValidateName(spec.Name); err != nil {
+		res.Errors = append(res.Errors, strings.TrimPrefix(err.Error(), ErrInvalid.Error()+": "))
+	}
+	if err := ValidateToolset(spec.Toolset, true); err != nil {
 		res.Errors = append(res.Errors, strings.TrimPrefix(err.Error(), ErrInvalid.Error()+": "))
 	}
 	if err := s.requireModelConfig(ctx, dyn, ns, spec.ModelConfig); err != nil {
@@ -516,6 +522,9 @@ func (s *Service) ValidateUpdate(ctx context.Context, upd Update) (*ValidateResu
 	}
 	dyn, _, err := s.dyn(ctx)
 	if err != nil {
+		return nil, err
+	}
+	if err := rejectToolNames(upd.RemovedToolNames); err != nil {
 		return nil, err
 	}
 	hr, _, err := s.writableHelmRelease(ctx, dyn, ns, upd.Name, upd.Force)
@@ -559,6 +568,12 @@ func (s *Service) Create(ctx context.Context, spec Spec) (*CreateResult, error) 
 	}
 	spec.Namespace = ns
 	if err := ValidateName(spec.Name); err != nil {
+		return nil, err
+	}
+	if err := rejectToolNames(spec.RemovedToolNames); err != nil {
+		return nil, err
+	}
+	if err := ValidateToolset(spec.Toolset, true); err != nil {
 		return nil, err
 	}
 	dyn, _, err := s.dyn(ctx)
@@ -694,21 +709,14 @@ func (s *Service) mergedValues(ctx context.Context, dyn dynamic.Interface, ns st
 			delete(after, "skills")
 		}
 	}
-	if upd.ToolNames != nil {
-		muster, _ := after["muster"].(map[string]any)
-		if muster == nil {
-			muster = map[string]any{}
+	if upd.Toolset != nil {
+		// Replaces the whole list; an empty list is refused (preset:none is
+		// the way to say "no tools"), so a toolset can never be cleared back
+		// to implicit full access.
+		if err := ValidateToolset(*upd.Toolset, false); err != nil {
+			return after, before, err
 		}
-		if len(*upd.ToolNames) > 0 {
-			muster["toolNames"] = toAnySlice(*upd.ToolNames)
-		} else {
-			delete(muster, "toolNames")
-		}
-		if len(muster) > 0 {
-			after["muster"] = muster
-		} else {
-			delete(after, "muster")
-		}
+		after[ToolsetValuesKey] = toAnySlice(*upd.Toolset)
 	}
 	if upd.Labels != nil {
 		if len(*upd.Labels) > 0 {
@@ -751,6 +759,9 @@ func (s *Service) Update(ctx context.Context, upd Update) (*UpdateResult, error)
 	}
 	dyn, _, err := s.dyn(ctx)
 	if err != nil {
+		return nil, err
+	}
+	if err := rejectToolNames(upd.RemovedToolNames); err != nil {
 		return nil, err
 	}
 	hr, _, err := s.writableHelmRelease(ctx, dyn, ns, upd.Name, upd.Force)
@@ -1009,7 +1020,7 @@ func agentFromCR(cr *unstructured.Unstructured) Agent {
 	a.ModelConfig, _, _ = unstructured.NestedString(cr.Object, "spec", "declarative", "modelConfig")
 	a.SystemMessage, _, _ = unstructured.NestedString(cr.Object, "spec", "declarative", "systemMessage")
 	a.Skills = skillsFromCR(cr)
-	a.ToolNames = toolNamesFromCR(cr)
+	a.Toolset, a.ImplicitFullAccess = toolsetFromCR(cr)
 	a.Conditions = conditionsOf(cr)
 	a.Ready = conditionStatus(a.Conditions, "Ready")
 	a.Accepted = conditionStatus(a.Conditions, "Accepted")
@@ -1052,35 +1063,39 @@ func skillsFromCR(cr *unstructured.Unstructured) *Skills {
 	return s
 }
 
-// toolNamesFromCR returns the toolNames of the first MCP server tool (the
-// muster gateway the chart wires).
-func toolNamesFromCR(cr *unstructured.Unstructured) []string {
+// toolsetFromCR reads the toolset a bare Agent CR carries: the X-Muster-Toolset
+// header (tools[].headersFrom[]) of its first MCP server tool entry. Without
+// the header, an MCP server entry means implicit full access; no MCP server
+// entry at all means neither (a preset:none agent has no entry).
+func toolsetFromCR(cr *unstructured.Unstructured) (toolset []string, implicitFullAccess bool) {
 	tools, found, _ := unstructured.NestedSlice(cr.Object, "spec", "declarative", "tools")
 	if !found {
-		return nil
+		return nil, false
 	}
 	for _, t := range tools {
 		m, ok := t.(map[string]any)
 		if !ok {
 			continue
 		}
-		server, ok := m["mcpServer"].(map[string]any)
-		if !ok {
+		if _, ok := m["mcpServer"].(map[string]any); !ok {
 			continue
 		}
-		names, ok := server["toolNames"].([]any)
-		if !ok {
-			return nil
-		}
-		out := make([]string, 0, len(names))
-		for _, n := range names {
-			if str, ok := n.(string); ok {
-				out = append(out, str)
+		headers, _ := m["headersFrom"].([]any)
+		for _, h := range headers {
+			hm, ok := h.(map[string]any)
+			if !ok {
+				continue
+			}
+			if name, _ := hm["name"].(string); name != ToolsetHeader {
+				continue
+			}
+			if value, _ := hm["value"].(string); value != "" {
+				return ParseToolsetHeader(value), false
 			}
 		}
-		return out
+		return nil, true
 	}
-	return nil
+	return nil, false
 }
 
 // applyHelmRelease folds the owning release into the view and, when the Agent
@@ -1113,6 +1128,16 @@ func applyHelmRelease(a *Agent, hr *unstructured.Unstructured) {
 	}
 	values, _, _ := unstructured.NestedMap(hr.Object, "spec", "values")
 	a.Values = values
+	// The HelmRelease values are the declaration: a declared toolset is
+	// reported as such, a release without one is implicit full access — even
+	// while the Agent CR has not been rendered yet.
+	if values != nil {
+		if toolset := stringSlice(values[ToolsetValuesKey]); toolset != nil {
+			a.Toolset, a.ImplicitFullAccess = toolset, false
+		} else {
+			a.Toolset, a.ImplicitFullAccess = nil, true
+		}
+	}
 	if a.Exists || values == nil {
 		return
 	}
@@ -1136,14 +1161,5 @@ func applyHelmRelease(a *Agent, hr *unstructured.Unstructured) {
 	}
 	if sk, _ := values["skills"].(map[string]any); sk != nil {
 		a.Skills = skillsFromCR(&unstructured.Unstructured{Object: map[string]any{"spec": map[string]any{"skills": sk}}})
-	}
-	if muster, _ := values["muster"].(map[string]any); muster != nil {
-		if names, ok := muster["toolNames"].([]any); ok {
-			for _, n := range names {
-				if str, ok := n.(string); ok {
-					a.ToolNames = append(a.ToolNames, str)
-				}
-			}
-		}
 	}
 }

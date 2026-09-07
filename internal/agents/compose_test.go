@@ -34,9 +34,9 @@ func TestBuildValuesMirrorsComposeManifests(t *testing.T) {
 	full := BuildValues(Spec{
 		Name: "sre", DisplayName: "SRE Assistant", Description: "helps", SystemMessage: "Be brief.", ModelConfig: "mc",
 		IconURL: "https://avatars.example/v1/sre.png", Runtime: "python",
-		Skills:    &Skills{GitRefs: []SkillGitRef{{URL: "https://github.com/giantswarm/agent-skills", Path: "nested/runbooks", Ref: "main"}}, Refs: []string{"registry/skill:1"}},
-		ToolNames: []string{"x_mcp-kubernetes_get_pods"},
-		Labels:    map[string]string{"tenant": "sre"},
+		Skills:  &Skills{GitRefs: []SkillGitRef{{URL: "https://github.com/giantswarm/agent-skills", Path: "nested/runbooks", Ref: "main"}}, Refs: []string{"registry/skill:1"}},
+		Toolset: []string{"preset:read-only", "workflow:incident-triage"},
+		Labels:  map[string]string{"tenant": "sre"},
 	})
 	assert.Equal(t, map[string]any{
 		"agent": map[string]any{
@@ -48,8 +48,8 @@ func TestBuildValuesMirrorsComposeManifests(t *testing.T) {
 			"refs":    []any{"registry/skill:1"},
 			"gitRefs": []any{map[string]any{"url": "https://github.com/giantswarm/agent-skills", "path": "nested/runbooks", "ref": "main", "name": "runbooks"}},
 		},
-		"muster": map[string]any{"toolNames": []any{"x_mcp-kubernetes_get_pods"}},
-		"labels": map[string]any{"tenant": "sre"},
+		"toolset": []any{"preset:read-only", "workflow:incident-triage"},
+		"labels":  map[string]any{"tenant": "sre"},
 	}, full)
 
 	_, violations := ValidateValues(context.Background(), embeddedChart{}, full)

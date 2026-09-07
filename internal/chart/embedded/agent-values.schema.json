@@ -270,6 +270,16 @@
         "tolerations": {
             "type": "array",
             "description": "Tolerations for agent pod scheduling."
+        },
+        "toolset": {
+            "type": [
+                "array",
+                "null"
+            ],
+            "description": "The tools the agent is composed with: a list of selectors that muster resolves per request. Selectors are `preset:<name>`, `server:<name>`, `workflow:<name>` or `tool:<name>` with exact, case-sensitive names (regex `^(preset|server|workflow|tool):[^\\s,]+$`); at most 32 inline, define a preset for more. `toolset:<name>` is reserved and refused; patterns, excludes, the read-only predicate and `label:` exist only inside presets. Rendered as the static `X-Muster-Toolset` header on the muster tool entry (kagent `spec.declarative.tools[].headersFrom`, the selectors joined by `,`). Exactly `[\"preset:none\"]` renders NO muster tool entry at all, so a chat-only agent pays no context for meta-tools; an empty list fails the render (say `preset:none` instead). Unset (the default) renders no header and the agent keeps today's implicit full access to everything the gateway exposes to the invoking human. Built-in presets: `read-only`, `none`, `full`; the platform charts ship `infrastructure` and `agent-platform`. Composition, not authorization: the human's identity and the backends' own authorization stay the boundary.",
+            "items": {
+                "type": "string"
+            }
         }
     }
 }

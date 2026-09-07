@@ -2,6 +2,9 @@ package agents
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -15,6 +18,7 @@ import (
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	kubefake "k8s.io/client-go/kubernetes/fake"
 
+	"github.com/giantswarm/agent-manager/internal/chart"
 	"github.com/giantswarm/agent-manager/internal/identity"
 	"github.com/giantswarm/agent-manager/internal/kube"
 )
@@ -87,7 +91,7 @@ func helmRelease(ns, name string, values map[string]any, ready bool, labels map[
 	}}
 }
 
-func agentCR(ns, name, hrName string, ready bool) *unstructured.Unstructured {
+func agentCR(ns, name, hrName string, ready bool, toolset ...string) *unstructured.Unstructured {
 	labels := map[string]any{}
 	if hrName != "" {
 		labels[HelmReleaseNameLabel] = hrName
@@ -97,6 +101,10 @@ func agentCR(ns, name, hrName string, ready bool) *unstructured.Unstructured {
 	if !ready {
 		readyStatus = "False"
 	}
+	musterTool := map[string]any{"type": "McpServer", "mcpServer": map[string]any{"kind": "RemoteMCPServer", "name": "muster"}}
+	if len(toolset) > 0 {
+		musterTool["headersFrom"] = []any{map[string]any{"name": ToolsetHeader, "value": strings.Join(toolset, ",")}}
+	}
 	return &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "kagent.dev/v1alpha2", "kind": "Agent",
 		"metadata": map[string]any{"name": name, "namespace": ns, "labels": labels, "annotations": map[string]any{DisplayNameAnnotation: "Display " + name}},
@@ -105,7 +113,7 @@ func agentCR(ns, name, hrName string, ready bool) *unstructured.Unstructured {
 			"skills": map[string]any{"gitRefs": []any{map[string]any{"url": "https://github.com/giantswarm/agent-skills", "path": "a", "ref": "main", "name": "a"}}},
 			"declarative": map[string]any{
 				"runtime": "go", "modelConfig": "default-model-config", "systemMessage": "You are " + name,
-				"tools": []any{map[string]any{"type": "McpServer", "mcpServer": map[string]any{"kind": "RemoteMCPServer", "name": "muster", "toolNames": []any{"x_a_b"}}}},
+				"tools": []any{musterTool},
 			},
 		},
 		"status": map[string]any{"conditions": []any{
@@ -133,12 +141,18 @@ func TestListMergesAgentsAndHelmReleases(t *testing.T) {
 	pending := map[string]any{"agent": map[string]any{"name": "pending", "displayName": "Pending"}, "modelConfig": map[string]any{"name": "qwen3-8-27b"}}
 	_, err := f.dyn.Resource(hrGVR).Namespace("kagent").Create(ctx, helmRelease("kagent", "pending", pending, false, map[string]any{KustomizationNameLabel: "flux-system"}), metav1.CreateOptions{})
 	require.NoError(t, err)
-	_, err = f.dyn.Resource(agGVR).Namespace("kagent").Create(ctx, agentCR("kagent", "bare", "", true), metav1.CreateOptions{})
+	_, err = f.dyn.Resource(agGVR).Namespace("kagent").Create(ctx, agentCR("kagent", "bare", "", true, "preset:read-only", "workflow:incident-triage"), metav1.CreateOptions{})
+	require.NoError(t, err)
+	// An agent that declares a toolset.
+	scoped := map[string]any{"agent": map[string]any{"name": "scoped"}, "modelConfig": map[string]any{"name": "qwen3-8-27b"}, ToolsetValuesKey: []any{"preset:infrastructure"}}
+	_, err = f.dyn.Resource(hrGVR).Namespace("kagent").Create(ctx, helmRelease("kagent", "scoped", scoped, true, nil), metav1.CreateOptions{})
+	require.NoError(t, err)
+	_, err = f.dyn.Resource(agGVR).Namespace("kagent").Create(ctx, agentCR("kagent", "scoped", "scoped", true, "preset:infrastructure"), metav1.CreateOptions{})
 	require.NoError(t, err)
 
 	list, err := f.svc.List(ctx, "")
 	require.NoError(t, err)
-	require.Len(t, list, 3)
+	require.Len(t, list, 4)
 	byName := map[string]Agent{}
 	for _, a := range list {
 		byName[a.Name] = a
@@ -148,7 +162,8 @@ func TestListMergesAgentsAndHelmReleases(t *testing.T) {
 	assert.True(t, v.Exists)
 	assert.Equal(t, "Display verifier", v.DisplayName)
 	assert.Equal(t, "default-model-config", v.ModelConfig)
-	assert.Equal(t, []string{"x_a_b"}, v.ToolNames)
+	assert.Nil(t, v.Toolset, "the release declares no toolset")
+	assert.True(t, v.ImplicitFullAccess, "no toolset on the release = implicit full access, whatever the CR says")
 	require.NotNil(t, v.Skills)
 	assert.Equal(t, "a", v.Skills.GitRefs[0].Path)
 	assert.Equal(t, ManagedHelmRelease, v.Managed)
@@ -165,10 +180,25 @@ func TestListMergesAgentsAndHelmReleases(t *testing.T) {
 	assert.Equal(t, ManagedGitOps, p.Managed)
 	assert.Nil(t, p.Ready)
 	assert.False(t, *p.HelmRelease.Ready)
+	assert.True(t, p.ImplicitFullAccess, "reported before the Agent is rendered")
 
 	b := byName["bare"]
 	assert.Equal(t, ManagedNone, b.Managed)
 	assert.Nil(t, b.HelmRelease)
+	assert.Equal(t, []string{"preset:read-only", "workflow:incident-triage"}, b.Toolset, "a bare CR reports the header it carries")
+	assert.False(t, b.ImplicitFullAccess)
+
+	sc := byName["scoped"]
+	assert.Equal(t, []string{"preset:infrastructure"}, sc.Toolset)
+	assert.False(t, sc.ImplicitFullAccess)
+	assert.Equal(t, []any{"preset:infrastructure"}, sc.Values[ToolsetValuesKey])
+
+	got, err := f.svc.Get(ctx, "", "scoped")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"preset:infrastructure"}, got.Toolset)
+	got, err = f.svc.Get(ctx, "", "verifier")
+	require.NoError(t, err)
+	assert.True(t, got.ImplicitFullAccess)
 
 	_, err = f.svc.List(ctx, "other")
 	assert.ErrorIs(t, err, ErrInvalid, "unmanaged namespaces are refused")
@@ -178,10 +208,28 @@ func TestCreateValidatesThenAppliesBothObjects(t *testing.T) {
 	f := seeded(t)
 	ctx := context.Background()
 
-	_, err := f.svc.Create(ctx, Spec{Name: "Bad", ModelConfig: "default-model-config"})
+	readOnly := []string{"preset:read-only"}
+	_, err := f.svc.Create(ctx, Spec{Name: "Bad", ModelConfig: "default-model-config", Toolset: readOnly})
 	assert.ErrorIs(t, err, ErrInvalid)
 
-	_, err = f.svc.Create(ctx, Spec{Name: "sre", ModelConfig: "nope"})
+	// No toolset: refused before anything is read, naming the presets.
+	_, err = f.svc.Create(ctx, Spec{Name: "sre", ModelConfig: "default-model-config"})
+	require.ErrorIs(t, err, ErrInvalid)
+	for _, want := range []string{"toolset is required", "preset:read-only", "preset:none", "preset:infrastructure", "preset:agent-platform", "preset:full"} {
+		assert.Contains(t, err.Error(), want)
+	}
+	_, err = f.svc.Create(ctx, Spec{Name: "sre", ModelConfig: "default-model-config", Toolset: []string{}})
+	require.ErrorIs(t, err, ErrInvalid)
+	assert.Contains(t, err.Error(), "preset:none")
+	_, err = f.svc.Create(ctx, Spec{Name: "sre", ModelConfig: "default-model-config", Toolset: []string{"toolset:shared"}})
+	require.ErrorIs(t, err, ErrInvalid)
+	assert.Contains(t, err.Error(), "reserved")
+	// The removed argument is explained, not silently dropped.
+	_, err = f.svc.Create(ctx, Spec{Name: "sre", ModelConfig: "default-model-config", Toolset: readOnly, RemovedToolNames: json.RawMessage(`["x_a_b"]`)})
+	require.ErrorIs(t, err, ErrInvalid)
+	assert.Contains(t, err.Error(), "toolNames never narrowed anything against muster")
+
+	_, err = f.svc.Create(ctx, Spec{Name: "sre", ModelConfig: "nope", Toolset: readOnly})
 	require.ErrorIs(t, err, ErrInvalid)
 	assert.Contains(t, err.Error(), "default-model-config, qwen3-8-27b", "the valid model configs are listed")
 
@@ -189,11 +237,11 @@ func TestCreateValidatesThenAppliesBothObjects(t *testing.T) {
 	for i := range long {
 		long[i] = 'x'
 	}
-	_, err = f.svc.Create(ctx, Spec{Name: "sre", ModelConfig: "default-model-config", DisplayName: string(long)})
+	_, err = f.svc.Create(ctx, Spec{Name: "sre", ModelConfig: "default-model-config", DisplayName: string(long), Toolset: readOnly})
 	require.ErrorIs(t, err, ErrInvalid)
 	assert.Contains(t, err.Error(), "displayName")
 
-	_, err = f.svc.Create(ctx, Spec{Name: "verifier", ModelConfig: "default-model-config"})
+	_, err = f.svc.Create(ctx, Spec{Name: "verifier", ModelConfig: "default-model-config", Toolset: readOnly})
 	assert.ErrorIs(t, err, ErrConflict)
 
 	// Nothing was written by the failures.
@@ -203,14 +251,16 @@ func TestCreateValidatesThenAppliesBothObjects(t *testing.T) {
 
 	res, err := f.svc.Create(ctx, Spec{
 		Name: "sre", DisplayName: "SRE", Description: "helps", SystemMessage: "Be brief.", ModelConfig: "qwen3-8-27b",
-		Skills:    &Skills{GitRefs: []SkillGitRef{{URL: "https://github.com/giantswarm/agent-skills", Path: "runbooks", Ref: "main"}}},
-		ToolNames: []string{"x_mcp-kubernetes_get_pods"},
+		Skills:  &Skills{GitRefs: []SkillGitRef{{URL: "https://github.com/giantswarm/agent-skills", Path: "runbooks", Ref: "main"}}},
+		Toolset: []string{"preset:read-only", "workflow:incident-triage"},
 	})
 	require.NoError(t, err)
 	assert.False(t, res.Created.OCIRepository, "the namespace already had the chart source")
 	assert.True(t, res.Created.HelmRelease)
 	assert.Equal(t, "sre", res.Agent.Name)
 	assert.False(t, res.Agent.Exists)
+	assert.Equal(t, []string{"preset:read-only", "workflow:incident-triage"}, res.Agent.Toolset)
+	assert.False(t, res.Agent.ImplicitFullAccess)
 	assert.Equal(t, ManagedHelmRelease, res.Agent.Managed)
 	assert.Contains(t, res.Manifests.HelmRelease, "kind: HelmRelease")
 	require.NotNil(t, res.Status)
@@ -223,14 +273,14 @@ func TestCreateValidatesThenAppliesBothObjects(t *testing.T) {
 		"agent":       map[string]any{"name": "sre", "displayName": "SRE", "description": "helps", "systemMessage": "Be brief."},
 		"modelConfig": map[string]any{"name": "qwen3-8-27b"},
 		"skills":      map[string]any{"gitRefs": []any{map[string]any{"url": "https://github.com/giantswarm/agent-skills", "path": "runbooks", "ref": "main", "name": "runbooks"}}},
-		"muster":      map[string]any{"toolNames": []any{"x_mcp-kubernetes_get_pods"}},
-	}, values)
+		"toolset":     []any{"preset:read-only", "workflow:incident-triage"},
+	}, values, "the toolset is the chart's top-level value; never muster.toolNames")
 	assert.Equal(t, ManagedByValue, hr.GetLabels()[ManagedByLabel])
 
 	// A namespace without a chart source gets one.
 	_, err = f.dyn.Resource(mcGVR).Namespace("tenant").Create(ctx, modelConfig("tenant", "mc", "Ollama", "qwen3"), metav1.CreateOptions{})
 	require.NoError(t, err)
-	res, err = f.svc.Create(ctx, Spec{Namespace: "tenant", Name: "t1", ModelConfig: "mc"})
+	res, err = f.svc.Create(ctx, Spec{Namespace: "tenant", Name: "t1", ModelConfig: "mc", Toolset: []string{"preset:none"}})
 	require.NoError(t, err)
 	assert.True(t, res.Created.OCIRepository)
 	repo, err := f.dyn.Resource(ociGVR).Namespace("tenant").Get(ctx, "agent", metav1.GetOptions{})
@@ -253,11 +303,35 @@ func TestValidateCreateIsADryRun(t *testing.T) {
 	assert.Contains(t, joined, "already exists")
 	assert.Contains(t, joined, "does not exist")
 	assert.Contains(t, joined, "/agent/runtime")
-	assert.Equal(t, "0.5.2", res.SchemaVersion)
+	assert.Contains(t, joined, "toolset is required", "a create without a toolset is invalid")
+	assert.Contains(t, joined, "preset:none")
+	assert.Contains(t, joined, "preset:full")
+	assert.Equal(t, chart.EmbeddedSchemaVersion, res.SchemaVersion)
 
-	ok, err := f.svc.ValidateCreate(ctx, Spec{Name: "fresh", ModelConfig: "default-model-config"})
+	// The toolset grammar is judged in the dry run too.
+	many := make([]string, MaxToolsetSelectors+1)
+	for i := range many {
+		many[i] = fmt.Sprintf("tool:x_a_%d", i)
+	}
+	for toolset, want := range map[*[]string]string{
+		{}:                                  "preset:none",
+		&many:                               "define a preset",
+		{"toolset:shared"}:                  "reserved",
+		{"label:tool-group=infrastructure"}: "presets only",
+	} {
+		r, err := f.svc.ValidateCreate(ctx, Spec{Name: "fresh", ModelConfig: "default-model-config", Toolset: *toolset})
+		require.NoError(t, err)
+		assert.False(t, r.Valid)
+		assert.Contains(t, strings.Join(r.Errors, "\n"), want)
+	}
+	_, err = f.svc.ValidateCreate(ctx, Spec{Name: "fresh", ModelConfig: "default-model-config", Toolset: []string{"preset:full"}, RemovedToolNames: json.RawMessage(`[]`)})
+	require.ErrorIs(t, err, ErrInvalid)
+	assert.Contains(t, err.Error(), "toolNames never narrowed")
+
+	ok, err := f.svc.ValidateCreate(ctx, Spec{Name: "fresh", ModelConfig: "default-model-config", Toolset: []string{"preset:read-only"}})
 	require.NoError(t, err)
 	assert.True(t, ok.Valid, ok.Errors)
+	assert.Equal(t, []any{"preset:read-only"}, ok.Manifests.Values[ToolsetValuesKey])
 	assert.Contains(t, ok.Manifests.OCIRepository, "kind: OCIRepository")
 	hrs, _ := f.dyn.Resource(hrGVR).Namespace("kagent").List(ctx, metav1.ListOptions{})
 	assert.Len(t, hrs.Items, 1, "validate writes nothing")
@@ -268,25 +342,50 @@ func TestUpdateMergesIntoValuesAndHonorsOwnership(t *testing.T) {
 	ctx := context.Background()
 	str := func(s string) *string { return &s }
 
-	res, err := f.svc.Update(ctx, Update{Name: "verifier", DisplayName: str("Verifier 2"), Description: str("now with a description"), ToolNames: &[]string{"x_a_b"}, ModelConfig: str("qwen3-8-27b")})
+	// Assigning a toolset to an agent that had none (rollout step 6).
+	res, err := f.svc.Update(ctx, Update{Name: "verifier", DisplayName: str("Verifier 2"), Description: str("now with a description"), Toolset: &[]string{"preset:read-only", "server:github"}, ModelConfig: str("qwen3-8-27b")})
 	require.NoError(t, err)
-	assert.Equal(t, []string{"agent.description", "agent.displayName", "modelConfig.name", "muster.toolNames"}, res.Changed)
+	assert.Equal(t, []string{"agent.description", "agent.displayName", "modelConfig.name", "toolset"}, res.Changed)
 	assert.Equal(t, "Verifier", res.Before["agent"].(map[string]any)["displayName"])
 	assert.Equal(t, "Verifier 2", res.After["agent"].(map[string]any)["displayName"])
+	assert.Equal(t, []any{"preset:read-only", "server:github"}, res.After[ToolsetValuesKey])
+	assert.Equal(t, []string{"preset:read-only", "server:github"}, res.Agent.Toolset)
+	assert.False(t, res.Agent.ImplicitFullAccess)
 	hr, err := f.dyn.Resource(hrGVR).Namespace("kagent").Get(ctx, "verifier", metav1.GetOptions{})
 	require.NoError(t, err)
 	assert.Equal(t, res.After, mustValues(hr))
 
-	// Clearing a field drops the key; skills replace the block; empty tool
-	// names drop the muster block.
-	res, err = f.svc.Update(ctx, Update{Name: "verifier", Description: str(""), Skills: &Skills{Refs: []string{"reg/skill:1"}}, ToolNames: &[]string{}})
+	// The toolset is replaced as a whole, never merged.
+	res, err = f.svc.Update(ctx, Update{Name: "verifier", Toolset: &[]string{"preset:none"}})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"toolset"}, res.Changed)
+	assert.Equal(t, []any{"preset:none"}, res.After[ToolsetValuesKey])
+
+	// It cannot be cleared back to implicit full access, and the grammar holds.
+	_, err = f.svc.Update(ctx, Update{Name: "verifier", Toolset: &[]string{}})
+	require.ErrorIs(t, err, ErrInvalid)
+	assert.Contains(t, err.Error(), "preset:none")
+	_, err = f.svc.Update(ctx, Update{Name: "verifier", Toolset: &[]string{"toolset:shared"}})
+	require.ErrorIs(t, err, ErrInvalid)
+	_, err = f.svc.Update(ctx, Update{Name: "verifier", RemovedToolNames: json.RawMessage(`["x_a_b"]`)})
+	require.ErrorIs(t, err, ErrInvalid)
+	assert.Contains(t, err.Error(), "toolNames never narrowed")
+	dry, err := f.svc.ValidateUpdate(ctx, Update{Name: "verifier", Toolset: &[]string{"label:x=y"}})
+	require.NoError(t, err)
+	assert.False(t, dry.Valid)
+	assert.Contains(t, strings.Join(dry.Errors, "\n"), "presets only")
+	hr, err = f.dyn.Resource(hrGVR).Namespace("kagent").Get(ctx, "verifier", metav1.GetOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, []any{"preset:none"}, mustValues(hr)[ToolsetValuesKey], "refusals write nothing")
+
+	// Clearing a field drops the key; skills replace the block.
+	res, err = f.svc.Update(ctx, Update{Name: "verifier", Description: str(""), Skills: &Skills{Refs: []string{"reg/skill:1"}}})
 	require.NoError(t, err)
 	after := res.After
 	_, hasDesc := after["agent"].(map[string]any)["description"]
 	assert.False(t, hasDesc)
 	assert.Equal(t, map[string]any{"refs": []any{"reg/skill:1"}}, after["skills"])
-	_, hasMuster := after["muster"]
-	assert.False(t, hasMuster)
+	assert.Equal(t, []any{"preset:none"}, after[ToolsetValuesKey], "an update without toolset leaves it")
 
 	// No change is a no-op.
 	res, err = f.svc.Update(ctx, Update{Name: "verifier"})
@@ -326,7 +425,7 @@ func mustValues(hr *unstructured.Unstructured) map[string]any {
 func TestDeleteRemovesTheReleaseAndTheSourceOnlyWhenUnreferenced(t *testing.T) {
 	f := seeded(t)
 	ctx := context.Background()
-	_, err := f.svc.Create(ctx, Spec{Name: "sre", ModelConfig: "default-model-config"})
+	_, err := f.svc.Create(ctx, Spec{Name: "sre", ModelConfig: "default-model-config", Toolset: []string{"preset:read-only"}})
 	require.NoError(t, err)
 
 	res, err := f.svc.Delete(ctx, "", "sre", false)
@@ -468,7 +567,7 @@ func TestMutationsCarryTheCaller(t *testing.T) {
 	f := seeded(t)
 	ctx := identity.ContextWith(context.Background(), &identity.Identity{Subject: "sub-1", Email: "admin@lab.local", Source: identity.SourceSSO})
 
-	created, err := f.svc.Create(ctx, Spec{Name: "sre", ModelConfig: "default-model-config"})
+	created, err := f.svc.Create(ctx, Spec{Name: "sre", ModelConfig: "default-model-config", Toolset: []string{"preset:read-only"}})
 	require.NoError(t, err)
 	assert.Equal(t, "admin@lab.local", created.RequestedBy)
 
@@ -481,7 +580,7 @@ func TestMutationsCarryTheCaller(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "admin@lab.local", deleted.RequestedBy)
 
-	anonymous, err := f.svc.Create(context.Background(), Spec{Name: "sre", ModelConfig: "default-model-config"})
+	anonymous, err := f.svc.Create(context.Background(), Spec{Name: "sre", ModelConfig: "default-model-config", Toolset: []string{"preset:read-only"}})
 	require.NoError(t, err)
 	assert.Empty(t, anonymous.RequestedBy, "without OAuth there is no caller to report")
 
@@ -492,6 +591,6 @@ func TestMutationsCarryTheCaller(t *testing.T) {
 	assert.Equal(t, kube.IdentityCaller, callerOnly.Info(context.Background()).Identity)
 	_, err = callerOnly.List(context.Background(), "")
 	assert.ErrorIs(t, err, ErrUnauthenticated)
-	_, err = callerOnly.Create(context.Background(), Spec{Name: "sre", ModelConfig: "default-model-config"})
+	_, err = callerOnly.Create(context.Background(), Spec{Name: "sre", ModelConfig: "default-model-config", Toolset: []string{"preset:read-only"}})
 	assert.ErrorIs(t, err, ErrUnauthenticated)
 }

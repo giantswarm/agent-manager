@@ -11,7 +11,7 @@ import (
 
 // The composition mirrors the portal's composeManifests.ts: an agent is a Flux
 // HelmRelease with inline values following the agent chart's schema (agent,
-// modelConfig, skills, muster as top-level keys) that renders from the shared
+// modelConfig, skills, toolset as top-level keys) that renders from the shared
 // per-namespace OCIRepository named after the chart, which tracks the chart by
 // semver range so every agent follows the latest published release.
 
@@ -93,8 +93,10 @@ func BuildValues(spec Spec) map[string]any {
 	if skills := skillsValues(spec.Skills); skills != nil {
 		values["skills"] = skills
 	}
-	if len(spec.ToolNames) > 0 {
-		values["muster"] = map[string]any{"toolNames": toAnySlice(spec.ToolNames)}
+	if len(spec.Toolset) > 0 {
+		// Exactly the declared list, as the chart's top-level value. Never
+		// muster.toolNames: that key filters muster's meta-tools only.
+		values[ToolsetValuesKey] = toAnySlice(spec.Toolset)
 	}
 	if len(spec.Labels) > 0 {
 		values["labels"] = toAnyMap(spec.Labels)

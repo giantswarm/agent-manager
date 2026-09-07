@@ -22,7 +22,7 @@ import (
 
 // EmbeddedSchemaVersion is the agent chart version whose values.schema.json is
 // compiled into the binary (internal/chart/embedded/).
-const EmbeddedSchemaVersion = "0.5.2"
+const EmbeddedSchemaVersion = "0.6.0"
 
 //go:embed embedded/agent-values.schema.json
 var embeddedSchema []byte
