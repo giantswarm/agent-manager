@@ -1,0 +1,21 @@
+# The helm.sh/chart label is <name>-<version> cut to 63 characters; a dev
+# version can put that cut right after a "." (PR #29's branch did), which the
+# apiserver rejects. The label must always end alphanumeric.
+suite: chart label
+templates:
+  - templates/serviceaccount.yaml
+tests:
+  - it: ends alphanumeric when the 63-character cut lands on a dot
+    chart:
+      version: 0.2.10-dev.fix-x-crypto-0-56.2026-09-07.17-03-34.h187b052
+    asserts:
+      - matchRegex:
+          path: metadata.labels["helm.sh/chart"]
+          pattern: ^agent-manager-0\.2\.10-dev\.fix-x-crypto-0-56\.2026-09-07\.17-03-34$
+  - it: keeps the plain release version
+    chart:
+      version: 0.2.10
+    asserts:
+      - equal:
+          path: metadata.labels["helm.sh/chart"]
+          value: agent-manager-0.2.10
