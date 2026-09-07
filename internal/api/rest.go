@@ -207,10 +207,11 @@ func SpecToUpdate(s agents.Spec) agents.Update {
 	if s.Skills != nil {
 		upd.Skills = s.Skills
 	}
-	if s.ToolNames != nil {
-		names := s.ToolNames
-		upd.ToolNames = &names
+	if s.Toolset != nil {
+		toolset := s.Toolset
+		upd.Toolset = &toolset
 	}
+	upd.RemovedToolNames = s.RemovedToolNames
 	if s.Labels != nil {
 		labels := s.Labels
 		upd.Labels = &labels

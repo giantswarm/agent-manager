@@ -89,23 +89,46 @@ func TestRESTLifecycle(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.Contains(t, rec.Body.String(), "x-mcp-tool: create_agent")
 
-	code, body := do(t, mux, http.MethodPost, Prefix+"/agents", map[string]any{"name": "sre", "modelConfig": "nope"})
+	readOnly := []string{"preset:read-only"}
+	code, body := do(t, mux, http.MethodPost, Prefix+"/agents", map[string]any{"name": "sre", "modelConfig": "nope", "toolset": readOnly})
 	assert.Equal(t, http.StatusBadRequest, code)
 	assert.Equal(t, "invalid_request", body["error"].(map[string]any)["code"])
 
-	code, body = do(t, mux, http.MethodPost, Prefix+"/agents", map[string]any{"name": "sre", "modelConfig": "default-model-config", "displayName": "SRE", "unknown": 1})
+	code, body = do(t, mux, http.MethodPost, Prefix+"/agents", map[string]any{"name": "sre", "modelConfig": "default-model-config", "displayName": "SRE", "toolset": readOnly, "unknown": 1})
 	assert.Equal(t, http.StatusBadRequest, code, "unknown fields are rejected: %v", body)
+
+	// No toolset: 400 naming the presets. The removed toolNames: 400 with the reason.
+	code, body = do(t, mux, http.MethodPost, Prefix+"/agents", map[string]any{"name": "sre", "modelConfig": "default-model-config"})
+	assert.Equal(t, http.StatusBadRequest, code, body)
+	msg := body["error"].(map[string]any)["message"].(string)
+	for _, want := range []string{"toolset is required", "preset:read-only", "preset:none", "preset:infrastructure", "preset:agent-platform", "preset:full"} {
+		assert.Contains(t, msg, want)
+	}
+	code, body = do(t, mux, http.MethodPost, Prefix+"/agents", map[string]any{"name": "sre", "modelConfig": "default-model-config", "toolset": readOnly, "toolNames": []string{"x_a_b"}})
+	assert.Equal(t, http.StatusBadRequest, code, body)
+	assert.Contains(t, body["error"].(map[string]any)["message"], "toolNames never narrowed anything against muster")
 
 	code, body = do(t, mux, http.MethodPost, Prefix+"/agents/validate", map[string]any{"name": "sre", "modelConfig": "default-model-config"})
 	assert.Equal(t, http.StatusOK, code)
-	assert.Equal(t, true, body["valid"])
+	assert.Equal(t, false, body["valid"], "a dry run without a toolset is invalid: %v", body["errors"])
+	code, body = do(t, mux, http.MethodPost, Prefix+"/agents/validate", map[string]any{"name": "sre", "modelConfig": "default-model-config", "toolset": []string{}})
+	assert.Equal(t, http.StatusOK, code)
+	assert.Equal(t, false, body["valid"])
+	assert.Contains(t, body["errors"].([]any)[0], "preset:none")
+	code, body = do(t, mux, http.MethodPost, Prefix+"/agents/validate", map[string]any{"name": "sre", "modelConfig": "default-model-config", "toolset": readOnly})
+	assert.Equal(t, http.StatusOK, code)
+	assert.Equal(t, true, body["valid"], body["errors"])
+	assert.Equal(t, []any{"preset:read-only"}, body["manifests"].(map[string]any)["values"].(map[string]any)["toolset"])
 
-	code, body = do(t, mux, http.MethodPost, Prefix+"/agents", map[string]any{"name": "sre", "modelConfig": "default-model-config", "displayName": "SRE"})
+	code, body = do(t, mux, http.MethodPost, Prefix+"/agents", map[string]any{"name": "sre", "modelConfig": "default-model-config", "displayName": "SRE", "toolset": readOnly})
 	require.Equal(t, http.StatusCreated, code, body)
 	assert.Equal(t, true, body["created"].(map[string]any)["helmRelease"])
 	assert.Equal(t, true, body["created"].(map[string]any)["ociRepository"])
+	assert.Equal(t, []any{"preset:read-only"}, body["agent"].(map[string]any)["toolset"])
+	_, implicit := body["agent"].(map[string]any)["implicitFullAccess"]
+	assert.False(t, implicit)
 
-	code, body = do(t, mux, http.MethodPost, Prefix+"/agents", map[string]any{"name": "sre", "modelConfig": "default-model-config"})
+	code, body = do(t, mux, http.MethodPost, Prefix+"/agents", map[string]any{"name": "sre", "modelConfig": "default-model-config", "toolset": readOnly})
 	assert.Equal(t, http.StatusConflict, code, body)
 
 	code, body = do(t, mux, http.MethodGet, Prefix+"/agents?namespace=kagent", nil)
@@ -116,10 +139,20 @@ func TestRESTLifecycle(t *testing.T) {
 	assert.Equal(t, http.StatusOK, code)
 	assert.Equal(t, "SRE", body["displayName"])
 	assert.Equal(t, "helmrelease", body["managed"])
+	assert.Equal(t, []any{"preset:read-only"}, body["toolset"])
 
-	code, body = do(t, mux, http.MethodPatch, Prefix+"/agents/kagent/sre", map[string]any{"description": "helps", "toolNames": []string{"x_a_b"}})
+	code, body = do(t, mux, http.MethodPatch, Prefix+"/agents/kagent/sre", map[string]any{"description": "helps", "toolset": []string{"preset:read-only", "server:github"}})
 	assert.Equal(t, http.StatusOK, code, body)
-	assert.Equal(t, []any{"agent.description", "muster.toolNames"}, body["changed"])
+	assert.Equal(t, []any{"agent.description", "toolset"}, body["changed"])
+	assert.Equal(t, []any{"preset:read-only", "server:github"}, body["after"].(map[string]any)["toolset"])
+	code, body = do(t, mux, http.MethodPatch, Prefix+"/agents/kagent/sre", map[string]any{"toolNames": []string{"x_a_b"}})
+	assert.Equal(t, http.StatusBadRequest, code, body)
+	assert.Contains(t, body["error"].(map[string]any)["message"], "toolNames never narrowed")
+	code, body = do(t, mux, http.MethodPatch, Prefix+"/agents/kagent/sre", map[string]any{"toolset": []string{}})
+	assert.Equal(t, http.StatusBadRequest, code, body)
+	assert.Contains(t, body["error"].(map[string]any)["message"], "preset:none")
+	code, body = do(t, mux, http.MethodPost, Prefix+"/agents/validate", map[string]any{"name": "sre", "update": true, "toolNames": []string{"x"}})
+	assert.Equal(t, http.StatusBadRequest, code, body)
 
 	code, body = do(t, mux, http.MethodGet, Prefix+"/agents/kagent/sre/status", nil)
 	assert.Equal(t, http.StatusOK, code)
@@ -180,6 +213,10 @@ func TestMCPToolsMirrorREST(t *testing.T) {
 			Tools []struct {
 				Name        string `json:"name"`
 				Description string `json:"description"`
+				InputSchema struct {
+					Properties map[string]any `json:"properties"`
+					Required   []string       `json:"required"`
+				} `json:"inputSchema"`
 				Annotations struct {
 					ReadOnlyHint    *bool `json:"readOnlyHint"`
 					DestructiveHint *bool `json:"destructiveHint"`
@@ -191,6 +228,16 @@ func TestMCPToolsMirrorREST(t *testing.T) {
 	names := map[string]bool{}
 	for _, tool := range listed.Result.Tools {
 		names[tool.Name] = true
+		_, hasToolNames := tool.InputSchema.Properties["toolNames"]
+		assert.False(t, hasToolNames, "%s still declares toolNames", tool.Name)
+		switch tool.Name {
+		case ToolCreateAgent:
+			assert.Contains(t, tool.InputSchema.Required, "toolset")
+			assert.Contains(t, tool.InputSchema.Properties["toolset"].(map[string]any)["description"], "preset:none")
+		case ToolUpdateAgent, ToolValidateAgent:
+			assert.Contains(t, tool.InputSchema.Properties, "toolset")
+			assert.NotContains(t, tool.InputSchema.Required, "toolset")
+		}
 		switch tool.Name {
 		case ToolCreateAgent, ToolUpdateAgent, ToolDeleteAgent:
 			assert.Contains(t, tool.Description, "WRITES", tool.Name)
@@ -215,30 +262,66 @@ func TestMCPToolsMirrorREST(t *testing.T) {
 	require.False(t, isErr, text)
 	assert.Contains(t, text, `"identity": "serviceAccount"`)
 
-	text, isErr = callTool(t, srv, ToolCreateAgent, map[string]any{"name": "sre", "modelConfig": "nope"})
+	text, isErr = callTool(t, srv, ToolCreateAgent, map[string]any{"name": "sre", "modelConfig": "nope", "toolset": []string{"preset:read-only"}})
 	assert.True(t, isErr)
 	assert.True(t, strings.HasPrefix(text, "invalid_request:"), text)
 
+	// Refused without a toolset, naming the presets; toolNames is explained.
+	text, isErr = callTool(t, srv, ToolCreateAgent, map[string]any{"name": "sre", "modelConfig": "default-model-config"})
+	assert.True(t, isErr)
+	for _, want := range []string{"invalid_request:", "toolset is required", "preset:read-only", "preset:none", "preset:infrastructure", "preset:agent-platform", "preset:full"} {
+		assert.Contains(t, text, want)
+	}
+	text, isErr = callTool(t, srv, ToolCreateAgent, map[string]any{"name": "sre", "modelConfig": "default-model-config", "toolNames": []string{"x_a_b"}})
+	assert.True(t, isErr)
+	assert.Contains(t, text, "toolNames never narrowed anything against muster")
+	text, isErr = callTool(t, srv, ToolValidateAgent, map[string]any{"name": "sre", "modelConfig": "default-model-config", "toolset": []string{"toolset:shared"}})
+	require.False(t, isErr, text)
+	assert.Contains(t, text, `"valid": false`)
+	assert.Contains(t, text, "reserved")
+
 	text, isErr = callTool(t, srv, ToolCreateAgent, map[string]any{
 		"name": "sre", "modelConfig": "default-model-config", "displayName": "SRE",
-		"skills":    map[string]any{"gitRefs": []map[string]any{{"url": "https://github.com/giantswarm/agent-skills", "path": "runbooks", "ref": "main"}}},
-		"toolNames": []string{"x_a_b"},
+		"skills":  map[string]any{"gitRefs": []map[string]any{{"url": "https://github.com/giantswarm/agent-skills", "path": "runbooks", "ref": "main"}}},
+		"toolset": []string{"preset:read-only", "workflow:incident-triage"},
 	})
 	require.False(t, isErr, text)
 	var created map[string]any
 	require.NoError(t, json.Unmarshal([]byte(text), &created))
 	assert.Equal(t, true, created["created"].(map[string]any)["helmRelease"])
+	assert.Equal(t, []any{"preset:read-only", "workflow:incident-triage"}, created["agent"].(map[string]any)["toolset"])
 
 	hr, err := dyn.Resource(hrGVR).Namespace("kagent").Get(context.Background(), "sre", metav1.GetOptions{})
 	require.NoError(t, err)
 	values, _, _ := unstructured.NestedMap(hr.Object, "spec", "values")
 	assert.Equal(t, map[string]any{"gitRefs": []any{map[string]any{"url": "https://github.com/giantswarm/agent-skills", "path": "runbooks", "ref": "main", "name": "runbooks"}}}, values["skills"])
+	assert.Equal(t, []any{"preset:read-only", "workflow:incident-triage"}, values["toolset"])
+	_, hasMuster := values["muster"]
+	assert.False(t, hasMuster, "never muster.toolNames")
 
 	// update: an explicit "" clears, absent leaves.
 	text, isErr = callTool(t, srv, ToolUpdateAgent, map[string]any{"name": "sre", "displayName": "", "description": "helps"})
 	require.False(t, isErr, text)
 	assert.Contains(t, text, `"agent.description"`)
 	assert.Contains(t, text, `"agent.displayName"`)
+
+	// update replaces the toolset as a whole; [] and toolNames are refused.
+	text, isErr = callTool(t, srv, ToolUpdateAgent, map[string]any{"name": "sre", "toolset": []string{"preset:none"}})
+	require.False(t, isErr, text)
+	assert.Contains(t, text, `"changed": [
+    "toolset"
+  ]`)
+	text, isErr = callTool(t, srv, ToolUpdateAgent, map[string]any{"name": "sre", "toolset": []string{}})
+	assert.True(t, isErr)
+	assert.Contains(t, text, "preset:none")
+	text, isErr = callTool(t, srv, ToolUpdateAgent, map[string]any{"name": "sre", "toolNames": []string{"x_a_b"}})
+	assert.True(t, isErr)
+	assert.Contains(t, text, "toolNames never narrowed")
+	text, isErr = callTool(t, srv, ToolGetAgent, map[string]any{"name": "sre"})
+	require.False(t, isErr, text)
+	assert.Contains(t, text, `"toolset": [
+    "preset:none"
+  ]`)
 
 	text, isErr = callTool(t, srv, ToolValidateAgent, map[string]any{"name": "sre", "update": true, "runtime": "rust"})
 	require.False(t, isErr, text)

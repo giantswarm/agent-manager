@@ -8,6 +8,7 @@
 package agents
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 )
@@ -116,9 +117,14 @@ type Spec struct {
 	Runtime string `json:"runtime,omitempty"`
 	// Skills the agent mounts.
 	Skills *Skills `json:"skills,omitempty"`
-	// ToolNames narrows the muster tools; empty means every tool the gateway
-	// exposes (chart default).
-	ToolNames []string `json:"toolNames,omitempty"`
+	// Toolset is the list of selectors that bounds which of the gateway's
+	// tools the agent can use (chart value `toolset`). Required on create;
+	// see ValidateToolset for the grammar.
+	Toolset []string `json:"toolset,omitempty"`
+	// RemovedToolNames is the removed `toolNames` argument: it only exists so
+	// that a caller still passing it is told why it is gone (see
+	// rejectToolNames) instead of getting an "unknown field" error.
+	RemovedToolNames json.RawMessage `json:"toolNames,omitempty"`
 	// Labels / Annotations are merged onto the Agent by the chart.
 	Labels      map[string]string `json:"labels,omitempty"`
 	Annotations map[string]string `json:"annotations,omitempty"`
@@ -126,7 +132,8 @@ type Spec struct {
 
 // Update is a partial change to an existing agent: nil pointers leave the
 // current value; a pointer to an empty value clears it (falls back to the
-// chart default). Skills and ToolNames replace the whole block.
+// chart default). Skills replace the whole block; Toolset replaces the whole
+// list (an empty list is refused: use preset:none).
 type Update struct {
 	Namespace     string             `json:"namespace,omitempty"`
 	Name          string             `json:"name"`
@@ -137,9 +144,11 @@ type Update struct {
 	IconURL       *string            `json:"iconUrl,omitempty"`
 	Runtime       *string            `json:"runtime,omitempty"`
 	Skills        *Skills            `json:"skills,omitempty"`
-	ToolNames     *[]string          `json:"toolNames,omitempty"`
+	Toolset       *[]string          `json:"toolset,omitempty"`
 	Labels        *map[string]string `json:"labels,omitempty"`
 	Annotations   *map[string]string `json:"annotations,omitempty"`
+	// RemovedToolNames: see Spec.RemovedToolNames.
+	RemovedToolNames json.RawMessage `json:"toolNames,omitempty"`
 	// Force writes to a GitOps-owned or suspended HelmRelease anyway.
 	Force bool `json:"force,omitempty"`
 }
@@ -186,15 +195,22 @@ type Agent struct {
 	Namespace string `json:"namespace"`
 	// Exists is false while the HelmRelease has not rendered the Agent CR yet
 	// (or failed to).
-	Exists        bool     `json:"exists"`
-	DisplayName   string   `json:"displayName,omitempty"`
-	Description   string   `json:"description,omitempty"`
-	ModelConfig   string   `json:"modelConfig,omitempty"`
-	Runtime       string   `json:"runtime,omitempty"`
-	IconURL       string   `json:"iconUrl,omitempty"`
-	SystemMessage string   `json:"systemMessage,omitempty"`
-	Skills        *Skills  `json:"skills,omitempty"`
-	ToolNames     []string `json:"toolNames,omitempty"`
+	Exists        bool    `json:"exists"`
+	DisplayName   string  `json:"displayName,omitempty"`
+	Description   string  `json:"description,omitempty"`
+	ModelConfig   string  `json:"modelConfig,omitempty"`
+	Runtime       string  `json:"runtime,omitempty"`
+	IconURL       string  `json:"iconUrl,omitempty"`
+	SystemMessage string  `json:"systemMessage,omitempty"`
+	Skills        *Skills `json:"skills,omitempty"`
+	// Toolset is the toolset the agent declares: the owning HelmRelease's
+	// `toolset` value, or — for a bare Agent CR — the X-Muster-Toolset header
+	// of its muster tool entry. Absent when none is declared.
+	Toolset []string `json:"toolset,omitempty"`
+	// ImplicitFullAccess is true when the agent declares no toolset but wires
+	// the gateway: its meta-tools see every tool the gateway exposes to the
+	// caller. Such agents predate toolsets and still need one assigned.
+	ImplicitFullAccess bool `json:"implicitFullAccess,omitempty"`
 	// Ready / Accepted mirror the Agent CR's conditions; nil while unreported
 	// or when the CR is absent.
 	Ready      *bool       `json:"ready"`
