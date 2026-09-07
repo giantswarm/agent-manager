@@ -1,0 +1,24 @@
+# Every chart release rolls the Deployment, and each rollout leaves a
+# zero-replica ReplicaSet behind that still carries the pod template of the
+# older chart version. Kubernetes keeps ten of them by default; Kyverno's
+# background scans then report every stale one that fails a newer policy. The
+# chart keeps the history short and lets an installation choose its own depth.
+#
+# Run with: make helm-test (helm unittest helm/agent-manager)
+suite: deployment revision history
+templates:
+  - templates/deployment.yaml
+tests:
+  - it: retains three old ReplicaSets by default
+    asserts:
+      - equal:
+          path: spec.revisionHistoryLimit
+          value: 3
+
+  - it: renders the configured revisionHistoryLimit
+    set:
+      revisionHistoryLimit: 0
+    asserts:
+      - equal:
+          path: spec.revisionHistoryLimit
+          value: 0

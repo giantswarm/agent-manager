@@ -4,6 +4,12 @@
 # server); more than one is fine.
 replicaCount: 1
 
+# -- Number of old ReplicaSets retained for rollback. Keep tight so frequent
+# rollouts don't leak zero-replica ReplicaSets across the cluster (each one
+# still carries the pod template of an older chart version, and a Kyverno
+# background scan reports every stale ReplicaSet that fails a newer policy).
+revisionHistoryLimit: 3
+
 image:
   # -- Image registry.
   registry: gsoci.azurecr.io

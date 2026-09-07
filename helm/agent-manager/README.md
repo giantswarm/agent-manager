@@ -59,6 +59,7 @@ standalone installs set `kagent.namespace`, `image.*`, `mcp.enabled`,
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | replicaCount | int | `1` | Number of replicas. The service is stateless (every read goes to the API server); more than one is fine. |
+| revisionHistoryLimit | int | `3` | Number of old ReplicaSets retained for rollback. Keep tight so frequent rollouts don't leak zero-replica ReplicaSets across the cluster (each one still carries the pod template of an older chart version, and a Kyverno background scan reports every stale ReplicaSet that fails a newer policy). |
 | image.registry | string | `"gsoci.azurecr.io"` | Image registry. |
 | image.repository | string | `"giantswarm/agent-manager"` | Image repository. |
 | image.pullPolicy | string | `"IfNotPresent"` | Image pull policy. |
