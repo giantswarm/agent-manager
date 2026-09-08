@@ -24,5 +24,5 @@ app-tests-deploy-namespace: agent-platform
 cluster-crds: /etc/ats/crds,tests/ats/cluster-prerequisites,https://raw.githubusercontent.com/fluxcd/helm-controller/v1.6.4/config/crd/bases/helm.toolkit.fluxcd.io_helmreleases.yaml,https://raw.githubusercontent.com/fluxcd/source-controller/v1.9.5/config/crd/bases/source.toolkit.fluxcd.io_ocirepositories.yaml,https://raw.githubusercontent.com/giantswarm/kagent/v0.1.42/helm/kagent/crds/kagent.dev/kagent.dev_agents.yaml,https://raw.githubusercontent.com/giantswarm/kagent/v0.1.42/helm/kagent/crds/kagent.dev/kagent.dev_modelconfigs.yaml
 
 # functional: no second scenario. upgrade: an upgrade from the last release in
-# the catalog is a follow-up (agent-platform-standalone has the recipe).
+# the catalog is a follow-up.
 skip-steps: [functional, upgrade]

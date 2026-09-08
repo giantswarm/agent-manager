@@ -28,11 +28,11 @@ nameOverride: ""
 # Service name through this).
 fullnameOverride: ""
 
-# The platform contract an umbrella chart (agent-platform-standalone) provides
-# and this chart reads as fallbacks for `oauth.*`: `global.identity.issuerUrl`,
+# The platform contract a parent chart (the `agent-platform` meta chart)
+# provides and this chart reads as fallbacks for `oauth.*`: `global.identity.issuerUrl`,
 # `global.identity.clientId`, `global.identity.existingSecret`,
 # `global.identity.ca.secretName` / `.key`, and `global.domain` for the OAuth
-# base URL. Empty here; a standalone install sets `oauth.*` directly.
+# base URL. Empty here; a chart installed on its own sets `oauth.*` directly.
 global: {}  # @schema type: object; additionalProperties: true
 
 kagent:
