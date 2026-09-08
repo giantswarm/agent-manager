@@ -73,13 +73,13 @@ The lab muster then lists the tools as `x_agent-manager_*`; the proof is a
 `create_agent` → `get_agent_status` (ready) → `delete_agent` round trip
 through `call_tool` while another agent keeps the shared OCIRepository alive.
 
-With the agent-platform-standalone umbrella the lab runs agent-manager as the
-caller (`oauth.enabled` + `oauth.downstream.enabled` from the umbrella
-contract, `requiredAudiences: [kubernetes]`, the `dex-localhost` sidecar
-agentlab's post-renderer adds so the pod reaches the lab issuer): swap the
-image on the umbrella's Deployment instead of installing a second release
-(`kubectl -n agent-platform set image deploy/agent-manager
-agent-manager=docker.io/library/agent-manager:dev-<sha>`) and run
+With the `agent-platform` meta chart the lab runs agent-manager as the
+caller (`oauth.enabled` + `oauth.downstream.enabled` from the chart's
+`agent-manager:` block, `requiredAudiences: [kubernetes]`, the `dex-localhost`
+sidecar agentlab patches in through the component's `postRenderers` so the pod
+reaches the lab issuer): swap the image through agentlab instead of installing
+a second release (`platform.devImages.agent-manager: agent-manager:dev-<sha>`
+in `agentlab.yaml`, then `agentlab platform`) and run
 `agentlab agents-test` — the admin's round trip succeeds with
 `requestedBy=admin@lab.local`, a `viewers`-group user's create is refused by
 the apiserver as `User "oidc:viewer@lab.local"`, and

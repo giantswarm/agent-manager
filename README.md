@@ -215,8 +215,11 @@ discovered from the server (`--*-api-version auto`).
 ## Helm chart
 
 `helm/agent-manager` — see its [README](helm/agent-manager/README.md). Keys
-the umbrella chart (`agent-platform-standalone`) sets: `kagent.namespace`,
-`image.*`, `mcp.enabled`, `muster.mcpServer.*`, `skills.repositories`.
+the [`giantswarm/agent-platform`](https://github.com/giantswarm/agent-platform)
+meta chart sets for its `agent-manager` component: `kagent.namespace`,
+`agentChart.*`, `mcp.enabled`, `oauth.*`, `muster.mcpServer.*`,
+`skills.repositories`, and `flux.helmReleaseServiceAccount` (derived from
+`kagent.fluxServiceAccountName`).
 Optional, off by default: `muster.mcpServer.enabled` (renders an
 `mcpservers.muster.giantswarm.io` CR), `httpRoute.enabled`,
 `networkPolicy.enabled`.

@@ -36,12 +36,14 @@ and reads agents back from the Agent CR, the HelmRelease and the workload.
   `401`, naming its `aud` next to the trusted audiences.
 - Without OAuth writes run under the chart's ServiceAccount and the service
   checks no identity itself; the agentgateway JWT policy in front of the
-  route (rendered by `agent-platform-standalone`) and muster in front of the
-  MCP endpoint are then the trust boundary.
+  route (rendered by the connectivity chart of the `agent-platform` meta chart)
+  and muster in front of the MCP endpoint are then the trust boundary.
 
-Used as a dependency of `agent-platform-standalone` behind a `condition`;
-standalone installs set `kagent.namespace`, `image.*`, `mcp.enabled`,
-`muster.mcpServer.*` and `skills.repositories`.
+A component of the [`giantswarm/agent-platform`](https://github.com/giantswarm/agent-platform)
+meta chart (`components.agent-manager.enabled`), which sets `kagent.namespace`,
+`agentChart.*`, `mcp.enabled`, `oauth.*`, `muster.mcpServer.*` and
+`skills.repositories`, and derives `flux.helmReleaseServiceAccount` from its
+`kagent.fluxServiceAccountName`.
 
 {{ template "chart.homepageLine" . }}
 
