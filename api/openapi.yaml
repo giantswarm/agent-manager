@@ -1,38 +1,45 @@
 openapi: 3.1.0
 info:
   title: agent-manager API
-  version: 1.0.0
+  version: 2.0.0-poc
   description: |
-    Agent lifecycle for the Giant Swarm Agent Platform.
+    Agent lifecycle for the Giant Swarm Agent Platform on kagent main
+    (`kagent.dev/v1alpha3`).
 
-    An agent is a Flux `HelmRelease` of the `agent` chart (one release renders
-    one kagent `Agent`) that renders from the shared per-namespace
-    `OCIRepository` of that chart, tracking it by semver range. agent-manager
-    composes those two objects exactly like the portal's create flow, validates
-    the values against the chart's `values.schema.json` before anything is
-    applied, and reads an agent back from its Agent CR, its owning HelmRelease
-    and the workload kagent runs.
+    An agent is an `AgentTemplate` in the kagent namespace — description,
+    system prompt, model config, skills pinned to immutable sources, one MCP
+    tool binding — that kagent compiles for every `Harness` whose admission
+    selector matches its labels (`kagent.dev/harness=<harness>`). The toolset
+    the agent declares travels as its **toolset carrier**: a per-agent copy of
+    the platform's `muster` `RemoteMCPServer` (`muster-<agent>`) carrying the
+    `X-Muster-Toolset` header, which the template binds instead of the platform
+    server. agent-manager composes both objects as the caller, validates what
+    kagent main can express before anything is applied, and reads readiness
+    from the template's per-Harness status. Conversations are `AgentInstance`s
+    created from the compiled template over kagent's own gRPC API, not here.
 
     Clients MUST call `GET /api/v1/info` first: it reports the managed
-    namespaces, the chart version whose schema validates right now, and the
-    capability flags (a false flag means the operation answers `501
-    unsupported`) and `identity`: `caller` means the server is an OAuth 2.1
-    resource server — every request needs a bearer token the platform IdP
-    issued (muster forwards the session's id_token, the portal sends the
-    user's through the gateway) and every Kubernetes call is made as that
-    user, so the user's RBAC decides and writes report `requestedBy`;
-    `serviceAccount` means no OAuth, the service's own identity behind a
-    trusted proxy. Without a valid token the OAuth layer answers `401` with a
-    `WWW-Authenticate: Bearer` challenge (RFC 9728) before any handler runs.
+    namespaces, the served kagent.dev API version, the platform's muster server
+    and default Harness, the capability flags (a false flag names an argument
+    an AgentTemplate cannot express — `perToolSelection`, `runtime`, `iconUrl`,
+    `skillGitAuthSecret`, `mutableSkillRefs`) and `identity`: `caller` means
+    the server is an OAuth 2.1 resource server — every request needs a bearer
+    token the platform IdP issued (muster forwards the session's id_token, the
+    portal sends the user's through the gateway) and every Kubernetes call is
+    made as that user, so the user's RBAC decides and writes report
+    `requestedBy`; `serviceAccount` means no OAuth, the service's own identity
+    behind a trusted proxy. Without a valid token the OAuth layer answers `401`
+    with a `WWW-Authenticate: Bearer` challenge (RFC 9728) before any handler
+    runs.
 
     The same operations are available as MCP tools (streamable HTTP at `/mcp`,
     tool names in `x-mcp-tool` below; through muster they appear as
     `x_<server>_<tool>`).
 
-    Ownership rules: an agent whose HelmRelease is applied by a Flux
-    Kustomization (`managed: gitops`) is refused for update and delete unless
-    `force` — its desired state lives in git. A bare Agent CR (`managed: none`)
-    has no HelmRelease to write to and is only deleted with `force`.
+    Ownership rules: a template applied by a Flux Kustomization (`managed:
+    gitops`) or written by someone else (`managed: external`) is refused for
+    update and delete unless `force`; so is an update of a template carrying
+    fields agent-manager does not compose (`unmanagedFields`).
 servers:
   - url: /
 tags:
@@ -58,8 +65,8 @@ paths:
       tags: [health]
       summary: Readiness (the API is serving)
       description: |
-        Does not depend on the API server or the chart registry: the API stays
-        reachable so clients read a failure from the response itself.
+        Does not depend on the API server: the API stays reachable so clients
+        read a failure from the response itself.
       operationId: readyz
       responses:
         "200":
@@ -70,7 +77,7 @@ paths:
   /api/v1/info:
     get:
       tags: [info]
-      summary: Service version, agent chart, managed namespaces and capability flags
+      summary: Service version, kagent API versions, managed namespaces and capability flags
       operationId: getInfo
       x-mcp-tool: get_info
       responses:
@@ -95,9 +102,9 @@ paths:
       tags: [agents]
       summary: List the agents of a namespace
       description: |
-        Every Agent CR with its owning HelmRelease (found through the Flux
-        provenance labels), plus every HelmRelease of the agent chart that has
-        not rendered an Agent yet (`exists: false`).
+        Every AgentTemplate of the namespace with its toolset carrier when it
+        has one: the declaration, the toolset (or `implicitFullAccess`), the
+        per-Harness status and who manages it.
       operationId: listAgents
       x-mcp-tool: list_agents
       parameters:
@@ -118,12 +125,14 @@ paths:
       tags: [agents]
       summary: Create an agent
       description: |
-        Composes the OCIRepository (created when missing) and the HelmRelease,
-        validates the values against the chart schema and the modelConfig
-        against the namespace, then applies. A validation failure writes
-        nothing (`400 invalid_request`, the message lists the valid model
-        configs). `409 conflict` when a HelmRelease or Agent of that name
-        exists.
+        Composes the toolset carrier and the AgentTemplate, checks the name,
+        the toolset (required), the modelConfig against the namespace, the
+        Harness admission and the skill sources, then applies the carrier and
+        the template (a template that fails to apply takes its carrier with
+        it). A check failure writes nothing (`400 invalid_request`, the
+        message names the valid model configs / the Harnesses and what they
+        admit). `409 conflict` when an AgentTemplate or a RemoteMCPServer of
+        the carrier's name exists.
       operationId: createAgent
       x-mcp-tool: create_agent
       requestBody:
@@ -147,7 +156,7 @@ paths:
       description: |
         Composes and validates without writing. With `update: true` the
         non-empty fields of the body are validated as a change to the existing
-        agent's values.
+        agent's declaration.
       operationId: validateAgent
       x-mcp-tool: validate_agent
       requestBody:
@@ -160,7 +169,7 @@ paths:
                 - type: object
                   properties:
                     update: { type: boolean, description: Validate as an update of the existing agent }
-                    force: { type: boolean, description: With update, ignore the GitOps/suspended guards }
+                    force: { type: boolean, description: With update, ignore the ownership guards }
       responses:
         "200":
           description: the verdict (valid may be false)
@@ -190,13 +199,17 @@ paths:
       tags: [agents]
       summary: Update an agent
       description: |
-        Merges the given fields into the HelmRelease values (absent fields stay,
-        an empty string clears a field back to the chart default, `skills`
-        replaces its whole block, `toolset` replaces the whole list — the way
-        to assign a toolset to an agent that reports `implicitFullAccess`),
-        validates and updates the HelmRelease. `409 conflict` for GitOps-owned
-        or suspended releases and bare Agent CRs unless `force`. `400` for a
-        body still carrying the removed `toolNames`.
+        Merges the given fields into the agent's declaration (absent fields
+        stay, an empty string clears a field, `skills` replaces its whole
+        block, `toolset` replaces the whole list — the way to assign a toolset
+        to an agent that reports `implicitFullAccess`), re-composes and writes
+        what differs: a toolset change updates the carrier only; anything else
+        updates the AgentTemplate, which makes kagent compile a **new
+        revision** for every admitting Harness while running AgentInstances
+        keep the revision they were created with (`note` says so). `409
+        conflict` for GitOps-owned or externally written templates and for
+        templates carrying `unmanagedFields` unless `force`. `400` for a body
+        still carrying the removed `toolNames`, `runtime` or `iconUrl`.
       operationId: updateAgent
       x-mcp-tool: update_agent
       parameters:
@@ -221,9 +234,9 @@ paths:
       tags: [agents]
       summary: Delete an agent
       description: |
-        Deletes the owning HelmRelease (helm-controller uninstalls the Agent)
-        and the shared OCIRepository when no other HelmRelease references it.
-        Bare Agent CRs, GitOps-owned and suspended releases need `force`.
+        Deletes the AgentTemplate and its toolset carrier (only when
+        agent-manager created the carrier; `toolsetCarrierKept` says why one
+        stays). GitOps-owned and externally written templates need `force`.
       operationId: deleteAgent
       x-mcp-tool: delete_agent
       parameters:
@@ -246,10 +259,11 @@ paths:
       tags: [agents]
       summary: Compact status verdict
       description: |
-        Agent conditions, HelmRelease conditions and history, Deployment
-        readiness, pods with waiting reasons (a CrashLoopBackOff pod is phase
-        Running — container statuses tell) and recent Warning events, folded
-        into `verdict` (ready | progressing | failed | unknown) and `summary`.
+        The AgentTemplate's per-Harness status (Accepted, ResolvedRefs,
+        Compatible, Ready, revisions, compile warnings) and the toolset
+        carrier's acceptance, folded into `verdict` (ready | progressing |
+        failed | unknown) and `summary`. `ready` = any admitting Harness
+        reports Ready for the current generation.
       operationId: getAgentStatus
       x-mcp-tool: get_agent_status
       responses:
@@ -284,9 +298,10 @@ paths:
       summary: Discover skills in the configured repositories
       description: |
         Every `SKILL.md` of a GitHub repository is one skill (frontmatter
-        `name`/`description`), returned as the `gitRefs` entry an agent mounts.
-        Cached briefly; `refresh=true` re-reads GitHub. `501 unsupported` when
-        no repositories are configured.
+        `name`/`description`), read at the commit the branch resolves to and
+        returned with that `commit` — the `gitRefs` entry an agent mounts
+        (`ref` = the commit). Cached briefly; `refresh=true` re-reads GitHub.
+        `501 unsupported` when no repositories are configured.
       operationId: listSkills
       x-mcp-tool: list_skills
       parameters:
@@ -347,16 +362,6 @@ components:
       type: object
       properties:
         version: { type: string }
-        chart:
-          type: object
-          properties:
-            ociUrl: { type: string }
-            semver: { type: string, description: The range the OCIRepository tracks }
-            latestVersion: { type: string, description: Newest published version in range ("" when the registry is unreachable) }
-            schemaVersion: { type: string, description: Chart version whose values.schema.json validates right now }
-            schemaSource: { type: string, enum: [registry, embedded] }
-            resolvedAt: { type: string, format: date-time }
-            error: { type: string }
         namespaces:
           type: object
           properties:
@@ -365,7 +370,12 @@ components:
         capabilities:
           type: object
           additionalProperties: { type: boolean }
-          description: "list, get, create, update, delete, status, validate, modelConfigs, skills, writesAsCaller (true when identity is caller)"
+          description: >-
+            list, get, create, update, delete, status, validate, modelConfigs, skills, writesAsCaller (true when
+            identity is caller), harnesses, toolsetCarrier; and what an AgentTemplate cannot express, always false
+            on kagent main: perToolSelection (tools[] needs controller-side discovery), runtime (the Harness is
+            the runtime), iconUrl, skillGitAuthSecret (skill sources are read anonymously), mutableSkillRefs
+            (git skills pin a commit, OCI skills a digest).
         identity:
           type: string
           enum: [caller, serviceAccount]
@@ -377,32 +387,32 @@ components:
             service's own identity behind a trusted proxy.
         apiVersions:
           type: object
+          description: The served kagent.dev version, discovered from the API server (agenttemplates).
           properties:
-            agent: { type: string }
-            modelConfig: { type: string }
-            helmRelease: { type: string }
-            ociRepository: { type: string }
-        flux:
+            agentTemplate: { type: string, example: kagent.dev/v1alpha3 }
+            remoteMcpServer: { type: string, example: kagent.dev/v1alpha3 }
+            harness: { type: string, example: kagent.dev/v1alpha3 }
+            modelConfig: { type: string, example: kagent.dev/v1alpha3 }
+        kagent:
           type: object
           properties:
-            helmReleaseInterval: { type: string }
-            ociRepositoryInterval: { type: string }
-            serviceAccountName: { type: string }
+            musterServer: { type: string, description: The platform RemoteMCPServer every carrier is copied from (muster) }
+            defaultHarness: { type: string, description: The Harness an agent runs on when the request names none (kagent) }
+            toolsetHeader: { type: string, example: X-Muster-Toolset }
         skillsRepositories: { type: array, items: { type: string } }
     SkillGitRef:
       type: object
-      required: [url]
+      required: [url, ref]
       properties:
-        url: { type: string }
+        url: { type: string, description: Repository URL (http or https) }
         path: { type: string, description: Skill directory; empty for the repository root }
-        ref: { type: string }
-        name: { type: string, description: Mount name under /skills; defaults to the directory name }
+        ref: { type: string, pattern: '^([0-9a-fA-F]{40}|[0-9a-fA-F]{64})$', description: Full git commit id; list_skills reports it as `commit` }
+        name: { type: string, description: Skill name under the template; defaults to the directory name }
     Skills:
       type: object
       properties:
-        refs: { type: array, items: { type: string }, description: OCI skill image references }
+        refs: { type: array, items: { type: string, pattern: '^[^\s@]+@sha256:[0-9a-f]{64}$' }, description: Digest-pinned OCI skill references }
         gitRefs: { type: array, items: { $ref: "#/components/schemas/SkillGitRef" } }
-        gitAuthSecretName: { type: string }
     Toolset:
       type: array
       minItems: 1
@@ -410,10 +420,11 @@ components:
       items: { type: string, pattern: '^(preset|server|workflow|tool):[^\s,]+$' }
       description: |
         The selectors that bound which of the gateway's tools the agent's
-        meta-tools can see and call — composed as the agent chart's top-level
-        `toolset` value, rendered as the `X-Muster-Toolset` header on the
-        agent's muster tool entry, resolved by muster per caller. Each selector
-        is `preset:<name>`, `server:<name>`, `workflow:<name>` or `tool:<name>`
+        meta-tools can see and call — carried as the `X-Muster-Toolset`
+        header of the agent's toolset carrier (RemoteMCPServer
+        `muster-<agent>`, a copy of the platform's `muster` server that the
+        AgentTemplate binds), resolved by muster per caller. Each selector is
+        `preset:<name>`, `server:<name>`, `workflow:<name>` or `tool:<name>`
         (exact names, at most 32 — define a preset for more). Shipped presets:
         `read-only`, `none` (a chat-only agent without tools), `infrastructure`,
         `agent-platform`, `full` (every tool the gateway exposes). `toolset:` is
@@ -426,16 +437,20 @@ components:
       required: [name, modelConfig, toolset]
       properties:
         namespace: { type: string }
-        name: { type: string, description: DNS-1123 technical name (HelmRelease and Agent name), max 63 chars }
-        displayName: { type: string, maxLength: 63 }
-        description: { type: string }
-        systemMessage: { type: string }
+        name: { type: string, description: DNS-1123 technical name (the AgentTemplate name), max 63 chars }
+        displayName: { type: string, maxLength: 63, description: Annotation ui.giantswarm.io/display-name }
+        description: { type: string, description: spec.description }
+        systemMessage: { type: string, description: spec.systemPrompt }
         modelConfig: { type: string, description: An existing ModelConfig of the namespace }
-        iconUrl: { type: string }
-        runtime: { type: string, enum: [go, python] }
+        harness:
+          type: string
+          description: >-
+            The kagent Harness that runs the agent (the runtime); the template is labelled
+            kagent.dev/harness=<harness> and a Harness admitting it must exist. Empty: the
+            installation default (info.kagent.defaultHarness). Replaces the former `runtime`.
         skills: { $ref: "#/components/schemas/Skills" }
         toolset: { $ref: "#/components/schemas/Toolset" }
-        labels: { type: object, additionalProperties: { type: string } }
+        labels: { type: object, additionalProperties: { type: string }, description: Extra labels on the AgentTemplate (a Harness with a foreign selector is matched through them) }
         annotations: { type: object, additionalProperties: { type: string } }
     Update:
       type: object
@@ -445,8 +460,7 @@ components:
         description: { type: string }
         systemMessage: { type: string }
         modelConfig: { type: string }
-        iconUrl: { type: string }
-        runtime: { type: string, enum: [go, python] }
+        harness: { type: string, description: Move the agent to another Harness; "" restores the default }
         skills: { $ref: "#/components/schemas/Skills" }
         toolset: { $ref: "#/components/schemas/Toolset" }
         labels: { type: object, additionalProperties: { type: string } }
@@ -460,60 +474,60 @@ components:
         reason: { type: string }
         message: { type: string }
         lastTransitionTime: { type: string }
-    HelmReleaseRef:
+        observedGeneration: { type: integer }
+    HarnessStatus:
+      type: object
+      description: What kagent reports for the template on one admitting Harness (status.harnesses[])
+      properties:
+        harness: { type: string }
+        ready: { type: [boolean, "null"] }
+        accepted: { type: [boolean, "null"] }
+        resolvedRefs: { type: [boolean, "null"] }
+        compatible: { type: [boolean, "null"] }
+        desiredRevision: { type: string }
+        latestSuccessfulRevision: { type: string, description: Instances pin the revision they were created with }
+        conditions: { type: array, items: { $ref: "#/components/schemas/Condition" } }
+        warnings: { type: array, items: { type: string }, description: kagent's non-blocking compile decisions }
+    ToolsetCarrier:
       type: object
       properties:
-        name: { type: string }
-        namespace: { type: string }
-        ready: { type: [boolean, "null"] }
-        reason: { type: string }
+        name: { type: string, example: muster-sre }
+        exists: { type: boolean }
+        accepted: { type: [boolean, "null"] }
         message: { type: string }
-        chartVersion: { type: string }
-        lastAttemptedRevision: { type: string }
-        suspended: { type: boolean }
-        gitOpsOwned: { type: boolean }
-        deleting: { type: boolean, description: helm-controller is uninstalling the release }
-        chartRef:
-          type: object
-          properties:
-            kind: { type: string }
-            name: { type: string }
-            namespace: { type: string }
+        header: { type: string, description: The X-Muster-Toolset value the carrier sends }
     Agent:
       type: object
       properties:
         name: { type: string }
         namespace: { type: string }
-        exists: { type: boolean, description: The Agent CR exists (false while the HelmRelease has not rendered it) }
         displayName: { type: string }
         description: { type: string }
         modelConfig: { type: string }
-        runtime: { type: string }
-        iconUrl: { type: string }
         systemMessage: { type: string }
+        harness: { type: string, description: The kagent.dev/harness label; absent when the template carries none }
         skills: { $ref: "#/components/schemas/Skills" }
-        toolset: { $ref: "#/components/schemas/Toolset", description: The declared toolset (the HelmRelease's `toolset` value; for a bare Agent CR the X-Muster-Toolset header it carries); absent when none is declared }
-        implicitFullAccess: { type: boolean, description: True when the agent declares no toolset but wires the gateway — its meta-tools see every tool the gateway exposes to the caller; such agents predate toolsets and still need one (update_agent) }
-        ready: { type: [boolean, "null"] }
-        accepted: { type: [boolean, "null"] }
-        conditions: { type: array, items: { $ref: "#/components/schemas/Condition" } }
-        managed: { type: string, enum: [helmrelease, gitops, none] }
-        helmRelease: { $ref: "#/components/schemas/HelmReleaseRef" }
-        values: { type: object, description: The HelmRelease's inline values (the chart contract) }
+        toolset: { $ref: "#/components/schemas/Toolset", description: The declared toolset (the carrier's X-Muster-Toolset header); absent when none is declared }
+        implicitFullAccess: { type: boolean, description: True when the template binds the platform's muster server directly (no carrier) — its tools are every tool the gateway exposes to the caller; assign a toolset with update_agent }
+        toolsetCarrier: { $ref: "#/components/schemas/ToolsetCarrier" }
+        ready: { type: [boolean, "null"], description: Any admitting Harness reports Ready; null while none has reported }
+        harnesses: { type: array, items: { $ref: "#/components/schemas/HarnessStatus" } }
+        managed: { type: string, enum: [agent-manager, gitops, external] }
+        generation: { type: integer }
+        observedGeneration: { type: integer }
+        unmanagedFields: { type: array, items: { type: string }, description: Template fields agent-manager does not compose (bucket skills, plugins, prompt templates, agent tool bindings, other MCP servers); an update overwrites them only with force }
+        spec: { type: object, description: The AgentTemplate spec as served (the kagent contract) }
     Manifests:
       type: object
       properties:
-        ociRepository: { type: string, description: YAML }
-        helmRelease: { type: string, description: YAML }
-        values: { type: object }
+        agentTemplate: { type: string, description: YAML }
+        toolsetCarrier: { type: string, description: YAML; empty when the template binds the platform server directly }
     ValidateResult:
       type: object
       properties:
         valid: { type: boolean }
         mode: { type: string, enum: [create, update] }
         errors: { type: array, items: { type: string } }
-        schemaVersion: { type: string }
-        schemaSource: { type: string, enum: [registry, embedded] }
         manifests: { $ref: "#/components/schemas/Manifests" }
     CreateResult:
       type: object
@@ -523,17 +537,18 @@ components:
         created:
           type: object
           properties:
-            ociRepository: { type: boolean }
-            helmRelease: { type: boolean }
+            agentTemplate: { type: boolean }
+            toolsetCarrier: { type: boolean }
         status: { $ref: "#/components/schemas/Status" }
         requestedBy: { type: string, description: The authenticated caller the write ran as (email, else subject); absent without OAuth }
     UpdateResult:
       type: object
       properties:
         agent: { $ref: "#/components/schemas/Agent" }
-        before: { type: object }
+        before: { type: object, description: The declaration before (displayName, description, systemMessage, modelConfig, harness, skills, toolset, labels, annotations) }
         after: { type: object }
-        changed: { type: array, items: { type: string }, description: Dotted value paths that changed }
+        changed: { type: array, items: { type: string }, description: Dotted declaration paths that changed, e.g. description, toolset, skills.gitRefs, labels.tenant }
+        note: { type: string, description: Present when the AgentTemplate changed — kagent compiles a new revision; running instances keep theirs }
         requestedBy: { type: string, description: The authenticated caller the write ran as }
         manifests: { $ref: "#/components/schemas/Manifests" }
     DeleteResult:
@@ -541,10 +556,9 @@ components:
       properties:
         name: { type: string }
         namespace: { type: string }
-        helmReleaseDeleted: { type: boolean }
-        agentDeleted: { type: boolean, description: A bare Agent CR was deleted directly (force) }
-        ociRepositoryDeleted: { type: boolean }
-        ociRepositoryKept: { type: string, description: Why the shared chart source stays }
+        agentTemplateDeleted: { type: boolean }
+        toolsetCarrierDeleted: { type: boolean }
+        toolsetCarrierKept: { type: string, description: Why a carrier of that name stays (not created by agent-manager) }
         requestedBy: { type: string, description: The authenticated caller the delete ran as }
     Status:
       type: object
@@ -553,70 +567,14 @@ components:
         namespace: { type: string }
         verdict: { type: string, enum: [ready, progressing, failed, unknown] }
         summary: { type: string }
-        agent:
+        template:
           type: object
           properties:
             exists: { type: boolean }
-            ready: { type: [boolean, "null"] }
-            accepted: { type: [boolean, "null"] }
-            conditions: { type: array, items: { $ref: "#/components/schemas/Condition" } }
-        helmRelease:
-          type: object
-          properties:
-            exists: { type: boolean }
-            ready: { type: [boolean, "null"] }
-            suspended: { type: boolean }
-            gitOpsOwned: { type: boolean }
-            deleting: { type: boolean }
-            conditions: { type: array, items: { $ref: "#/components/schemas/Condition" } }
-            history:
-              type: array
-              items:
-                type: object
-                properties:
-                  version: { type: integer }
-                  chartVersion: { type: string }
-                  status: { type: string }
-                  lastDeployed: { type: string }
-            lastAttemptedRevision: { type: string }
-        deployment:
-          type: object
-          properties:
-            exists: { type: boolean }
-            replicas: { type: integer }
-            readyReplicas: { type: integer }
-            availableReplicas: { type: integer }
-            conditions: { type: array, items: { $ref: "#/components/schemas/Condition" } }
-        pods:
-          type: array
-          items:
-            type: object
-            properties:
-              name: { type: string }
-              phase: { type: string }
-              ready: { type: boolean }
-              restarts: { type: integer }
-              containers:
-                type: array
-                items:
-                  type: object
-                  properties:
-                    name: { type: string }
-                    state: { type: string, enum: [waiting, terminated, running] }
-                    reason: { type: string }
-                    message: { type: string }
-                    init: { type: boolean }
-        events:
-          type: array
-          items:
-            type: object
-            properties:
-              type: { type: string }
-              reason: { type: string }
-              message: { type: string }
-              object: { type: string }
-              count: { type: integer }
-              lastTimestamp: { type: string }
+            generation: { type: integer }
+            observedGeneration: { type: integer }
+            harnesses: { type: array, items: { $ref: "#/components/schemas/HarnessStatus" } }
+        toolsetCarrier: { $ref: "#/components/schemas/ToolsetCarrier" }
     ModelConfig:
       type: object
       properties:
@@ -634,7 +592,8 @@ components:
         description: { type: string }
         repoUrl: { type: string }
         path: { type: string }
-        ref: { type: string }
+        ref: { type: string, description: The branch that was read }
+        commit: { type: string, description: The commit the branch resolved to — what a template pins }
     SkillsResult:
       type: object
       properties:
@@ -645,6 +604,7 @@ components:
             properties:
               repoUrl: { type: string }
               ref: { type: string }
+              commit: { type: string }
               skills: { type: array, items: { $ref: "#/components/schemas/Skill" } }
               truncated: { type: boolean }
               error: { type: string }

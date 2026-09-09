@@ -1,15 +1,12 @@
 package agents
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/giantswarm/agent-manager/internal/chart"
 )
 
 func TestValidateToolsetGrammar(t *testing.T) {
@@ -56,67 +53,34 @@ func TestValidateToolsetGrammar(t *testing.T) {
 	}
 }
 
-func TestRejectToolNamesExplainsTheRemoval(t *testing.T) {
-	assert.NoError(t, rejectToolNames(nil))
-	assert.NoError(t, rejectToolNames(json.RawMessage("null")))
-	for _, raw := range []string{`["x_a_b"]`, `[]`, `"x"`} {
-		err := rejectToolNames(json.RawMessage(raw))
-		require.ErrorIs(t, err, ErrInvalid, raw)
-		assert.Contains(t, err.Error(), "toolNames never narrowed anything against muster")
-		assert.Contains(t, err.Error(), "kagent filters muster's meta-tools only")
-		assert.Contains(t, err.Error(), `toolset: ["preset:read-only"]`)
+func TestRemovedArgumentsExplainThemselves(t *testing.T) {
+	assert.NoError(t, rejectRemoved(Spec{}.removed()...))
+	assert.NoError(t, rejectRemoved(Spec{RemovedToolNames: json.RawMessage("null"), Skills: &Skills{}}.removed()...))
+	for name, tc := range map[string]struct {
+		spec Spec
+		want []string
+	}{
+		"toolNames": {Spec{RemovedToolNames: json.RawMessage(`["x_a_b"]`)}, []string{"toolNames never narrowed anything against muster", "kagent filters muster's meta-tools only", `toolset: ["preset:read-only"]`}},
+		"runtime":   {Spec{RemovedRuntime: json.RawMessage(`"python"`)}, []string{"runtime is gone", "harness: <name>"}},
+		"iconUrl":   {Spec{RemovedIconURL: json.RawMessage(`"https://x/y.png"`)}, []string{"iconUrl is gone", "no icon field"}},
+		"gitAuth":   {Spec{Skills: &Skills{RemovedGitAuthSecretName: json.RawMessage(`"git-creds"`)}}, []string{"gitAuthSecretName is gone", "anonymously"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := rejectRemoved(tc.spec.removed()...)
+			require.ErrorIs(t, err, ErrInvalid)
+			for _, want := range tc.want {
+				assert.Contains(t, err.Error(), want)
+			}
+		})
 	}
+	err := rejectRemoved(Update{RemovedRuntime: json.RawMessage(`"go"`), Skills: &Skills{RemovedGitAuthSecretName: json.RawMessage(`"x"`)}}.removed()...)
+	require.ErrorIs(t, err, ErrInvalid)
+	assert.Contains(t, err.Error(), "runtime is gone", "the first removed argument is reported")
 }
 
-func TestParseToolsetHeader(t *testing.T) {
+func TestToolsetHeaderRoundTrip(t *testing.T) {
+	assert.Equal(t, "preset:read-only,workflow:incident-triage", ToolsetHeaderValue([]string{"preset:read-only", "workflow:incident-triage"}))
 	assert.Equal(t, []string{"preset:read-only", "workflow:incident-triage"}, ParseToolsetHeader("preset:read-only, workflow:incident-triage"))
 	assert.Equal(t, []string{"preset:none"}, ParseToolsetHeader("preset:none"))
 	assert.Nil(t, ParseToolsetHeader(" , "))
-}
-
-// legacyChart is a schema source serving the schema of an agent chart from
-// before `toolset` existed (top-level additionalProperties: false, no
-// toolset): the embedded copy of an older service build, or a registry that
-// still resolves to such a version.
-type legacyChart struct{}
-
-func (legacyChart) Schema(context.Context) chart.Schema {
-	s := chart.EmbeddedSchema()
-	doc := s.Document.(map[string]any)
-	props := doc["properties"].(map[string]any)
-	delete(props, ToolsetValuesKey)
-	s.Version, s.Source = "0.5.6", chart.SourceRegistry
-	return s
-}
-
-func TestToolsetValidationDoesNotDependOnTheSchemaKnowingTheKey(t *testing.T) {
-	ctx := context.Background()
-	values := BuildValues(Spec{Name: "sre", ModelConfig: "mc", Toolset: []string{"preset:read-only", "workflow:incident-triage"}})
-	assert.Equal(t, []any{"preset:read-only", "workflow:incident-triage"}, values[ToolsetValuesKey])
-	_, hasMuster := values["muster"]
-	assert.False(t, hasMuster, "never muster.toolNames")
-
-	// The embedded schema is the agent chart's first release with toolset: it
-	// declares the key and validates it as well.
-	sch, violations := ValidateValues(ctx, embeddedChart{}, values)
-	assert.Equal(t, chart.SourceEmbedded, sch.Source)
-	assert.True(t, schemaDeclares(sch, ToolsetValuesKey), "embedded schema %s declares toolset", sch.Version)
-	assert.Empty(t, violations)
-	_, violations = ValidateValues(ctx, embeddedChart{}, map[string]any{"agent": map[string]any{"name": "sre"}, "modelConfig": map[string]any{"name": "mc"}, ToolsetValuesKey: "preset:read-only"})
-	require.Len(t, violations, 1)
-	assert.Contains(t, violations[0], "/toolset")
-
-	// A schema from before the value (additionalProperties: false, no toolset)
-	// would refuse the key as an additional property: it is left out of that
-	// schema check, everything else is still judged.
-	sch, violations = ValidateValues(ctx, legacyChart{}, values)
-	assert.Equal(t, "0.5.6", sch.Version)
-	assert.Empty(t, violations)
-	bad := BuildValues(Spec{Name: "sre", ModelConfig: "mc", Runtime: "rust", Toolset: []string{"preset:read-only"}})
-	_, violations = ValidateValues(ctx, legacyChart{}, bad)
-	require.Len(t, violations, 1)
-	assert.Contains(t, violations[0], "/agent/runtime")
-	_, violations = ValidateValues(ctx, legacyChart{}, map[string]any{"agent": map[string]any{"name": "sre"}, "modelConfig": map[string]any{"name": "mc"}, "unknownKey": true})
-	require.Len(t, violations, 1)
-	assert.Contains(t, violations[0], "unknownKey", "only toolset is exempt")
 }

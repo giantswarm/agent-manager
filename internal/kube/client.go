@@ -20,7 +20,6 @@ import (
 
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
-	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 
@@ -41,12 +40,10 @@ const (
 var ErrNoCallerToken = errors.New("no caller token on the request")
 
 // Client is what the service needs from Kubernetes: the dynamic client for the
-// custom resources (HelmRelease, OCIRepository, Agent, ModelConfig), the typed
-// client for core objects (Deployments, Pods, Events) and discovery for the
-// served API versions.
+// kagent.dev custom resources (AgentTemplate, RemoteMCPServer, Harness,
+// ModelConfig) and discovery for the served API version.
 type Client interface {
 	Dynamic() dynamic.Interface
-	Typed() kubernetes.Interface
 	Discovery() discovery.DiscoveryInterface
 }
 
@@ -64,7 +61,6 @@ type Provider interface {
 // Clients is the concrete client set built from a rest.Config.
 type Clients struct {
 	dynamic   dynamic.Interface
-	typed     kubernetes.Interface
 	discovery discovery.DiscoveryInterface
 	restCfg   *rest.Config
 }
@@ -72,15 +68,12 @@ type Clients struct {
 // Dynamic implements Client.
 func (c *Clients) Dynamic() dynamic.Interface { return c.dynamic }
 
-// Typed implements Client.
-func (c *Clients) Typed() kubernetes.Interface { return c.typed }
-
 // Discovery implements Client.
 func (c *Clients) Discovery() discovery.DiscoveryInterface { return c.discovery }
 
 // FromInterfaces wraps existing clients (tests use the fakes).
-func FromInterfaces(dyn dynamic.Interface, typed kubernetes.Interface, disc discovery.DiscoveryInterface) *Clients {
-	return &Clients{dynamic: dyn, typed: typed, discovery: disc}
+func FromInterfaces(dyn dynamic.Interface, disc discovery.DiscoveryInterface) *Clients {
+	return &Clients{dynamic: dyn, discovery: disc}
 }
 
 // Config selects how to reach the API server.
@@ -114,11 +107,7 @@ func fromRESTConfig(restCfg *rest.Config) (*Clients, error) {
 	if err != nil {
 		return nil, fmt.Errorf("discovery client: %w", err)
 	}
-	cs, err := kubernetes.NewForConfig(restCfg)
-	if err != nil {
-		return nil, fmt.Errorf("clientset: %w", err)
-	}
-	return &Clients{dynamic: dyn, typed: cs, discovery: disc, restCfg: restCfg}, nil
+	return &Clients{dynamic: dyn, discovery: disc, restCfg: restCfg}, nil
 }
 
 // ForToken returns clients that authenticate to the API server with token (an
@@ -269,11 +258,10 @@ func (p *CallerProvider) evictLocked(now time.Time) {
 }
 
 // DiscoverVersion returns the API version of group that serves resource,
-// preferring the server's preferred version. Used for kagent.dev (agents,
-// modelconfigs) and the Flux groups (helmreleases, ocirepositories), whose
-// versions differ between installations. Discovery is what every
-// authenticated principal may read, so the ServiceAccount answers it even
-// when it holds no other permission.
+// preferring the server's preferred version. Used for kagent.dev
+// (agenttemplates), whose version differs between installations. Discovery is
+// what every authenticated principal may read, so the ServiceAccount answers
+// it even when it holds no other permission.
 func DiscoverVersion(dc discovery.DiscoveryInterface, group, resource string) (string, error) {
 	groups, err := dc.ServerGroups()
 	if err != nil {

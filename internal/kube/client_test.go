@@ -36,7 +36,7 @@ func TestForTokenDropsEveryServiceAccountCredential(t *testing.T) {
 	assert.Equal(t, c.restCfg.Host, user.restCfg.Host)
 	assert.Equal(t, c.restCfg.TLSClientConfig, user.restCfg.TLSClientConfig)
 	assert.Equal(t, "agent-manager", user.restCfg.UserAgent)
-	assert.NotSame(t, c.Typed(), user.Typed())
+	assert.NotSame(t, c.Dynamic(), user.Dynamic())
 
 	_, err = c.ForToken("")
 	assert.ErrorIs(t, err, ErrNoCallerToken)

@@ -41,8 +41,7 @@ const (
 	argDescription   = "description"
 	argSystemMessage = "systemMessage"
 	argModelConfig   = "modelConfig"
-	argIconURL       = "iconUrl"
-	argRuntime       = "runtime"
+	argHarness       = "harness"
 	argSkills        = "skills"
 	argToolset       = "toolset"
 	argLabels        = "labels"
@@ -59,62 +58,61 @@ const (
 func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 	s := mcpserver.NewMCPServer("agent-manager", version,
 		mcpserver.WithToolCapabilities(false),
-		mcpserver.WithInstructions("Manage the agents of the Agent Platform. An agent is a Flux HelmRelease of the agent chart (one release renders one kagent Agent) plus the shared per-namespace OCIRepository of that chart. Call get_info first for the managed namespaces and the chart version; list_model_configs before create_agent (the modelConfig must exist in the namespace); list_skills for the skills an agent can mount. Names are DNS-1123 labels the caller chooses and confirms — the service never derives a name from a display name. validate_agent is a dry run of create/update. Every agent declares a toolset — create_agent requires it: the selectors (preset:<name>, server:<name>, workflow:<name>, tool:<name>) that bound which of the gateway's tools the agent's meta-tools can see and call; presets shipped on every installation: read-only, none, infrastructure, agent-platform, full. list_agents reports the toolset of each agent, or implicitFullAccess: true for agents created before toolsets existed — assign them one with update_agent. Agents whose HelmRelease is applied from git (managed: gitops) are read-only here unless force is passed: change them in the GitOps repository instead."),
+		mcpserver.WithInstructions("Manage the agents of the Agent Platform on kagent main. An agent is a kagent.dev/v1alpha3 AgentTemplate in the kagent namespace (description, system prompt, model config, immutable skills, one MCP binding to the platform's muster gateway) that kagent compiles for every Harness admitting it; conversations are AgentInstances created from the template over kagent's own API, not here. Call get_info first for the managed namespaces, the default Harness and the capability flags; list_model_configs before create_agent (the modelConfig must exist in the namespace); list_skills for the skills an agent can mount (it reports each skill's commit — skills are pinned to immutable sources). Names are DNS-1123 labels the caller chooses and confirms — the service never derives a name from a display name. validate_agent is a dry run of create/update. Every agent declares a toolset — create_agent requires it: the selectors (preset:<name>, server:<name>, workflow:<name>, tool:<name>) that bound which of the gateway's tools the agent's meta-tools can see and call; presets shipped on every installation: read-only, none, infrastructure, agent-platform, full. The toolset travels as a per-agent copy of the platform's muster RemoteMCPServer (the toolset carrier, muster-<agent>) carrying the X-Muster-Toolset header; a toolset change never compiles a new template revision. list_agents reports each agent's toolset, or implicitFullAccess: true for a template that binds the platform server directly — assign it one with update_agent. Templates applied from git (managed: gitops) or written by someone else (managed: external) are read-only here unless force is passed."),
 	)
 	t := &tools{svc: svc}
 
 	skillsProp := mcp.WithObject(argSkills,
-		mcp.Description("Skills the agent mounts under /skills: {refs: [OCI image references], gitRefs: [{url, path, ref, name}], gitAuthSecretName}. Take gitRefs entries from list_skills."),
+		mcp.Description("Skills the agent mounts, each pinned to an immutable source: {gitRefs: [{url, path, ref, name}], refs: [digest-pinned OCI references]}. ref must be a full git commit id (40 or 64 hex characters) — take gitRefs entries from list_skills, which resolves the commit; refs must be <repository>@sha256:<digest>. A branch, a tag or an OCI tag is refused."),
 		mcp.Properties(map[string]any{
-			"refs": schemaArray(schemaProp("string", "OCI skill image reference"), "OCI skill image references"),
+			"refs": schemaArray(schemaProp("string", "Digest-pinned OCI skill reference (<repository>@sha256:<64 hex digits>)"), "OCI skill references"),
 			"gitRefs": schemaArray(map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"url":  schemaProp("string", "Repository URL"),
+					"url":  schemaProp("string", "Repository URL (http or https)"),
 					"path": schemaProp("string", "Skill directory (holds SKILL.md); empty for the repository root"),
-					"ref":  schemaProp("string", "Branch, tag or commit"),
-					"name": schemaProp("string", "Mount name under /skills; defaults to the directory name"),
+					"ref":  schemaProp("string", "Full git commit id (40 or 64 hex characters); list_skills reports it as commit"),
+					"name": schemaProp("string", "Skill name under the template; defaults to the directory name"),
 				},
-				"required": []string{"url"},
+				"required": []string{"url", "ref"},
 			}, "Git repository skills"),
-			"gitAuthSecretName": schemaProp("string", "Secret in the agent's namespace for private gitRefs (key token, or a kubernetes.io/ssh-auth secret)"),
 		}),
 	)
-	toolsetDesc := "Toolset: the selectors that bound which of the gateway's tools the agent's meta-tools can see and call. Each is preset:<name>, server:<name>, workflow:<name> or tool:<name> (exact names; at most 32 — define a preset for more). Shipped presets: preset:read-only, preset:none (a chat-only agent without tools), preset:infrastructure, preset:agent-platform, preset:full (every tool the gateway exposes). Composed as the chart's top-level toolset value; muster resolves it per caller. The former toolNames argument is gone: it never narrowed anything against muster."
+	toolsetDesc := "Toolset: the selectors that bound which of the gateway's tools the agent's meta-tools can see and call. Each is preset:<name>, server:<name>, workflow:<name> or tool:<name> (exact names; at most 32 — define a preset for more). Shipped presets: preset:read-only, preset:none (a chat-only agent without tools), preset:infrastructure, preset:agent-platform, preset:full (every tool the gateway exposes). Carried as the X-Muster-Toolset header of the agent's toolset carrier (RemoteMCPServer muster-<agent>, a copy of the platform's muster server); muster resolves it per caller. The former toolNames argument is gone: it never narrowed anything against muster."
 	toolsetProp := mcp.WithArray(argToolset, mcp.Description(toolsetDesc), mcp.WithStringItems())
 	toolsetRequiredProp := mcp.WithArray(argToolset, mcp.Required(), mcp.Description("REQUIRED. "+toolsetDesc), mcp.WithStringItems())
-	toolsetReplaceProp := mcp.WithArray(argToolset, mcp.Description("Replaces the agent's whole toolset with this list (an empty list is refused: use [\"preset:none\"] for no tools). "+toolsetDesc), mcp.WithStringItems())
-	labelsProp := mcp.WithObject(argLabels, mcp.Description("Extra labels on the Agent (string values)."), mcp.AdditionalProperties(map[string]any{"type": "string"}))
-	annotationsProp := mcp.WithObject(argAnnotations, mcp.Description("Extra annotations on the Agent (string values)."), mcp.AdditionalProperties(map[string]any{"type": "string"}))
+	toolsetReplaceProp := mcp.WithArray(argToolset, mcp.Description("Replaces the agent's whole toolset with this list (an empty list is refused: use [\"preset:none\"] for no tools); changes the carrier only, never the template. "+toolsetDesc), mcp.WithStringItems())
+	harnessProp := mcp.WithString(argHarness, mcp.Description("Name of the kagent Harness that runs the agent (the runtime: kagent for the Go ADK, claude for the Claude harness, …); the template is labelled kagent.dev/harness=<name> and a Harness admitting it must exist — refused otherwise, naming the Harnesses and what they admit. Omit for the installation default (get_info: kagent.defaultHarness). The former runtime argument is gone."))
+	labelsProp := mcp.WithObject(argLabels, mcp.Description("Extra labels on the AgentTemplate (string values); a Harness with a foreign admission selector is matched through them."), mcp.AdditionalProperties(map[string]any{"type": "string"}))
+	annotationsProp := mcp.WithObject(argAnnotations, mcp.Description("Extra annotations on the AgentTemplate (string values)."), mcp.AdditionalProperties(map[string]any{"type": "string"}))
 	nsProp := mcp.WithString(argNamespace, mcp.Description("Namespace of the agent; default: the installation's kagent namespace (get_info reports the managed ones)."))
 
 	s.AddTool(mcp.NewTool(ToolGetInfo,
-		mcp.WithDescription("Read-only. Report the service version, the agent chart (OCI URL, tracked semver range, resolved latest version, which values schema validates right now), the managed namespaces, the capability flags, the Flux settings composed into every agent and how writes are authenticated. Call first."),
+		mcp.WithDescription("Read-only. Report the service version, the managed namespaces, the served kagent.dev API versions, the platform's muster server and default Harness, the capability flags (what an AgentTemplate can and cannot express: perToolSelection, runtime, iconUrl, skillGitAuthSecret, mutableSkillRefs are false on kagent main) and how writes are authenticated. Call first."),
 		mcp.WithReadOnlyHintAnnotation(true),
 	), t.getInfo)
 
 	s.AddTool(mcp.NewTool(ToolListAgents,
-		mcp.WithDescription("Read-only. List the agents of a namespace: display name, description, model config, runtime, skills, the declared toolset (or implicitFullAccess: true for an agent without one — it sees every tool the gateway exposes and still needs a toolset), Agent Ready/Accepted conditions, the owning HelmRelease (Ready, chart version) and how each is managed (helmrelease: writable here; gitops: applied from git, read-only without force; none: a bare Agent CR). HelmReleases of the agent chart that have not rendered an Agent yet are listed too (exists: false)."),
+		mcp.WithDescription("Read-only. List the AgentTemplates of a namespace: display name, description, model config, harness, skills, the declared toolset (or implicitFullAccess: true for a template that binds the platform server directly — it sees every tool the gateway exposes and still needs a toolset), the toolset carrier, ready (any admitting Harness Ready) with the per-Harness status, and how each is managed (agent-manager: created here, writable; gitops: applied from git, read-only without force; external: written by someone else, taken over with force). Templates carrying fields agent-manager does not compose list them under unmanagedFields."),
 		nsProp,
 		mcp.WithReadOnlyHintAnnotation(true),
 	), t.listAgents)
 
 	s.AddTool(mcp.NewTool(ToolGetAgent,
-		mcp.WithDescription("Read-only. Get one agent with its HelmRelease values (the chart contract), its declared toolset (or implicitFullAccess: true) and conditions."),
+		mcp.WithDescription("Read-only. Get one agent: its declaration, its AgentTemplate spec (the kagent contract), its declared toolset (or implicitFullAccess: true), its toolset carrier and the per-Harness status."),
 		mcp.WithString(argName, mcp.Required(), mcp.Description("Agent name")),
 		nsProp,
 		mcp.WithReadOnlyHintAnnotation(true),
 	), t.getAgent)
 
 	s.AddTool(mcp.NewTool(ToolCreateAgent,
-		mcp.WithDescription("WRITES: creates a Flux HelmRelease of the agent chart named after the agent (and the shared OCIRepository of the chart in the namespace when it does not exist yet); helm-controller then renders the kagent Agent and kagent runs it. A toolset is required (refused without one). The values are validated against the chart's values.schema.json and the modelConfig must exist in the namespace before anything is applied — a failure writes nothing and lists the valid model configs. Returns the applied manifests and the initial status; poll get_agent_status until the verdict is ready. The name is the DNS-1123 technical name the caller chose (confirm it with the user; it is never derived from displayName)."),
-		mcp.WithString(argName, mcp.Required(), mcp.Description("DNS-1123 technical name (max 63 chars): the HelmRelease and Agent name")),
+		mcp.WithDescription("WRITES: creates the agent's toolset carrier (RemoteMCPServer muster-<name>: a copy of the platform's muster server plus the X-Muster-Toolset header) and its kagent.dev/v1alpha3 AgentTemplate (labelled kagent.dev/harness=<harness>, binding the carrier), both in the kagent namespace as the caller; kagent then compiles the template for every admitting Harness. A toolset is required (refused without one); the modelConfig must exist, a Harness must admit the template, skills must be immutable references — every check runs before anything is written, and a template that fails to apply takes its carrier with it. Returns the applied manifests and the initial status; poll get_agent_status until the verdict is ready. The name is the DNS-1123 technical name the caller chose (confirm it with the user; it is never derived from displayName). Conversations are AgentInstances created from the template through kagent's own API (the portal), not here."),
+		mcp.WithString(argName, mcp.Required(), mcp.Description("DNS-1123 technical name (max 63 chars): the AgentTemplate name")),
 		mcp.WithString(argModelConfig, mcp.Required(), mcp.Description("Name of an existing kagent ModelConfig in the namespace (list_model_configs)")),
-		mcp.WithString(argDisplayName, mcp.Description("Friendly Unicode name (max 63 chars), shown by the portal")),
-		mcp.WithString(argDescription, mcp.Description("What the agent is for")),
-		mcp.WithString(argSystemMessage, mcp.Description("System prompt; omit for the chart's default prompt")),
-		mcp.WithString(argIconURL, mcp.Description("Avatar URL (chart agent.iconUrl); omit unless the installation serves avatars")),
-		mcp.WithString(argRuntime, mcp.Description("kagent runtime: go (default) or python"), mcp.Enum("go", "python")),
+		mcp.WithString(argDisplayName, mcp.Description("Friendly Unicode name (max 63 chars), shown by the portal (annotation ui.giantswarm.io/display-name)")),
+		mcp.WithString(argDescription, mcp.Description("What the agent is for (spec.description)")),
+		mcp.WithString(argSystemMessage, mcp.Description("System prompt (spec.systemPrompt); omit for the Harness default")),
+		harnessProp,
 		toolsetRequiredProp,
 		skillsProp,
 		labelsProp,
@@ -123,53 +121,51 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 	), t.createAgent)
 
 	s.AddTool(mcp.NewTool(ToolUpdateAgent,
-		mcp.WithDescription("WRITES: merges the given fields into the agent's HelmRelease values (only the arguments passed change; skills replace their whole block, toolset replaces the whole list — the way to assign a toolset to an agent that reports implicitFullAccess; an empty string clears a field back to the chart default), validates the result against the chart schema and updates the HelmRelease — helm-controller upgrades the Agent. Returns the values before and after and the changed paths. Refused for GitOps-owned (managed: gitops) or suspended releases unless force is true."),
+		mcp.WithDescription("WRITES: merges the given fields into the agent's declaration (only the arguments passed change; skills replace their whole block, toolset replaces the whole list — the way to assign a toolset to an agent that reports implicitFullAccess; an empty string clears a field), re-composes and writes what differs: a toolset change updates the carrier only, anything else updates the AgentTemplate — which makes kagent compile a NEW REVISION for every admitting Harness while running AgentInstances keep the revision they were created with (the result's note says so). Returns the declaration before and after and the changed paths. Refused for GitOps-owned (managed: gitops) or externally written (managed: external) templates, and for templates carrying fields agent-manager does not compose, unless force is true."),
 		mcp.WithString(argName, mcp.Required(), mcp.Description("Agent name")),
 		mcp.WithString(argDisplayName, mcp.Description("New friendly name; \"\" clears it")),
 		mcp.WithString(argDescription, mcp.Description("New description; \"\" clears it")),
-		mcp.WithString(argSystemMessage, mcp.Description("New system prompt; \"\" restores the chart default")),
+		mcp.WithString(argSystemMessage, mcp.Description("New system prompt; \"\" clears it")),
 		mcp.WithString(argModelConfig, mcp.Description("Name of an existing ModelConfig in the namespace")),
-		mcp.WithString(argIconURL, mcp.Description("New avatar URL; \"\" clears it")),
-		mcp.WithString(argRuntime, mcp.Description("kagent runtime: go or python"), mcp.Enum("go", "python")),
+		mcp.WithString(argHarness, mcp.Description("Move the agent to another Harness (a Harness admitting the relabelled template must exist); \"\" restores the installation default")),
 		skillsProp,
 		toolsetReplaceProp,
 		labelsProp,
 		annotationsProp,
-		mcp.WithBoolean(argForce, mcp.Description("Write even when the HelmRelease is GitOps-owned or suspended (default false)")),
+		mcp.WithBoolean(argForce, mcp.Description("Write even when the template is GitOps-owned or externally written, and overwrite fields agent-manager does not compose (default false)")),
 		nsProp,
 		mcp.WithIdempotentHintAnnotation(true),
 	), t.updateAgent)
 
 	s.AddTool(mcp.NewTool(ToolDeleteAgent,
-		mcp.WithDescription("WRITES (destructive): deletes the HelmRelease that owns the agent — helm-controller uninstalls the release and removes the Agent, kagent stops the pods — and deletes the shared OCIRepository of the agent chart only when no other HelmRelease in the namespace references it (the result says why it was kept). A bare Agent CR without a HelmRelease is refused unless force is true (then the CR is deleted directly); a GitOps-owned or suspended HelmRelease is refused unless force is true."),
+		mcp.WithDescription("WRITES (destructive): deletes the agent's AgentTemplate and its toolset carrier (the RemoteMCPServer muster-<name>, only when agent-manager created it; the result says why one is kept). A GitOps-owned or externally written template is refused unless force is true."),
 		mcp.WithString(argName, mcp.Required(), mcp.Description("Agent name")),
-		mcp.WithBoolean(argForce, mcp.Description("Also delete bare Agent CRs, and GitOps-owned or suspended releases (default false)")),
+		mcp.WithBoolean(argForce, mcp.Description("Also delete GitOps-owned or externally written templates (default false)")),
 		nsProp,
 		mcp.WithDestructiveHintAnnotation(true),
 	), t.deleteAgent)
 
 	s.AddTool(mcp.NewTool(ToolGetAgentStatus,
-		mcp.WithDescription("Read-only. One verdict (ready | progressing | failed | unknown) with a one-line summary, from the Agent conditions, the HelmRelease conditions and history, the Deployment readiness, the pods with their waiting reasons (a CrashLoopBackOff pod is phase Running; containerStatuses tell) and the recent Warning events (BackOff, Failed*)."),
+		mcp.WithDescription("Read-only. One verdict (ready | progressing | failed | unknown) with a one-line summary, from the AgentTemplate's per-Harness status (Accepted, ResolvedRefs, Compatible, Ready, desired and latest successful revision, compile warnings; ready = any admitting Harness reports Ready for the current generation) and the toolset carrier's acceptance."),
 		mcp.WithString(argName, mcp.Required(), mcp.Description("Agent name")),
 		nsProp,
 		mcp.WithReadOnlyHintAnnotation(true),
 	), t.getAgentStatus)
 
 	s.AddTool(mcp.NewTool(ToolValidateAgent,
-		mcp.WithDescription("Read-only dry run of create_agent (or of update_agent when update is true): composes the OCIRepository and HelmRelease, checks the name, the modelConfig, the toolset (required for a create; validated when given for an update) and the values against the agent chart's values.schema.json, and returns the manifests and every violation. Nothing is written."),
+		mcp.WithDescription("Read-only dry run of create_agent (or of update_agent when update is true): composes the AgentTemplate and the toolset carrier, checks the name, the modelConfig, the toolset (required for a create), the Harness admission and the skill sources, and returns the manifests and every violation. Nothing is written."),
 		mcp.WithString(argName, mcp.Required(), mcp.Description("Agent name")),
 		mcp.WithString(argModelConfig, mcp.Description("ModelConfig name (required for a create)")),
 		mcp.WithString(argDisplayName, mcp.Description("Friendly name")),
 		mcp.WithString(argDescription, mcp.Description("Description")),
 		mcp.WithString(argSystemMessage, mcp.Description("System prompt")),
-		mcp.WithString(argIconURL, mcp.Description("Avatar URL")),
-		mcp.WithString(argRuntime, mcp.Description("kagent runtime: go or python"), mcp.Enum("go", "python")),
+		harnessProp,
 		toolsetProp,
 		skillsProp,
 		labelsProp,
 		annotationsProp,
 		mcp.WithBoolean(argUpdate, mcp.Description("Validate as an update of the existing agent instead of a create (default false)")),
-		mcp.WithBoolean(argForce, mcp.Description("With update: ignore the GitOps/suspended guards (default false)")),
+		mcp.WithBoolean(argForce, mcp.Description("With update: ignore the ownership guards (default false)")),
 		nsProp,
 		mcp.WithReadOnlyHintAnnotation(true),
 	), t.validateAgent)
@@ -181,7 +177,7 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 	), t.listModelConfigs)
 
 	s.AddTool(mcp.NewTool(ToolListSkills,
-		mcp.WithDescription("Read-only. Discover the skills of the configured skill repositories (every SKILL.md in a GitHub repository, with its frontmatter name and description) as gitRefs entries for create_agent/update_agent. Results are cached briefly; refresh re-reads GitHub."),
+		mcp.WithDescription("Read-only. Discover the skills of the configured skill repositories (every SKILL.md in a GitHub repository, with its frontmatter name and description, the branch and the commit it resolves to) as gitRefs entries for create_agent/update_agent — pass the commit as ref. Results are cached briefly; refresh re-reads GitHub."),
 		mcp.WithString(argRepository, mcp.Description("Only this repository (https://github.com/<owner>/<repo>); default: every configured one")),
 		mcp.WithString(argRef, mcp.Description("Git ref to read; default: the default branch")),
 		mcp.WithBoolean(argRefresh, mcp.Description("Bypass the cache (default false)")),

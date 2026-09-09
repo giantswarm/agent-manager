@@ -202,8 +202,7 @@ func SpecToUpdate(s agents.Spec) agents.Update {
 	upd.Description = str(s.Description)
 	upd.SystemMessage = str(s.SystemMessage)
 	upd.ModelConfig = str(s.ModelConfig)
-	upd.IconURL = str(s.IconURL)
-	upd.Runtime = str(s.Runtime)
+	upd.Harness = str(s.Harness)
 	if s.Skills != nil {
 		upd.Skills = s.Skills
 	}
@@ -212,6 +211,8 @@ func SpecToUpdate(s agents.Spec) agents.Update {
 		upd.Toolset = &toolset
 	}
 	upd.RemovedToolNames = s.RemovedToolNames
+	upd.RemovedRuntime = s.RemovedRuntime
+	upd.RemovedIconURL = s.RemovedIconURL
 	if s.Labels != nil {
 		labels := s.Labels
 		upd.Labels = &labels

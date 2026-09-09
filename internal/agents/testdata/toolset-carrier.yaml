@@ -1,0 +1,23 @@
+apiVersion: kagent.dev/v1alpha3
+kind: RemoteMCPServer
+metadata:
+  annotations:
+    agent-manager.giantswarm.io/requested-by: admin@lab.local
+  labels:
+    agent-manager.giantswarm.io/agent: sre
+    app.kubernetes.io/managed-by: agent-manager
+    kagent.dev/discovery: disabled
+  name: muster-sre
+  namespace: kagent
+spec:
+  description: Shared muster MCP gateway for platform agents — toolset [preset:read-only,workflow:incident-triage]
+    of agent sre
+  headersFrom:
+  - name: X-Custom
+    value: kept
+  - name: X-Muster-Toolset
+    value: preset:read-only,workflow:incident-triage
+  protocol: STREAMABLE_HTTP
+  terminateOnClose: true
+  timeout: 30s
+  url: http://muster.agent-platform.svc.cluster.local:8090/mcp

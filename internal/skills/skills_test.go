@@ -13,6 +13,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// headCommit is what the fake's main branch resolves to.
+const headCommit = "0123456789abcdef0123456789abcdef01234567"
+
 func fakeGitHub(t *testing.T) (*httptest.Server, *int) {
 	hits := 0
 	mux := http.NewServeMux()
@@ -21,7 +24,11 @@ func fakeGitHub(t *testing.T) (*httptest.Server, *int) {
 		assert.Equal(t, "Bearer secret", r.Header.Get("Authorization"))
 		_ = json.NewEncoder(w).Encode(map[string]any{"default_branch": "main"})
 	})
-	mux.HandleFunc("/repos/giantswarm/agent-skills/git/trees/main", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("/repos/giantswarm/agent-skills/commits/main", func(w http.ResponseWriter, _ *http.Request) {
+		hits++
+		_ = json.NewEncoder(w).Encode(map[string]any{"sha": headCommit})
+	})
+	mux.HandleFunc("/repos/giantswarm/agent-skills/git/trees/"+headCommit, func(w http.ResponseWriter, _ *http.Request) {
 		hits++
 		_ = json.NewEncoder(w).Encode(map[string]any{"truncated": false, "tree": []map[string]any{
 			{"path": "README.md", "type": "blob"},
@@ -34,7 +41,7 @@ func fakeGitHub(t *testing.T) (*httptest.Server, *int) {
 	mux.HandleFunc("/repos/giantswarm/agent-skills/contents/", func(w http.ResponseWriter, r *http.Request) {
 		hits++
 		assert.Equal(t, "application/vnd.github.raw+json", r.Header.Get("Accept"))
-		assert.Equal(t, "main", r.URL.Query().Get("ref"))
+		assert.Equal(t, headCommit, r.URL.Query().Get("ref"), "files are read at the resolved commit, not the moving branch")
 		switch strings.TrimPrefix(r.URL.Path, "/repos/giantswarm/agent-skills/contents/") {
 		case "agent-self-awareness/SKILL.md":
 			_, _ = w.Write([]byte("---\nname: self-awareness\ndescription: Knows what it is.\n---\n# body\n"))
@@ -61,17 +68,19 @@ func TestDiscoverMirrorsThePortalSemantics(t *testing.T) {
 	repo := res.Repositories[0]
 	assert.Equal(t, "https://github.com/giantswarm/agent-skills", repo.RepoURL, "the URL is canonicalized")
 	assert.Equal(t, "main", repo.Ref)
+	assert.Equal(t, headCommit, repo.Commit, "the branch is resolved to the commit a template pins")
 	assert.False(t, repo.Truncated)
 	assert.Empty(t, repo.Error)
 	require.Len(t, res.Skills, 3)
 	assert.Equal(t, []Skill{
-		{Name: "self-awareness", Description: "Knows what it is.", RepoURL: repo.RepoURL, Path: "agent-self-awareness", Ref: "main"},
-		{Name: "runbooks", Description: "Operates things.", RepoURL: repo.RepoURL, Path: "nested/runbooks", Ref: "main"},
-		{Name: "noname", Description: "", RepoURL: repo.RepoURL, Path: "noname", Ref: "main"},
+		{Name: "self-awareness", Description: "Knows what it is.", RepoURL: repo.RepoURL, Path: "agent-self-awareness", Ref: "main", Commit: headCommit},
+		{Name: "runbooks", Description: "Operates things.", RepoURL: repo.RepoURL, Path: "nested/runbooks", Ref: "main", Commit: headCommit},
+		{Name: "noname", Description: "", RepoURL: repo.RepoURL, Path: "noname", Ref: "main", Commit: headCommit},
 	}, res.Skills, "sorted by path; the directory names a skill without frontmatter")
 
 	gitRef := res.Skills[0].GitRef()
-	assert.Equal(t, map[string]string{"url": repo.RepoURL, "path": "agent-self-awareness", "ref": "main", "name": "agent-self-awareness"}, gitRef)
+	assert.Equal(t, map[string]string{"url": repo.RepoURL, "path": "agent-self-awareness", "ref": headCommit, "name": "agent-self-awareness"}, gitRef, "the gitRefs entry pins the commit, ready for create_agent")
+	assert.Equal(t, "main", Skill{RepoURL: repo.RepoURL, Ref: "main"}.GitRef()["ref"], "without a resolved commit the branch is all there is")
 
 	before := *hits
 	_, err = d.List(context.Background(), "", "", false)

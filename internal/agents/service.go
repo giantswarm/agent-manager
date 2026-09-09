@@ -10,24 +10,13 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 
-	"github.com/giantswarm/agent-manager/internal/chart"
 	"github.com/giantswarm/agent-manager/internal/identity"
 	"github.com/giantswarm/agent-manager/internal/kube"
 	"github.com/giantswarm/agent-manager/internal/skills"
 )
-
-// ChartSource is what the service needs to know about the agent chart.
-type ChartSource interface {
-	SchemaSource
-	Info(ctx context.Context) chart.Info
-	Name() string
-	OCIURL() string
-	SemverRange() string
-}
 
 // Config configures the service.
 type Config struct {
@@ -36,10 +25,8 @@ type Config struct {
 	// ManagedNamespaces are the namespaces the service may read and write
 	// (RBAC exists there); DefaultNamespace is always included.
 	ManagedNamespaces []string
-	// Compose is the platform side of the manifests.
+	// Compose is the platform side of the composition.
 	Compose ComposeConfig
-	// KagentAPIVersion is the served kagent.dev version (v1alpha2).
-	KagentAPIVersion string
 	// Version is the service version reported by GET /info.
 	Version string
 }
@@ -47,7 +34,6 @@ type Config struct {
 // Service is the agent lifecycle.
 type Service struct {
 	kube   kube.Provider
-	chart  ChartSource
 	skills *skills.Discoverer
 	cfg    Config
 	log    *slog.Logger
@@ -55,31 +41,16 @@ type Service struct {
 
 // New builds the service. skills may be nil (list_skills then reports
 // unsupported).
-func New(k kube.Provider, c ChartSource, s *skills.Discoverer, cfg Config, log *slog.Logger) *Service {
+func New(k kube.Provider, s *skills.Discoverer, cfg Config, log *slog.Logger) *Service {
 	if log == nil {
 		log = slog.Default()
 	}
 	if cfg.DefaultNamespace == "" {
 		cfg.DefaultNamespace = "kagent"
 	}
-	if cfg.KagentAPIVersion == "" {
-		cfg.KagentAPIVersion = "v1alpha2"
-	}
-	if cfg.Compose.ChartName == "" {
-		cfg.Compose.ChartName = c.Name()
-	}
-	if cfg.Compose.ChartOCIURL == "" {
-		cfg.Compose.ChartOCIURL = c.OCIURL()
-	}
-	if cfg.Compose.ChartSemver == "" {
-		cfg.Compose.ChartSemver = c.SemverRange()
-	}
-	if cfg.Compose.HelmReleaseAPIVersion == "" {
-		cfg.Compose.HelmReleaseAPIVersion = DefaultHelmReleaseAPIVersion
-	}
-	if cfg.Compose.OCIRepositoryAPIVersion == "" {
-		cfg.Compose.OCIRepositoryAPIVersion = DefaultOCIRepositoryAPIVersion
-	}
+	cfg.Compose.APIVersion = orDefault(cfg.Compose.APIVersion, DefaultAPIVersion)
+	cfg.Compose.MusterServer = orDefault(cfg.Compose.MusterServer, DefaultMusterServer)
+	cfg.Compose.DefaultHarness = orDefault(cfg.Compose.DefaultHarness, DefaultHarness)
 	managed := []string{cfg.DefaultNamespace}
 	for _, ns := range cfg.ManagedNamespaces {
 		if ns != "" && ns != cfg.DefaultNamespace {
@@ -87,48 +58,51 @@ func New(k kube.Provider, c ChartSource, s *skills.Discoverer, cfg Config, log *
 		}
 	}
 	cfg.ManagedNamespaces = managed
-	return &Service{kube: k, chart: c, skills: s, cfg: cfg, log: log}
+	return &Service{kube: k, skills: s, cfg: cfg, log: log}
 }
 
 // InfoResponse is GET /info: what this installation can do, so the portal and
 // agents feature-detect instead of guessing.
 type InfoResponse struct {
-	Version string     `json:"version"`
-	Chart   chart.Info `json:"chart"`
+	Version string `json:"version"`
 	// Namespaces the service manages agents in.
 	Namespaces struct {
 		Default string   `json:"default"`
 		Managed []string `json:"managed"`
 	} `json:"namespaces"`
 	// Capabilities are explicit flags; a false flag means the matching
-	// operation answers 501 unsupported.
+	// operation or argument is not available on this installation.
 	Capabilities map[string]bool `json:"capabilities"`
 	// Identity says how calls reach the API server: `caller` (every call
 	// presents the signed-in user's IdP token; the user's RBAC governs) or
 	// `serviceAccount` (the service's own identity behind a trusted proxy).
 	Identity string `json:"identity"`
-	// APIVersions are the served CRD versions the service composes and reads.
+	// APIVersions are the served kagent.dev versions the service composes and
+	// reads.
 	APIVersions struct {
-		Agent         string `json:"agent"`
-		ModelConfig   string `json:"modelConfig"`
-		HelmRelease   string `json:"helmRelease"`
-		OCIRepository string `json:"ociRepository"`
+		AgentTemplate   string `json:"agentTemplate"`
+		RemoteMCPServer string `json:"remoteMcpServer"`
+		Harness         string `json:"harness"`
+		ModelConfig     string `json:"modelConfig"`
 	} `json:"apiVersions"`
-	// Flux settings the composed HelmReleases carry.
-	Flux struct {
-		HelmReleaseInterval   string `json:"helmReleaseInterval"`
-		OCIRepositoryInterval string `json:"ociRepositoryInterval"`
-		ServiceAccountName    string `json:"serviceAccountName,omitempty"`
-	} `json:"flux"`
+	// Kagent is the platform side of the composition.
+	Kagent struct {
+		// MusterServer is the platform RemoteMCPServer every toolset carrier
+		// is copied from and every agent without a carrier binds.
+		MusterServer string `json:"musterServer"`
+		// DefaultHarness runs agents that name no harness.
+		DefaultHarness string `json:"defaultHarness"`
+		// ToolsetHeader is the header the toolset carrier sends.
+		ToolsetHeader string `json:"toolsetHeader"`
+	} `json:"kagent"`
 	// SkillsRepositories are the configured skill repositories.
 	SkillsRepositories []string `json:"skillsRepositories"`
 }
 
 // Info reports the installation's capabilities.
-func (s *Service) Info(ctx context.Context) InfoResponse {
+func (s *Service) Info(context.Context) InfoResponse {
 	var out InfoResponse
 	out.Version = s.cfg.Version
-	out.Chart = s.chart.Info(ctx)
 	out.Namespaces.Default = s.cfg.DefaultNamespace
 	out.Namespaces.Managed = append([]string(nil), s.cfg.ManagedNamespaces...)
 	out.Capabilities = map[string]bool{
@@ -136,15 +110,26 @@ func (s *Service) Info(ctx context.Context) InfoResponse {
 		"status": true, "validate": true, "modelConfigs": true,
 		"skills":         s.skills != nil,
 		"writesAsCaller": s.kube.Identity() == kube.IdentityCaller,
+		// kagent main: the Harness is the runtime, chosen per agent and
+		// validated against the Harnesses that admit the template.
+		"harnesses": true,
+		// The toolset travels as a per-agent RemoteMCPServer (the carrier).
+		"toolsetCarrier": true,
+		// What an AgentTemplate cannot express.
+		"perToolSelection":   false, // tools[] needs controller-side discovery, off for muster
+		"runtime":            false, // the Harness is the runtime
+		"iconUrl":            false, // no icon field on the template
+		"skillGitAuthSecret": false, // skill sources are read anonymously
+		"mutableSkillRefs":   false, // git skills pin a commit, OCI skills a digest
 	}
 	out.Identity = s.kube.Identity()
-	out.APIVersions.Agent = "kagent.dev/" + s.cfg.KagentAPIVersion
-	out.APIVersions.ModelConfig = "kagent.dev/" + s.cfg.KagentAPIVersion
-	out.APIVersions.HelmRelease = s.cfg.Compose.HelmReleaseAPIVersion
-	out.APIVersions.OCIRepository = s.cfg.Compose.OCIRepositoryAPIVersion
-	out.Flux.HelmReleaseInterval = orDefault(s.cfg.Compose.HelmReleaseInterval, DefaultHelmReleaseInterval)
-	out.Flux.OCIRepositoryInterval = orDefault(s.cfg.Compose.OCIRepositoryInterval, DefaultOCIRepositoryInterval)
-	out.Flux.ServiceAccountName = s.cfg.Compose.ServiceAccountName
+	out.APIVersions.AgentTemplate = s.cfg.Compose.APIVersion
+	out.APIVersions.RemoteMCPServer = s.cfg.Compose.APIVersion
+	out.APIVersions.Harness = s.cfg.Compose.APIVersion
+	out.APIVersions.ModelConfig = s.cfg.Compose.APIVersion
+	out.Kagent.MusterServer = s.cfg.Compose.MusterServer
+	out.Kagent.DefaultHarness = s.cfg.Compose.DefaultHarness
+	out.Kagent.ToolsetHeader = ToolsetHeader
 	if s.skills != nil {
 		out.SkillsRepositories = s.skills.Repositories()
 	} else {
@@ -155,29 +140,18 @@ func (s *Service) Info(ctx context.Context) InfoResponse {
 
 // ---- GVRs -----------------------------------------------------------------
 
-func gvrFor(apiVersion, resource string) schema.GroupVersionResource {
-	gv, err := schema.ParseGroupVersion(apiVersion)
+func (s *Service) kagentGVR(resource string) schema.GroupVersionResource {
+	gv, err := schema.ParseGroupVersion(s.cfg.Compose.APIVersion)
 	if err != nil {
-		gv = schema.GroupVersion{Version: apiVersion}
+		gv = schema.GroupVersion{Group: "kagent.dev", Version: s.cfg.Compose.APIVersion}
 	}
 	return gv.WithResource(resource)
 }
 
-func (s *Service) helmReleaseGVR() schema.GroupVersionResource {
-	return gvrFor(s.cfg.Compose.HelmReleaseAPIVersion, "helmreleases")
-}
-
-func (s *Service) ociRepositoryGVR() schema.GroupVersionResource {
-	return gvrFor(s.cfg.Compose.OCIRepositoryAPIVersion, "ocirepositories")
-}
-
-func (s *Service) agentGVR() schema.GroupVersionResource {
-	return schema.GroupVersionResource{Group: "kagent.dev", Version: s.cfg.KagentAPIVersion, Resource: "agents"}
-}
-
-func (s *Service) modelConfigGVR() schema.GroupVersionResource {
-	return schema.GroupVersionResource{Group: "kagent.dev", Version: s.cfg.KagentAPIVersion, Resource: "modelconfigs"}
-}
+func (s *Service) templateGVR() schema.GroupVersionResource    { return s.kagentGVR("agenttemplates") }
+func (s *Service) mcpServerGVR() schema.GroupVersionResource   { return s.kagentGVR("remotemcpservers") }
+func (s *Service) harnessGVR() schema.GroupVersionResource     { return s.kagentGVR("harnesses") }
+func (s *Service) modelConfigGVR() schema.GroupVersionResource { return s.kagentGVR("modelconfigs") }
 
 // ---- namespaces -------------------------------------------------------------
 
@@ -194,15 +168,15 @@ func (s *Service) Namespace(ns string) (string, error) {
 	return "", invalidf("namespace %q is not managed by agent-manager (managed: %s)", ns, strings.Join(s.cfg.ManagedNamespaces, ", "))
 }
 
-func (s *Service) dyn(ctx context.Context) (dynamic.Interface, kube.Client, error) {
+func (s *Service) dyn(ctx context.Context) (dynamic.Interface, error) {
 	c, err := s.kube.Client(ctx)
 	if err != nil {
 		if errorsIs(err, kube.ErrNoCallerToken) {
-			return nil, nil, fmt.Errorf("%w: the request carries no identity token to act with: %v", ErrUnauthenticated, err)
+			return nil, fmt.Errorf("%w: the request carries no identity token to act with: %v", ErrUnauthenticated, err)
 		}
-		return nil, nil, fmt.Errorf("kubernetes client: %w", err)
+		return nil, fmt.Errorf("kubernetes client: %w", err)
 	}
-	return c.Dynamic(), c, nil
+	return c.Dynamic(), nil
 }
 
 // wrapKube maps API server errors onto the domain sentinels.
@@ -223,63 +197,38 @@ func wrapKube(err error, what string) error {
 	}
 }
 
+func createOptions() metav1.CreateOptions { return metav1.CreateOptions{FieldManager: FieldManager} }
+func updateOptions() metav1.UpdateOptions { return metav1.UpdateOptions{FieldManager: FieldManager} }
+
 // ---- reads ------------------------------------------------------------------
 
-// List returns the agents of a namespace: every Agent CR (with its owning
-// HelmRelease when Flux labels name one) plus every HelmRelease of the agent
-// chart that has not rendered an Agent yet.
+// List returns the agents of a namespace: every AgentTemplate, with its
+// toolset carrier when it has one.
 func (s *Service) List(ctx context.Context, ns string) ([]Agent, error) {
 	ns, err := s.Namespace(ns)
 	if err != nil {
 		return nil, err
 	}
-	dyn, _, err := s.dyn(ctx)
+	dyn, err := s.dyn(ctx)
 	if err != nil {
 		return nil, err
 	}
-	agentList, err := dyn.Resource(s.agentGVR()).Namespace(ns).List(ctx, metav1.ListOptions{})
+	templates, err := dyn.Resource(s.templateGVR()).Namespace(ns).List(ctx, metav1.ListOptions{})
 	if err != nil {
-		return nil, wrapKube(err, "list agents in "+ns)
+		return nil, wrapKube(err, "list agenttemplates in "+ns)
 	}
-	hrs, err := s.agentHelmReleases(ctx, dyn, ns)
+	servers, err := dyn.Resource(s.mcpServerGVR()).Namespace(ns).List(ctx, metav1.ListOptions{})
 	if err != nil {
-		return nil, err
+		return nil, wrapKube(err, "list remotemcpservers in "+ns)
 	}
-	byName := map[string]*Agent{}
-	for i := range agentList.Items {
-		cr := &agentList.Items[i]
-		a := agentFromCR(cr)
-		if hrName, hrNs := ownerOf(cr); hrName != "" {
-			hr := hrs[hrName]
-			if hr == nil || hrNs != ns {
-				hr, _ = s.getHelmRelease(ctx, dyn, orDefault(hrNs, ns), hrName)
-			}
-			if hr != nil {
-				applyHelmRelease(&a, hr)
-				delete(hrs, hrName)
-			}
-		}
-		byName[a.Name] = &a
+	byName := make(map[string]*unstructured.Unstructured, len(servers.Items))
+	for i := range servers.Items {
+		byName[servers.Items[i].GetName()] = &servers.Items[i]
 	}
-	for _, hr := range hrs {
-		a := Agent{Namespace: ns, Managed: ManagedHelmRelease}
-		applyHelmRelease(&a, hr)
-		if a.Name == "" {
-			a.Name = hr.GetName()
-		}
-		if existing, ok := byName[a.Name]; ok {
-			// A HelmRelease whose Agent carries no provenance labels (an older
-			// helm-controller): attach by name.
-			if existing.HelmRelease == nil {
-				applyHelmRelease(existing, hr)
-			}
-			continue
-		}
-		byName[a.Name] = &a
-	}
-	out := make([]Agent, 0, len(byName))
-	for _, a := range byName {
-		out = append(out, *a)
+	out := make([]Agent, 0, len(templates.Items))
+	for i := range templates.Items {
+		tpl := &templates.Items[i]
+		out = append(out, s.agentView(tpl, byName[CarrierName(s.cfg.Compose.MusterServer, tpl.GetName())]))
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, nil
@@ -291,7 +240,7 @@ func (s *Service) Get(ctx context.Context, ns, name string) (*Agent, error) {
 	if err != nil {
 		return nil, err
 	}
-	dyn, _, err := s.dyn(ctx)
+	dyn, err := s.dyn(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -299,99 +248,89 @@ func (s *Service) Get(ctx context.Context, ns, name string) (*Agent, error) {
 }
 
 func (s *Service) get(ctx context.Context, dyn dynamic.Interface, ns, name string) (*Agent, error) {
-	cr, err := s.getAgentCR(ctx, dyn, ns, name)
+	tpl, err := s.getTemplate(ctx, dyn, ns, name)
 	if err != nil {
 		return nil, err
 	}
-	var a Agent
-	hrName, hrNs := name, ns
-	if cr != nil {
-		a = agentFromCR(cr)
-		if n, nsFromLabel := ownerOf(cr); n != "" {
-			hrName, hrNs = n, orDefault(nsFromLabel, ns)
-		}
-	} else {
-		a = Agent{Name: name, Namespace: ns, Managed: ManagedNone}
+	if tpl == nil {
+		return nil, notFoundf("agent %s/%s: no AgentTemplate of that name", ns, name)
 	}
-	hr, err := s.getHelmRelease(ctx, dyn, hrNs, hrName)
+	carrier, err := s.getCarrier(ctx, dyn, ns, name)
 	if err != nil {
 		return nil, err
 	}
-	if hr != nil {
-		applyHelmRelease(&a, hr)
-	}
-	if cr == nil && hr == nil {
-		return nil, notFoundf("agent %s/%s: no Agent and no HelmRelease of that name", ns, name)
-	}
+	a := s.agentView(tpl, carrier)
 	return &a, nil
 }
 
-// getAgentCR returns nil, nil when the Agent does not exist.
-func (s *Service) getAgentCR(ctx context.Context, dyn dynamic.Interface, ns, name string) (*unstructured.Unstructured, error) {
-	cr, err := dyn.Resource(s.agentGVR()).Namespace(ns).Get(ctx, name, metav1.GetOptions{})
-	if apierrors.IsNotFound(err) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, wrapKube(err, fmt.Sprintf("get agent %s/%s", ns, name))
-	}
-	return cr, nil
+// getTemplate returns nil, nil when the AgentTemplate does not exist.
+func (s *Service) getTemplate(ctx context.Context, dyn dynamic.Interface, ns, name string) (*unstructured.Unstructured, error) {
+	return s.getObject(ctx, dyn, s.templateGVR(), ns, name, "agenttemplate")
 }
 
-// getHelmRelease returns nil, nil when the HelmRelease does not exist.
-func (s *Service) getHelmRelease(ctx context.Context, dyn dynamic.Interface, ns, name string) (*unstructured.Unstructured, error) {
-	hr, err := dyn.Resource(s.helmReleaseGVR()).Namespace(ns).Get(ctx, name, metav1.GetOptions{})
-	if apierrors.IsNotFound(err) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, wrapKube(err, fmt.Sprintf("get helmrelease %s/%s", ns, name))
-	}
-	return hr, nil
+// getCarrier returns the agent's toolset carrier, nil, nil when absent.
+func (s *Service) getCarrier(ctx context.Context, dyn dynamic.Interface, ns, agent string) (*unstructured.Unstructured, error) {
+	return s.getObject(ctx, dyn, s.mcpServerGVR(), ns, CarrierName(s.cfg.Compose.MusterServer, agent), "remotemcpserver")
 }
 
-// agentChartSources returns the names of the OCIRepositories in ns that point
-// at the agent chart (the conventional one named after the chart, plus any
-// other with the same URL).
-func (s *Service) agentChartSources(ctx context.Context, dyn dynamic.Interface, ns string) (map[string]bool, error) {
-	names := map[string]bool{s.cfg.Compose.ChartName: true}
-	list, err := dyn.Resource(s.ociRepositoryGVR()).Namespace(ns).List(ctx, metav1.ListOptions{})
-	if err != nil {
-		return nil, wrapKube(err, "list ocirepositories in "+ns)
-	}
-	for _, item := range list.Items {
-		url, _, _ := unstructured.NestedString(item.Object, "spec", "url")
-		if url == s.cfg.Compose.ChartOCIURL {
-			names[item.GetName()] = true
-		}
-	}
-	return names, nil
-}
-
-// agentHelmReleases lists the HelmReleases of ns that render the agent chart,
-// keyed by name.
-func (s *Service) agentHelmReleases(ctx context.Context, dyn dynamic.Interface, ns string) (map[string]*unstructured.Unstructured, error) {
-	sources, err := s.agentChartSources(ctx, dyn, ns)
+// getPlatformServer returns the platform's muster RemoteMCPServer of ns, which
+// every carrier is copied from; a missing one is an installation problem.
+func (s *Service) getPlatformServer(ctx context.Context, dyn dynamic.Interface, ns string) (*unstructured.Unstructured, error) {
+	obj, err := s.getObject(ctx, dyn, s.mcpServerGVR(), ns, s.cfg.Compose.MusterServer, "remotemcpserver")
 	if err != nil {
 		return nil, err
 	}
-	list, err := dyn.Resource(s.helmReleaseGVR()).Namespace(ns).List(ctx, metav1.ListOptions{})
+	if obj == nil {
+		return nil, fmt.Errorf("platform RemoteMCPServer %s/%s does not exist: every agent binds the platform's muster gateway, which the connectivity chart renders into the kagent namespace when kagent and muster are enabled", ns, s.cfg.Compose.MusterServer)
+	}
+	return obj, nil
+}
+
+func (s *Service) getObject(ctx context.Context, dyn dynamic.Interface, gvr schema.GroupVersionResource, ns, name, what string) (*unstructured.Unstructured, error) {
+	obj, err := dyn.Resource(gvr).Namespace(ns).Get(ctx, name, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return nil, nil
+	}
 	if err != nil {
-		return nil, wrapKube(err, "list helmreleases in "+ns)
+		return nil, wrapKube(err, fmt.Sprintf("get %s %s/%s", what, ns, name))
 	}
-	out := map[string]*unstructured.Unstructured{}
-	for i := range list.Items {
-		hr := &list.Items[i]
-		ref := chartRefOf(hr)
-		if ref == nil || ref.Kind != kindOCIRepository || !sources[ref.Name] {
-			continue
-		}
-		if ref.Namespace != "" && ref.Namespace != ns {
-			continue
-		}
-		out[hr.GetName()] = hr
+	return obj, nil
+}
+
+// agentView reads a template and its carrier into the read model.
+func (s *Service) agentView(tpl, carrier *unstructured.Unstructured) Agent {
+	cfg := s.cfg.Compose
+	d, unmanaged := declarationOf(tpl, carrier, cfg)
+	spec, _, _ := unstructured.NestedMap(tpl.Object, "spec")
+	a := Agent{
+		Name: tpl.GetName(), Namespace: tpl.GetNamespace(),
+		DisplayName: d.DisplayName, Description: d.Description, ModelConfig: d.ModelConfig, SystemMessage: d.SystemMessage,
+		Harness: d.Harness, Skills: d.Skills, Toolset: d.Toolset, ImplicitFullAccess: d.bindsPlatformServer,
+		Managed: managedOf(tpl), Generation: tpl.GetGeneration(), UnmanagedFields: unmanaged, Spec: spec,
 	}
-	return out, nil
+	ts := templateStatusOf(tpl)
+	a.Harnesses = ts.Harnesses
+	a.ObservedGeneration = ts.ObservedGeneration
+	if len(ts.Harnesses) > 0 {
+		a.Ready = boolPtr(len(anyReady(ts)) > 0)
+	}
+	if d.Toolset != nil || bindsCarrier(tpl, cfg) {
+		a.ToolsetCarrier = carrierView(tpl.GetName(), carrier, cfg)
+	}
+	return a
+}
+
+// managedOf says who owns a template: applied from git, created here, or
+// written by someone else.
+func managedOf(tpl *unstructured.Unstructured) string {
+	labels := tpl.GetLabels()
+	switch {
+	case labels[KustomizationNameLabel] != "":
+		return ManagedGitOps
+	case labels[ManagedByLabel] == ManagedByValue:
+		return ManagedAgentManager
+	}
+	return ManagedExternal
 }
 
 // ---- model configs ----------------------------------------------------------
@@ -402,7 +341,7 @@ func (s *Service) ListModelConfigs(ctx context.Context, ns string) ([]ModelConfi
 	if err != nil {
 		return nil, err
 	}
-	dyn, _, err := s.dyn(ctx)
+	dyn, err := s.dyn(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -419,9 +358,10 @@ func (s *Service) listModelConfigs(ctx context.Context, dyn dynamic.Interface, n
 		mc := ModelConfig{Name: item.GetName(), Namespace: item.GetNamespace()}
 		mc.Provider, _, _ = unstructured.NestedString(item.Object, "spec", "provider")
 		mc.Model, _, _ = unstructured.NestedString(item.Object, "spec", "model")
-		conds := conditionsOf(&item)
-		mc.Accepted = conditionStatus(conds, "Accepted")
-		if c := findCondition(conds, "Accepted"); c != nil {
+		raw, _, _ := unstructured.NestedSlice(item.Object, "status", "conditions")
+		conds := conditionsOf(raw)
+		mc.Accepted = conditionStatus(conds, conditionAccepted)
+		if c := findCondition(conds, conditionAccepted); c != nil {
 			mc.Message = c.Message
 		}
 		mc.ManagedBy = item.GetLabels()[ManagedByLabel]
@@ -454,6 +394,19 @@ func (s *Service) requireModelConfig(ctx context.Context, dyn dynamic.Interface,
 	return invalidf("modelConfig %q does not exist in namespace %s; valid: %s", name, ns, strings.Join(names, ", "))
 }
 
+// requireAdmission checks that a Harness of ns admits the declaration's labels.
+func (s *Service) requireAdmission(ctx context.Context, dyn dynamic.Interface, ns string, d declaration) error {
+	lbls, err := d.templateLabels(s.cfg.Compose)
+	if err != nil {
+		return err
+	}
+	harnesses, err := s.listHarnesses(ctx, dyn, ns)
+	if err != nil {
+		return err
+	}
+	return requireHarnessAdmission(harnesses, lbls, ns)
+}
+
 // ---- skills -------------------------------------------------------------------
 
 // ListSkills discovers skills in the configured (or the given) repository.
@@ -470,6 +423,23 @@ func (s *Service) ListSkills(ctx context.Context, repository, ref string, refres
 
 // ---- validate ------------------------------------------------------------------
 
+// checkSpec runs the request-level checks of a create that need no cluster.
+func checkSpec(spec Spec) []error {
+	var errs []error
+	if err := ValidateName(spec.Name); err != nil {
+		errs = append(errs, err)
+	}
+	if err := ValidateToolset(spec.Toolset, true); err != nil {
+		errs = append(errs, err)
+	}
+	if spec.Harness != "" {
+		if err := ValidateHarness(spec.Harness); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errs
+}
+
 // ValidateCreate is create_agent without the write.
 func (s *Service) ValidateCreate(ctx context.Context, spec Spec) (*ValidateResult, error) {
 	ns, err := s.Namespace(spec.Namespace)
@@ -477,41 +447,67 @@ func (s *Service) ValidateCreate(ctx context.Context, spec Spec) (*ValidateResul
 		return nil, err
 	}
 	spec.Namespace = ns
-	dyn, _, err := s.dyn(ctx)
+	if err := rejectRemoved(spec.removed()...); err != nil {
+		return nil, err
+	}
+	dyn, err := s.dyn(ctx)
 	if err != nil {
 		return nil, err
 	}
-	if err := rejectToolNames(spec.RemovedToolNames); err != nil {
-		return nil, err
-	}
 	res := &ValidateResult{Mode: "create"}
-	if err := ValidateName(spec.Name); err != nil {
-		res.Errors = append(res.Errors, strings.TrimPrefix(err.Error(), ErrInvalid.Error()+": "))
+	for _, e := range checkSpec(spec) {
+		res.addError(e)
 	}
-	if err := ValidateToolset(spec.Toolset, true); err != nil {
-		res.Errors = append(res.Errors, strings.TrimPrefix(err.Error(), ErrInvalid.Error()+": "))
+	d := declaration{Spec: spec}
+	for _, check := range []func() error{
+		func() error { return s.requireModelConfig(ctx, dyn, ns, spec.ModelConfig) },
+		func() error { return s.requireAdmission(ctx, dyn, ns, d) },
+		func() error { return s.requireFreeName(ctx, dyn, ns, spec.Name) },
+	} {
+		if err := check(); err != nil {
+			if !isDomainError(err) {
+				return nil, err
+			}
+			res.addError(err)
+		}
 	}
-	if err := s.requireModelConfig(ctx, dyn, ns, spec.ModelConfig); err != nil {
-		if !isDomainError(err) {
+	tpl, err := BuildAgentTemplate(d, s.cfg.Compose, identity.Caller(ctx))
+	if err != nil {
+		res.addError(err)
+	}
+	var carrier *unstructured.Unstructured
+	if d.Toolset != nil {
+		platform, err := s.getPlatformServer(ctx, dyn, ns)
+		switch {
+		case err != nil && !isDomainError(err):
+			res.addError(err)
+		case err != nil:
 			return nil, err
-		}
-		res.Errors = append(res.Errors, strings.TrimPrefix(err.Error(), ErrInvalid.Error()+": "))
-	}
-	if spec.Name != "" {
-		if hr, _ := s.getHelmRelease(ctx, dyn, ns, spec.Name); hr != nil {
-			res.Errors = append(res.Errors, fmt.Sprintf("HelmRelease %s/%s already exists (use update_agent)", ns, spec.Name))
-		}
-		if cr, _ := s.getAgentCR(ctx, dyn, ns, spec.Name); cr != nil {
-			res.Errors = append(res.Errors, fmt.Sprintf("Agent %s/%s already exists", ns, spec.Name))
+		default:
+			carrier, _ = BuildToolsetCarrier(spec.Name, d.Toolset, platform, s.cfg.Compose, identity.Caller(ctx))
 		}
 	}
-	values := BuildValues(spec)
-	sch, violations := ValidateValues(ctx, s.chart, values)
-	res.Errors = append(res.Errors, violations...)
-	res.SchemaVersion, res.SchemaSource = sch.Version, sch.Source
-	res.Manifests = ComposeManifests(spec.Name, ns, values, s.cfg.Compose)
+	res.Manifests = ComposeManifests(tpl, carrier)
 	res.Valid = len(res.Errors) == 0
 	return res, nil
+}
+
+// requireFreeName fails when an AgentTemplate or a carrier of that name exists.
+func (s *Service) requireFreeName(ctx context.Context, dyn dynamic.Interface, ns, name string) error {
+	if name == "" {
+		return nil
+	}
+	if tpl, err := s.getTemplate(ctx, dyn, ns, name); err != nil {
+		return err
+	} else if tpl != nil {
+		return conflictf("AgentTemplate %s/%s already exists; use update_agent to change it", ns, name)
+	}
+	if carrier, err := s.getCarrier(ctx, dyn, ns, name); err != nil {
+		return err
+	} else if carrier != nil {
+		return conflictf("RemoteMCPServer %s/%s already exists (the toolset carrier the agent would get); remove it or pick another name", ns, carrier.GetName())
+	}
+	return nil
 }
 
 // ValidateUpdate is update_agent without the write.
@@ -520,31 +516,48 @@ func (s *Service) ValidateUpdate(ctx context.Context, upd Update) (*ValidateResu
 	if err != nil {
 		return nil, err
 	}
-	dyn, _, err := s.dyn(ctx)
+	if err := rejectRemoved(upd.removed()...); err != nil {
+		return nil, err
+	}
+	dyn, err := s.dyn(ctx)
 	if err != nil {
 		return nil, err
 	}
-	if err := rejectToolNames(upd.RemovedToolNames); err != nil {
-		return nil, err
-	}
-	hr, _, err := s.writableHelmRelease(ctx, dyn, ns, upd.Name, upd.Force)
+	tpl, carrier, err := s.writableTemplate(ctx, dyn, ns, upd.Name, upd.Force)
 	if err != nil {
 		return nil, err
 	}
 	res := &ValidateResult{Mode: "update"}
-	values, _, err := s.mergedValues(ctx, dyn, ns, upd, hr)
+	current, _ := declarationOf(tpl, carrier, s.cfg.Compose)
+	next, err := mergeUpdate(current, upd)
 	if err != nil {
+		res.addError(err)
+	}
+	if err := s.checkChanges(ctx, dyn, ns, current, next); err != nil {
 		if !isDomainError(err) {
 			return nil, err
 		}
-		res.Errors = append(res.Errors, strings.TrimPrefix(err.Error(), ErrInvalid.Error()+": "))
+		res.addError(err)
 	}
-	sch, violations := ValidateValues(ctx, s.chart, values)
-	res.Errors = append(res.Errors, violations...)
-	res.SchemaVersion, res.SchemaSource = sch.Version, sch.Source
-	res.Manifests = ComposeManifests(upd.Name, ns, values, s.cfg.Compose)
+	nextTpl, err := BuildAgentTemplate(next, s.cfg.Compose, identity.Caller(ctx))
+	if err != nil {
+		res.addError(err)
+	}
+	var nextCarrier *unstructured.Unstructured
+	if next.Toolset != nil {
+		platform, err := s.getPlatformServer(ctx, dyn, ns)
+		if err != nil {
+			return nil, err
+		}
+		nextCarrier, _ = BuildToolsetCarrier(upd.Name, next.Toolset, platform, s.cfg.Compose, identity.Caller(ctx))
+	}
+	res.Manifests = ComposeManifests(nextTpl, nextCarrier)
 	res.Valid = len(res.Errors) == 0
 	return res, nil
+}
+
+func (r *ValidateResult) addError(err error) {
+	r.Errors = append(r.Errors, strings.TrimPrefix(strings.TrimPrefix(err.Error(), ErrInvalid.Error()+": "), ErrConflict.Error()+": "))
 }
 
 func isDomainError(err error) bool {
@@ -558,155 +571,131 @@ func isDomainError(err error) bool {
 
 // ---- create --------------------------------------------------------------------
 
-// Create composes and applies the OCIRepository (when missing) and the
-// HelmRelease of a new agent after validating the values against the chart
-// schema. Nothing is written when validation fails.
+// Create composes and applies the toolset carrier and the AgentTemplate of a
+// new agent as the caller. Nothing is written when a check fails; a template
+// that fails to apply takes its carrier with it.
 func (s *Service) Create(ctx context.Context, spec Spec) (*CreateResult, error) {
 	ns, err := s.Namespace(spec.Namespace)
 	if err != nil {
 		return nil, err
 	}
 	spec.Namespace = ns
-	if err := ValidateName(spec.Name); err != nil {
+	if err := rejectRemoved(spec.removed()...); err != nil {
 		return nil, err
 	}
-	if err := rejectToolNames(spec.RemovedToolNames); err != nil {
-		return nil, err
+	if errs := checkSpec(spec); len(errs) > 0 {
+		return nil, errs[0]
 	}
-	if err := ValidateToolset(spec.Toolset, true); err != nil {
-		return nil, err
-	}
-	dyn, _, err := s.dyn(ctx)
+	dyn, err := s.dyn(ctx)
 	if err != nil {
 		return nil, err
 	}
-	if hr, err := s.getHelmRelease(ctx, dyn, ns, spec.Name); err != nil {
+	if err := s.requireFreeName(ctx, dyn, ns, spec.Name); err != nil {
 		return nil, err
-	} else if hr != nil {
-		return nil, conflictf("HelmRelease %s/%s already exists; use update_agent to change it", ns, spec.Name)
-	}
-	if cr, err := s.getAgentCR(ctx, dyn, ns, spec.Name); err != nil {
-		return nil, err
-	} else if cr != nil {
-		return nil, conflictf("Agent %s/%s already exists without a HelmRelease (a bare CR); delete it first (delete_agent with force) or pick another name", ns, spec.Name)
 	}
 	if err := s.requireModelConfig(ctx, dyn, ns, spec.ModelConfig); err != nil {
 		return nil, err
 	}
-	values := BuildValues(spec)
-	sch, violations := ValidateValues(ctx, s.chart, values)
-	if len(violations) > 0 {
-		return nil, invalidf("values do not satisfy the agent chart schema %s (%s): %s", sch.Version, sch.Source, strings.Join(violations, "; "))
+	d := declaration{Spec: spec}
+	if err := s.requireAdmission(ctx, dyn, ns, d); err != nil {
+		return nil, err
 	}
-
-	res := &CreateResult{RequestedBy: identity.Caller(ctx)}
-	res.Manifests = ComposeManifests(spec.Name, ns, values, s.cfg.Compose)
-
-	// The chart source is shared per namespace: create it once, reuse it after.
-	ociRepo := BuildOCIRepository(ns, s.cfg.Compose)
-	existing, err := dyn.Resource(s.ociRepositoryGVR()).Namespace(ns).Get(ctx, ociRepo.GetName(), metav1.GetOptions{})
-	switch {
-	case apierrors.IsNotFound(err):
-		if _, err := dyn.Resource(s.ociRepositoryGVR()).Namespace(ns).Create(ctx, ociRepo, metav1.CreateOptions{}); err != nil {
-			return nil, wrapKube(err, fmt.Sprintf("create OCIRepository %s/%s", ns, ociRepo.GetName()))
-		}
-		res.Created.OCIRepository = true
-	case err != nil:
-		return nil, wrapKube(err, fmt.Sprintf("get OCIRepository %s/%s", ns, ociRepo.GetName()))
-	default:
-		if url, _, _ := unstructured.NestedString(existing.Object, "spec", "url"); url != s.cfg.Compose.ChartOCIURL {
-			s.log.Warn("reusing an OCIRepository that points elsewhere", "namespace", ns, "name", ociRepo.GetName(), "url", url, "expected", s.cfg.Compose.ChartOCIURL)
-		}
-	}
-
-	hr := BuildHelmRelease(spec.Name, ns, values, s.cfg.Compose)
-	created, err := dyn.Resource(s.helmReleaseGVR()).Namespace(ns).Create(ctx, hr, metav1.CreateOptions{})
+	caller := identity.Caller(ctx)
+	tpl, err := BuildAgentTemplate(d, s.cfg.Compose, caller)
 	if err != nil {
-		return nil, wrapKube(err, fmt.Sprintf("create HelmRelease %s/%s", ns, spec.Name))
+		return nil, err
 	}
-	res.Created.HelmRelease = true
-	agent := Agent{Name: spec.Name, Namespace: ns, Managed: ManagedHelmRelease}
-	applyHelmRelease(&agent, created)
-	res.Agent = agent
-	if st, err := s.Status(ctx, ns, spec.Name); err == nil {
-		res.Status = st
+	platform, err := s.getPlatformServer(ctx, dyn, ns)
+	if err != nil {
+		return nil, err
 	}
-	s.log.Info("agent created", identity.LogAttr(ctx), "namespace", ns, "name", spec.Name, "modelConfig", spec.ModelConfig, "ociRepositoryCreated", res.Created.OCIRepository)
+	carrier, dropped := BuildToolsetCarrier(spec.Name, d.Toolset, platform, s.cfg.Compose, caller)
+	if len(dropped) > 0 {
+		s.log.Warn("platform RemoteMCPServer carries an Authorization header; not copied onto the toolset carrier (it would override the caller's bearer)", "namespace", ns, "server", platform.GetName(), "dropped", dropped)
+	}
+
+	res := &CreateResult{RequestedBy: caller, Manifests: ComposeManifests(tpl, carrier)}
+	// The carrier first, so the template's binding resolves at its first
+	// reconcile; the template's failure removes the carrier again.
+	createdCarrier, err := dyn.Resource(s.mcpServerGVR()).Namespace(ns).Create(ctx, carrier, createOptions())
+	if err != nil {
+		return nil, wrapKube(err, fmt.Sprintf("create RemoteMCPServer %s/%s", ns, carrier.GetName()))
+	}
+	res.Created.ToolsetCarrier = true
+	createdTpl, err := dyn.Resource(s.templateGVR()).Namespace(ns).Create(ctx, tpl, createOptions())
+	if err != nil {
+		if delErr := dyn.Resource(s.mcpServerGVR()).Namespace(ns).Delete(ctx, carrier.GetName(), metav1.DeleteOptions{}); delErr != nil && !apierrors.IsNotFound(delErr) {
+			s.log.Warn("toolset carrier left behind after the AgentTemplate failed", identity.LogAttr(ctx), "namespace", ns, "name", carrier.GetName(), "error", delErr)
+		}
+		return nil, wrapKube(err, fmt.Sprintf("create AgentTemplate %s/%s", ns, spec.Name))
+	}
+	res.Created.AgentTemplate = true
+	res.Agent = s.agentView(createdTpl, createdCarrier)
+	res.Status = statusOf(createdTpl, createdCarrier, s.cfg.Compose)
+	s.log.Info("agent created", identity.LogAttr(ctx), "namespace", ns, "name", spec.Name, "modelConfig", spec.ModelConfig, "harness", d.harness(s.cfg.Compose), "toolset", ToolsetHeaderValue(d.Toolset))
 	return res, nil
 }
 
 // ---- update --------------------------------------------------------------------
 
-// writableHelmRelease fetches the HelmRelease an update or delete targets and
-// applies the ownership rules: a bare Agent CR has nothing to write to; a
-// GitOps-owned or suspended release is refused unless force.
-func (s *Service) writableHelmRelease(ctx context.Context, dyn dynamic.Interface, ns, name string, force bool) (*unstructured.Unstructured, *unstructured.Unstructured, error) {
-	cr, err := s.getAgentCR(ctx, dyn, ns, name)
+// writableTemplate fetches the template (and carrier) an update or delete
+// targets and applies the ownership rules: a GitOps-owned or externally
+// written template, or one carrying fields agent-manager does not compose, is
+// refused unless force.
+func (s *Service) writableTemplate(ctx context.Context, dyn dynamic.Interface, ns, name string, force bool) (*unstructured.Unstructured, *unstructured.Unstructured, error) {
+	tpl, err := s.getTemplate(ctx, dyn, ns, name)
 	if err != nil {
 		return nil, nil, err
 	}
-	hrName, hrNs := name, ns
-	if cr != nil {
-		if n, nsFromLabel := ownerOf(cr); n != "" {
-			hrName, hrNs = n, orDefault(nsFromLabel, ns)
-		}
+	if tpl == nil {
+		return nil, nil, notFoundf("agent %s/%s", ns, name)
 	}
-	hr, err := s.getHelmRelease(ctx, dyn, hrNs, hrName)
+	carrier, err := s.getCarrier(ctx, dyn, ns, name)
 	if err != nil {
 		return nil, nil, err
 	}
-	if hr == nil {
-		if cr == nil {
-			return nil, nil, notFoundf("agent %s/%s", ns, name)
-		}
-		return nil, cr, conflictf("Agent %s/%s is a bare CR with no HelmRelease behind it; agent-manager only writes HelmRelease values (recreate it with create_agent, or delete it with force)", ns, name)
+	if err := s.ownershipGuard(tpl, force); err != nil {
+		return nil, nil, err
 	}
 	if !force {
-		if gitOpsOwnedHR(hr) {
-			return nil, cr, conflictf("HelmRelease %s/%s is applied by Flux Kustomization %q: its desired state lives in git, a live write would be undone. Change it in the GitOps repository, or pass force to write anyway", hrNs, hrName, hr.GetLabels()[KustomizationNameLabel])
-		}
-		if suspended, _, _ := unstructured.NestedBool(hr.Object, "spec", "suspend"); suspended {
-			return nil, cr, conflictf("HelmRelease %s/%s is suspended: Flux will not act on a change. Resume it first, or pass force", hrNs, hrName)
+		if _, unmanaged := declarationOf(tpl, carrier, s.cfg.Compose); len(unmanaged) > 0 {
+			return nil, nil, conflictf("AgentTemplate %s/%s carries fields agent-manager does not compose (%s): a write here would drop them. Edit the template directly, or pass force to overwrite it", ns, name, strings.Join(unmanaged, ", "))
 		}
 	}
-	return hr, cr, nil
+	return tpl, carrier, nil
 }
 
-// mergedValues applies an Update to the release's current values and returns
-// (after, before).
-func (s *Service) mergedValues(ctx context.Context, dyn dynamic.Interface, ns string, upd Update, hr *unstructured.Unstructured) (map[string]any, map[string]any, error) {
-	current, _, _ := unstructured.NestedMap(hr.Object, "spec", "values")
-	if current == nil {
-		current = map[string]any{}
+// ownershipGuard refuses writes to templates agent-manager does not own.
+func (s *Service) ownershipGuard(tpl *unstructured.Unstructured, force bool) error {
+	if force {
+		return nil
 	}
-	before := runtime.DeepCopyJSON(current)
-	after := runtime.DeepCopyJSON(current)
-	agentBlock, _ := after["agent"].(map[string]any)
-	if agentBlock == nil {
-		agentBlock = map[string]any{}
+	switch managedOf(tpl) {
+	case ManagedGitOps:
+		return conflictf("AgentTemplate %s/%s is applied by Flux Kustomization %q: its desired state lives in git, a live write would be undone. Change it in the GitOps repository, or pass force to write anyway", tpl.GetNamespace(), tpl.GetName(), tpl.GetLabels()[KustomizationNameLabel])
+	case ManagedExternal:
+		return conflictf("AgentTemplate %s/%s was not created by agent-manager (no %s=%s label): pass force to take it over", tpl.GetNamespace(), tpl.GetName(), ManagedByLabel, ManagedByValue)
 	}
-	if _, ok := agentBlock["name"]; !ok {
-		agentBlock["name"] = upd.Name
-	}
-	setOrDelete(agentBlock, "displayName", upd.DisplayName)
-	setOrDelete(agentBlock, "description", upd.Description)
-	setOrDelete(agentBlock, "systemMessage", upd.SystemMessage)
-	setOrDelete(agentBlock, "iconUrl", upd.IconURL)
-	setOrDelete(agentBlock, "runtime", upd.Runtime)
-	after["agent"] = agentBlock
+	return nil
+}
 
-	var modelErr error
-	if upd.ModelConfig != nil {
-		if err := s.requireModelConfig(ctx, dyn, ns, *upd.ModelConfig); err != nil {
-			modelErr = err
+// mergeUpdate applies an Update to the current declaration.
+func mergeUpdate(current declaration, upd Update) (declaration, error) {
+	next := current
+	setOrClear := func(dst *string, v *string) {
+		if v != nil {
+			*dst = strings.TrimSpace(*v)
 		}
-		after["modelConfig"] = map[string]any{"name": *upd.ModelConfig}
 	}
+	setOrClear(&next.DisplayName, upd.DisplayName)
+	setOrClear(&next.Description, upd.Description)
+	setOrClear(&next.SystemMessage, upd.SystemMessage)
+	setOrClear(&next.ModelConfig, upd.ModelConfig)
+	setOrClear(&next.Harness, upd.Harness)
 	if upd.Skills != nil {
-		if sk := skillsValues(upd.Skills); sk != nil {
-			after["skills"] = sk
-		} else {
-			delete(after, "skills")
+		next.Skills = upd.Skills
+		if next.Skills.IsEmpty() {
+			next.Skills = nil
 		}
 	}
 	if upd.Toolset != nil {
@@ -714,41 +703,50 @@ func (s *Service) mergedValues(ctx context.Context, dyn dynamic.Interface, ns st
 		// the way to say "no tools"), so a toolset can never be cleared back
 		// to implicit full access.
 		if err := ValidateToolset(*upd.Toolset, false); err != nil {
-			return after, before, err
+			return next, err
 		}
-		after[ToolsetValuesKey] = toAnySlice(*upd.Toolset)
+		next.Toolset = append([]string(nil), (*upd.Toolset)...)
+		next.bindsPlatformServer = false
 	}
 	if upd.Labels != nil {
-		if len(*upd.Labels) > 0 {
-			after["labels"] = toAnyMap(*upd.Labels)
-		} else {
-			delete(after, "labels")
-		}
+		next.Labels = *upd.Labels
 	}
 	if upd.Annotations != nil {
-		if len(*upd.Annotations) > 0 {
-			after["annotations"] = toAnyMap(*upd.Annotations)
-		} else {
-			delete(after, "annotations")
+		next.Annotations = *upd.Annotations
+	}
+	if next.Harness != "" {
+		if err := ValidateHarness(next.Harness); err != nil {
+			return next, err
 		}
 	}
-	return after, before, modelErr
+	return next, nil
 }
 
-func setOrDelete(m map[string]any, key string, v *string) {
-	if v == nil {
-		return
+// checkChanges validates what an update changes against the cluster: a new
+// model config must exist, a new harness or label set must still be admitted.
+func (s *Service) checkChanges(ctx context.Context, dyn dynamic.Interface, ns string, current, next declaration) error {
+	if next.ModelConfig != current.ModelConfig {
+		if err := s.requireModelConfig(ctx, dyn, ns, next.ModelConfig); err != nil {
+			return err
+		}
 	}
-	if strings.TrimSpace(*v) == "" {
-		delete(m, key)
-		return
+	curLabels, _ := current.templateLabels(s.cfg.Compose)
+	nextLabels, err := next.templateLabels(s.cfg.Compose)
+	if err != nil {
+		return err
 	}
-	m[key] = *v
+	if fmt.Sprint(curLabels) != fmt.Sprint(nextLabels) {
+		return s.requireAdmission(ctx, dyn, ns, next)
+	}
+	return nil
 }
 
-// Update merges the change into the HelmRelease values, validates the result
-// against the chart schema and writes it. The Agent CR itself is never
-// touched: helm-controller renders the change.
+// revisionNote tells the user what a template change means on kagent main.
+const revisionNote = "the AgentTemplate changed: kagent compiles a new revision for every admitting Harness; running AgentInstances keep the revision they were created with — start a new instance to pick up the change"
+
+// Update merges the change into the agent's declaration, re-composes both
+// objects and writes what differs: the carrier for a toolset change (no new
+// template revision), the template for everything else.
 func (s *Service) Update(ctx context.Context, upd Update) (*UpdateResult, error) {
 	ns, err := s.Namespace(upd.Namespace)
 	if err != nil {
@@ -757,93 +755,120 @@ func (s *Service) Update(ctx context.Context, upd Update) (*UpdateResult, error)
 	if err := ValidateName(upd.Name); err != nil {
 		return nil, err
 	}
-	dyn, _, err := s.dyn(ctx)
+	if err := rejectRemoved(upd.removed()...); err != nil {
+		return nil, err
+	}
+	dyn, err := s.dyn(ctx)
 	if err != nil {
 		return nil, err
 	}
-	if err := rejectToolNames(upd.RemovedToolNames); err != nil {
-		return nil, err
-	}
-	hr, _, err := s.writableHelmRelease(ctx, dyn, ns, upd.Name, upd.Force)
+	tpl, carrier, err := s.writableTemplate(ctx, dyn, ns, upd.Name, upd.Force)
 	if err != nil {
 		return nil, err
 	}
-	after, before, err := s.mergedValues(ctx, dyn, ns, upd, hr)
+	current, _ := declarationOf(tpl, carrier, s.cfg.Compose)
+	next, err := mergeUpdate(current, upd)
 	if err != nil {
 		return nil, err
 	}
-	sch, violations := ValidateValues(ctx, s.chart, after)
-	if len(violations) > 0 {
-		return nil, invalidf("values do not satisfy the agent chart schema %s (%s): %s", sch.Version, sch.Source, strings.Join(violations, "; "))
+	if err := s.checkChanges(ctx, dyn, ns, current, next); err != nil {
+		return nil, err
 	}
+	caller := identity.Caller(ctx)
+	before, after := declarationMap(current), declarationMap(next)
 	changed := changedPaths("", before, after)
-	res := &UpdateResult{Before: before, After: after, Changed: changed, RequestedBy: identity.Caller(ctx)}
-	res.Manifests = ComposeManifests(upd.Name, ns, after, s.cfg.Compose)
-	if len(changed) == 0 {
-		agent, err := s.get(ctx, dyn, ns, upd.Name)
+	res := &UpdateResult{Before: before, After: after, Changed: changed, RequestedBy: caller}
+	nextTpl, err := BuildAgentTemplate(next, s.cfg.Compose, caller)
+	if err != nil {
+		return nil, err
+	}
+	var nextCarrier *unstructured.Unstructured
+	if next.Toolset != nil {
+		platform, err := s.getPlatformServer(ctx, dyn, ns)
 		if err != nil {
 			return nil, err
 		}
-		res.Agent = *agent
+		nextCarrier, _ = BuildToolsetCarrier(upd.Name, next.Toolset, platform, s.cfg.Compose, caller)
+	}
+	res.Manifests = ComposeManifests(nextTpl, nextCarrier)
+	if len(changed) == 0 {
+		res.Agent = s.agentView(tpl, carrier)
 		return res, nil
 	}
-	if err := unstructured.SetNestedMap(hr.Object, after, "spec", "values"); err != nil {
-		return nil, fmt.Errorf("set values: %w", err)
+
+	// The carrier first (a new one must exist before the template binds it).
+	toolsetChanged := contains(changed, "toolset")
+	if toolsetChanged && nextCarrier != nil {
+		if carrier == nil {
+			carrier, err = dyn.Resource(s.mcpServerGVR()).Namespace(ns).Create(ctx, nextCarrier, createOptions())
+			if err != nil {
+				return nil, wrapKube(err, fmt.Sprintf("create RemoteMCPServer %s/%s", ns, nextCarrier.GetName()))
+			}
+		} else {
+			overlay(carrier, nextCarrier)
+			carrier, err = dyn.Resource(s.mcpServerGVR()).Namespace(ns).Update(ctx, carrier, updateOptions())
+			if err != nil {
+				return nil, wrapKube(err, fmt.Sprintf("update RemoteMCPServer %s/%s", ns, carrier.GetName()))
+			}
+		}
 	}
-	updated, err := dyn.Resource(s.helmReleaseGVR()).Namespace(hr.GetNamespace()).Update(ctx, hr, metav1.UpdateOptions{})
-	if err != nil {
-		return nil, wrapKube(err, fmt.Sprintf("update HelmRelease %s/%s", hr.GetNamespace(), hr.GetName()))
+	// The template changes when anything but the toolset did, or when its
+	// binding moves (from the platform server, or from no tools, onto the
+	// carrier); a toolset change alone stays on the carrier.
+	templateChanged := len(changed) > 1 || !toolsetChanged || current.serverBinding(s.cfg.Compose) != next.serverBinding(s.cfg.Compose)
+	if templateChanged {
+		overlay(tpl, nextTpl)
+		tpl, err = dyn.Resource(s.templateGVR()).Namespace(ns).Update(ctx, tpl, updateOptions())
+		if err != nil {
+			return nil, wrapKube(err, fmt.Sprintf("update AgentTemplate %s/%s", ns, upd.Name))
+		}
+		res.Note = revisionNote
 	}
-	agent, err := s.get(ctx, dyn, ns, upd.Name)
-	if err != nil {
-		agent = &Agent{Name: upd.Name, Namespace: ns, Managed: ManagedHelmRelease}
-		applyHelmRelease(agent, updated)
-	}
-	res.Agent = *agent
-	s.log.Info("agent updated", identity.LogAttr(ctx), "namespace", ns, "name", upd.Name, "changed", changed)
+	res.Agent = s.agentView(tpl, carrier)
+	s.log.Info("agent updated", identity.LogAttr(ctx), "namespace", ns, "name", upd.Name, "changed", changed, "templateChanged", templateChanged)
 	return res, nil
 }
 
-// changedPaths lists the dotted value paths whose leaves differ.
-func changedPaths(prefix string, before, after map[string]any) []string {
-	keys := map[string]bool{}
-	for k := range before {
-		keys[k] = true
-	}
-	for k := range after {
-		keys[k] = true
-	}
-	var out []string
-	for k := range keys {
-		path := k
-		if prefix != "" {
-			path = prefix + "." + k
-		}
-		b, bOK := before[k]
-		a, aOK := after[k]
-		bm, bIsMap := b.(map[string]any)
-		am, aIsMap := a.(map[string]any)
-		switch {
-		case bIsMap && aIsMap:
-			out = append(out, changedPaths(path, bm, am)...)
-		case aIsMap && !bOK:
-			// A whole block appeared: report its leaves.
-			out = append(out, changedPaths(path, map[string]any{}, am)...)
-		case bIsMap && !aOK:
-			out = append(out, changedPaths(path, bm, map[string]any{})...)
-		case bOK != aOK || fmt.Sprint(b) != fmt.Sprint(a):
-			out = append(out, path)
+// overlay puts the composed object's labels, annotations and spec onto the
+// served one, keeping its identity (resourceVersion, uid, finalizers) and the
+// labels and annotations other tooling stamps.
+func overlay(existing, composed *unstructured.Unstructured) {
+	labels := map[string]string{}
+	for k, v := range existing.GetLabels() {
+		if toolingLabel(k) {
+			labels[k] = v
 		}
 	}
-	sort.Strings(out)
-	return out
+	for k, v := range composed.GetLabels() {
+		labels[k] = v
+	}
+	existing.SetLabels(labels)
+	annotations := map[string]string{}
+	for k, v := range existing.GetAnnotations() {
+		if toolingAnnotation(k) && k != RequestedByAnnotation {
+			annotations[k] = v
+		}
+	}
+	for k, v := range composed.GetAnnotations() {
+		annotations[k] = v
+	}
+	existing.SetAnnotations(annotations)
+	existing.Object["spec"] = composed.Object["spec"]
+}
+
+func contains(list []string, want string) bool {
+	for _, s := range list {
+		if s == want {
+			return true
+		}
+	}
+	return false
 }
 
 // ---- delete --------------------------------------------------------------------
 
-// Delete removes the agent's HelmRelease (helm-controller uninstalls the Agent)
-// and the shared OCIRepository when no other release references it. A bare
-// Agent CR is only deleted with force.
+// Delete removes the agent's AgentTemplate and its toolset carrier. A
+// GitOps-owned or externally written template needs force.
 func (s *Service) Delete(ctx context.Context, ns, name string, force bool) (*DeleteResult, error) {
 	ns, err := s.Namespace(ns)
 	if err != nil {
@@ -852,314 +877,41 @@ func (s *Service) Delete(ctx context.Context, ns, name string, force bool) (*Del
 	if err := ValidateName(name); err != nil {
 		return nil, err
 	}
-	dyn, _, err := s.dyn(ctx)
+	dyn, err := s.dyn(ctx)
 	if err != nil {
+		return nil, err
+	}
+	tpl, err := s.getTemplate(ctx, dyn, ns, name)
+	if err != nil {
+		return nil, err
+	}
+	if tpl == nil {
+		return nil, notFoundf("agent %s/%s", ns, name)
+	}
+	if err := s.ownershipGuard(tpl, force); err != nil {
 		return nil, err
 	}
 	res := &DeleteResult{Name: name, Namespace: ns, RequestedBy: identity.Caller(ctx)}
-	hr, cr, err := s.writableHelmRelease(ctx, dyn, ns, name, force)
-	if err != nil {
-		if hr == nil && cr != nil && force && errorsIs(err, ErrConflict) {
-			// A bare Agent CR, forced: delete the CR itself.
-			if err := dyn.Resource(s.agentGVR()).Namespace(ns).Delete(ctx, name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
-				return nil, wrapKube(err, fmt.Sprintf("delete Agent %s/%s", ns, name))
-			}
-			res.AgentDeleted = true
-			s.log.Info("bare agent deleted", identity.LogAttr(ctx), "namespace", ns, "name", name)
-			return res, nil
-		}
-		return nil, err
+	if err := dyn.Resource(s.templateGVR()).Namespace(ns).Delete(ctx, name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+		return nil, wrapKube(err, fmt.Sprintf("delete AgentTemplate %s/%s", ns, name))
 	}
-	suspended, _, _ := unstructured.NestedBool(hr.Object, "spec", "suspend")
-	if err := dyn.Resource(s.helmReleaseGVR()).Namespace(hr.GetNamespace()).Delete(ctx, hr.GetName(), metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
-		return nil, wrapKube(err, fmt.Sprintf("delete HelmRelease %s/%s", hr.GetNamespace(), hr.GetName()))
-	}
-	res.HelmReleaseDeleted = true
-	if suspended && force && cr != nil {
-		// Flux drops the finalizer of a suspended release without uninstalling:
-		// the Agent would stay behind, so remove it directly.
-		if err := dyn.Resource(s.agentGVR()).Namespace(ns).Delete(ctx, name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
-			return nil, wrapKube(err, fmt.Sprintf("delete Agent %s/%s", ns, name))
-		}
-		res.AgentDeleted = true
-	}
+	res.AgentTemplateDeleted = true
 
-	// Best-effort cleanup of the shared chart source: every uncertainty keeps
-	// it (an orphan is inert; a wrongly deleted one breaks every other agent).
-	ref := chartRefOf(hr)
-	if ref == nil || ref.Kind != kindOCIRepository {
-		res.OCIRepositoryKept = "the HelmRelease does not render from an OCIRepository"
-		return res, nil
-	}
-	sourceNs := orDefault(ref.Namespace, hr.GetNamespace())
-	others, err := s.otherReferences(ctx, dyn, sourceNs, ref.Name, hr.GetName())
-	if err != nil {
-		res.OCIRepositoryKept = "could not list the other HelmReleases of the namespace: " + err.Error()
-		return res, nil
-	}
-	if len(others) > 0 {
-		res.OCIRepositoryKept = fmt.Sprintf("still referenced by %d other HelmRelease(s): %s", len(others), strings.Join(others, ", "))
-		return res, nil
-	}
-	if err := dyn.Resource(s.ociRepositoryGVR()).Namespace(sourceNs).Delete(ctx, ref.Name, metav1.DeleteOptions{}); err != nil {
-		if apierrors.IsNotFound(err) {
-			res.OCIRepositoryKept = "no OCIRepository to delete"
+	carrier, err := s.getCarrier(ctx, dyn, ns, name)
+	switch {
+	case err != nil:
+		res.ToolsetCarrierKept = "could not read it: " + err.Error()
+	case carrier == nil:
+		// No carrier: the template bound the platform server or nothing.
+	case carrier.GetLabels()[ManagedByLabel] != ManagedByValue:
+		res.ToolsetCarrierKept = fmt.Sprintf("RemoteMCPServer %s was not created by agent-manager", carrier.GetName())
+	default:
+		if err := dyn.Resource(s.mcpServerGVR()).Namespace(ns).Delete(ctx, carrier.GetName(), metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+			res.ToolsetCarrierKept = "delete refused: " + err.Error()
 		} else {
-			res.OCIRepositoryKept = "delete refused: " + err.Error()
+			res.ToolsetCarrierDeleted = true
 		}
-		return res, nil
 	}
-	res.OCIRepositoryDeleted = true
-	s.log.Info("agent deleted", identity.LogAttr(ctx), "namespace", ns, "name", name, "ociRepositoryDeleted", true)
+	s.log.Info("agent deleted", identity.LogAttr(ctx), "namespace", ns, "name", name, "toolsetCarrierDeleted", res.ToolsetCarrierDeleted)
 	return res, nil
-}
-
-// otherReferences lists the HelmReleases of ns, other than self, whose chartRef
-// is the OCIRepository source.
-func (s *Service) otherReferences(ctx context.Context, dyn dynamic.Interface, ns, source, self string) ([]string, error) {
-	list, err := dyn.Resource(s.helmReleaseGVR()).Namespace(ns).List(ctx, metav1.ListOptions{})
-	if err != nil {
-		return nil, err
-	}
-	var out []string
-	for i := range list.Items {
-		hr := &list.Items[i]
-		if hr.GetName() == self {
-			continue
-		}
-		ref := chartRefOf(hr)
-		if ref != nil && ref.Kind == kindOCIRepository && ref.Name == source && orDefault(ref.Namespace, ns) == ns {
-			out = append(out, hr.GetName())
-		}
-	}
-	sort.Strings(out)
-	return out, nil
-}
-
-// ---- read helpers --------------------------------------------------------------
-
-// ownerOf reads the Flux provenance labels of an object rendered by a release.
-func ownerOf(obj *unstructured.Unstructured) (name, namespace string) {
-	labels := obj.GetLabels()
-	return labels[HelmReleaseNameLabel], labels[HelmReleaseNamespaceLabel]
-}
-
-func gitOpsOwnedHR(hr *unstructured.Unstructured) bool {
-	_, ok := hr.GetLabels()[KustomizationNameLabel]
-	return ok
-}
-
-func chartRefOf(hr *unstructured.Unstructured) *ChartRef {
-	ref, found, _ := unstructured.NestedMap(hr.Object, "spec", "chartRef")
-	if !found {
-		return nil
-	}
-	out := &ChartRef{}
-	out.Kind, _ = ref["kind"].(string)
-	out.Name, _ = ref["name"].(string)
-	out.Namespace, _ = ref["namespace"].(string)
-	return out
-}
-
-// conditionsOf flattens status.conditions.
-func conditionsOf(obj *unstructured.Unstructured) []Condition {
-	raw, found, _ := unstructured.NestedSlice(obj.Object, "status", "conditions")
-	if !found {
-		return nil
-	}
-	out := make([]Condition, 0, len(raw))
-	for _, item := range raw {
-		m, ok := item.(map[string]any)
-		if !ok {
-			continue
-		}
-		c := Condition{}
-		c.Type, _ = m["type"].(string)
-		c.Status, _ = m["status"].(string)
-		c.Reason, _ = m["reason"].(string)
-		c.Message, _ = m["message"].(string)
-		c.LastTransitionTime, _ = m["lastTransitionTime"].(string)
-		out = append(out, c)
-	}
-	return out
-}
-
-func findCondition(conds []Condition, typ string) *Condition {
-	for i := range conds {
-		if conds[i].Type == typ {
-			return &conds[i]
-		}
-	}
-	return nil
-}
-
-// conditionStatus maps a condition to true/false, nil when absent or Unknown.
-func conditionStatus(conds []Condition, typ string) *bool {
-	c := findCondition(conds, typ)
-	if c == nil {
-		return nil
-	}
-	switch c.Status {
-	case "True":
-		return boolPtr(true)
-	case "False":
-		return boolPtr(false)
-	}
-	return nil
-}
-
-func boolPtr(b bool) *bool { return &b }
-
-// agentFromCR reads the Agent CR into the view.
-func agentFromCR(cr *unstructured.Unstructured) Agent {
-	a := Agent{Name: cr.GetName(), Namespace: cr.GetNamespace(), Exists: true, Managed: ManagedNone}
-	a.DisplayName = cr.GetAnnotations()[DisplayNameAnnotation]
-	a.Description, _, _ = unstructured.NestedString(cr.Object, "spec", "description")
-	a.IconURL, _, _ = unstructured.NestedString(cr.Object, "spec", "iconUrl")
-	a.Runtime, _, _ = unstructured.NestedString(cr.Object, "spec", "declarative", "runtime")
-	a.ModelConfig, _, _ = unstructured.NestedString(cr.Object, "spec", "declarative", "modelConfig")
-	a.SystemMessage, _, _ = unstructured.NestedString(cr.Object, "spec", "declarative", "systemMessage")
-	a.Skills = skillsFromCR(cr)
-	a.Toolset, a.ImplicitFullAccess = toolsetFromCR(cr)
-	a.Conditions = conditionsOf(cr)
-	a.Ready = conditionStatus(a.Conditions, "Ready")
-	a.Accepted = conditionStatus(a.Conditions, "Accepted")
-	return a
-}
-
-func skillsFromCR(cr *unstructured.Unstructured) *Skills {
-	raw, found, _ := unstructured.NestedMap(cr.Object, "spec", "skills")
-	if !found {
-		return nil
-	}
-	s := &Skills{}
-	if refs, ok := raw["refs"].([]any); ok {
-		for _, r := range refs {
-			if str, ok := r.(string); ok {
-				s.Refs = append(s.Refs, str)
-			}
-		}
-	}
-	if gitRefs, ok := raw["gitRefs"].([]any); ok {
-		for _, g := range gitRefs {
-			m, ok := g.(map[string]any)
-			if !ok {
-				continue
-			}
-			ref := SkillGitRef{}
-			ref.URL, _ = m["url"].(string)
-			ref.Path, _ = m["path"].(string)
-			ref.Ref, _ = m["ref"].(string)
-			ref.Name, _ = m["name"].(string)
-			s.GitRefs = append(s.GitRefs, ref)
-		}
-	}
-	if auth, ok := raw["gitAuthSecretRef"].(map[string]any); ok {
-		s.GitAuthSecretName, _ = auth["name"].(string)
-	}
-	if s.IsEmpty() && s.GitAuthSecretName == "" {
-		return nil
-	}
-	return s
-}
-
-// toolsetFromCR reads the toolset a bare Agent CR carries: the X-Muster-Toolset
-// header (tools[].headersFrom[]) of its first MCP server tool entry. Without
-// the header, an MCP server entry means implicit full access; no MCP server
-// entry at all means neither (a preset:none agent has no entry).
-func toolsetFromCR(cr *unstructured.Unstructured) (toolset []string, implicitFullAccess bool) {
-	tools, found, _ := unstructured.NestedSlice(cr.Object, "spec", "declarative", "tools")
-	if !found {
-		return nil, false
-	}
-	for _, t := range tools {
-		m, ok := t.(map[string]any)
-		if !ok {
-			continue
-		}
-		if _, ok := m["mcpServer"].(map[string]any); !ok {
-			continue
-		}
-		headers, _ := m["headersFrom"].([]any)
-		for _, h := range headers {
-			hm, ok := h.(map[string]any)
-			if !ok {
-				continue
-			}
-			if name, _ := hm["name"].(string); name != ToolsetHeader {
-				continue
-			}
-			if value, _ := hm["value"].(string); value != "" {
-				return ParseToolsetHeader(value), false
-			}
-		}
-		return nil, true
-	}
-	return nil, false
-}
-
-// applyHelmRelease folds the owning release into the view and, when the Agent
-// CR is absent, reads the identity fields from the values.
-func applyHelmRelease(a *Agent, hr *unstructured.Unstructured) {
-	ref := &HelmReleaseRef{Name: hr.GetName(), Namespace: hr.GetNamespace()}
-	conds := conditionsOf(hr)
-	ref.Ready = conditionStatus(conds, "Ready")
-	if c := findCondition(conds, "Ready"); c != nil {
-		ref.Reason, ref.Message = c.Reason, c.Message
-	}
-	ref.Suspended, _, _ = unstructured.NestedBool(hr.Object, "spec", "suspend")
-	ref.GitOpsOwned = gitOpsOwnedHR(hr)
-	ref.Deleting = hr.GetDeletionTimestamp() != nil
-	ref.ChartRef = chartRefOf(hr)
-	ref.LastAttemptedRevision, _, _ = unstructured.NestedString(hr.Object, "status", "lastAttemptedRevision")
-	if history, found, _ := unstructured.NestedSlice(hr.Object, "status", "history"); found && len(history) > 0 {
-		if entry, ok := history[0].(map[string]any); ok {
-			ref.ChartVersion, _ = entry["chartVersion"].(string)
-		}
-	}
-	if ref.ChartVersion == "" {
-		ref.ChartVersion = ref.LastAttemptedRevision
-	}
-	a.HelmRelease = ref
-	if ref.GitOpsOwned {
-		a.Managed = ManagedGitOps
-	} else {
-		a.Managed = ManagedHelmRelease
-	}
-	values, _, _ := unstructured.NestedMap(hr.Object, "spec", "values")
-	a.Values = values
-	// The HelmRelease values are the declaration: a declared toolset is
-	// reported as such, a release without one is implicit full access — even
-	// while the Agent CR has not been rendered yet.
-	if values != nil {
-		if toolset := stringSlice(values[ToolsetValuesKey]); toolset != nil {
-			a.Toolset, a.ImplicitFullAccess = toolset, false
-		} else {
-			a.Toolset, a.ImplicitFullAccess = nil, true
-		}
-	}
-	if a.Exists || values == nil {
-		return
-	}
-	// No Agent CR yet: the values are what the agent will be.
-	agentBlock, _ := values["agent"].(map[string]any)
-	if agentBlock != nil {
-		if name, _ := agentBlock["name"].(string); name != "" {
-			a.Name = name
-		}
-		a.DisplayName, _ = agentBlock["displayName"].(string)
-		a.Description, _ = agentBlock["description"].(string)
-		a.IconURL, _ = agentBlock["iconUrl"].(string)
-		a.Runtime, _ = agentBlock["runtime"].(string)
-		a.SystemMessage, _ = agentBlock["systemMessage"].(string)
-	}
-	if a.Name == "" {
-		a.Name = hr.GetName()
-	}
-	if mc, _ := values["modelConfig"].(map[string]any); mc != nil {
-		a.ModelConfig, _ = mc["name"].(string)
-	}
-	if sk, _ := values["skills"].(map[string]any); sk != nil {
-		a.Skills = skillsFromCR(&unstructured.Unstructured{Object: map[string]any{"spec": map[string]any{"skills": sk}}})
-	}
 }

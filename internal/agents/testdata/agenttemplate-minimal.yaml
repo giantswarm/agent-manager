@@ -1,0 +1,16 @@
+apiVersion: kagent.dev/v1alpha3
+kind: AgentTemplate
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: agent-manager
+    kagent.dev/harness: kagent
+  name: sre
+  namespace: kagent
+spec:
+  modelConfig:
+    name: mc
+  tools:
+  - mcp:
+      server:
+        kind: RemoteMCPServer
+        name: muster-sre

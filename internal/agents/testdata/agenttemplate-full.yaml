@@ -1,0 +1,33 @@
+apiVersion: kagent.dev/v1alpha3
+kind: AgentTemplate
+metadata:
+  annotations:
+    agent-manager.giantswarm.io/requested-by: admin@lab.local
+    team: bumblebee
+    ui.giantswarm.io/display-name: SRE Assistant
+  labels:
+    app.kubernetes.io/managed-by: agent-manager
+    kagent.dev/harness: claude
+    tenant: sre
+  name: sre
+  namespace: kagent
+spec:
+  description: helps
+  modelConfig:
+    name: default-model-config
+  skills:
+  - name: runbooks
+    source:
+      git:
+        commit: 0123456789abcdef0123456789abcdef01234567
+        url: https://github.com/giantswarm/agent-skills
+      path: nested/runbooks
+  - name: kubectl
+    source:
+      oci: ghcr.io/giantswarm/skills/kubectl@sha256:5b0bcabd1ed22e9fb1310cf6c2dec7cdef19f0ad69efa1f392e94a4333501270
+  systemPrompt: Be brief.
+  tools:
+  - mcp:
+      server:
+        kind: RemoteMCPServer
+        name: muster-sre

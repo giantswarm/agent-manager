@@ -372,7 +372,7 @@ func TestServerGuardsRESTAndMCPButNotProbes(t *testing.T) {
 	idp := newFakeIdP(t)
 	dyn := dynamicfake.NewSimpleDynamicClient(runtime.NewScheme())
 	typed := kubefake.NewClientset()
-	svc := agents.New(kube.NewServiceAccountProvider(kube.FromInterfaces(dyn, typed, typed.Discovery())), embeddedChart{}, nil, agents.Config{Version: "test"}, nil)
+	svc := agents.New(kube.NewServiceAccountProvider(kube.FromInterfaces(dyn, typed.Discovery())), nil, agents.Config{Version: "test"}, nil)
 	cfg := idp.config(true)
 	srv, err := New(Config{Addr: "127.0.0.1:0", MCPEnabled: true, OAuth: &cfg}, svc, api.NewMCPServer(svc, "test"), quiet())
 	require.NoError(t, err)

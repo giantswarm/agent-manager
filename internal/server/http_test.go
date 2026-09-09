@@ -1,7 +1,6 @@
 package server
 
 import (
-	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -15,24 +14,15 @@ import (
 
 	"github.com/giantswarm/agent-manager/internal/agents"
 	"github.com/giantswarm/agent-manager/internal/api"
-	"github.com/giantswarm/agent-manager/internal/chart"
 	"github.com/giantswarm/agent-manager/internal/kube"
 )
-
-type embeddedChart struct{}
-
-func (embeddedChart) Schema(context.Context) chart.Schema { return chart.EmbeddedSchema() }
-func (embeddedChart) Info(context.Context) chart.Info     { return chart.Info{} }
-func (embeddedChart) Name() string                        { return "agent" }
-func (embeddedChart) OCIURL() string                      { return agents.DefaultChartOCIURL }
-func (embeddedChart) SemverRange() string                 { return "x.x.x" }
 
 // Without OAuth nothing guards the API: the deployment in front of it is the
 // trust boundary and the service acts as its ServiceAccount.
 func TestServerMountsHealthRESTAndMCP(t *testing.T) {
 	dyn := dynamicfake.NewSimpleDynamicClient(runtime.NewScheme())
 	typed := kubefake.NewClientset()
-	svc := agents.New(kube.NewServiceAccountProvider(kube.FromInterfaces(dyn, typed, typed.Discovery())), embeddedChart{}, nil, agents.Config{Version: "test"}, nil)
+	svc := agents.New(kube.NewServiceAccountProvider(kube.FromInterfaces(dyn, typed.Discovery())), nil, agents.Config{Version: "test"}, nil)
 	srv, err := New(Config{Addr: "127.0.0.1:0", MCPEnabled: true}, svc, api.NewMCPServer(svc, "test"), nil)
 	require.NoError(t, err)
 	ts := httptest.NewServer(srv.Handler())

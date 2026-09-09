@@ -1,6 +1,6 @@
 apiVersion: v2
 name: agent-manager
-description: Agent lifecycle service for the Agent Platform — creates, updates, deletes and inspects kagent agents as Flux HelmReleases of the agent chart, validated against the chart schema, exposed as REST and MCP
+description: Agent lifecycle service for the Agent Platform — creates, updates, deletes and inspects agents as kagent.dev/v1alpha3 AgentTemplates with a per-agent toolset carrier, validated before anything is applied, exposed as REST and MCP
 type: application
 version: 0.1.0
 appVersion: "0.1.0"
@@ -12,7 +12,6 @@ keywords:
   - mcp
   - agents
   - kagent
-  - flux
   - agent-platform
 maintainers:
   - name: Giant Swarm

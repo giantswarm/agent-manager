@@ -6,15 +6,25 @@ Agent lifecycle service for the Giant Swarm Agent Platform: the write surface
 for **agents themselves**, the sibling of [model-manager](https://github.com/giantswarm/model-manager)
 (models) next to muster's own management tools (MCP servers, workflows).
 
-On the platform an agent is a Flux `HelmRelease` of the
-[`agent` chart](https://github.com/giantswarm/agent) — one release renders one
-kagent `Agent` — that renders from the shared per-namespace `OCIRepository` of
-that chart, tracking it by semver range. That is exactly what the portal's
-create flow composes; agent-manager composes the same two objects from a
-small, curated argument set, validates the values against the chart's
-`values.schema.json` **before** anything is applied, and reads an agent back
-from its Agent CR, its owning HelmRelease (Flux provenance labels) and the
-Deployment kagent runs for it.
+> **POC branch (`poc/kagent-main`)**: this branch composes agents for
+> **kagent `main`** (`kagent.dev/v1alpha3`, API v2). The fleet runs kagent
+> 0.10 (`v1alpha2`, Flux HelmReleases of the `agent` chart); nothing here
+> lands on `main` until the platform moves.
+
+On kagent main an agent is a `kagent.dev/v1alpha3` **`AgentTemplate`** in the
+kagent namespace — description, system prompt, model config, skills pinned to
+immutable sources and one MCP tool binding — that kagent compiles for every
+**`Harness`** whose admission selector matches its labels
+(`kagent.dev/harness: <harness>`; the platform renders one Harness per runtime:
+`kagent` for the Go ADK, `claude` for the Claude harness). Conversations are
+`AgentInstance`s created from the compiled template over kagent's own gRPC API
+(the portal); agent-manager never creates instances. The toolset an agent
+declares travels as its **toolset carrier**: a per-agent copy of the platform's
+`muster` `RemoteMCPServer` (`muster-<agent>`) carrying the `X-Muster-Toolset`
+header, which the template binds instead of the platform server. agent-manager
+composes both objects as the caller, validates what kagent main can express
+before anything is applied, and reads readiness from the template's
+per-Harness status.
 
 The same operations are exposed twice from one process:
 
@@ -28,28 +38,30 @@ The same operations are exposed twice from one process:
   annotations are set.
 
 Part of the [Agent Control Plane epic](https://github.com/giantswarm/giantswarm/issues/36796)
-("create and manage versioned agents"): the reconciler half is the `agent`
-chart plus Flux helm-controller, this is the MCP-server-writer half.
+("create and manage versioned agents"): the reconciler half is kagent's
+controller (templates compile to revisions, instances pin them), this is the
+MCP-server-writer half.
 
 ## API at a glance
 
 | Operation | REST | MCP tool | Writes |
 |---|---|---|---|
-| Version, chart (OCI URL, semver range, latest version, schema in use), managed namespaces, capabilities, identity | `GET /api/v1/info` | `get_info` | no |
-| Agents of a namespace (Agent CRs + HelmReleases of the chart not rendered yet) | `GET /api/v1/agents?namespace=` | `list_agents` | no |
-| One agent with its HelmRelease values | `GET /api/v1/agents/{ns}/{name}` | `get_agent` | no |
-| Create: OCIRepository (when missing) + HelmRelease, after schema and ModelConfig validation | `POST /api/v1/agents` | `create_agent` | HelmRelease, OCIRepository |
-| Update: merge into the HelmRelease values, validate, update | `PATCH /api/v1/agents/{ns}/{name}[?force=true]` | `update_agent` | HelmRelease |
-| Delete: the HelmRelease; the OCIRepository only when nothing else references it | `DELETE /api/v1/agents/{ns}/{name}[?force=true]` | `delete_agent` | HelmRelease, OCIRepository, (bare Agent with force) |
-| Status verdict: Agent + HelmRelease conditions/history, Deployment, pods (waiting reasons), Warning events | `GET /api/v1/agents/{ns}/{name}/status` | `get_agent_status` | no |
+| Version, kagent API versions, managed namespaces, the platform's muster server and default Harness, capabilities, identity | `GET /api/v1/info` | `get_info` | no |
+| Agents of a namespace (every AgentTemplate with its toolset carrier) | `GET /api/v1/agents?namespace=` | `list_agents` | no |
+| One agent: declaration, template spec, toolset, carrier, per-Harness status | `GET /api/v1/agents/{ns}/{name}` | `get_agent` | no |
+| Create: toolset carrier + AgentTemplate, after every check | `POST /api/v1/agents` | `create_agent` | RemoteMCPServer, AgentTemplate |
+| Update: merge into the declaration, re-compose, write what differs | `PATCH /api/v1/agents/{ns}/{name}[?force=true]` | `update_agent` | RemoteMCPServer and/or AgentTemplate |
+| Delete: the AgentTemplate and its carrier | `DELETE /api/v1/agents/{ns}/{name}[?force=true]` | `delete_agent` | AgentTemplate, RemoteMCPServer |
+| Status verdict: per-Harness conditions, revisions, warnings; carrier acceptance | `GET /api/v1/agents/{ns}/{name}/status` | `get_agent_status` | no |
 | Dry run of create/update: composed manifests + every violation | `POST /api/v1/agents/validate` | `validate_agent` | no |
 | kagent ModelConfigs of a namespace | `GET /api/v1/modelconfigs?namespace=` | `list_model_configs` | no |
-| Skills (`SKILL.md`) of the configured GitHub repositories | `GET /api/v1/skills[?repository=&ref=&refresh=]` | `list_skills` | no |
+| Skills (`SKILL.md`) of the configured GitHub repositories, with the commit each pins | `GET /api/v1/skills[?repository=&ref=&refresh=]` | `list_skills` | no |
 | Health | `GET /healthz`, `GET /readyz` | — | no |
 
 Errors are `{"error":{"code":"not_found|invalid_request|conflict|forbidden|unsupported|backend_error","message":"…"}}`;
-`conflict` (409) covers "exists already", "GitOps-owned", "suspended" and
-"bare Agent CR" — the cases `force` overrides where documented.
+`conflict` (409) covers "exists already", "GitOps-owned", "written by someone
+else" and "carries fields agent-manager does not compose" — the cases `force`
+overrides where documented.
 
 ## What an agent is made of
 
@@ -57,43 +69,63 @@ Errors are `{"error":{"code":"not_found|invalid_request|conflict|forbidden|unsup
 chose and confirmed — the service never derives one from a display name, per
 the creating-agents PRD), the **modelConfig** (must exist in the namespace;
 the error lists the valid ones), the **toolset** (required, see below), and
-optionally `displayName`, `description`, `systemMessage`, `iconUrl`, `runtime`
-(go|python), `skills` (`gitRefs` from `list_skills`, OCI `refs`), `labels`,
-`annotations`, `namespace`. It emits only what was set so the chart's
-defaults apply to everything else — the portal's rule — and composes:
+optionally `harness` (the kagent Harness that runs the agent; the installation
+default when omitted — a Harness admitting the template must exist, the error
+names the Harnesses and what they admit), `displayName`, `description`,
+`systemMessage`, `skills` (`gitRefs` pinned to a commit — `list_skills` reports
+it — and digest-pinned OCI `refs`), `labels`, `annotations`, `namespace`. It
+emits only what was set and composes, in the kagent namespace:
 
 ```yaml
-apiVersion: source.toolkit.fluxcd.io/v1
-kind: OCIRepository
-metadata: {name: agent, namespace: kagent}
-spec: {interval: 30m, url: oci://gsoci.azurecr.io/charts/giantswarm/agent, ref: {semver: x.x.x}}
----
-apiVersion: helm.toolkit.fluxcd.io/v2
-kind: HelmRelease
-metadata: {name: sre, namespace: kagent}
+apiVersion: kagent.dev/v1alpha3
+kind: RemoteMCPServer                  # the toolset carrier: a copy of the platform's `muster` server
+metadata:
+  name: muster-sre
+  namespace: kagent
+  labels: {app.kubernetes.io/managed-by: agent-manager, agent-manager.giantswarm.io/agent: sre, kagent.dev/discovery: disabled}
 spec:
-  interval: 10m
-  chartRef: {kind: OCIRepository, name: agent, namespace: kagent}
-  values:
-    agent: {name: sre, displayName: SRE Assistant, systemMessage: …}
-    modelConfig: {name: default-model-config}
-    skills: {gitRefs: [{url: https://github.com/giantswarm/agent-skills, path: runbooks, ref: main, name: runbooks}]}
-    toolset: [preset:read-only, workflow:incident-triage]
+  description: Shared muster MCP gateway for platform agents — toolset [preset:read-only] of agent sre
+  url: http://muster.agent-platform.svc.cluster.local:8090/mcp
+  protocol: STREAMABLE_HTTP
+  headersFrom:
+    - {name: X-Muster-Toolset, value: "preset:read-only"}   # never an Authorization header
+---
+apiVersion: kagent.dev/v1alpha3
+kind: AgentTemplate
+metadata:
+  name: sre
+  namespace: kagent
+  labels: {app.kubernetes.io/managed-by: agent-manager, kagent.dev/harness: kagent}
+  annotations: {ui.giantswarm.io/display-name: SRE Assistant, agent-manager.giantswarm.io/requested-by: admin@example.com}
+spec:
+  description: helps
+  systemPrompt: …
+  modelConfig: {name: default-model-config}
+  skills:
+    - name: runbooks
+      source: {git: {url: https://github.com/giantswarm/agent-skills, commit: <40 hex>}, path: runbooks}
+  tools:
+    - mcp: {server: {kind: RemoteMCPServer, name: muster-sre}}   # the whole server: per-tool selection needs discovery, which is off
 ```
 
-ModelConfigs, their Secrets and the shared muster `RemoteMCPServer` are
-platform-admin owned: agent-manager only reads ModelConfigs.
+What an AgentTemplate cannot express is refused with the reason, never dropped
+silently, and `get_info.capabilities` says so up front: `runtime` (the Harness
+is the runtime — pass `harness`), `iconUrl` (no icon field), a skill on a
+branch or an OCI tag (`mutableSkillRefs`), `skills.gitAuthSecretName` (sources
+are read anonymously), a per-tool selection (`perToolSelection`), and the
+former `toolNames`.
+
+ModelConfigs, their Secrets, the Harnesses and the platform's `muster`
+`RemoteMCPServer` are platform-admin owned: agent-manager only reads them.
 
 ## The toolset
 
 Every agent declares a **toolset**: the list of selectors that bounds which of
-the gateway's tools its meta-tools can see and call. It is the agent chart's
-top-level `toolset` value, which the chart renders as the `X-Muster-Toolset`
-header on the agent's muster tool entry; muster resolves it per request and
-per caller. agent-manager validates the inline grammar and composes the list
-exactly as given — it never resolves a toolset, and it never writes
-`muster.toolNames` (that key only filters muster's meta-tools, so the former
-`toolNames` argument narrowed nothing; a caller still passing it is told so).
+the gateway's tools its meta-tools can see and call. It rides on the agent's
+toolset carrier as the `X-Muster-Toolset` header; kagent's runtime sends it
+with every MCP call next to the caller's forwarded bearer, and muster resolves
+it per request and per caller. agent-manager validates the inline grammar and
+composes the list exactly as given — it never resolves a toolset.
 
 - Selectors: `preset:<name>`, `server:<name>`, `workflow:<name>`,
   `tool:<name>` — exact, case-sensitive names; at most 32 inline (define a
@@ -104,50 +136,60 @@ exactly as given — it never resolves a toolset, and it never writes
   toolset and names them: `preset:none` for a chat-only agent without tools,
   `preset:full` for the deliberate choice of every tool the gateway exposes.
   An empty list is refused too, so "no tools" is never confused with implicit
-  full access.
-- `update_agent` replaces the whole list — the edit path, and the way agents
-  that predate toolsets get one. `get_agent` / `list_agents` report the
-  declared `toolset`, or `implicitFullAccess: true` for a release without one.
-- The toolset is agent-manager's own contract: it is validated the same way
-  whichever chart version's schema is in use. A schema that does not declare
-  the key yet (the embedded fallback of an older chart, or a registry version
-  before the chart release that added `toolset`) would refuse it as an
-  additional property, so the key is left out of that schema check; as soon
-  as the tracked chart declares `toolset`, its schema validates it as well.
-  The HelmRelease still carries `toolset`, so against a chart that does not
-  know it helm-controller reports the release as failed — the rollout order
-  is: the agent chart release with `toolset` first, then this service.
+  full access. Every declared toolset gets a carrier — `preset:full` and
+  `preset:none` included — so the declaration is always readable on the
+  cluster.
+- `update_agent` replaces the whole list. A toolset change rewrites the
+  carrier only: the template does not change, so kagent compiles **no new
+  revision**.
+- `get_agent` / `list_agents` report the declared `toolset`, or
+  `implicitFullAccess: true` for a template that binds the platform's `muster`
+  server directly (written by hand, or before toolsets existed): its tools are
+  every tool the gateway exposes to the caller. Assign it a toolset with
+  `update_agent` (`force`, since agent-manager did not create it): the carrier
+  appears and the template is rebound to it.
 
 It is composition, not authorization: the invoking human's identity and the
 backends' own authorization remain the boundary.
 
-## Ownership and the meta agent's rule
+## Revisions, readiness and ownership
+
+kagent compiles every AgentTemplate for each admitting Harness into a
+revision and reports one `status.harnesses[]` entry per Harness (`Accepted`,
+`ResolvedRefs`, `Compatible`, then `Ready` once the golden snapshot exists;
+`desiredRevision`, `latestSuccessfulRevision`, compile `warnings`).
+`get_agent_status` folds that into one verdict — `ready` when any admitting
+Harness reports Ready for the current generation, `failed` on a False stage or
+when no Harness admits the template, `progressing` otherwise — plus the
+carrier's acceptance. Running `AgentInstance`s keep the revision they were
+created with: an update that changes the template says so in its `note`.
 
 `list_agents` says how each agent is managed:
 
-- `helmrelease` — a HelmRelease agent-manager (or the portal, or a hand-applied
-  manifest) owns: writable here.
-- `gitops` — the HelmRelease carries `kustomize.toolkit.fluxcd.io/name`: its
+- `agent-manager` — created here (the `app.kubernetes.io/managed-by` label):
+  writable.
+- `gitops` — the template carries `kustomize.toolkit.fluxcd.io/name`: its
   desired state lives in git and a live write would be undone on the next
   reconciliation. `update_agent` and `delete_agent` refuse it unless `force`.
   A meta agent opens a pull request in the GitOps repository instead.
-- `none` — a bare Agent CR with no HelmRelease behind it: nothing to write to;
-  `delete_agent` removes it only with `force`.
+- `external` — written by someone else (kubectl, a chart): taken over with
+  `force` only.
 
-A suspended HelmRelease is refused the same way: Flux drops its finalizer
-without uninstalling, so deleting it would leave the Agent behind (with `force`
-the Agent is deleted too).
+A template carrying fields agent-manager does not compose — bucket skills,
+plugins, prompt templates, `systemPromptFrom`, agent tool bindings, other MCP
+servers, a per-tool selection — lists them under `unmanagedFields`; an update
+would drop them and is refused unless `force`.
 
 ## Validation
 
-Every create and update is validated against the `agent` chart's
-`values.schema.json` before it is applied. The schema comes from the chart
-registry (`agentChart.ociUrl`, the newest version in `agentChart.semver`, the
-same resolution Flux's OCIRepository performs) and is re-read every
-`agentChart.refresh`; when the registry cannot be reached the copy compiled
-into the binary (chart 0.5.2) validates and `get_info` reports
-`chart.schemaSource: embedded` with the error. `validate_agent` returns the
-composed manifests and every violation without writing.
+Every create and update is checked before anything is applied: the name and
+toolset grammar, the ModelConfig against the namespace, the Harness admission
+(a Harness of the namespace whose `allowedAgentTemplates` selector matches the
+composed labels), the skill sources (a full commit id or a digest), the
+platform's `muster` RemoteMCPServer (the carrier is a copy of it). A create
+writes the carrier first, then the template; a template the apiserver refuses
+takes its carrier with it. `validate_agent` returns the composed manifests and
+every violation without writing.
 
 ## Identity
 
@@ -174,8 +216,8 @@ write's log line (`caller=`) and on every create/update/delete result as
 `requestedBy`.
 
 `--downstream-oauth` presents the caller's token to the kube-apiserver for
-everything a request does — the HelmRelease and OCIRepository writes, the
-Agent, ModelConfig, Deployment, pod and event reads — through per-caller
+everything a request does — the AgentTemplate and RemoteMCPServer writes, the
+Harness and ModelConfig reads — through per-caller
 clients (`internal/kube.CallerProvider`, built from
 `rest.AnonymousClientConfig` + the caller's bearer, cached until the token's
 `exp`). The user's RBAC governs; the ServiceAccount holds **no** permissions
@@ -183,8 +225,8 @@ clients (`internal/kube.CallerProvider`, built from
 there is no fallback: a request without an IdP token is refused with `401`, a
 token that expires mid-request keeps being presented and the apiserver's `401`
 fails the request, attributed to the caller. agent-manager has no background
-Kubernetes work — API version discovery at startup is what every authenticated
-principal may read — so the ServiceAccount token stays mounted only for the
+Kubernetes work — API version discovery at startup (`agenttemplates`) is what
+every authenticated principal may read — so the ServiceAccount token stays mounted only for the
 in-cluster address and CA. The apiserver must trust the token: with Dex the
 audience it trusts (`dex-k8s-authenticator` on Giant Swarm clusters,
 `kubernetes` in agentlab) is requested as a cross-client scope through
@@ -193,36 +235,42 @@ client id *is* the apiserver's `--oidc-client-id` (`requiredAudiences: []`).
 `get_info` reports `identity: caller` and `capabilities.writesAsCaller: true`.
 
 Without `--enable-oauth` the service checks no identity and acts as its
-ServiceAccount (the Role per managed namespace: HelmReleases and
-OCIRepositories read/write; Agents, ModelConfigs, Deployments, pods and events
-read; Agents delete for the forced bare-CR case) — only for a server nothing
-but a trusted proxy (the agentgateway JWT policy, muster) can reach.
+ServiceAccount (the Role per managed namespace: AgentTemplates and
+RemoteMCPServers read/write; Harnesses and ModelConfigs read) — only for a
+server nothing but a trusted proxy (the agentgateway JWT policy, muster) can
+reach.
 
 ## Running
 
 ```sh
 agent-manager serve \
   --kubeconfig ~/.kube/config --kube-context kind-agentlab \
-  --kagent-namespace kagent \
-  --agent-chart-oci-url oci://gsoci.azurecr.io/charts/giantswarm/agent \
+  --kagent-namespace kagent --kagent-muster-server muster --kagent-default-harness kagent \
   --skills-repositories https://github.com/giantswarm/agent-skills
 ```
 
 Every flag has an environment variable (`agent-manager serve --help`).
-Kubernetes access is required; the kagent.dev and Flux API versions are
-discovered from the server (`--*-api-version auto`).
+Kubernetes access is required; the kagent.dev API version is discovered from
+the server (`--kagent-api-version auto`, the version serving `agenttemplates`,
+default `v1alpha3`). The binary needs neither Flux CRDs nor the `agent` chart.
+The flags of the retired Flux/agent-chart composition
+(`--agent-chart-*`, `--flux-*`, `--helmrelease-*`, `--ocirepository-interval`)
+still parse and do nothing, so a chart release that passes them keeps
+starting this binary (a deprecation notice is printed per flag).
 
 ## Helm chart
 
 `helm/agent-manager` — see its [README](helm/agent-manager/README.md). Keys
 the [`giantswarm/agent-platform`](https://github.com/giantswarm/agent-platform)
 meta chart sets for its `agent-manager` component: `kagent.namespace`,
-`agentChart.*`, `mcp.enabled`, `oauth.*`, `muster.mcpServer.*`,
-`skills.repositories`, and `flux.helmReleaseServiceAccount` (derived from
-`kagent.fluxServiceAccountName`).
-Optional, off by default: `muster.mcpServer.enabled` (renders an
-`mcpservers.muster.giantswarm.io` CR), `httpRoute.enabled`,
-`networkPolicy.enabled`.
+`mcp.enabled`, `oauth.*`, `muster.mcpServer.*`, `skills.repositories`;
+`kagent.musterServer` and `kagent.defaultHarness` name the platform's muster
+server and the default Harness. Optional, off by default:
+`muster.mcpServer.enabled` (renders an `mcpservers.muster.giantswarm.io` CR),
+`httpRoute.enabled`, `networkPolicy.enabled`. With `oauth.downstream.enabled`
+(the platform's mode) the chart renders no RBAC — the caller's RBAC on
+`agenttemplates`, `remotemcpservers`, `harnesses` and `modelconfigs` in
+`kagent.dev` governs; without it the Role grants exactly those.
 
 ## Development
 

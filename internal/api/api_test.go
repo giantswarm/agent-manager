@@ -22,40 +22,42 @@ import (
 	kubefake "k8s.io/client-go/kubernetes/fake"
 
 	"github.com/giantswarm/agent-manager/internal/agents"
-	"github.com/giantswarm/agent-manager/internal/chart"
 	"github.com/giantswarm/agent-manager/internal/kube"
 )
 
-type embeddedChart struct{}
-
-func (embeddedChart) Schema(context.Context) chart.Schema { return chart.EmbeddedSchema() }
-func (embeddedChart) Info(context.Context) chart.Info {
-	return chart.Info{OCIURL: agents.DefaultChartOCIURL, Semver: "x.x.x", SchemaVersion: chart.EmbeddedSchemaVersion, SchemaSource: chart.SourceEmbedded}
-}
-func (embeddedChart) Name() string        { return "agent" }
-func (embeddedChart) OCIURL() string      { return agents.DefaultChartOCIURL }
-func (embeddedChart) SemverRange() string { return "x.x.x" }
+const testCommit = "0123456789abcdef0123456789abcdef01234567"
 
 var (
-	hrGVR  = schema.GroupVersionResource{Group: "helm.toolkit.fluxcd.io", Version: "v2", Resource: "helmreleases"}
-	ociGVR = schema.GroupVersionResource{Group: "source.toolkit.fluxcd.io", Version: "v1", Resource: "ocirepositories"}
-	agGVR  = schema.GroupVersionResource{Group: "kagent.dev", Version: "v1alpha2", Resource: "agents"}
-	mcGVR  = schema.GroupVersionResource{Group: "kagent.dev", Version: "v1alpha2", Resource: "modelconfigs"}
+	tplGVR = schema.GroupVersionResource{Group: "kagent.dev", Version: "v1alpha3", Resource: "agenttemplates"}
+	rmsGVR = schema.GroupVersionResource{Group: "kagent.dev", Version: "v1alpha3", Resource: "remotemcpservers"}
+	hGVR   = schema.GroupVersionResource{Group: "kagent.dev", Version: "v1alpha3", Resource: "harnesses"}
+	mcGVR  = schema.GroupVersionResource{Group: "kagent.dev", Version: "v1alpha3", Resource: "modelconfigs"}
 )
 
+// newService is the platform namespace as the charts leave it: a ModelConfig,
+// the kagent Harness and the muster RemoteMCPServer.
 func newService(t *testing.T) (*agents.Service, *dynamicfake.FakeDynamicClient) {
 	t.Helper()
 	mc := &unstructured.Unstructured{Object: map[string]any{
-		"apiVersion": "kagent.dev/v1alpha2", "kind": "ModelConfig",
+		"apiVersion": "kagent.dev/v1alpha3", "kind": "ModelConfig",
 		"metadata": map[string]any{"name": "default-model-config", "namespace": "kagent"},
 		"spec":     map[string]any{"provider": "Anthropic", "model": "claude-sonnet-4-6"},
 	}}
+	h := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "kagent.dev/v1alpha3", "kind": "Harness",
+		"metadata": map[string]any{"name": "kagent", "namespace": "kagent"},
+		"spec":     map[string]any{"kagent": map[string]any{}, "allowedAgentTemplates": map[string]any{"selector": map[string]any{"matchLabels": map[string]any{agents.HarnessLabel: "kagent"}}}},
+	}}
+	muster := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "kagent.dev/v1alpha3", "kind": "RemoteMCPServer",
+		"metadata": map[string]any{"name": "muster", "namespace": "kagent", "labels": map[string]any{agents.DiscoveryLabel: "disabled"}},
+		"spec":     map[string]any{"description": "Shared muster MCP gateway for platform agents", "url": "http://muster.agent-platform.svc.cluster.local:8090/mcp", "protocol": "STREAMABLE_HTTP"},
+	}}
 	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{
-		hrGVR: "HelmReleaseList", ociGVR: "OCIRepositoryList", agGVR: "AgentList", mcGVR: "ModelConfigList",
-	}, mc)
-	typed := kubefake.NewClientset()
-	client := kube.FromInterfaces(dyn, typed, typed.Discovery())
-	svc := agents.New(kube.NewServiceAccountProvider(client), embeddedChart{}, nil, agents.Config{DefaultNamespace: "kagent", Version: "test"}, nil)
+		tplGVR: "AgentTemplateList", rmsGVR: "RemoteMCPServerList", hGVR: "HarnessList", mcGVR: "ModelConfigList",
+	}, mc, h, muster)
+	client := kube.FromInterfaces(dyn, kubefake.NewClientset().Discovery())
+	svc := agents.New(kube.NewServiceAccountProvider(client), nil, agents.Config{DefaultNamespace: "kagent", Version: "test"}, nil)
 	return svc, dyn
 }
 
@@ -75,19 +77,28 @@ func do(t *testing.T, h http.Handler, method, path string, body any) (int, map[s
 	return rec.Code, out
 }
 
+func errMessage(body map[string]any) string {
+	e, _ := body["error"].(map[string]any)
+	msg, _ := e["message"].(string)
+	return msg
+}
+
 func TestRESTLifecycle(t *testing.T) {
-	svc, _ := newService(t)
+	svc, dyn := newService(t)
 	mux := http.NewServeMux()
 	NewREST(svc, nil).Register(mux)
 
 	code, info := do(t, mux, http.MethodGet, Prefix+"/info", nil)
 	assert.Equal(t, http.StatusOK, code)
 	assert.Equal(t, "test", info["version"])
+	assert.Equal(t, "kagent.dev/v1alpha3", info["apiVersions"].(map[string]any)["agentTemplate"])
+	assert.Equal(t, "muster", info["kagent"].(map[string]any)["musterServer"])
 
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, Prefix+"/openapi.yaml", nil))
 	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.Contains(t, rec.Body.String(), "x-mcp-tool: create_agent")
+	assert.Contains(t, rec.Body.String(), "AgentTemplate")
 
 	readOnly := []string{"preset:read-only"}
 	code, body := do(t, mux, http.MethodPost, Prefix+"/agents", map[string]any{"name": "sre", "modelConfig": "nope", "toolset": readOnly})
@@ -97,36 +108,46 @@ func TestRESTLifecycle(t *testing.T) {
 	code, body = do(t, mux, http.MethodPost, Prefix+"/agents", map[string]any{"name": "sre", "modelConfig": "default-model-config", "displayName": "SRE", "toolset": readOnly, "unknown": 1})
 	assert.Equal(t, http.StatusBadRequest, code, "unknown fields are rejected: %v", body)
 
-	// No toolset: 400 naming the presets. The removed toolNames: 400 with the reason.
+	// No toolset: 400 naming the presets. The removed arguments: 400 with the reason.
 	code, body = do(t, mux, http.MethodPost, Prefix+"/agents", map[string]any{"name": "sre", "modelConfig": "default-model-config"})
 	assert.Equal(t, http.StatusBadRequest, code, body)
-	msg := body["error"].(map[string]any)["message"].(string)
 	for _, want := range []string{"toolset is required", "preset:read-only", "preset:none", "preset:infrastructure", "preset:agent-platform", "preset:full"} {
-		assert.Contains(t, msg, want)
+		assert.Contains(t, errMessage(body), want)
 	}
-	code, body = do(t, mux, http.MethodPost, Prefix+"/agents", map[string]any{"name": "sre", "modelConfig": "default-model-config", "toolset": readOnly, "toolNames": []string{"x_a_b"}})
+	for field, want := range map[string]string{"toolNames": "toolNames never narrowed anything against muster", "runtime": "runtime is gone", "iconUrl": "iconUrl is gone"} {
+		code, body = do(t, mux, http.MethodPost, Prefix+"/agents", map[string]any{"name": "sre", "modelConfig": "default-model-config", "toolset": readOnly, field: "x"})
+		assert.Equal(t, http.StatusBadRequest, code, body)
+		assert.Contains(t, errMessage(body), want)
+	}
+	code, body = do(t, mux, http.MethodPost, Prefix+"/agents", map[string]any{"name": "sre", "modelConfig": "default-model-config", "toolset": readOnly, "harness": "codex"})
 	assert.Equal(t, http.StatusBadRequest, code, body)
-	assert.Contains(t, body["error"].(map[string]any)["message"], "toolNames never narrowed anything against muster")
+	assert.Contains(t, errMessage(body), "no Harness in namespace kagent admits")
+	code, body = do(t, mux, http.MethodPost, Prefix+"/agents", map[string]any{"name": "sre", "modelConfig": "default-model-config", "toolset": readOnly, "skills": map[string]any{"gitRefs": []map[string]any{{"url": "https://github.com/o/r", "ref": "main"}}}})
+	assert.Equal(t, http.StatusBadRequest, code, body)
+	assert.Contains(t, errMessage(body), "full git commit id")
 
 	code, body = do(t, mux, http.MethodPost, Prefix+"/agents/validate", map[string]any{"name": "sre", "modelConfig": "default-model-config"})
 	assert.Equal(t, http.StatusOK, code)
 	assert.Equal(t, false, body["valid"], "a dry run without a toolset is invalid: %v", body["errors"])
-	code, body = do(t, mux, http.MethodPost, Prefix+"/agents/validate", map[string]any{"name": "sre", "modelConfig": "default-model-config", "toolset": []string{}})
-	assert.Equal(t, http.StatusOK, code)
-	assert.Equal(t, false, body["valid"])
-	assert.Contains(t, body["errors"].([]any)[0], "preset:none")
 	code, body = do(t, mux, http.MethodPost, Prefix+"/agents/validate", map[string]any{"name": "sre", "modelConfig": "default-model-config", "toolset": readOnly})
 	assert.Equal(t, http.StatusOK, code)
 	assert.Equal(t, true, body["valid"], body["errors"])
-	assert.Equal(t, []any{"preset:read-only"}, body["manifests"].(map[string]any)["values"].(map[string]any)["toolset"])
+	manifests := body["manifests"].(map[string]any)
+	assert.Contains(t, manifests["agentTemplate"], "kind: AgentTemplate")
+	assert.Contains(t, manifests["toolsetCarrier"], "value: preset:read-only")
 
-	code, body = do(t, mux, http.MethodPost, Prefix+"/agents", map[string]any{"name": "sre", "modelConfig": "default-model-config", "displayName": "SRE", "toolset": readOnly})
+	code, body = do(t, mux, http.MethodPost, Prefix+"/agents", map[string]any{"name": "sre", "modelConfig": "default-model-config", "displayName": "SRE", "toolset": readOnly,
+		"skills": map[string]any{"gitRefs": []map[string]any{{"url": "https://github.com/giantswarm/agent-skills", "path": "runbooks", "ref": testCommit}}}})
 	require.Equal(t, http.StatusCreated, code, body)
-	assert.Equal(t, true, body["created"].(map[string]any)["helmRelease"])
-	assert.Equal(t, true, body["created"].(map[string]any)["ociRepository"])
-	assert.Equal(t, []any{"preset:read-only"}, body["agent"].(map[string]any)["toolset"])
-	_, implicit := body["agent"].(map[string]any)["implicitFullAccess"]
+	created := body["created"].(map[string]any)
+	assert.Equal(t, true, created["agentTemplate"])
+	assert.Equal(t, true, created["toolsetCarrier"])
+	agent := body["agent"].(map[string]any)
+	assert.Equal(t, []any{"preset:read-only"}, agent["toolset"])
+	assert.Equal(t, "kagent", agent["harness"])
+	_, implicit := agent["implicitFullAccess"]
 	assert.False(t, implicit)
+	assert.Equal(t, "progressing", body["status"].(map[string]any)["verdict"])
 
 	code, body = do(t, mux, http.MethodPost, Prefix+"/agents", map[string]any{"name": "sre", "modelConfig": "default-model-config", "toolset": readOnly})
 	assert.Equal(t, http.StatusConflict, code, body)
@@ -138,20 +159,22 @@ func TestRESTLifecycle(t *testing.T) {
 	code, body = do(t, mux, http.MethodGet, Prefix+"/agents/kagent/sre", nil)
 	assert.Equal(t, http.StatusOK, code)
 	assert.Equal(t, "SRE", body["displayName"])
-	assert.Equal(t, "helmrelease", body["managed"])
+	assert.Equal(t, "agent-manager", body["managed"])
 	assert.Equal(t, []any{"preset:read-only"}, body["toolset"])
+	assert.Equal(t, "muster-sre", body["toolsetCarrier"].(map[string]any)["name"])
 
 	code, body = do(t, mux, http.MethodPatch, Prefix+"/agents/kagent/sre", map[string]any{"description": "helps", "toolset": []string{"preset:read-only", "server:github"}})
 	assert.Equal(t, http.StatusOK, code, body)
-	assert.Equal(t, []any{"agent.description", "toolset"}, body["changed"])
+	assert.Equal(t, []any{"description", "toolset"}, body["changed"])
 	assert.Equal(t, []any{"preset:read-only", "server:github"}, body["after"].(map[string]any)["toolset"])
+	assert.Contains(t, body["note"], "new revision")
 	code, body = do(t, mux, http.MethodPatch, Prefix+"/agents/kagent/sre", map[string]any{"toolNames": []string{"x_a_b"}})
 	assert.Equal(t, http.StatusBadRequest, code, body)
-	assert.Contains(t, body["error"].(map[string]any)["message"], "toolNames never narrowed")
+	assert.Contains(t, errMessage(body), "toolNames never narrowed")
 	code, body = do(t, mux, http.MethodPatch, Prefix+"/agents/kagent/sre", map[string]any{"toolset": []string{}})
 	assert.Equal(t, http.StatusBadRequest, code, body)
-	assert.Contains(t, body["error"].(map[string]any)["message"], "preset:none")
-	code, body = do(t, mux, http.MethodPost, Prefix+"/agents/validate", map[string]any{"name": "sre", "update": true, "toolNames": []string{"x"}})
+	assert.Contains(t, errMessage(body), "preset:none")
+	code, body = do(t, mux, http.MethodPost, Prefix+"/agents/validate", map[string]any{"name": "sre", "update": true, "runtime": "python"})
 	assert.Equal(t, http.StatusBadRequest, code, body)
 
 	code, body = do(t, mux, http.MethodGet, Prefix+"/agents/kagent/sre/status", nil)
@@ -167,8 +190,10 @@ func TestRESTLifecycle(t *testing.T) {
 
 	code, body = do(t, mux, http.MethodDelete, Prefix+"/agents/kagent/sre", nil)
 	assert.Equal(t, http.StatusOK, code, body)
-	assert.Equal(t, true, body["helmReleaseDeleted"])
-	assert.Equal(t, true, body["ociRepositoryDeleted"])
+	assert.Equal(t, true, body["agentTemplateDeleted"])
+	assert.Equal(t, true, body["toolsetCarrierDeleted"])
+	_, err := dyn.Resource(rmsGVR).Namespace("kagent").Get(context.Background(), "muster-sre", metav1.GetOptions{})
+	assert.Error(t, err)
 
 	code, _ = do(t, mux, http.MethodGet, Prefix+"/agents/kagent/sre", nil)
 	assert.Equal(t, http.StatusNotFound, code)
@@ -228,14 +253,19 @@ func TestMCPToolsMirrorREST(t *testing.T) {
 	names := map[string]bool{}
 	for _, tool := range listed.Result.Tools {
 		names[tool.Name] = true
-		_, hasToolNames := tool.InputSchema.Properties["toolNames"]
-		assert.False(t, hasToolNames, "%s still declares toolNames", tool.Name)
+		for _, gone := range []string{"toolNames", "runtime", "iconUrl"} {
+			_, has := tool.InputSchema.Properties[gone]
+			assert.False(t, has, "%s still declares %s", tool.Name, gone)
+		}
 		switch tool.Name {
 		case ToolCreateAgent:
 			assert.Contains(t, tool.InputSchema.Required, "toolset")
 			assert.Contains(t, tool.InputSchema.Properties["toolset"].(map[string]any)["description"], "preset:none")
+			assert.Contains(t, tool.InputSchema.Properties, "harness")
+			assert.NotContains(t, tool.InputSchema.Required, "harness")
 		case ToolUpdateAgent, ToolValidateAgent:
 			assert.Contains(t, tool.InputSchema.Properties, "toolset")
+			assert.Contains(t, tool.InputSchema.Properties, "harness")
 			assert.NotContains(t, tool.InputSchema.Required, "toolset")
 		}
 		switch tool.Name {
@@ -261,12 +291,14 @@ func TestMCPToolsMirrorREST(t *testing.T) {
 	text, isErr := callTool(t, srv, ToolGetInfo, nil)
 	require.False(t, isErr, text)
 	assert.Contains(t, text, `"identity": "serviceAccount"`)
+	assert.Contains(t, text, `"agentTemplate": "kagent.dev/v1alpha3"`)
 
 	text, isErr = callTool(t, srv, ToolCreateAgent, map[string]any{"name": "sre", "modelConfig": "nope", "toolset": []string{"preset:read-only"}})
 	assert.True(t, isErr)
 	assert.True(t, strings.HasPrefix(text, "invalid_request:"), text)
 
-	// Refused without a toolset, naming the presets; toolNames is explained.
+	// Refused without a toolset, naming the presets; the removed arguments
+	// are explained.
 	text, isErr = callTool(t, srv, ToolCreateAgent, map[string]any{"name": "sre", "modelConfig": "default-model-config"})
 	assert.True(t, isErr)
 	for _, want := range []string{"invalid_request:", "toolset is required", "preset:read-only", "preset:none", "preset:infrastructure", "preset:agent-platform", "preset:full"} {
@@ -275,6 +307,9 @@ func TestMCPToolsMirrorREST(t *testing.T) {
 	text, isErr = callTool(t, srv, ToolCreateAgent, map[string]any{"name": "sre", "modelConfig": "default-model-config", "toolNames": []string{"x_a_b"}})
 	assert.True(t, isErr)
 	assert.Contains(t, text, "toolNames never narrowed anything against muster")
+	text, isErr = callTool(t, srv, ToolCreateAgent, map[string]any{"name": "sre", "modelConfig": "default-model-config", "toolset": []string{"preset:read-only"}, "runtime": "python"})
+	assert.True(t, isErr)
+	assert.Contains(t, text, "runtime is gone")
 	text, isErr = callTool(t, srv, ToolValidateAgent, map[string]any{"name": "sre", "modelConfig": "default-model-config", "toolset": []string{"toolset:shared"}})
 	require.False(t, isErr, text)
 	assert.Contains(t, text, `"valid": false`)
@@ -282,28 +317,34 @@ func TestMCPToolsMirrorREST(t *testing.T) {
 
 	text, isErr = callTool(t, srv, ToolCreateAgent, map[string]any{
 		"name": "sre", "modelConfig": "default-model-config", "displayName": "SRE",
-		"skills":  map[string]any{"gitRefs": []map[string]any{{"url": "https://github.com/giantswarm/agent-skills", "path": "runbooks", "ref": "main"}}},
+		"skills":  map[string]any{"gitRefs": []map[string]any{{"url": "https://github.com/giantswarm/agent-skills", "path": "runbooks", "ref": testCommit}}},
 		"toolset": []string{"preset:read-only", "workflow:incident-triage"},
 	})
 	require.False(t, isErr, text)
 	var created map[string]any
 	require.NoError(t, json.Unmarshal([]byte(text), &created))
-	assert.Equal(t, true, created["created"].(map[string]any)["helmRelease"])
+	assert.Equal(t, true, created["created"].(map[string]any)["agentTemplate"])
+	assert.Equal(t, true, created["created"].(map[string]any)["toolsetCarrier"])
 	assert.Equal(t, []any{"preset:read-only", "workflow:incident-triage"}, created["agent"].(map[string]any)["toolset"])
 
-	hr, err := dyn.Resource(hrGVR).Namespace("kagent").Get(context.Background(), "sre", metav1.GetOptions{})
+	tpl, err := dyn.Resource(tplGVR).Namespace("kagent").Get(context.Background(), "sre", metav1.GetOptions{})
 	require.NoError(t, err)
-	values, _, _ := unstructured.NestedMap(hr.Object, "spec", "values")
-	assert.Equal(t, map[string]any{"gitRefs": []any{map[string]any{"url": "https://github.com/giantswarm/agent-skills", "path": "runbooks", "ref": "main", "name": "runbooks"}}}, values["skills"])
-	assert.Equal(t, []any{"preset:read-only", "workflow:incident-triage"}, values["toolset"])
-	_, hasMuster := values["muster"]
-	assert.False(t, hasMuster, "never muster.toolNames")
+	assert.Equal(t, "kagent", tpl.GetLabels()[agents.HarnessLabel])
+	skills, _, _ := unstructured.NestedSlice(tpl.Object, "spec", "skills")
+	assert.Equal(t, []any{map[string]any{"name": "runbooks", "source": map[string]any{"git": map[string]any{"url": "https://github.com/giantswarm/agent-skills", "commit": testCommit}, "path": "runbooks"}}}, skills)
+	tools, _, _ := unstructured.NestedSlice(tpl.Object, "spec", "tools")
+	assert.Equal(t, []any{map[string]any{"mcp": map[string]any{"server": map[string]any{"kind": "RemoteMCPServer", "name": "muster-sre"}}}}, tools)
+	c, err := dyn.Resource(rmsGVR).Namespace("kagent").Get(context.Background(), "muster-sre", metav1.GetOptions{})
+	require.NoError(t, err)
+	headers, _, _ := unstructured.NestedSlice(c.Object, "spec", "headersFrom")
+	assert.Equal(t, []any{map[string]any{"name": "X-Muster-Toolset", "value": "preset:read-only,workflow:incident-triage"}}, headers)
 
 	// update: an explicit "" clears, absent leaves.
 	text, isErr = callTool(t, srv, ToolUpdateAgent, map[string]any{"name": "sre", "displayName": "", "description": "helps"})
 	require.False(t, isErr, text)
-	assert.Contains(t, text, `"agent.description"`)
-	assert.Contains(t, text, `"agent.displayName"`)
+	assert.Contains(t, text, `"description"`)
+	assert.Contains(t, text, `"displayName"`)
+	assert.Contains(t, text, `"note"`)
 
 	// update replaces the toolset as a whole; [] and toolNames are refused.
 	text, isErr = callTool(t, srv, ToolUpdateAgent, map[string]any{"name": "sre", "toolset": []string{"preset:none"}})
@@ -311,6 +352,7 @@ func TestMCPToolsMirrorREST(t *testing.T) {
 	assert.Contains(t, text, `"changed": [
     "toolset"
   ]`)
+	assert.NotContains(t, text, `"note"`, "a toolset change is no new revision")
 	text, isErr = callTool(t, srv, ToolUpdateAgent, map[string]any{"name": "sre", "toolset": []string{}})
 	assert.True(t, isErr)
 	assert.Contains(t, text, "preset:none")
@@ -323,7 +365,7 @@ func TestMCPToolsMirrorREST(t *testing.T) {
     "preset:none"
   ]`)
 
-	text, isErr = callTool(t, srv, ToolValidateAgent, map[string]any{"name": "sre", "update": true, "runtime": "rust"})
+	text, isErr = callTool(t, srv, ToolValidateAgent, map[string]any{"name": "sre", "update": true, "harness": "codex"})
 	require.False(t, isErr, text)
 	assert.Contains(t, text, `"valid": false`)
 
@@ -337,7 +379,7 @@ func TestMCPToolsMirrorREST(t *testing.T) {
 
 	text, isErr = callTool(t, srv, ToolDeleteAgent, map[string]any{"name": "sre"})
 	require.False(t, isErr, text)
-	assert.Contains(t, text, `"ociRepositoryDeleted": true`)
+	assert.Contains(t, text, `"toolsetCarrierDeleted": true`)
 
 	text, isErr = callTool(t, srv, ToolGetAgent, map[string]any{"name": "sre"})
 	assert.True(t, isErr)

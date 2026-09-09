@@ -6,22 +6,18 @@ import (
 	"strings"
 )
 
-// A toolset is the list of selectors an agent declares — the chart's top-level
-// `toolset` value, rendered by the agent chart as the X-Muster-Toolset header
-// on the agent's muster tool entry — that bounds which of the gateway's tools
-// the agent's meta-tools can see and call. agent-manager validates the inline
-// grammar and composes the list exactly as given; resolving a toolset to tools
-// is muster's job, per caller. It is composition, not authorization: the
-// invoking human's identity and the backends' own authorization stay the
-// boundary.
+// A toolset is the list of selectors an agent declares — agent-manager
+// argument `toolset`, header `X-Muster-Toolset` on the agent's toolset carrier
+// (its per-agent copy of the platform's muster RemoteMCPServer) — that bounds
+// which of the gateway's tools the agent's meta-tools can see and call.
+// agent-manager validates the inline grammar and composes the list exactly as
+// given; resolving a toolset to tools is muster's job, per request and per
+// caller. It is composition, not authorization: the invoking human's identity
+// and the backends' own authorization stay the boundary.
 
 const (
-	// ToolsetValuesKey is the agent chart's top-level value carrying the
-	// toolset (never `muster.toolNames`, which only filters muster's
-	// meta-tools).
-	ToolsetValuesKey = "toolset"
-	// ToolsetHeader is the header the chart renders for the muster tool entry
-	// (Agent.spec.declarative.tools[].headersFrom[]).
+	// ToolsetHeader is the header the toolset carrier sends on every MCP call
+	// (RemoteMCPServer.spec.headersFrom[]).
 	ToolsetHeader = "X-Muster-Toolset"
 	// MaxToolsetSelectors is the inline cap; a longer list belongs in a preset.
 	MaxToolsetSelectors = 32
@@ -41,8 +37,13 @@ const (
 	selectorPrefixPresetOnly = "label:"
 )
 
-// toolNamesRemoved explains the removed argument to a caller still passing it.
-const toolNamesRemoved = `toolNames never narrowed anything against muster (kagent filters muster's meta-tools only); declare a toolset instead, e.g. toolset: ["preset:read-only"]`
+// What the removed arguments are told.
+const (
+	toolNamesRemoved         = `toolNames never narrowed anything against muster (kagent filters muster's meta-tools only); declare a toolset instead, e.g. toolset: ["preset:read-only"]`
+	runtimeRemoved           = `runtime is gone: on kagent main the Harness is the runtime — pass harness: <name> (a kagent.dev Harness of the namespace; the installation default applies when omitted)`
+	iconURLRemoved           = `iconUrl is gone: a kagent.dev/v1alpha3 AgentTemplate has no icon field (capabilities.iconUrl is false)`
+	gitAuthSecretNameRemoved = `skills.gitAuthSecretName is gone: kagent main reads skill sources anonymously from immutable references (a git commit or an OCI digest); private skill repositories are not supported (capabilities.skillGitAuthSecret is false)`
+)
 
 // ValidateToolset checks a declared toolset against the inline grammar:
 // non-empty, at most MaxToolsetSelectors selectors, each
@@ -91,14 +92,8 @@ func presetSelectors() []string {
 	return out
 }
 
-// rejectToolNames refuses the removed `toolNames` argument with the reason.
-// JSON null counts as absent.
-func rejectToolNames(raw json.RawMessage) error {
-	if len(raw) == 0 || string(raw) == "null" {
-		return nil
-	}
-	return invalidf("%s", toolNamesRemoved)
-}
+// ToolsetHeaderValue joins selectors the way the header carries them.
+func ToolsetHeaderValue(selectors []string) string { return strings.Join(selectors, ",") }
 
 // ParseToolsetHeader splits a rendered X-Muster-Toolset header value back into
 // selectors (comma-separated, whitespace around selectors trimmed).
@@ -112,17 +107,46 @@ func ParseToolsetHeader(value string) []string {
 	return out
 }
 
-// stringSlice converts a values list to strings; nil when v is not a list.
-func stringSlice(v any) []string {
-	items, ok := v.([]any)
-	if !ok {
-		return nil
-	}
-	out := make([]string, 0, len(items))
-	for _, item := range items {
-		if s, ok := item.(string); ok {
-			out = append(out, s)
+// removedArgument pairs a removed argument's raw value with its explanation.
+type removedArgument struct {
+	raw    json.RawMessage
+	reason string
+}
+
+// rejectRemoved refuses the first removed argument a request still carries,
+// with the reason it is gone. JSON null counts as absent.
+func rejectRemoved(args ...removedArgument) error {
+	for _, a := range args {
+		if len(a.raw) == 0 || string(a.raw) == "null" {
+			continue
 		}
+		return invalidf("%s", a.reason)
+	}
+	return nil
+}
+
+// removed lists the removed arguments of a create.
+func (s Spec) removed() []removedArgument {
+	out := []removedArgument{
+		{s.RemovedToolNames, toolNamesRemoved},
+		{s.RemovedRuntime, runtimeRemoved},
+		{s.RemovedIconURL, iconURLRemoved},
+	}
+	if s.Skills != nil {
+		out = append(out, removedArgument{s.Skills.RemovedGitAuthSecretName, gitAuthSecretNameRemoved})
+	}
+	return out
+}
+
+// removed lists the removed arguments of an update.
+func (u Update) removed() []removedArgument {
+	out := []removedArgument{
+		{u.RemovedToolNames, toolNamesRemoved},
+		{u.RemovedRuntime, runtimeRemoved},
+		{u.RemovedIconURL, iconURLRemoved},
+	}
+	if u.Skills != nil {
+		out = append(out, removedArgument{u.Skills.RemovedGitAuthSecretName, gitAuthSecretNameRemoved})
 	}
 	return out
 }

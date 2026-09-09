@@ -37,44 +37,28 @@ global: {}  # @schema type: object; additionalProperties: true
 
 kagent:
   # -- Namespace agents are created in and listed from by default — the
-  # namespace kagent watches and the platform admin provisions ModelConfigs
-  # into. The Role for HelmReleases, OCIRepositories, Agents, ModelConfigs,
-  # Deployments, pods and events is created here.
+  # namespace the kagent controller watches, the platform admin provisions
+  # ModelConfigs into and the connectivity chart renders the `muster`
+  # RemoteMCPServer and the Harnesses into. The Role for AgentTemplates,
+  # RemoteMCPServers, Harnesses and ModelConfigs is created here.
   namespace: kagent
   # -- Additional namespaces agents may live in (multi-tenant installs). Each
-  # gets the same Role; requests naming any other namespace are refused.
+  # gets the same Role and needs its own platform `muster` RemoteMCPServer;
+  # requests naming any other namespace are refused.
   additionalNamespaces: []
-  # -- kagent.dev API version for Agents and ModelConfigs; `auto` discovers
-  # the server's preferred version.
+  # -- kagent.dev API version for AgentTemplates, RemoteMCPServers, Harnesses
+  # and ModelConfigs; `auto` discovers the version serving agenttemplates
+  # (default v1alpha3).
   apiVersion: auto
-
-agentChart:
-  # -- OCI URL of the `agent` chart every agent renders from. Written into the
-  # shared per-namespace OCIRepository, and read at run time for the chart's
-  # values.schema.json that validates every create/update before it is
-  # applied (the pod needs egress to this registry; the embedded copy of the
-  # schema is the offline fallback).
-  ociUrl: oci://gsoci.azurecr.io/charts/giantswarm/agent
-  # -- Semver range the OCIRepository tracks. `x.x.x` follows every published
-  # release, the platform convention for agents.
-  semver: x.x.x
-  # -- How often the registry is re-read for the latest version and schema.
-  refresh: 10m
-
-flux:
-  # -- HelmRelease.spec.interval of every composed agent.
-  helmReleaseInterval: 10m
-  # -- OCIRepository.spec.interval of the shared chart source.
-  ociRepositoryInterval: 30m
-  # -- HelmRelease.spec.serviceAccountName, required by a Flux multi-tenancy
-  # admission policy in tenant namespaces; empty omits it.
-  helmReleaseServiceAccount: ""
-  # -- helm.toolkit.fluxcd.io API version composed into HelmReleases; `auto`
-  # discovers it.
-  helmReleaseApiVersion: auto
-  # -- source.toolkit.fluxcd.io API version composed into OCIRepositories;
-  # `auto` discovers it.
-  ociRepositoryApiVersion: auto
+  # -- Name of the platform's muster RemoteMCPServer in every managed
+  # namespace: the server every agent binds and every per-agent toolset
+  # carrier (`<musterServer>-<agent>`, headersFrom X-Muster-Toolset) is copied
+  # from. The connectivity chart renders it.
+  musterServer: muster
+  # -- Harness an agent runs on when the request names none; the AgentTemplate
+  # is labelled `kagent.dev/harness: <name>`, which the platform's Harnesses
+  # select on.
+  defaultHarness: kagent
 
 skills:
   # -- GitHub repositories whose SKILL.md files list_skills offers (the same
@@ -162,8 +146,8 @@ oauth:
   allowPublicClientRegistration: false
   downstream:
     # -- Call the Kubernetes API as the caller: everything a request does
-    # (HelmReleases and OCIRepositories, the Agents, ModelConfigs,
-    # Deployments, pods and events it reads) presents the caller's IdP token,
+    # (the AgentTemplates and RemoteMCPServers it writes, the Harnesses and
+    # ModelConfigs it reads) presents the caller's IdP token,
     # so the caller's RBAC governs — the apiserver must trust the IdP and the
     # token's audience (a Dex install lists that audience in
     # `muster.mcpServer.auth.requiredAudiences`; a Google install's client id
@@ -226,9 +210,9 @@ networkPolicy:
   ingressNamespaces: []
   # -- Allow egress to the Kubernetes API server.
   allowKubeAPI: true
-  # -- Allow egress on 443 to every destination: the chart registry (schema
-  # and version) and GitHub (skills). Vanilla NetworkPolicy cannot select by
-  # name; narrow with egressCIDRs instead when the addresses are known.
+  # -- Allow egress on 443 to every destination: GitHub (skill discovery).
+  # Vanilla NetworkPolicy cannot select by name; narrow with egressCIDRs
+  # instead when the addresses are known.
   allowInternet: true
   # -- Extra egress CIDRs.
   egressCIDRs: []
@@ -243,10 +227,10 @@ serviceAccount:
 
 rbac:
   # -- Create the Role/RoleBinding in `kagent.namespace` (and every
-  # `kagent.additionalNamespaces` entry): HelmReleases and OCIRepositories
-  # read/write; Agents, ModelConfigs, Deployments, pods and events read — the
-  # ServiceAccount's own permissions. Ignored with `oauth.downstream.enabled`:
-  # the ServiceAccount then gets no RBAC at all, the caller's RBAC governs.
+  # `kagent.additionalNamespaces` entry): AgentTemplates and RemoteMCPServers
+  # read/write; Harnesses and ModelConfigs read — the ServiceAccount's own
+  # permissions. Ignored with `oauth.downstream.enabled`: the ServiceAccount
+  # then gets no RBAC at all, the caller's RBAC governs.
   create: true
 
 # -- Annotations on the pod.

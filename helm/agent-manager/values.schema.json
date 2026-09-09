@@ -8,24 +8,6 @@
             "description": "Affinity.",
             "additionalProperties": true
         },
-        "agentChart": {
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-                "ociUrl": {
-                    "type": "string",
-                    "description": "OCI URL of the `agent` chart every agent renders from. Written into the shared per-namespace OCIRepository, and read at run time for the chart's values.schema.json that validates every create/update before it is applied (the pod needs egress to this registry; the embedded copy of the schema is the offline fallback)."
-                },
-                "refresh": {
-                    "type": "string",
-                    "description": "How often the registry is re-read for the latest version and schema."
-                },
-                "semver": {
-                    "type": "string",
-                    "description": "Semver range the OCIRepository tracks. `x.x.x` follows every published release, the platform convention for agents."
-                }
-            }
-        },
         "baseDomain": {
             "type": "string"
         },
@@ -78,32 +60,6 @@
                         "type": "object",
                         "additionalProperties": true
                     }
-                }
-            }
-        },
-        "flux": {
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-                "helmReleaseApiVersion": {
-                    "type": "string",
-                    "description": "helm.toolkit.fluxcd.io API version composed into HelmReleases; `auto` discovers it."
-                },
-                "helmReleaseInterval": {
-                    "type": "string",
-                    "description": "HelmRelease.spec.interval of every composed agent."
-                },
-                "helmReleaseServiceAccount": {
-                    "type": "string",
-                    "description": "HelmRelease.spec.serviceAccountName, required by a Flux multi-tenancy admission policy in tenant namespaces; empty omits it."
-                },
-                "ociRepositoryApiVersion": {
-                    "type": "string",
-                    "description": "source.toolkit.fluxcd.io API version composed into OCIRepositories; `auto` discovers it."
-                },
-                "ociRepositoryInterval": {
-                    "type": "string",
-                    "description": "OCIRepository.spec.interval of the shared chart source."
                 }
             }
         },
@@ -202,15 +158,23 @@
             "properties": {
                 "additionalNamespaces": {
                     "type": "array",
-                    "description": "Additional namespaces agents may live in (multi-tenant installs). Each gets the same Role; requests naming any other namespace are refused."
+                    "description": "Additional namespaces agents may live in (multi-tenant installs). Each gets the same Role and needs its own platform `muster` RemoteMCPServer; requests naming any other namespace are refused."
                 },
                 "apiVersion": {
                     "type": "string",
-                    "description": "kagent.dev API version for Agents and ModelConfigs; `auto` discovers the server's preferred version."
+                    "description": "kagent.dev API version for AgentTemplates, RemoteMCPServers, Harnesses and ModelConfigs; `auto` discovers the version serving agenttemplates (default v1alpha3)."
+                },
+                "defaultHarness": {
+                    "type": "string",
+                    "description": "Harness an agent runs on when the request names none; the AgentTemplate is labelled `kagent.dev/harness: <name>`, which the platform's Harnesses select on."
+                },
+                "musterServer": {
+                    "type": "string",
+                    "description": "Name of the platform's muster RemoteMCPServer in every managed namespace: the server every agent binds and every per-agent toolset carrier (`<musterServer>-<agent>`, headersFrom X-Muster-Toolset) is copied from. The connectivity chart renders it."
                 },
                 "namespace": {
                     "type": "string",
-                    "description": "Namespace agents are created in and listed from by default — the namespace kagent watches and the platform admin provisions ModelConfigs into. The Role for HelmReleases, OCIRepositories, Agents, ModelConfigs, Deployments, pods and events is created here."
+                    "description": "Namespace agents are created in and listed from by default — the namespace the kagent controller watches, the platform admin provisions ModelConfigs into and the connectivity chart renders the `muster` RemoteMCPServer and the Harnesses into. The Role for AgentTemplates, RemoteMCPServers, Harnesses and ModelConfigs is created here."
                 }
             }
         },
@@ -294,7 +258,7 @@
             "properties": {
                 "allowInternet": {
                     "type": "boolean",
-                    "description": "Allow egress on 443 to every destination: the chart registry (schema and version) and GitHub (skills). Vanilla NetworkPolicy cannot select by name; narrow with egressCIDRs instead when the addresses are known."
+                    "description": "Allow egress on 443 to every destination: GitHub (skill discovery). Vanilla NetworkPolicy cannot select by name; narrow with egressCIDRs instead when the addresses are known."
                 },
                 "allowKubeAPI": {
                     "type": "boolean",
@@ -372,7 +336,7 @@
                     "properties": {
                         "enabled": {
                             "type": "boolean",
-                            "description": "Call the Kubernetes API as the caller: everything a request does (HelmReleases and OCIRepositories, the Agents, ModelConfigs, Deployments, pods and events it reads) presents the caller's IdP token, so the caller's RBAC governs — the apiserver must trust the IdP and the token's audience (a Dex install lists that audience in `muster.mcpServer.auth.requiredAudiences`; a Google install's client id permissions: the chart renders none of its Roles (`rbac.create` is moot) and the token stays mounted only for the in-cluster API address and CA plus API discovery at startup, which every authenticated principal may read. agent-manager has no background work, so nothing is lost: a request without a token is refused with 401 instead of running as the ServiceAccount."
+                            "description": "Call the Kubernetes API as the caller: everything a request does (the AgentTemplates and RemoteMCPServers it writes, the Harnesses and ModelConfigs it reads) presents the caller's IdP token, so the caller's RBAC governs — the apiserver must trust the IdP and the token's audience (a Dex install lists that audience in `muster.mcpServer.auth.requiredAudiences`; a Google install's client id permissions: the chart renders none of its Roles (`rbac.create` is moot) and the token stays mounted only for the in-cluster API address and CA plus API discovery at startup, which every authenticated principal may read. agent-manager has no background work, so nothing is lost: a request without a token is refused with 401 instead of running as the ServiceAccount."
                         }
                     }
                 },
@@ -465,7 +429,7 @@
             "properties": {
                 "create": {
                     "type": "boolean",
-                    "description": "Create the Role/RoleBinding in `kagent.namespace` (and every `kagent.additionalNamespaces` entry): HelmReleases and OCIRepositories read/write; Agents, ModelConfigs, Deployments, pods and events read — the ServiceAccount's own permissions. Ignored with `oauth.downstream.enabled`: the ServiceAccount then gets no RBAC at all, the caller's RBAC governs."
+                    "description": "Create the Role/RoleBinding in `kagent.namespace` (and every `kagent.additionalNamespaces` entry): AgentTemplates and RemoteMCPServers read/write; Harnesses and ModelConfigs read — the ServiceAccount's own permissions. Ignored with `oauth.downstream.enabled`: the ServiceAccount then gets no RBAC at all, the caller's RBAC governs."
                 }
             }
         },

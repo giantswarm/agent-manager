@@ -11,7 +11,9 @@ make helm-docs          # regenerate helm/agent-manager/README.md
 
 ## Layout
 
-- `cmd/` — cobra CLI (`serve`, `version`); every flag has an environment variable.
+- `cmd/` — cobra CLI (`serve`, `version`); every flag has an environment
+  variable. The flags of the retired Flux/agent-chart composition still parse
+  as deprecated no-ops so an older chart release keeps starting the binary.
 - `internal/kube` — the Kubernetes clients behind the `Client` / `Provider`
   interfaces: `CallerProvider` builds one client set per caller token
   (`rest.AnonymousClientConfig` + the bearer the OAuth layer put on the
@@ -20,17 +22,19 @@ make helm-docs          # regenerate helm/agent-manager/README.md
 - `internal/identity` — the authenticated caller on the request context
   (subject, email, groups, source) and the IdP token downstream OAuth presents
   to the apiserver.
-- `internal/chart` — the agent chart: a minimal OCI distribution client
-  (anonymous bearer challenge, tag list, one file out of the chart archive), the
-  resolver that tracks the latest in-range version and its `values.schema.json`,
-  and the embedded copy of the schema as the offline fallback.
-- `internal/agents` — the domain: `compose.go` mirrors the portal's
-  `composeManifests.ts` (values, HelmRelease, OCIRepository), `validate.go`
-  runs the chart schema, `service.go` is list/get/create/update/delete plus
-  model configs, `status.go` folds Agent, HelmRelease, Deployment, pods and
-  events into one verdict.
+- `internal/agents` — the domain: `compose.go` composes the
+  `kagent.dev/v1alpha3` AgentTemplate and the toolset carrier (the per-agent
+  copy of the platform's muster RemoteMCPServer with the `X-Muster-Toolset`
+  header), maps skills onto immutable sources and reads a served template back
+  into its declaration; `harness.go` checks a Harness admits the template the
+  way kagent's controller pairs them; `toolset.go` is the toolset grammar;
+  `service.go` is list/get/create/update/delete plus model configs;
+  `status.go` folds `status.harnesses[]` and the carrier into one verdict.
+  `testdata/` holds the golden manifests (`UPDATE_GOLDEN=1 go test ./internal/agents`
+  rewrites them).
 - `internal/skills` — SKILL.md discovery in GitHub repositories, the portal
-  backend's `/agent-skills` semantics, with a per-repository cache.
+  backend's `/agent-skills` semantics, resolving the branch to the commit a
+  template pins, with a per-repository cache.
 - `internal/api` — REST handlers and MCP tools over the service.
 - `internal/server` — the HTTP listener; `oauth.go` is the mcp-oauth resource
   server (Dex or Google provider, forwarded-id_token validation through
@@ -42,7 +46,7 @@ make helm-docs          # regenerate helm/agent-manager/README.md
 - `api/openapi.yaml` — the REST contract; served at `/api/v1/openapi.yaml`.
 - `helm/agent-manager` — the chart.
 
-## Local loop against the agentlab kind cluster
+## Local loop against a kagent main kind cluster
 
 ```sh
 go build -o agent-manager .
@@ -52,11 +56,14 @@ go build -o agent-manager .
 
 curl -s localhost:18080/api/v1/info
 curl -s localhost:18080/api/v1/modelconfigs
-curl -s -X POST localhost:18080/api/v1/agents/validate -d '{"name":"probe","modelConfig":"default-model-config","displayName":"Probe"}'
-curl -s -X POST localhost:18080/api/v1/agents -d '{"name":"probe","modelConfig":"default-model-config","displayName":"Probe"}'
+curl -s -X POST localhost:18080/api/v1/agents/validate -d '{"name":"probe","modelConfig":"default-model-config","toolset":["preset:read-only"],"displayName":"Probe"}'
+curl -s -X POST localhost:18080/api/v1/agents -d '{"name":"probe","modelConfig":"default-model-config","toolset":["preset:read-only"],"displayName":"Probe"}'
 curl -s localhost:18080/api/v1/agents/kagent/probe/status
 curl -s -X DELETE localhost:18080/api/v1/agents/kagent/probe
 ```
+
+`validate` returns the composed manifests; `kubectl apply --dry-run=server -f`
+on them validates the composition against the cluster's CRDs without writing.
 
 ## In the lab (agentlab)
 
@@ -70,8 +77,9 @@ helm upgrade --install agent-manager helm/agent-manager -n agent-platform \
 ```
 
 The lab muster then lists the tools as `x_agent-manager_*`; the proof is a
-`create_agent` → `get_agent_status` (ready) → `delete_agent` round trip
-through `call_tool` while another agent keeps the shared OCIRepository alive.
+`create_agent` → `get_agent_status` (ready on the kagent Harness) →
+`update_agent` → `delete_agent` round trip through `call_tool`, the
+AgentTemplate binding its `muster-<agent>` carrier.
 
 With the `agent-platform` meta chart the lab runs agent-manager as the
 caller (`oauth.enabled` + `oauth.downstream.enabled` from the chart's
@@ -85,3 +93,7 @@ in `agentlab.yaml`, then `agentlab platform`) and run
 the apiserver as `User "oidc:viewer@lab.local"`, and
 `kubectl auth can-i --list --as=system:serviceaccount:agent-platform:agent-manager -n kagent`
 shows nothing beyond discovery.
+
+The POC lab (`~/.local/state/kagent-main-poc`) runs kagent main from the fork
+with the connectivity chart of `agent-platform` branch `poc/kagent-main`; the
+dev image is swapped in through `platform.devImages.agent-manager`.

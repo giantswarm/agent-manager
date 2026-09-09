@@ -45,7 +45,7 @@ spec:
         - protocol: TCP
           port: 6443
     {{- else if .Values.networkPolicy.allowInternet }}
-    # The chart registry (versions, values schema) and GitHub (skills).
+    # GitHub (skill discovery).
     - to:
         - ipBlock:
             cidr: 0.0.0.0/0

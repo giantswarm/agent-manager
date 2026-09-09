@@ -1,9 +1,12 @@
 // Package skills discovers agent skills in git repositories the way the
 // portal backend's /agent-skills endpoint does: every SKILL.md in a GitHub
 // repository is one skill, its frontmatter name and description describe it,
-// and its directory is the kagent spec.skills.gitRefs entry (url + path + ref)
-// an agent mounts. Results are cached per repository for a short time so a
-// meta agent listing skills repeatedly does not exhaust GitHub's rate limit.
+// and its directory is the skill an agent mounts (url + path). kagent main
+// pins skills to immutable sources, so the branch that was read is resolved
+// to its commit and reported next to it: the gitRefs entry a listing yields
+// (ref = commit) feeds create_agent as is. Results are cached per repository
+// for a short time so a meta agent listing skills repeatedly does not exhaust
+// GitHub's rate limit.
 package skills
 
 import (
@@ -33,18 +36,26 @@ type Skill struct {
 	RepoURL string `json:"repoUrl"`
 	// Path is the skill directory; "" at the repository root.
 	Path string `json:"path"`
-	// Ref is the git ref the skill was read from.
+	// Ref is the git ref (branch) the skill was read from.
 	Ref string `json:"ref"`
+	// Commit is the commit Ref resolved to when it was read: the immutable
+	// reference an AgentTemplate pins the skill to.
+	Commit string `json:"commit,omitempty"`
 }
 
-// GitRef is the skill as a chart skills.gitRefs entry.
+// GitRef is the skill as a create_agent skills.gitRefs entry, pinned to the
+// commit it was read at (the branch when the commit is unknown).
 func (s Skill) GitRef() map[string]string {
 	name := s.Name
 	if p := strings.Trim(s.Path, "/"); p != "" {
 		parts := strings.Split(p, "/")
 		name = parts[len(parts)-1]
 	}
-	out := map[string]string{"url": s.RepoURL, "name": name, "ref": s.Ref}
+	ref := s.Commit
+	if ref == "" {
+		ref = s.Ref
+	}
+	out := map[string]string{"url": s.RepoURL, "name": name, "ref": ref}
 	if s.Path != "" {
 		out["path"] = s.Path
 	}
@@ -53,9 +64,11 @@ func (s Skill) GitRef() map[string]string {
 
 // Repository is the discovery result of one configured repository.
 type Repository struct {
-	RepoURL string  `json:"repoUrl"`
-	Ref     string  `json:"ref,omitempty"`
-	Skills  []Skill `json:"skills"`
+	RepoURL string `json:"repoUrl"`
+	Ref     string `json:"ref,omitempty"`
+	// Commit is what Ref resolved to when the repository was read.
+	Commit string  `json:"commit,omitempty"`
+	Skills []Skill `json:"skills"`
 	// Truncated is true when GitHub capped the tree or a SKILL.md read failed:
 	// some skills may be missing.
 	Truncated bool `json:"truncated"`
@@ -206,6 +219,13 @@ func (d *Discoverer) read(ctx context.Context, repoURL, ref string) (Repository,
 			branch = "main"
 		}
 	}
+	// The commit the ref points at right now: what a template pins.
+	var head struct {
+		SHA string `json:"sha"`
+	}
+	if err := d.getJSON(ctx, fmt.Sprintf("%s/repos/%s/%s/commits/%s", d.cfg.APIURL, owner, name, url.PathEscape(branch)), &head); err != nil {
+		return Repository{}, err
+	}
 	var tree struct {
 		Tree []struct {
 			Path string `json:"path"`
@@ -213,15 +233,17 @@ func (d *Discoverer) read(ctx context.Context, repoURL, ref string) (Repository,
 		} `json:"tree"`
 		Truncated bool `json:"truncated"`
 	}
-	if err := d.getJSON(ctx, fmt.Sprintf("%s/repos/%s/%s/git/trees/%s?recursive=1", d.cfg.APIURL, owner, name, url.PathEscape(branch)), &tree); err != nil {
+	// Read the tree at the commit, not the branch: the two stay consistent
+	// even when the branch moves between the calls.
+	if err := d.getJSON(ctx, fmt.Sprintf("%s/repos/%s/%s/git/trees/%s?recursive=1", d.cfg.APIURL, owner, name, url.PathEscape(head.SHA)), &tree); err != nil {
 		return Repository{}, err
 	}
-	repo := Repository{RepoURL: canonical, Ref: branch, Skills: []Skill{}, Truncated: tree.Truncated}
+	repo := Repository{RepoURL: canonical, Ref: branch, Commit: head.SHA, Skills: []Skill{}, Truncated: tree.Truncated}
 	for _, entry := range tree.Tree {
 		if entry.Type != "blob" || !isSkillFile(entry.Path) {
 			continue
 		}
-		content, err := d.raw(ctx, owner, name, entry.Path, branch)
+		content, err := d.raw(ctx, owner, name, entry.Path, head.SHA)
 		if err != nil {
 			d.log.Warn("skipping unreadable SKILL.md", "repository", canonical, "path", entry.Path, "error", err)
 			repo.Truncated = true
@@ -244,6 +266,7 @@ func (d *Discoverer) read(ctx context.Context, repoURL, ref string) (Repository,
 			RepoURL:     canonical,
 			Path:        dir,
 			Ref:         branch,
+			Commit:      head.SHA,
 		})
 	}
 	sort.Slice(repo.Skills, func(i, j int) bool {
