@@ -39,10 +39,10 @@ const (
 
 // What the removed arguments are told.
 const (
-	toolNamesRemoved         = `toolNames never narrowed anything against muster (kagent filters muster's meta-tools only); declare a toolset instead, e.g. toolset: ["preset:read-only"]`
-	runtimeRemoved           = `runtime is gone: on kagent main the Harness is the runtime — pass harness: <name> (a kagent.dev Harness of the namespace; the installation default applies when omitted)`
-	iconURLRemoved           = `iconUrl is gone: a kagent.dev/v1alpha3 AgentTemplate has no icon field (capabilities.iconUrl is false)`
-	gitAuthSecretNameRemoved = `skills.gitAuthSecretName is gone: kagent main reads skill sources anonymously from immutable references (a git commit or an OCI digest); private skill repositories are not supported (capabilities.skillGitAuthSecret is false)`
+	toolNamesRemoved  = `toolNames never narrowed anything against muster (kagent filters muster's meta-tools only); declare a toolset instead, e.g. toolset: ["preset:read-only"]`
+	runtimeRemoved    = `runtime is gone: on kagent main the Harness is the runtime — pass harness: <name> (a kagent.dev Harness of the namespace; the installation default applies when omitted)`
+	iconURLRemoved    = `iconUrl is gone: a kagent.dev/v1alpha3 AgentTemplate has no icon field (capabilities.iconUrl is false)`
+	gitAuthRefRemoved = `skills.gitAuthSecretName is gone: kagent main reads skill sources anonymously from immutable references (a git commit or an OCI digest); private skill repositories are not supported (capabilities.skillGitAuthSecret is false)`
 )
 
 // ValidateToolset checks a declared toolset against the inline grammar:
@@ -133,7 +133,7 @@ func (s Spec) removed() []removedArgument {
 		{s.RemovedIconURL, iconURLRemoved},
 	}
 	if s.Skills != nil {
-		out = append(out, removedArgument{s.Skills.RemovedGitAuthSecretName, gitAuthSecretNameRemoved})
+		out = append(out, removedArgument{s.Skills.RemovedGitAuthSecretName, gitAuthRefRemoved})
 	}
 	return out
 }
@@ -146,7 +146,7 @@ func (u Update) removed() []removedArgument {
 		{u.RemovedIconURL, iconURLRemoved},
 	}
 	if u.Skills != nil {
-		out = append(out, removedArgument{u.Skills.RemovedGitAuthSecretName, gitAuthSecretNameRemoved})
+		out = append(out, removedArgument{u.Skills.RemovedGitAuthSecretName, gitAuthRefRemoved})
 	}
 	return out
 }

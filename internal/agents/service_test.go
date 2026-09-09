@@ -91,9 +91,9 @@ func harness(ns, name string, selector map[string]any) *unstructured.Unstructure
 		"apiVersion": DefaultAPIVersion, "kind": "Harness",
 		"metadata": map[string]any{"name": name, "namespace": ns},
 		"spec": map[string]any{
-			name:       map[string]any{},
-			"workload": map[string]any{"image": "localhost:5001/kagent-dev/kagent/golang-adk@" + testDigest},
-			"substrate": map[string]any{"workerPoolRef": map[string]any{"name": "kagent-default"}, "snapshotPolicy": map[string]any{"location": "s3://ate-snapshots/" + name}},
+			name:                    map[string]any{},
+			"workload":              map[string]any{"image": "localhost:5001/kagent-dev/kagent/golang-adk@" + testDigest},
+			"substrate":             map[string]any{"workerPoolRef": map[string]any{"name": "kagent-default"}, "snapshotPolicy": map[string]any{"location": "s3://ate-snapshots/" + name}},
 			"allowedAgentTemplates": map[string]any{"selector": map[string]any{"matchLabels": selector}},
 		},
 	}}
@@ -274,9 +274,11 @@ func TestCreateChecksEverythingThenWritesCarrierAndTemplate(t *testing.T) {
 		"unknown modelConfig": {func(s *Spec) { s.ModelConfig = "nope" }, ErrInvalid, []string{"default-model-config, qwen3-8-27b"}},
 		"unknown harness":     {func(s *Spec) { s.Harness = "codex" }, ErrInvalid, []string{"no Harness in namespace kagent admits", "kagent.dev/harness=codex", "claude (admits kagent.dev/harness=claude)", "kagent (admits kagent.dev/harness=kagent)"}},
 		"harness label":       {func(s *Spec) { s.Labels = map[string]string{HarnessLabel: "claude"} }, ErrInvalid, []string{"conflicts with harness"}},
-		"mutable skill":       {func(s *Spec) { s.Skills = &Skills{GitRefs: []SkillGitRef{{URL: "https://github.com/o/r", Ref: "main"}}} }, ErrInvalid, []string{"full git commit id", "list_skills reports each skill's commit"}},
-		"tagged oci skill":    {func(s *Spec) { s.Skills = &Skills{Refs: []string{"ghcr.io/o/s:1"}} }, ErrInvalid, []string{"digest-pinned"}},
-		"exists":              {func(s *Spec) { s.Name = "verifier" }, ErrConflict, []string{"already exists", "update_agent"}},
+		"mutable skill": {func(s *Spec) {
+			s.Skills = &Skills{GitRefs: []SkillGitRef{{URL: "https://github.com/o/r", Ref: "main"}}}
+		}, ErrInvalid, []string{"full git commit id", "list_skills reports each skill's commit"}},
+		"tagged oci skill": {func(s *Spec) { s.Skills = &Skills{Refs: []string{"ghcr.io/o/s:1"}} }, ErrInvalid, []string{"digest-pinned"}},
+		"exists":           {func(s *Spec) { s.Name = "verifier" }, ErrConflict, []string{"already exists", "update_agent"}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			spec := base()

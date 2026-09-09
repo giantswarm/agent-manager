@@ -52,7 +52,7 @@ func golden(t *testing.T, name, got string) {
 		require.NoError(t, os.MkdirAll("testdata", 0o750))
 		require.NoError(t, os.WriteFile(path, []byte(got), 0o600))
 	}
-	want, err := os.ReadFile(path)
+	want, err := os.ReadFile(path) //nolint:gosec // a golden file under testdata, named by the test
 	require.NoError(t, err, "run with UPDATE_GOLDEN=1 to (re)write %s", path)
 	assert.Equal(t, string(want), got, "%s differs from the golden file (UPDATE_GOLDEN=1 rewrites it)", path)
 }
