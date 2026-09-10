@@ -1,0 +1,69 @@
+# What Generic chart 1.x renders for an agent with every value set, as
+# helm-controller stamps and kagent reports it.
+apiVersion: kagent.dev/v1alpha3
+kind: AgentTemplate
+metadata:
+  name: sre
+  namespace: kagent
+  generation: 2
+  annotations:
+    ui.giantswarm.io/display-name: SRE Assistant
+    ui.giantswarm.io/icon-url: https://avatars.example/v1/sre.png
+    team: bumblebee
+  labels:
+    app.kubernetes.io/managed-by: Helm
+    agent-platform.giantswarm.io/harness: kagent
+    helm.toolkit.fluxcd.io/name: sre
+    helm.toolkit.fluxcd.io/namespace: kagent
+    tenant: sre
+spec:
+  description: helps
+  modelConfig:
+    name: default-model-config
+  systemPrompt: Be brief.
+  skills:
+    - name: runbooks
+      source:
+        git:
+          url: https://github.com/giantswarm/agent-skills
+          commit: 0123456789abcdef0123456789abcdef01234567
+        path: nested/runbooks
+    - name: kubectl
+      source:
+        oci: ghcr.io/giantswarm/skills/kubectl@sha256:5b0bcabd1ed22e9fb1310cf6c2dec7cdef19f0ad69efa1f392e94a4333501270
+  tools:
+    - mcp:
+        server:
+          kind: RemoteMCPServer
+          name: sre
+    - mcp:
+        server:
+          kind: RemoteMCPServer
+          name: github
+        tools: [get_issue, list_issues]
+status:
+  observedGeneration: 2
+  harnesses:
+    - harness: kagent
+      desiredRevision: sre-kagent-a1b2c3
+      latestSuccessfulRevision: sre-kagent-a1b2c3
+      warnings:
+        - "tools narrowed for server github could not be verified: discovery disabled"
+      conditions:
+        - type: Accepted
+          status: "True"
+          reason: Accepted
+          observedGeneration: 2
+        - type: ResolvedRefs
+          status: "True"
+          reason: ResolvedRefs
+          observedGeneration: 2
+        - type: Compatible
+          status: "True"
+          reason: Compatible
+          observedGeneration: 2
+        - type: Ready
+          status: "True"
+          reason: Ready
+          message: golden snapshot sre-kagent-a1b2c3 ready
+          observedGeneration: 2

@@ -98,11 +98,13 @@ func TestEmbeddedSchemaIsTheChart1xContract(t *testing.T) {
 	}
 	skills := props["skills"].(map[string]any)
 	assert.Equal(t, "array", skills["type"], "skills is a list of pinned sources, not the 0.x refs/gitRefs object")
-	skill := skills["items"].(map[string]any)["properties"].(map[string]any)
+	assert.Equal(t, "#/$defs/skill.schema.json", skills["items"].(map[string]any)["$ref"], "the chart bundles its skill schema")
+	skill := doc["$defs"].(map[string]any)["skill.schema.json"].(map[string]any)["properties"].(map[string]any)
 	assert.NotContains(t, skill, "gitAuthSecretRef")
 	for _, kept := range []string{"name", "git", "oci", "path"} {
 		assert.Contains(t, skill, kept)
 	}
+	assert.Contains(t, agent, "harness", "the Harness admission label's value")
 	for _, kept := range []string{"toolset", "extraTools", "extraAgentSpec", "labels", "annotations", "modelConfig"} {
 		assert.Contains(t, props, kept)
 	}

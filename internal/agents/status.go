@@ -29,12 +29,14 @@ func errorsIs(err, target error) bool { return errors.Is(err, target) }
 // one Harness — the configured one is the verdict's source. Harness.status is
 // never written; there is no per-agent Deployment or pod.
 
-// The AgentTemplate condition types kagent reports per Harness.
+// The AgentTemplate condition types kagent reports per Harness, and the Ready
+// reason the controller writes while it waits for the golden snapshot.
 const (
 	conditionReady        = "Ready"
 	conditionAccepted     = "Accepted"
 	conditionResolvedRefs = "ResolvedRefs"
 	conditionCompatible   = "Compatible"
+	readyReasonPending    = "ActorTemplatePending"
 )
 
 // Status gathers the AgentTemplate's per-Harness status, the owning
@@ -71,7 +73,7 @@ func (s *Service) Status(ctx context.Context, ns, name string) (*Status, error) 
 	}
 	st := &Status{Name: name, Namespace: ns, Template: templateStatusOf(tpl), HelmRelease: helmReleaseStatus(hr)}
 	st.Events = s.warningEvents(ctx, client, ns, name)
-	st.Verdict, st.Summary = verdict(st, s.cfg.HarnessName)
+	st.Verdict, st.Summary = verdict(st, s.cfg.Compose.HarnessName)
 	if st.Verdict == VerdictFailed && tpl != nil && len(st.Template.Harnesses) == 0 {
 		// Nobody admits the template: say which Harnesses exist and what
 		// they admit, so the label mismatch is visible from the answer.
@@ -262,11 +264,18 @@ func harnessVerdict(h *HarnessStatus) (string, string) {
 		}
 		return VerdictReady, summary
 	}
-	if c := findCondition(h.Conditions, conditionReady); c != nil && c.Status == "False" && h.LatestSuccessfulRevision == "" {
-		return VerdictFailed, fmt.Sprintf("Harness %s: Ready is False (%s)", h.Harness, conditionText(c))
-	}
 	if h.LatestSuccessfulRevision != "" && h.DesiredRevision != h.LatestSuccessfulRevision {
 		return VerdictProgressing, fmt.Sprintf("Harness %s is compiling revision %s; %s is the latest successful one", h.Harness, h.DesiredRevision, h.LatestSuccessfulRevision)
+	}
+	// Ready not yet True without a failed stage: the first revision is still
+	// compiling while the controller waits for the golden snapshot
+	// (readyReasonPending); any other False reason is a failure it will not
+	// get past on its own.
+	if c := findCondition(h.Conditions, conditionReady); c != nil && c.Status != "True" {
+		if c.Status == "False" && c.Reason != readyReasonPending {
+			return VerdictFailed, fmt.Sprintf("Harness %s: Ready is False (%s)", h.Harness, conditionText(c))
+		}
+		return VerdictProgressing, fmt.Sprintf("Harness %s is compiling revision %s; Ready is %s (%s)", h.Harness, h.DesiredRevision, c.Status, conditionText(c))
 	}
 	return VerdictProgressing, fmt.Sprintf("Harness %s is compiling revision %s; Ready not reported yet", h.Harness, h.DesiredRevision)
 }

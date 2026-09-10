@@ -23,10 +23,13 @@ import (
 )
 
 // EmbeddedSchemaVersion is the agent chart version whose values.schema.json is
-// compiled into the binary (internal/chart/embedded/): the 1.x values
-// contract — an AgentTemplate plus a per-agent muster RemoteMCPServer, skills
-// as a list of commit- or digest-pinned sources, `muster.url` and
-// `muster.tools`, none of the 0.x runtime keys.
+// compiled into the binary (internal/chart/embedded/): the Generic chart 1.x
+// values contract — one release renders a kagent.dev/v1alpha3 AgentTemplate
+// plus the agent's muster RemoteMCPServer; skills are a list of commit- or
+// digest-pinned sources (bundled $defs/skill.schema.json); `agent.harness`,
+// `muster.url`, `muster.tools`, `muster.discovery`; none of the 0.x runtime
+// keys. The copy is the chart's own values.schema.json at the commit that made
+// the contract final (giantswarm/agent, chart-1-0-agenttemplate @ 82815864).
 const EmbeddedSchemaVersion = "1.0.0"
 
 //go:embed embedded/agent-values.schema.json

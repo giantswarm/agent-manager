@@ -7,22 +7,33 @@
 
 The chart deploys one Deployment that serves the REST/JSON API under `/api/v1`
 (contract: `/api/v1/openapi.yaml`) and the MCP streamable-HTTP endpoint under
-`/mcp`. An agent is a Flux `HelmRelease` of the `agent` chart (one release
-renders one kagent `Agent`) plus the shared per-namespace `OCIRepository` of
-that chart; agent-manager composes both the way the portal's create flow does,
-validates the values against the chart's `values.schema.json` before applying,
-and reads agents back from the Agent CR, the HelmRelease and the workload.
+`/mcp`. An agent is a Flux `HelmRelease` of the Generic `agent` chart (1.x: one
+release renders one `kagent.dev/v1alpha3` `AgentTemplate` plus the agent's own
+muster `RemoteMCPServer`) plus the shared per-namespace `OCIRepository` of that
+chart tracking `1.x`; agent-manager composes both the way the portal's create
+flow does, pins every skill to a commit or a digest, validates the values
+against the chart's `values.schema.json` before applying, and reads agents back
+from the AgentTemplate, the RemoteMCPServer and the HelmRelease. Readiness is
+the platform Harness's verdict on the template (`status.harnesses[]`).
 
 - `kagent.namespace` (plus `kagent.additionalNamespaces`) are the namespaces
   agents live in; the Role is created there. Requests naming another
   namespace are refused.
+- `harness.name` is the platform Harness every agent runs on (rendered by the
+  connectivity chart of the `agent-platform` meta chart); its entry on the
+  AgentTemplate decides `get_agent_status`.
 - `agentChart.ociUrl` / `agentChart.semver` are what the composed
-  OCIRepository carries; the same registry is read at run time for the latest
-  version and its values schema (`GET /api/v1/info` says which schema is in
-  use — the embedded copy is the offline fallback).
+  OCIRepository carries (`1.x` — never a pre-release build); the same registry
+  is read at run time for the latest version and its values schema
+  (`GET /api/v1/info` says which schema is in use — the embedded copy is the
+  offline fallback).
+- `muster.url` is the platform's muster MCP URL composed into every agent as
+  the chart value `muster.url`; empty leaves the Generic chart's default.
 - `skills.repositories` are the GitHub repositories `list_skills` discovers
-  `SKILL.md` files in; `skills.github.tokenSecret` names a Secret with a token
-  for private repositories.
+  `SKILL.md` files in, reporting the head commit an agent pins;
+  `skills.github.tokenSecret` names a Secret with the token that resolves
+  branches and tags in private repositories (there is no per-agent skill
+  credential).
 - With `oauth.enabled` the service is an OAuth 2.1 resource server: every
   request carries the caller's identity, and with `oauth.downstream.enabled`
   every Kubernetes call is made as the caller (the ServiceAccount holds no
@@ -41,9 +52,9 @@ and reads agents back from the Agent CR, the HelmRelease and the workload.
 
 A component of the [`giantswarm/agent-platform`](https://github.com/giantswarm/agent-platform)
 meta chart (`components.agent-manager.enabled`), which sets `kagent.namespace`,
-`agentChart.*`, `mcp.enabled`, `oauth.*`, `muster.mcpServer.*` and
-`skills.repositories`, and derives `flux.helmReleaseServiceAccount` from its
-`kagent.fluxServiceAccountName`.
+`harness.name`, `agentChart.*`, `muster.url`, `mcp.enabled`, `oauth.*`,
+`muster.mcpServer.*` and `skills.repositories`, and derives
+`flux.helmReleaseServiceAccount` from its `kagent.fluxServiceAccountName`.
 
 {{ template "chart.homepageLine" . }}
 

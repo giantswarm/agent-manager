@@ -7,10 +7,13 @@ mounted for the in-cluster API address and CA.
 {{- if include "agent-manager.serviceAccountRBAC" . }}
 {{- /*
 One Role per managed namespace. agent-manager writes the two Flux objects an
-agent consists of (HelmRelease + the shared OCIRepository of the agent chart)
-and reads everything it reports on: the Agent kagent renders, the ModelConfigs
-an agent may reference (platform-admin owned, never written), and the
-Deployment, pods and events behind an agent for get_agent_status.
+agent consists of (HelmRelease + the shared OCIRepository of the Generic agent
+chart) and reads everything it reports on: the kagent.dev/v1alpha3
+AgentTemplate and the agent's RemoteMCPServer the chart renders, the Harnesses
+whose admission decides readiness, the ModelConfigs an agent may reference
+(platform-admin owned, never written), and the namespace's events for
+get_agent_status. Nothing names the v1alpha2 `agents` resource; there is no
+per-agent Deployment or pod to read.
 */}}
 {{- range $ns := (include "agent-manager.managedNamespaces" . | fromJsonArray) }}
 ---
@@ -29,18 +32,17 @@ rules:
     resources: ["ocirepositories"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: ["kagent.dev"]
-    resources: ["agents", "modelconfigs"]
+    resources: ["agenttemplates", "harnesses", "remotemcpservers", "modelconfigs"]
     verbs: ["get", "list", "watch"]
   - apiGroups: ["kagent.dev"]
-    resources: ["agents"]
-    # A bare Agent CR (no HelmRelease behind it) is only ever deleted with
-    # force; helm-controller removes the ones agent-manager created.
+    resources: ["agenttemplates", "remotemcpservers"]
+    # What a release leaves behind is only ever deleted with force: a bare
+    # AgentTemplate (no HelmRelease behind it), or the rendered objects of a
+    # suspended release Flux drops without uninstalling. helm-controller
+    # removes the ones agent-manager created.
     verbs: ["delete"]
-  - apiGroups: ["apps"]
-    resources: ["deployments", "replicasets"]
-    verbs: ["get", "list", "watch"]
   - apiGroups: [""]
-    resources: ["pods", "events"]
+    resources: ["events"]
     verbs: ["get", "list", "watch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1

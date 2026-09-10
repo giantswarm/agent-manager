@@ -40,9 +40,6 @@ type Config struct {
 	Compose ComposeConfig
 	// KagentAPIVersion is the served kagent.dev version (v1alpha3).
 	KagentAPIVersion string
-	// HarnessName is the platform Harness whose status.harnesses[] entry
-	// decides an agent's readiness.
-	HarnessName string
 	// Version is the service version reported by GET /info.
 	Version string
 }
@@ -68,7 +65,7 @@ func New(k kube.Provider, c ChartSource, s *skills.Discoverer, p SkillPinner, cf
 	}
 	cfg.DefaultNamespace = orDefault(cfg.DefaultNamespace, "kagent")
 	cfg.KagentAPIVersion = orDefault(cfg.KagentAPIVersion, DefaultKagentAPIVersion)
-	cfg.HarnessName = orDefault(cfg.HarnessName, DefaultHarnessName)
+	cfg.Compose.HarnessName = orDefault(cfg.Compose.HarnessName, DefaultHarnessName)
 	cfg.Compose.ChartName = orDefault(cfg.Compose.ChartName, c.Name())
 	cfg.Compose.ChartOCIURL = orDefault(cfg.Compose.ChartOCIURL, c.OCIURL())
 	cfg.Compose.ChartSemver = orDefault(cfg.Compose.ChartSemver, c.SemverRange())
@@ -157,7 +154,7 @@ func (s *Service) Info(ctx context.Context) InfoResponse {
 	out.Flux.HelmReleaseInterval = orDefault(s.cfg.Compose.HelmReleaseInterval, DefaultHelmReleaseInterval)
 	out.Flux.OCIRepositoryInterval = orDefault(s.cfg.Compose.OCIRepositoryInterval, DefaultOCIRepositoryInterval)
 	out.Flux.ServiceAccountName = s.cfg.Compose.ServiceAccountName
-	out.Harness.Name = s.cfg.HarnessName
+	out.Harness.Name = s.cfg.Compose.HarnessName
 	out.Muster.URL = s.cfg.Compose.MusterURL
 	if s.skills != nil {
 		out.SkillsRepositories = s.skills.Repositories()
@@ -852,6 +849,9 @@ func (s *Service) Update(ctx context.Context, upd Update) (*UpdateResult, error)
 		return nil, invalidf("values do not satisfy the agent chart schema %s (%s): %s", sch.Version, sch.Source, strings.Join(violations, "; "))
 	}
 	changed := changedPaths("", before, after)
+	if changed == nil {
+		changed = []string{}
+	}
 	res := &UpdateResult{Before: before, After: after, Changed: changed, RequestedBy: identity.Caller(ctx)}
 	res.Manifests = ComposeManifests(upd.Name, ns, after, s.cfg.Compose)
 	if len(changed) == 0 {
@@ -1075,7 +1075,7 @@ func (s *Service) agentFromTemplate(tpl, server *unstructured.Unstructured) Agen
 	a.Toolset, a.ImplicitFullAccess = toolsetOf(tpl, server)
 	ts := templateStatusOf(tpl)
 	a.Harnesses = ts.Harnesses
-	a.Ready = harnessReady(ts.Harnesses, s.cfg.HarnessName)
+	a.Ready = harnessReady(ts.Harnesses, s.cfg.Compose.HarnessName)
 	return a
 }
 

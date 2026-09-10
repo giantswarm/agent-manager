@@ -37,6 +37,10 @@ type ComposeConfig struct {
 	// MusterURL is the platform's muster MCP URL, composed as the chart value
 	// muster.url; empty composes nothing and the chart default applies.
 	MusterURL string
+	// HarnessName is the platform Harness every agent runs on: composed as
+	// the chart value agent.harness (the admission label's value), and the
+	// status.harnesses[] entry that decides an agent's readiness.
+	HarnessName string
 }
 
 // Defaults of the composition, the values composeManifests.ts uses.
@@ -104,6 +108,9 @@ func BuildValues(spec Spec, cfg ComposeConfig) map[string]any {
 	if strings.TrimSpace(spec.SystemMessage) != "" {
 		agent["systemMessage"] = spec.SystemMessage
 	}
+	// The platform's Harness, so the template lands on the Harness whose
+	// status entry get_agent_status reads.
+	agent["harness"] = orDefault(cfg.HarnessName, DefaultHarnessName)
 	values := map[string]any{
 		"agent":       agent,
 		"modelConfig": map[string]any{"name": spec.ModelConfig},

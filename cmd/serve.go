@@ -86,7 +86,7 @@ environment variable named next to it; flags win over the environment.`,
 	f.StringVar(&o.kagentNamespace, "kagent-namespace", envOr("KAGENT_NAMESPACE", "kagent"), "Default namespace agents are created in and listed from (KAGENT_NAMESPACE)")
 	f.StringVar(&o.managedNamespaces, "managed-namespaces", envOr("AGENT_MANAGER_MANAGED_NAMESPACES", ""), "Comma-separated additional namespaces agents may live in; RBAC must exist there (AGENT_MANAGER_MANAGED_NAMESPACES)")
 	f.StringVar(&o.kagentAPIVersion, "kagent-api-version", envOr("KAGENT_API_VERSION", "auto"), "kagent.dev API version for AgentTemplates, Harnesses, RemoteMCPServers and ModelConfigs; auto discovers the version serving agenttemplates, default "+agents.DefaultKagentAPIVersion+" (KAGENT_API_VERSION)")
-	f.StringVar(&o.harnessName, "harness-name", envOr("AGENT_HARNESS_NAME", agents.DefaultHarnessName), "Name of the platform Harness every agent runs on; its AgentTemplate.status.harnesses[] entry decides get_agent_status (AGENT_HARNESS_NAME)")
+	f.StringVar(&o.harnessName, "harness-name", envOr("AGENT_HARNESS_NAME", agents.DefaultHarnessName), "Name of the platform Harness every agent runs on: composed as the chart value agent.harness (the admission label's value); its AgentTemplate.status.harnesses[] entry decides get_agent_status (AGENT_HARNESS_NAME)")
 	f.StringVar(&o.musterURL, "muster-url", envOr("AGENT_MUSTER_URL", ""), "The platform's muster MCP URL, composed into every agent as the chart value muster.url; empty composes nothing and the chart default applies (AGENT_MUSTER_URL)")
 	f.StringVar(&o.helmReleaseAPI, "flux-helmrelease-api-version", envOr("FLUX_HELMRELEASE_API_VERSION", "auto"), "helm.toolkit.fluxcd.io API version composed into HelmReleases; auto discovers it (FLUX_HELMRELEASE_API_VERSION)")
 	f.StringVar(&o.ociRepositoryAPI, "flux-ocirepository-api-version", envOr("FLUX_OCIREPOSITORY_API_VERSION", "auto"), "source.toolkit.fluxcd.io API version composed into OCIRepositories; auto discovers it (FLUX_OCIREPOSITORY_API_VERSION)")
@@ -175,9 +175,9 @@ func runServe(ctx context.Context, o *serveOptions) error {
 			HelmReleaseAPIVersion:   helmReleaseAPI,
 			OCIRepositoryAPIVersion: ociRepositoryAPI,
 			MusterURL:               o.musterURL,
+			HarnessName:             o.harnessName,
 		},
 		KagentAPIVersion: kagentVersion,
-		HarnessName:      o.harnessName,
 		Version:          version,
 	}, log)
 

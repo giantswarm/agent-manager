@@ -1,0 +1,24 @@
+# The agent's own muster RemoteMCPServer as Generic chart 1.x renders it: the
+# toolset carrier, named after the agent, never an Authorization header.
+apiVersion: kagent.dev/v1alpha3
+kind: RemoteMCPServer
+metadata:
+  name: sre
+  namespace: kagent
+  labels:
+    app.kubernetes.io/managed-by: Helm
+    helm.toolkit.fluxcd.io/name: sre
+    helm.toolkit.fluxcd.io/namespace: kagent
+    kagent.dev/discovery: disabled
+spec:
+  description: muster MCP gateway for agent sre (toolset preset:read-only,workflow:incident-triage)
+  protocol: STREAMABLE_HTTP
+  url: http://muster.agent-platform.svc.cluster.local:8090/mcp
+  headersFrom:
+    - name: X-Muster-Toolset
+      value: preset:read-only,workflow:incident-triage
+status:
+  conditions:
+    - type: Accepted
+      status: "True"
+      reason: Accepted

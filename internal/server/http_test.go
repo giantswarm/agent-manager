@@ -32,7 +32,7 @@ func (embeddedChart) SemverRange() string                 { return "x.x.x" }
 func TestServerMountsHealthRESTAndMCP(t *testing.T) {
 	dyn := dynamicfake.NewSimpleDynamicClient(runtime.NewScheme())
 	typed := kubefake.NewClientset()
-	svc := agents.New(kube.NewServiceAccountProvider(kube.FromInterfaces(dyn, typed, typed.Discovery())), embeddedChart{}, nil, agents.Config{Version: "test"}, nil)
+	svc := agents.New(kube.NewServiceAccountProvider(kube.FromInterfaces(dyn, typed, typed.Discovery())), embeddedChart{}, nil, nil, agents.Config{Version: "test"}, nil)
 	srv, err := New(Config{Addr: "127.0.0.1:0", MCPEnabled: true}, svc, api.NewMCPServer(svc, "test"), nil)
 	require.NoError(t, err)
 	ts := httptest.NewServer(srv.Handler())

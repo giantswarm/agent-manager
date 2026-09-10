@@ -1,0 +1,42 @@
+# The kagent API v2 arguments the Deployment renders: the Generic chart 1.x
+# range, the platform Harness, and the muster URL only when set.
+#
+# Run with: make helm-test (helm unittest helm/agent-manager)
+suite: deployment kagent v2 arguments
+templates:
+  - templates/deployment.yaml
+tests:
+  - it: tracks the Generic chart at 1.x and names the platform Harness by default
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --agent-chart-semver=1.x
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --harness-name=kagent
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --kagent-api-version=auto
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --agent-chart-semver=x.x.x
+
+  - it: composes no muster URL unless one is set
+    asserts:
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].args
+          pattern: --muster-url
+
+  - it: forwards the platform's muster URL and Harness when set
+    set:
+      muster:
+        url: http://muster.agent-platform.svc.cluster.local:8090/mcp
+      harness:
+        name: claude
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --muster-url=http://muster.agent-platform.svc.cluster.local:8090/mcp
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --harness-name=claude

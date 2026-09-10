@@ -14,7 +14,7 @@
             "properties": {
                 "ociUrl": {
                     "type": "string",
-                    "description": "OCI URL of the `agent` chart every agent renders from. Written into the shared per-namespace OCIRepository, and read at run time for the chart's values.schema.json that validates every create/update before it is applied (the pod needs egress to this registry; the embedded copy of the schema is the offline fallback)."
+                    "description": "OCI URL of the Generic `agent` chart every agent renders from (1.x: one release renders one kagent.dev/v1alpha3 AgentTemplate plus the agent's muster RemoteMCPServer). Written into the shared per-namespace OCIRepository, and read at run time for the chart's values.schema.json that validates every create/update before it is applied (the pod needs egress to this registry; the embedded copy of the schema is the offline fallback)."
                 },
                 "refresh": {
                     "type": "string",
@@ -22,7 +22,7 @@
                 },
                 "semver": {
                     "type": "string",
-                    "description": "Semver range the OCIRepository tracks. `x.x.x` follows every published release, the platform convention for agents."
+                    "description": "Semver range the OCIRepository tracks. `1.x` follows every 1.x release of the Generic chart and never a pre-release build or a next major."
                 }
             }
         },
@@ -118,6 +118,16 @@
             "type": "object",
             "additionalProperties": true
         },
+        "harness": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "Name of the platform Harness every agent runs on (the connectivity chart renders it): the `status.harnesses[]` entry of that name on the AgentTemplate is what `get_agent_status` reports."
+                }
+            }
+        },
         "httpRoute": {
             "type": "object",
             "additionalProperties": false,
@@ -206,11 +216,11 @@
                 },
                 "apiVersion": {
                     "type": "string",
-                    "description": "kagent.dev API version for Agents and ModelConfigs; `auto` discovers the server's preferred version."
+                    "description": "kagent.dev API version for AgentTemplates, Harnesses, RemoteMCPServers and ModelConfigs; `auto` discovers the version serving `agenttemplates` (default v1alpha3)."
                 },
                 "namespace": {
                     "type": "string",
-                    "description": "Namespace agents are created in and listed from by default — the namespace kagent watches and the platform admin provisions ModelConfigs into. The Role for HelmReleases, OCIRepositories, Agents, ModelConfigs, Deployments, pods and events is created here."
+                    "description": "Namespace agents are created in and listed from by default — the namespace the kagent controller watches, the platform admin provisions ModelConfigs into and the connectivity chart renders the platform Harness into. The Role for HelmReleases, OCIRepositories, AgentTemplates, RemoteMCPServers, Harnesses, ModelConfigs and events is created here."
                 }
             }
         },
@@ -281,6 +291,10 @@
                             "description": "MCPServer CR name (drives the tool prefix)."
                         }
                     }
+                },
+                "url": {
+                    "type": "string",
+                    "description": "The platform's muster MCP URL, composed into every agent as the chart value `muster.url` (the URL of the agent's own RemoteMCPServer). Empty composes nothing and the Generic chart's default applies (`http://muster.agent-platform.svc.cluster.local:8090/mcp`). The `agent-platform` meta chart forwards it from its connectivity helper."
                 }
             }
         },
@@ -294,7 +308,7 @@
             "properties": {
                 "allowInternet": {
                     "type": "boolean",
-                    "description": "Allow egress on 443 to every destination: the chart registry (schema and version) and GitHub (skills). Vanilla NetworkPolicy cannot select by name; narrow with egressCIDRs instead when the addresses are known."
+                    "description": "Allow egress on 443 to every destination: the chart registry (schema and version), GitHub (skill discovery and commit resolution) and the registries of OCI skills (digest resolution). Vanilla NetworkPolicy cannot select by name; narrow with egressCIDRs instead when the addresses are known."
                 },
                 "allowKubeAPI": {
                     "type": "boolean",
@@ -372,7 +386,7 @@
                     "properties": {
                         "enabled": {
                             "type": "boolean",
-                            "description": "Call the Kubernetes API as the caller: everything a request does (HelmReleases and OCIRepositories, the Agents, ModelConfigs, Deployments, pods and events it reads) presents the caller's IdP token, so the caller's RBAC governs — the apiserver must trust the IdP and the token's audience (a Dex install lists that audience in `muster.mcpServer.auth.requiredAudiences`; a Google install's client id permissions: the chart renders none of its Roles (`rbac.create` is moot) and the token stays mounted only for the in-cluster API address and CA plus API discovery at startup, which every authenticated principal may read. agent-manager has no background work, so nothing is lost: a request without a token is refused with 401 instead of running as the ServiceAccount."
+                            "description": "Call the Kubernetes API as the caller: everything a request does (HelmReleases and OCIRepositories, the AgentTemplates, RemoteMCPServers, Harnesses, ModelConfigs and events it reads) presents the caller's IdP token, so the caller's RBAC governs — the apiserver must trust the IdP and the token's audience (a Dex install lists that audience in `muster.mcpServer.auth.requiredAudiences`; a Google install's client id permissions: the chart renders none of its Roles (`rbac.create` is moot) and the token stays mounted only for the in-cluster API address and CA plus API discovery at startup, which every authenticated principal may read. agent-manager has no background work, so nothing is lost: a request without a token is refused with 401 instead of running as the ServiceAccount."
                         }
                     }
                 },
@@ -465,7 +479,7 @@
             "properties": {
                 "create": {
                     "type": "boolean",
-                    "description": "Create the Role/RoleBinding in `kagent.namespace` (and every `kagent.additionalNamespaces` entry): HelmReleases and OCIRepositories read/write; Agents, ModelConfigs, Deployments, pods and events read — the ServiceAccount's own permissions. Ignored with `oauth.downstream.enabled`: the ServiceAccount then gets no RBAC at all, the caller's RBAC governs."
+                    "description": "Create the Role/RoleBinding in `kagent.namespace` (and every `kagent.additionalNamespaces` entry): HelmReleases and OCIRepositories read/write; AgentTemplates, RemoteMCPServers, Harnesses, ModelConfigs and events read (AgentTemplates and RemoteMCPServers also delete, for the forced removal of what a suspended or bare release leaves behind) — the ServiceAccount's own permissions. Ignored with `oauth.downstream.enabled`: the ServiceAccount then gets no RBAC at all, the caller's RBAC governs."
                 }
             }
         },
@@ -616,7 +630,7 @@
                                 },
                                 "name": {
                                     "type": "string",
-                                    "description": "Existing Secret in the release namespace with a GitHub token (private skill repositories, higher rate limit). Empty: anonymous."
+                                    "description": "Existing Secret in the release namespace with a GitHub token: the credential that resolves a skill's branch or tag to its head commit in a private repository (there is no per-agent skill credential) and lifts the anonymous rate limit. Empty: anonymous, public repositories only."
                                 }
                             }
                         }
@@ -624,7 +638,7 @@
                 },
                 "repositories": {
                     "type": "array",
-                    "description": "GitHub repositories whose SKILL.md files list_skills offers (the same list the portal's create flow reads). Empty turns the skills capability off.",
+                    "description": "GitHub repositories whose SKILL.md files list_skills offers (the same list the portal's create flow reads), each with the head commit an agent pins. Empty turns the skills capability off; skills given by URL are still resolved through the GitHub API.",
                     "items": {
                         "type": "string"
                     }
