@@ -23,9 +23,8 @@ tests:
 
   - it: composes no muster URL unless one is set
     asserts:
-      - notMatchRegex:
-          path: spec.template.spec.containers[0].args
-          pattern: --muster-url
+      - notExists:
+          path: spec.template.spec.containers[0].args[?(@ =~ /^--muster-url=/)]
 
   - it: forwards the platform's muster URL and Harness when set
     set:

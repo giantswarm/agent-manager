@@ -124,7 +124,7 @@ func (s *Skills) UnmarshalJSON(b []byte) error {
 		}
 		_ = json.Unmarshal(trimmed, &legacy)
 		if len(legacy.GitAuthSecretName) > 0 && string(legacy.GitAuthSecretName) != "null" {
-			return errors.New(gitAuthSecretRemoved)
+			return errors.New(gitAuthRefRemoved)
 		}
 		return errors.New(skillsShapeChanged)
 	}

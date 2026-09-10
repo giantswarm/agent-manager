@@ -204,11 +204,6 @@ func schemaProp(typ, desc string) map[string]any {
 	return map[string]any{"type": typ, argDescription: desc}
 }
 
-// schemaArray is a JSON-schema array of items with a description.
-func schemaArray(items map[string]any, desc string) map[string]any {
-	return map[string]any{"type": "array", "items": items, argDescription: desc}
-}
-
 func (t *tools) getInfo(ctx context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	return jsonResult(t.svc.Info(ctx))
 }

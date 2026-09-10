@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -196,7 +197,7 @@ func mustCreate(t *testing.T, f *fixture, gvr schema.GroupVersionResource, obj *
 
 func loadFixture(t *testing.T, name string) *unstructured.Unstructured {
 	t.Helper()
-	raw, err := os.ReadFile("testdata/" + name)
+	raw, err := os.ReadFile(filepath.Clean(filepath.Join("testdata", name)))
 	require.NoError(t, err)
 	var obj map[string]any
 	require.NoError(t, yaml.Unmarshal(raw, &obj))

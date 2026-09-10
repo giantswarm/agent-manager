@@ -147,7 +147,7 @@ func TestRESTLifecycle(t *testing.T) {
 	assert.Equal(t, http.StatusOK, code)
 	assert.Equal(t, false, body["valid"])
 	assert.Contains(t, body["errors"].([]any)[0], "preset:none")
-	code, body = do(t, mux, http.MethodPost, Prefix+"/agents/validate", map[string]any{"name": "sre", "modelConfig": "default-model-config", "toolset": readOnly, "runtime": "go"})
+	code, _ = do(t, mux, http.MethodPost, Prefix+"/agents/validate", map[string]any{"name": "sre", "modelConfig": "default-model-config", "toolset": readOnly, "runtime": "go"})
 	assert.Equal(t, http.StatusBadRequest, code, "validate answers the removed argument the same way")
 	code, body = do(t, mux, http.MethodPost, Prefix+"/agents/validate", map[string]any{"name": "sre", "modelConfig": "default-model-config", "toolset": readOnly})
 	assert.Equal(t, http.StatusOK, code)
