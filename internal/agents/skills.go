@@ -28,10 +28,10 @@ type SkillPinner interface {
 
 // What the removed arguments are told.
 const (
-	toolNamesRemoved     = `toolNames never narrowed anything against muster (kagent filters muster's meta-tools only); declare a toolset instead, e.g. toolset: ["preset:read-only"]`
-	runtimeRemoved       = `runtime is gone: on kagent API v2 the platform Harness (the Go ADK) is the runtime of every agent — there is no per-agent runtime and no Python runtime; drop the argument`
-	gitAuthRefRemoved = `skills.gitAuthSecretName is gone: kagent API v2 and Generic chart 1.x carry no per-source skill credential — a skill is an immutable reference (a git commit or an OCI digest) the Harness reads without one; agent-manager resolves a branch or tag through the GitHub API with its own token (GITHUB_TOKEN) where a private repository needs it. Drop the field; skills is a list of {name, git: {url, ref | commit}, path} or {name, oci: <reference>}`
-	skillsShapeChanged   = `skills is a list now — [{name, git: {url, ref | commit}, path} | {name, oci: <registry>/<repository>:<tag>|@sha256:<digest>}] — not the 0.x object {refs, gitRefs}; every entry is pinned to a commit or a digest before it is written (list_skills reports the commits)`
+	toolNamesRemoved   = `toolNames never narrowed anything against muster (kagent filters muster's meta-tools only); declare a toolset instead, e.g. toolset: ["preset:read-only"]`
+	runtimeRemoved     = `runtime is gone: on kagent API v2 the platform Harness (the Go ADK) is the runtime of every agent — there is no per-agent runtime and no Python runtime; drop the argument`
+	gitAuthRefRemoved  = `skills.gitAuthSecretName is gone: kagent API v2 and Generic chart 1.x carry no per-source skill credential — a skill is an immutable reference (a git commit or an OCI digest) the Harness reads without one; agent-manager resolves a branch or tag through the GitHub API with its own token (GITHUB_TOKEN) where a private repository needs it. Drop the field; skills is a list of {name, git: {url, ref | commit}, path} or {name, oci: <reference>}`
+	skillsShapeChanged = `skills is a list now — [{name, git: {url, ref | commit}, path} | {name, oci: <registry>/<repository>:<tag>|@sha256:<digest>}] — not the 0.x object {refs, gitRefs}; every entry is pinned to a commit or a digest before it is written (list_skills reports the commits)`
 )
 
 var httpURL = regexp.MustCompile(`^https?://\S+$`)
