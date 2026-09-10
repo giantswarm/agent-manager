@@ -55,9 +55,10 @@ agentChart:
   # applied (the pod needs egress to this registry; the embedded copy of the
   # schema is the offline fallback).
   ociUrl: oci://gsoci.azurecr.io/charts/giantswarm/agent
-  # -- Semver range the OCIRepository tracks. `x.x.x` follows every published
-  # release, the platform convention for agents.
-  semver: x.x.x
+  # -- Semver range the OCIRepository tracks. `>=0.2.1 <1.0.0` keeps every agent
+  # on the 0.x line of the `agent` chart: chart 1.0.0 (kagent API v2) has a
+  # breaking values schema and is composed by agent-manager 1.x only.
+  semver: ">=0.2.1 <1.0.0"
   # -- How often the registry is re-read for the latest version and schema.
   refresh: 10m
 

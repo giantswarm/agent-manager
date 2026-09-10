@@ -74,7 +74,7 @@ meta chart (`components.agent-manager.enabled`), which sets `kagent.namespace`,
 | kagent.additionalNamespaces | list | `[]` | Additional namespaces agents may live in (multi-tenant installs). Each gets the same Role; requests naming any other namespace are refused. |
 | kagent.apiVersion | string | `"auto"` | kagent.dev API version for Agents and ModelConfigs; `auto` discovers the server's preferred version. |
 | agentChart.ociUrl | string | `"oci://gsoci.azurecr.io/charts/giantswarm/agent"` | OCI URL of the `agent` chart every agent renders from. Written into the shared per-namespace OCIRepository, and read at run time for the chart's values.schema.json that validates every create/update before it is applied (the pod needs egress to this registry; the embedded copy of the schema is the offline fallback). |
-| agentChart.semver | string | `"x.x.x"` | Semver range the OCIRepository tracks. `x.x.x` follows every published release, the platform convention for agents. |
+| agentChart.semver | string | `">=0.2.1 <1.0.0"` | Semver range the OCIRepository tracks. `>=0.2.1 <1.0.0` keeps every agent on the 0.x line of the `agent` chart: chart 1.0.0 (kagent API v2) has a breaking values schema and is composed by agent-manager 1.x only. |
 | agentChart.refresh | string | `"10m"` | How often the registry is re-read for the latest version and schema. |
 | flux.helmReleaseInterval | string | `"10m"` | HelmRelease.spec.interval of every composed agent. |
 | flux.ociRepositoryInterval | string | `"30m"` | OCIRepository.spec.interval of the shared chart source. |

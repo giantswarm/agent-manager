@@ -66,7 +66,7 @@ defaults apply to everything else — the portal's rule — and composes:
 apiVersion: source.toolkit.fluxcd.io/v1
 kind: OCIRepository
 metadata: {name: agent, namespace: kagent}
-spec: {interval: 30m, url: oci://gsoci.azurecr.io/charts/giantswarm/agent, ref: {semver: x.x.x}}
+spec: {interval: 30m, url: oci://gsoci.azurecr.io/charts/giantswarm/agent, ref: {semver: '>=0.2.1 <1.0.0'}}
 ---
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
