@@ -21,11 +21,11 @@ app-tests-deploy-namespace: agent-platform
 # HelmRelease/OCIRepository CRDs and the kagent.dev/v1alpha3 CRDs
 # (AgentTemplate, Harness, RemoteMCPServer, ModelConfig) of the kagent line —
 # plain-YAML templates of helm/kagent-crds in giantswarm/kagent-upstream,
-# pinned to the line's commit (never the branch: it is force-pushed on every
-# re-pin). Without them the service logs a discovery warning and falls back
+# pinned to the line's release tag (never the branch: it is force-pushed on
+# every re-pin). Without them the service logs a discovery warning and falls back
 # to v1alpha3; with them the smoke covers the discovery path. Bump the pins
 # together with the platform's Flux and kagent.
-cluster-crds: /etc/ats/crds,tests/ats/cluster-prerequisites,https://raw.githubusercontent.com/fluxcd/helm-controller/v1.6.4/config/crd/bases/helm.toolkit.fluxcd.io_helmreleases.yaml,https://raw.githubusercontent.com/fluxcd/source-controller/v1.9.5/config/crd/bases/source.toolkit.fluxcd.io_ocirepositories.yaml,https://raw.githubusercontent.com/giantswarm/kagent-upstream/0ac524031db451634359df3081d7d5d08cea4c93/helm/kagent-crds/templates/kagent.dev_agenttemplates.yaml,https://raw.githubusercontent.com/giantswarm/kagent-upstream/0ac524031db451634359df3081d7d5d08cea4c93/helm/kagent-crds/templates/kagent.dev_harnesses.yaml,https://raw.githubusercontent.com/giantswarm/kagent-upstream/0ac524031db451634359df3081d7d5d08cea4c93/helm/kagent-crds/templates/kagent.dev_remotemcpservers.yaml,https://raw.githubusercontent.com/giantswarm/kagent-upstream/0ac524031db451634359df3081d7d5d08cea4c93/helm/kagent-crds/templates/kagent.dev_modelconfigs.yaml
+cluster-crds: /etc/ats/crds,tests/ats/cluster-prerequisites,https://raw.githubusercontent.com/fluxcd/helm-controller/v1.6.4/config/crd/bases/helm.toolkit.fluxcd.io_helmreleases.yaml,https://raw.githubusercontent.com/fluxcd/source-controller/v1.9.5/config/crd/bases/source.toolkit.fluxcd.io_ocirepositories.yaml,https://raw.githubusercontent.com/giantswarm/kagent-upstream/v0.11.0-gs.1/helm/kagent-crds/templates/kagent.dev_agenttemplates.yaml,https://raw.githubusercontent.com/giantswarm/kagent-upstream/v0.11.0-gs.1/helm/kagent-crds/templates/kagent.dev_harnesses.yaml,https://raw.githubusercontent.com/giantswarm/kagent-upstream/v0.11.0-gs.1/helm/kagent-crds/templates/kagent.dev_remotemcpservers.yaml,https://raw.githubusercontent.com/giantswarm/kagent-upstream/v0.11.0-gs.1/helm/kagent-crds/templates/kagent.dev_modelconfigs.yaml
 
 # functional: no second scenario. upgrade: an upgrade from the last release in
 # the catalog is a follow-up.

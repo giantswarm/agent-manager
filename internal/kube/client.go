@@ -42,7 +42,7 @@ var ErrNoCallerToken = errors.New("no caller token on the request")
 
 // Client is what the service needs from Kubernetes: the dynamic client for the
 // custom resources (HelmRelease, OCIRepository, Agent, ModelConfig), the typed
-// client for core objects (Deployments, Pods, Events) and discovery for the
+// client for the namespace events get_agent_status reports and discovery for the
 // served API versions.
 type Client interface {
 	Dynamic() dynamic.Interface
