@@ -22,7 +22,7 @@
                 },
                 "semver": {
                     "type": "string",
-                    "description": "Semver range the OCIRepository tracks. `x.x.x` follows every published release, the platform convention for agents."
+                    "description": "Semver range the OCIRepository tracks. `>=0.2.1 <1.0.0` keeps every agent on the 0.x line of the `agent` chart: chart 1.0.0 (kagent API v2) has a breaking values schema and is composed by agent-manager 1.x only."
                 }
             }
         },

@@ -63,7 +63,7 @@ func TestSkillName(t *testing.T) {
 }
 
 func TestBuildHelmReleaseAndOCIRepositoryMatchThePortal(t *testing.T) {
-	cfg := ComposeConfig{ChartOCIURL: DefaultChartOCIURL, ChartName: "agent", ChartSemver: "x.x.x"}
+	cfg := ComposeConfig{ChartOCIURL: DefaultChartOCIURL, ChartName: "agent"}
 	values := BuildValues(Spec{Name: "sre", ModelConfig: "mc"})
 
 	hr := BuildHelmRelease("sre", "kagent", values, cfg)
@@ -88,7 +88,7 @@ func TestBuildHelmReleaseAndOCIRepositoryMatchThePortal(t *testing.T) {
 	assert.Equal(t, "source.toolkit.fluxcd.io/v1", got["apiVersion"])
 	assert.Equal(t, "OCIRepository", got["kind"])
 	assert.Equal(t, map[string]any{"name": "agent", "namespace": "kagent", "labels": map[string]any{ManagedByLabel: ManagedByValue}}, got["metadata"])
-	assert.Equal(t, map[string]any{"interval": "30m", "url": DefaultChartOCIURL, "ref": map[string]any{"semver": "x.x.x"}}, got["spec"])
+	assert.Equal(t, map[string]any{"interval": "30m", "url": DefaultChartOCIURL, "ref": map[string]any{"semver": ">=0.2.1 <1.0.0"}}, got["spec"], "the default range stays below agent chart 1.0.0")
 }
 
 func TestValidateValuesReportsSchemaViolations(t *testing.T) {

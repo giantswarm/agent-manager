@@ -13,7 +13,8 @@ import (
 // HelmRelease with inline values following the agent chart's schema (agent,
 // modelConfig, skills, toolset as top-level keys) that renders from the shared
 // per-namespace OCIRepository named after the chart, which tracks the chart by
-// semver range so every agent follows the latest published release.
+// semver range so every agent follows the latest published release the range
+// admits.
 
 // ComposeConfig is the platform side of the composition.
 type ComposeConfig struct {
@@ -21,7 +22,7 @@ type ComposeConfig struct {
 	ChartOCIURL string
 	// ChartName is the OCIRepository's name (the chart name).
 	ChartName string
-	// ChartSemver is the OCIRepository ref.semver range (x.x.x).
+	// ChartSemver is the OCIRepository ref.semver range (DefaultChartSemver).
 	ChartSemver string
 	// HelmReleaseInterval / OCIRepositoryInterval are the Flux intervals.
 	HelmReleaseInterval   string
@@ -36,9 +37,13 @@ type ComposeConfig struct {
 }
 
 // Defaults of the composition, the values composeManifests.ts uses.
+//
+// DefaultChartSemver is bounded below 1.0.0: agent chart 1.0.0 (kagent API v2)
+// has a breaking values schema and is composed by agent-manager 1.x only, so an
+// agent created by this 0.x line on a 3.x installation must never resolve it.
 const (
 	DefaultChartOCIURL             = "oci://gsoci.azurecr.io/charts/giantswarm/agent"
-	DefaultChartSemver             = "x.x.x"
+	DefaultChartSemver             = ">=0.2.1 <1.0.0"
 	DefaultHelmReleaseInterval     = "10m"
 	DefaultOCIRepositoryInterval   = "30m"
 	DefaultHelmReleaseAPIVersion   = "helm.toolkit.fluxcd.io/v2"
