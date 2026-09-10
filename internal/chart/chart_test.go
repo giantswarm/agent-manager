@@ -1,159 +1,63 @@
 package chart
 
 import (
-	"archive/tar"
-	"bytes"
-	"compress/gzip"
 	"context"
-	"encoding/json"
-	"net/http"
-	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/giantswarm/agent-manager/internal/oci"
+	"github.com/giantswarm/agent-manager/internal/oci/ocitest"
 )
 
-// fakeRegistry serves one chart repository with a bearer challenge, the tag
-// list and one chart archive per tag, like an OCI distribution registry.
-type fakeRegistry struct {
-	t         *testing.T
-	repo      string
-	tags      []string
-	schemas   map[string]string // tag -> values.schema.json
-	tokenHits int
-	failTags  bool
-}
-
-func (f *fakeRegistry) handler() http.Handler {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/oauth2/token", func(w http.ResponseWriter, r *http.Request) {
-		f.tokenHits++
-		assert.Equal(f.t, "repository:"+f.repo+":pull", r.URL.Query().Get("scope"))
-		_ = json.NewEncoder(w).Encode(map[string]any{"access_token": "anon", "expires_in": 300})
-	})
-	auth := func(w http.ResponseWriter, r *http.Request) bool {
-		if r.Header.Get("Authorization") != "Bearer anon" {
-			w.Header().Set("Www-Authenticate", `Bearer realm="http://`+r.Host+`/oauth2/token",service="fake",scope="repository:`+f.repo+`:pull"`)
-			w.WriteHeader(http.StatusUnauthorized)
-			return false
-		}
-		return true
-	}
-	mux.HandleFunc("/v2/"+f.repo+"/tags/list", func(w http.ResponseWriter, r *http.Request) {
-		if !auth(w, r) {
-			return
-		}
-		if f.failTags {
-			http.Error(w, "boom", http.StatusInternalServerError)
-			return
-		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"name": f.repo, "tags": f.tags})
-	})
-	mux.HandleFunc("/v2/"+f.repo+"/manifests/", func(w http.ResponseWriter, r *http.Request) {
-		if !auth(w, r) {
-			return
-		}
-		tag := strings.TrimPrefix(r.URL.Path, "/v2/"+f.repo+"/manifests/")
-		if _, ok := f.schemas[tag]; !ok {
-			http.NotFound(w, r)
-			return
-		}
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"schemaVersion": 2,
-			"config":        map[string]any{"mediaType": "application/vnd.cncf.helm.config.v1+json"},
-			"layers": []map[string]any{{
-				"mediaType": helmChartLayerMediaType,
-				"digest":    "sha256:" + tag,
-				"size":      1,
-			}},
-		})
-	})
-	mux.HandleFunc("/v2/"+f.repo+"/blobs/", func(w http.ResponseWriter, r *http.Request) {
-		if !auth(w, r) {
-			return
-		}
-		tag := strings.TrimPrefix(r.URL.Path, "/v2/"+f.repo+"/blobs/sha256:")
-		schema, ok := f.schemas[tag]
-		if !ok {
-			http.NotFound(w, r)
-			return
-		}
-		_, _ = w.Write(chartArchive(f.t, "agent", map[string]string{
-			"Chart.yaml":         "name: agent\nversion: " + tag + "\n",
-			"values.schema.json": schema,
-		}))
-	})
-	return mux
-}
-
-func chartArchive(t *testing.T, name string, files map[string]string) []byte {
-	t.Helper()
-	var buf bytes.Buffer
-	gz := gzip.NewWriter(&buf)
-	tw := tar.NewWriter(gz)
-	for path, content := range files {
-		require.NoError(t, tw.WriteHeader(&tar.Header{Name: name + "/" + path, Mode: 0o644, Size: int64(len(content)), Typeflag: tar.TypeReg}))
-		_, err := tw.Write([]byte(content))
-		require.NoError(t, err)
-	}
-	require.NoError(t, tw.Close())
-	require.NoError(t, gz.Close())
-	return buf.Bytes()
-}
-
-func newFake(t *testing.T) (*fakeRegistry, *httptest.Server, Reference) {
-	f := &fakeRegistry{t: t, repo: "charts/giantswarm/agent",
-		tags:    []string{"0.1.0", "0.5.2", "0.6.0-rc.1", "0.6.0", "artifacthub.io", "1.0.0"},
-		schemas: map[string]string{"0.6.0": `{"type":"object","properties":{"agent":{"type":"object"}}}`, "1.0.0": `{"type":"object"}`}}
-	ts := httptest.NewServer(f.handler())
-	t.Cleanup(ts.Close)
-	ref := Reference{Host: strings.TrimPrefix(ts.URL, "http://"), Repository: f.repo, Insecure: true}
-	return f, ts, ref
+func newFake(t *testing.T) *ocitest.Registry {
+	f := ocitest.New(t, "charts/giantswarm/agent")
+	f.Tags = []string{"0.1.0", "0.6.1", "1.0.0-dev.kagent-v2.2026-09-11.01-00-00.habcdef0", "1.0.0", "1.2.3", "artifacthub.io", "2.0.0"}
+	f.Files["1.2.3"] = map[string]string{"Chart.yaml": "name: agent\nversion: 1.2.3\n", "values.schema.json": `{"type":"object","properties":{"agent":{"type":"object"}}}`}
+	f.Files["2.0.0"] = map[string]string{"Chart.yaml": "name: agent\nversion: 2.0.0\n", "values.schema.json": `{"type":"object"}`}
+	return f
 }
 
 func TestLatestFollowsFluxSemverSemantics(t *testing.T) {
-	tags := []string{"0.1.0", "0.5.2", "0.6.0-rc.1", "0.6.0", "artifacthub.io", "1.0.0"}
+	tags := []string{"0.1.0", "0.6.1", "1.0.0-dev.kagent-v2.2026-09-11.01-00-00.habcdef0", "1.0.0", "1.2.3", "artifacthub.io", "2.0.0"}
 	v, err := Latest(tags, "x.x.x")
 	require.NoError(t, err)
-	assert.Equal(t, "1.0.0", v, "x.x.x tracks every stable release")
+	assert.Equal(t, "2.0.0", v, "x.x.x tracks every stable release")
+	v, err = Latest(tags, "1.x")
+	require.NoError(t, err)
+	assert.Equal(t, "1.2.3", v, "1.x stays inside the major and skips pre-releases")
 	v, err = Latest(tags, "0.x")
 	require.NoError(t, err)
-	assert.Equal(t, "0.6.0", v, "pre-releases are skipped")
+	assert.Equal(t, "0.6.1", v)
+	_, err = Latest([]string{"1.0.0-dev.kagent-v2.2026-09-11.01-00-00.habcdef0"}, "1.x")
+	assert.Error(t, err, "a branch build never satisfies 1.x: the lab pins the exact version instead")
+	v, err = Latest([]string{"1.0.0-dev.kagent-v2.2026-09-11.01-00-00.habcdef0"}, ">=1.0.0-0 <2.0.0")
+	require.NoError(t, err)
+	assert.Equal(t, "1.0.0-dev.kagent-v2.2026-09-11.01-00-00.habcdef0", v, "a pre-release-aware range does")
 	_, err = Latest([]string{"artifacthub.io"}, "x.x.x")
 	assert.Error(t, err)
 }
 
-func TestRegistryListsTagsAndReadsTheSchemaThroughTheBearerChallenge(t *testing.T) {
-	f, _, ref := newFake(t)
-	reg := NewRegistry(nil)
-	tags, err := reg.ListTags(context.Background(), ref)
-	require.NoError(t, err)
-	assert.Contains(t, tags, "0.6.0")
-	raw, err := reg.ReadChartFile(context.Background(), ref, "0.6.0", "values.schema.json")
-	require.NoError(t, err)
-	assert.JSONEq(t, f.schemas["0.6.0"], string(raw))
-	assert.Equal(t, 1, f.tokenHits, "the anonymous token is cached across requests")
-}
-
 func TestResolverPrefersTheRegistryAndFallsBackToTheEmbeddedSchema(t *testing.T) {
-	f, ts, _ := newFake(t)
-	r, err := NewResolver("oci://"+strings.TrimPrefix(ts.URL, "http://")+"/"+f.repo, "0.x", time.Hour, NewRegistry(nil), nil)
+	f := newFake(t)
+	chartURL := "oci://" + f.Host() + "/" + f.Repo
+	r, err := NewResolver(chartURL, "1.x", time.Hour, oci.NewRegistry(nil), nil)
 	require.NoError(t, err)
 	r.ref.Insecure = true
 
 	s := r.Schema(context.Background())
 	assert.Equal(t, SourceRegistry, s.Source)
-	assert.Equal(t, "0.6.0", s.Version)
+	assert.Equal(t, "1.2.3", s.Version)
 	info := r.Info(context.Background())
-	assert.Equal(t, "0.6.0", info.LatestVersion)
+	assert.Equal(t, "1.2.3", info.LatestVersion)
+	assert.Equal(t, "1.x", info.Semver)
 	assert.Empty(t, info.Error)
 
 	// A broken registry on a fresh resolver: the embedded copy validates.
-	f.failTags = true
-	r2, err := NewResolver("oci://"+strings.TrimPrefix(ts.URL, "http://")+"/"+f.repo, "0.x", time.Hour, NewRegistry(nil), nil)
+	f.FailTags = true
+	r2, err := NewResolver(chartURL, "1.x", time.Hour, oci.NewRegistry(nil), nil)
 	require.NoError(t, err)
 	r2.ref.Insecure = true
 	s2 := r2.Schema(context.Background())
@@ -165,14 +69,41 @@ func TestResolverPrefersTheRegistryAndFallsBackToTheEmbeddedSchema(t *testing.T)
 	props, ok := s2.Document.(map[string]any)["properties"].(map[string]any)
 	require.True(t, ok)
 	assert.Contains(t, props, "modelConfig", "the embedded copy is the real agent chart schema")
+
+	_, err = NewResolver(chartURL, "not a range", time.Hour, nil, nil)
+	assert.Error(t, err)
 }
 
-func TestParseReference(t *testing.T) {
-	ref, err := ParseReference("oci://gsoci.azurecr.io/charts/giantswarm/agent")
-	require.NoError(t, err)
-	assert.Equal(t, "gsoci.azurecr.io", ref.Host)
-	assert.Equal(t, "charts/giantswarm/agent", ref.Repository)
-	assert.Equal(t, "agent", ref.Name())
-	_, err = ParseReference("https://gsoci.azurecr.io/charts/giantswarm/agent")
-	assert.Error(t, err)
+// TestEmbeddedSchemaIsTheChart1xContract pins the shape of the fallback schema
+// to the Generic chart 1.x values contract: the 0.x runtime keys are gone,
+// skills are a list of pinned sources, muster has url and tools.
+func TestEmbeddedSchemaIsTheChart1xContract(t *testing.T) {
+	doc := EmbeddedSchema().Document.(map[string]any)
+	assert.Equal(t, false, doc["additionalProperties"], "a stale composer sending a removed key fails, never silently loses a field")
+	props := doc["properties"].(map[string]any)
+	for _, removed := range []string{"replicas", "resources", "nodeSelector", "tolerations"} {
+		assert.NotContains(t, props, removed)
+	}
+	agent := props["agent"].(map[string]any)["properties"].(map[string]any)
+	assert.NotContains(t, agent, "runtime")
+	for _, kept := range []string{"name", "displayName", "description", "iconUrl", "systemMessage"} {
+		assert.Contains(t, agent, kept)
+	}
+	muster := props["muster"].(map[string]any)["properties"].(map[string]any)
+	for _, removed := range []string{"serverRef", "allowedHeaders", "stsWellKnownUri", "toolNames"} {
+		assert.NotContains(t, muster, removed)
+	}
+	for _, kept := range []string{"enabled", "tools", "url"} {
+		assert.Contains(t, muster, kept)
+	}
+	skills := props["skills"].(map[string]any)
+	assert.Equal(t, "array", skills["type"], "skills is a list of pinned sources, not the 0.x refs/gitRefs object")
+	skill := skills["items"].(map[string]any)["properties"].(map[string]any)
+	assert.NotContains(t, skill, "gitAuthSecretRef")
+	for _, kept := range []string{"name", "git", "oci", "path"} {
+		assert.Contains(t, skill, kept)
+	}
+	for _, kept := range []string{"toolset", "extraTools", "extraAgentSpec", "labels", "annotations", "modelConfig"} {
+		assert.Contains(t, props, kept)
+	}
 }

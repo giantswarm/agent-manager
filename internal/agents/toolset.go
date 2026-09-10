@@ -8,20 +8,19 @@ import (
 
 // A toolset is the list of selectors an agent declares — the chart's top-level
 // `toolset` value, rendered by the agent chart as the X-Muster-Toolset header
-// on the agent's muster tool entry — that bounds which of the gateway's tools
-// the agent's meta-tools can see and call. agent-manager validates the inline
-// grammar and composes the list exactly as given; resolving a toolset to tools
-// is muster's job, per caller. It is composition, not authorization: the
-// invoking human's identity and the backends' own authorization stay the
-// boundary.
+// on the agent's own muster RemoteMCPServer — that bounds which of the
+// gateway's tools the agent's meta-tools can see and call. agent-manager
+// validates the inline grammar and composes the list exactly as given;
+// resolving a toolset to tools is muster's job, per caller. It is composition,
+// not authorization: the invoking human's identity and the backends' own
+// authorization stay the boundary.
 
 const (
 	// ToolsetValuesKey is the agent chart's top-level value carrying the
-	// toolset (never `muster.toolNames`, which only filters muster's
-	// meta-tools).
+	// toolset (never `muster.tools`, which narrows the MCP binding).
 	ToolsetValuesKey = "toolset"
-	// ToolsetHeader is the header the chart renders for the muster tool entry
-	// (Agent.spec.declarative.tools[].headersFrom[]).
+	// ToolsetHeader is the header the chart renders on the agent's
+	// RemoteMCPServer (spec.headersFrom[]).
 	ToolsetHeader = "X-Muster-Toolset"
 	// MaxToolsetSelectors is the inline cap; a longer list belongs in a preset.
 	MaxToolsetSelectors = 32
@@ -40,9 +39,6 @@ const (
 	selectorPrefixReserved   = "toolset:"
 	selectorPrefixPresetOnly = "label:"
 )
-
-// toolNamesRemoved explains the removed argument to a caller still passing it.
-const toolNamesRemoved = `toolNames never narrowed anything against muster (kagent filters muster's meta-tools only); declare a toolset instead, e.g. toolset: ["preset:read-only"]`
 
 // ValidateToolset checks a declared toolset against the inline grammar:
 // non-empty, at most MaxToolsetSelectors selectors, each
@@ -91,13 +87,32 @@ func presetSelectors() []string {
 	return out
 }
 
-// rejectToolNames refuses the removed `toolNames` argument with the reason.
-// JSON null counts as absent.
-func rejectToolNames(raw json.RawMessage) error {
-	if len(raw) == 0 || string(raw) == "null" {
-		return nil
+// removedArgument pairs a removed argument's raw value with its explanation.
+type removedArgument struct {
+	raw    json.RawMessage
+	reason string
+}
+
+// rejectRemoved refuses the first removed argument a request still carries,
+// with the reason it is gone. JSON null counts as absent.
+func rejectRemoved(args ...removedArgument) error {
+	for _, a := range args {
+		if len(a.raw) == 0 || string(a.raw) == "null" {
+			continue
+		}
+		return invalidf("%s", a.reason)
 	}
-	return invalidf("%s", toolNamesRemoved)
+	return nil
+}
+
+// removed lists the removed arguments of a create.
+func (s Spec) removed() []removedArgument {
+	return []removedArgument{{s.RemovedToolNames, toolNamesRemoved}, {s.RemovedRuntime, runtimeRemoved}}
+}
+
+// removed lists the removed arguments of an update.
+func (u Update) removed() []removedArgument {
+	return []removedArgument{{u.RemovedToolNames, toolNamesRemoved}, {u.RemovedRuntime, runtimeRemoved}}
 }
 
 // ParseToolsetHeader splits a rendered X-Muster-Toolset header value back into

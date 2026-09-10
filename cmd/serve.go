@@ -31,6 +31,8 @@ type serveOptions struct {
 	kagentNamespace   string
 	managedNamespaces string
 	kagentAPIVersion  string
+	harnessName       string
+	musterURL         string
 	helmReleaseAPI    string
 	ociRepositoryAPI  string
 
@@ -83,17 +85,19 @@ environment variable named next to it; flags win over the environment.`,
 	f.BoolVar(&o.inCluster, "in-cluster", envBool("KUBERNETES_IN_CLUSTER", false), "Force in-cluster Kubernetes auth (KUBERNETES_IN_CLUSTER)")
 	f.StringVar(&o.kagentNamespace, "kagent-namespace", envOr("KAGENT_NAMESPACE", "kagent"), "Default namespace agents are created in and listed from (KAGENT_NAMESPACE)")
 	f.StringVar(&o.managedNamespaces, "managed-namespaces", envOr("AGENT_MANAGER_MANAGED_NAMESPACES", ""), "Comma-separated additional namespaces agents may live in; RBAC must exist there (AGENT_MANAGER_MANAGED_NAMESPACES)")
-	f.StringVar(&o.kagentAPIVersion, "kagent-api-version", envOr("KAGENT_API_VERSION", "auto"), "kagent.dev API version for Agents and ModelConfigs; auto discovers the server's preferred version (KAGENT_API_VERSION)")
+	f.StringVar(&o.kagentAPIVersion, "kagent-api-version", envOr("KAGENT_API_VERSION", "auto"), "kagent.dev API version for AgentTemplates, Harnesses, RemoteMCPServers and ModelConfigs; auto discovers the version serving agenttemplates, default "+agents.DefaultKagentAPIVersion+" (KAGENT_API_VERSION)")
+	f.StringVar(&o.harnessName, "harness-name", envOr("AGENT_HARNESS_NAME", agents.DefaultHarnessName), "Name of the platform Harness every agent runs on; its AgentTemplate.status.harnesses[] entry decides get_agent_status (AGENT_HARNESS_NAME)")
+	f.StringVar(&o.musterURL, "muster-url", envOr("AGENT_MUSTER_URL", ""), "The platform's muster MCP URL, composed into every agent as the chart value muster.url; empty composes nothing and the chart default applies (AGENT_MUSTER_URL)")
 	f.StringVar(&o.helmReleaseAPI, "flux-helmrelease-api-version", envOr("FLUX_HELMRELEASE_API_VERSION", "auto"), "helm.toolkit.fluxcd.io API version composed into HelmReleases; auto discovers it (FLUX_HELMRELEASE_API_VERSION)")
 	f.StringVar(&o.ociRepositoryAPI, "flux-ocirepository-api-version", envOr("FLUX_OCIREPOSITORY_API_VERSION", "auto"), "source.toolkit.fluxcd.io API version composed into OCIRepositories; auto discovers it (FLUX_OCIREPOSITORY_API_VERSION)")
 	f.StringVar(&o.chartOCIURL, "agent-chart-oci-url", envOr("AGENT_CHART_OCI_URL", agents.DefaultChartOCIURL), "OCI URL of the agent chart every agent renders from (AGENT_CHART_OCI_URL)")
-	f.StringVar(&o.chartSemver, "agent-chart-semver", envOr("AGENT_CHART_SEMVER", agents.DefaultChartSemver), "Semver range the OCIRepository tracks; x.x.x follows every release (AGENT_CHART_SEMVER)")
+	f.StringVar(&o.chartSemver, "agent-chart-semver", envOr("AGENT_CHART_SEMVER", agents.DefaultChartSemver), "Semver range the OCIRepository tracks; 1.x follows every 1.x release of the Generic chart and never a pre-release (AGENT_CHART_SEMVER)")
 	f.DurationVar(&o.chartRefresh, "agent-chart-refresh", envDuration("AGENT_CHART_REFRESH", 10*time.Minute), "How often the chart registry is re-read for the latest version and its values schema (AGENT_CHART_REFRESH)")
 	f.StringVar(&o.helmReleaseInterval, "helmrelease-interval", envOr("HELMRELEASE_INTERVAL", agents.DefaultHelmReleaseInterval), "HelmRelease.spec.interval of composed agents (HELMRELEASE_INTERVAL)")
 	f.StringVar(&o.ociRepositoryInterval, "ocirepository-interval", envOr("OCIREPOSITORY_INTERVAL", agents.DefaultOCIRepositoryInterval), "OCIRepository.spec.interval of the shared chart source (OCIREPOSITORY_INTERVAL)")
 	f.StringVar(&o.helmReleaseSA, "helmrelease-service-account", envOr("HELMRELEASE_SERVICE_ACCOUNT", ""), "HelmRelease.spec.serviceAccountName, required by a Flux multi-tenancy admission policy in tenant namespaces; empty omits it (HELMRELEASE_SERVICE_ACCOUNT)")
 	f.StringVar(&o.skillsRepositories, "skills-repositories", envOr("AGENT_MANAGER_SKILLS_REPOSITORIES", ""), "Comma-separated GitHub repository URLs whose SKILL.md files are offered by list_skills (AGENT_MANAGER_SKILLS_REPOSITORIES)")
-	f.StringVar(&o.skillsGitHubAPI, "skills-github-api", envOr("AGENT_MANAGER_SKILLS_GITHUB_API", "https://api.github.com"), "GitHub API base URL for skill discovery (AGENT_MANAGER_SKILLS_GITHUB_API)")
+	f.StringVar(&o.skillsGitHubAPI, "skills-github-api", envOr("AGENT_MANAGER_SKILLS_GITHUB_API", "https://api.github.com"), "GitHub API base URL for skill discovery and for resolving a skill's branch or tag to its head commit (AGENT_MANAGER_SKILLS_GITHUB_API)")
 	f.StringVar(&o.skillsToken, "skills-github-token", envOr("GITHUB_TOKEN", ""), "GitHub token for private skill repositories and a higher rate limit; prefer the environment (GITHUB_TOKEN)")
 	f.DurationVar(&o.skillsCacheTTL, "skills-cache-ttl", envDuration("AGENT_MANAGER_SKILLS_CACHE_TTL", 5*time.Minute), "How long a repository's discovered skills are reused (AGENT_MANAGER_SKILLS_CACHE_TTL)")
 	f.BoolVar(&o.mcpEnabled, "mcp-enabled", envBool("AGENT_MANAGER_MCP_ENABLED", true), "Serve the MCP streamable-HTTP endpoint (AGENT_MANAGER_MCP_ENABLED)")
@@ -134,12 +138,12 @@ func runServe(ctx context.Context, o *serveOptions) error {
 		provider = kube.NewCallerProvider(clients, log)
 	}
 
-	kagentVersion := o.kagentAPIVersion
+	kagentVersion := strings.TrimPrefix(o.kagentAPIVersion, "kagent.dev/")
 	if kagentVersion == "" || kagentVersion == "auto" {
-		kagentVersion, err = kube.DiscoverVersion(clients.Discovery(), "kagent.dev", "agents")
+		kagentVersion, err = kube.DiscoverVersion(clients.Discovery(), "kagent.dev", "agenttemplates")
 		if err != nil {
-			log.Warn("kagent API discovery failed, using default", "default", "v1alpha2", "error", err)
-			kagentVersion = "v1alpha2"
+			log.Warn("kagent API discovery failed, using default", "default", agents.DefaultKagentAPIVersion, "error", err)
+			kagentVersion = agents.DefaultKagentAPIVersion
 		}
 	}
 	helmReleaseAPI := discoverGroupVersion(o.helmReleaseAPI, clients, "helm.toolkit.fluxcd.io", "helmreleases", agents.DefaultHelmReleaseAPIVersion, log)
@@ -154,8 +158,11 @@ func runServe(ctx context.Context, o *serveOptions) error {
 	if repos := splitList(o.skillsRepositories); len(repos) > 0 {
 		discoverer = skills.New(skills.Config{Repositories: repos, APIURL: o.skillsGitHubAPI, Token: o.skillsToken, CacheTTL: o.skillsCacheTTL}, log)
 	}
+	// Skills are pinned before they are written: a branch or tag to its head
+	// commit through the GitHub API, an image tag to its digest.
+	pinner := skills.NewResolver(o.skillsGitHubAPI, o.skillsToken, nil, nil)
 
-	svc := agents.New(provider, resolver, discoverer, agents.Config{
+	svc := agents.New(provider, resolver, discoverer, pinner, agents.Config{
 		DefaultNamespace:  o.kagentNamespace,
 		ManagedNamespaces: splitList(o.managedNamespaces),
 		Compose: agents.ComposeConfig{
@@ -167,8 +174,10 @@ func runServe(ctx context.Context, o *serveOptions) error {
 			ServiceAccountName:      o.helmReleaseSA,
 			HelmReleaseAPIVersion:   helmReleaseAPI,
 			OCIRepositoryAPIVersion: ociRepositoryAPI,
+			MusterURL:               o.musterURL,
 		},
 		KagentAPIVersion: kagentVersion,
+		HarnessName:      o.harnessName,
 		Version:          version,
 	}, log)
 
@@ -197,8 +206,8 @@ func runServe(ctx context.Context, o *serveOptions) error {
 	info := svc.Info(ctx)
 	log.Info("agent-manager starting", "version", version, "listen", o.listen, "rest", api.Prefix, "mcp", o.mcpPath, "mcpEnabled", o.mcpEnabled,
 		"oauth", o.oauthEnabled, "downstreamOAuth", o.downstreamOAuth, "identity", info.Identity,
-		"namespaces", info.Namespaces.Managed, "chart", o.chartOCIURL, "chartVersion", info.Chart.LatestVersion, "schemaSource", info.Chart.SchemaSource,
-		"kagentAPI", kagentVersion, "helmReleaseAPI", helmReleaseAPI, "ociRepositoryAPI", ociRepositoryAPI, "skillsRepositories", info.SkillsRepositories)
+		"namespaces", info.Namespaces.Managed, "chart", o.chartOCIURL, "chartSemver", o.chartSemver, "chartVersion", info.Chart.LatestVersion, "schemaSource", info.Chart.SchemaSource,
+		"kagentAPI", kagentVersion, "harness", info.Harness.Name, "musterURL", info.Muster.URL, "helmReleaseAPI", helmReleaseAPI, "ociRepositoryAPI", ociRepositoryAPI, "skillsRepositories", info.SkillsRepositories)
 
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
