@@ -31,39 +31,10 @@ func ValidateValues(ctx context.Context, src SchemaSource, values map[string]any
 	if err != nil {
 		return s, []string{fmt.Sprintf("agent chart schema %s (%s) does not compile: %v", s.Version, s.Source, err)}
 	}
-	if err := compiled.Validate(schemaSubject(s, values)); err != nil {
+	if err := compiled.Validate(values); err != nil {
 		return s, flatten(err)
 	}
 	return s, nil
-}
-
-// schemaSubject returns the values the chart schema judges. The toolset is
-// agent-manager's own contract (ValidateToolset) and does not depend on which
-// chart version's schema is in use: a schema that does not declare the key —
-// the embedded copy of an older chart, or a registry version before the chart
-// release that added `toolset` — would refuse it as an additional property, so
-// the key is left out of the schema check then. As soon as the tracked chart
-// declares `toolset`, its schema validates it as well.
-func schemaSubject(s chart.Schema, values map[string]any) map[string]any {
-	if _, declared := values[ToolsetValuesKey]; !declared || schemaDeclares(s, ToolsetValuesKey) {
-		return values
-	}
-	out := make(map[string]any, len(values))
-	for k, v := range values {
-		if k != ToolsetValuesKey {
-			out[k] = v
-		}
-	}
-	return out
-}
-
-// schemaDeclares reports whether the schema lists key among its top-level
-// properties.
-func schemaDeclares(s chart.Schema, key string) bool {
-	doc, _ := s.Document.(map[string]any)
-	props, _ := doc["properties"].(map[string]any)
-	_, ok := props[key]
-	return ok
 }
 
 func compile(s chart.Schema) (*jsonschema.Schema, error) {

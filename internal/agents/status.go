@@ -8,9 +8,11 @@ import (
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/dynamic"
 
 	"github.com/giantswarm/agent-manager/internal/kube"
 )
@@ -18,33 +20,28 @@ import (
 // errorsIs is errors.Is, named so the service file reads without the import.
 func errorsIs(err, target error) bool { return errors.Is(err, target) }
 
-// Container waiting reasons that mean the workload will not recover on its own.
-var failedWaitingReasons = map[string]bool{
-	"CrashLoopBackOff":                true,
-	"ImagePullBackOff":                true,
-	"ErrImagePull":                    true,
-	"InvalidImageName":                true,
-	"CreateContainerConfigError":      true,
-	"CreateContainerError":            true,
-	"RunContainerError":               true,
-	"ErrImageNeverPull":               true,
-	"ContainerCannotRun":              true,
-	"Error":                           true,
-	"OOMKilled":                       true,
-	"DeadlineExceeded":                true,
-	"StartError":                      true,
-	"CreatePodSandboxError":           true,
-	"FailedPostStartHook":             true,
-	"FailedPreStopHook":               true,
-	"KillContainerError":              true,
-	"ConfigError":                     true,
-	"InvalidEnvironmentVariableNames": true,
-}
+// Readiness on kagent API v2 is the template's: the controller compiles every
+// AgentTemplate for each Harness whose admission selector matches it and
+// reports one status entry per Harness (Accepted, ResolvedRefs, Compatible,
+// then Ready once the golden snapshot exists; a failing stage sets its
+// condition False with the reason; desiredRevision moves ahead of
+// latestSuccessfulRevision while a new revision compiles). The platform runs
+// one Harness — the configured one is the verdict's source. Harness.status is
+// never written; there is no per-agent Deployment or pod.
 
-// Status gathers the Agent CR, the owning HelmRelease (conditions, history),
-// the Deployment kagent runs and its pods (waiting reasons — a crash-looping
-// pod is phase Running, so containerStatuses are what tell) and the recent
-// Warning events, and folds them into one verdict.
+// The AgentTemplate condition types kagent reports per Harness, and the Ready
+// reason the controller writes while it waits for the golden snapshot.
+const (
+	conditionReady        = "Ready"
+	conditionAccepted     = "Accepted"
+	conditionResolvedRefs = "ResolvedRefs"
+	conditionCompatible   = "Compatible"
+	readyReasonPending    = "ActorTemplatePending"
+)
+
+// Status gathers the AgentTemplate's per-Harness status, the owning
+// HelmRelease (conditions, history) and the namespace's recent Warning events
+// for the agent, and folds them into one verdict.
 func (s *Service) Status(ctx context.Context, ns, name string) (*Status, error) {
 	ns, err := s.Namespace(ns)
 	if err != nil {
@@ -57,70 +54,98 @@ func (s *Service) Status(ctx context.Context, ns, name string) (*Status, error) 
 	if err != nil {
 		return nil, err
 	}
-	st := &Status{Name: name, Namespace: ns}
-
-	cr, err := s.getAgentCR(ctx, dyn, ns, name)
+	tpl, err := s.getTemplate(ctx, dyn, ns, name)
 	if err != nil {
 		return nil, err
 	}
 	hrName, hrNs := name, ns
-	if cr != nil {
-		conds := conditionsOf(cr)
-		st.Agent = &AgentStatus{Exists: true, Conditions: conds, Ready: conditionStatus(conds, "Ready"), Accepted: conditionStatus(conds, "Accepted")}
-		if n, nsFromLabel := ownerOf(cr); n != "" {
+	if tpl != nil {
+		if n, nsFromLabel := ownerOf(tpl); n != "" {
 			hrName, hrNs = n, orDefault(nsFromLabel, ns)
 		}
-	} else {
-		st.Agent = &AgentStatus{Exists: false}
 	}
-
 	hr, err := s.getHelmRelease(ctx, dyn, hrNs, hrName)
 	if err != nil {
 		return nil, err
 	}
-	if hr != nil {
-		st.HelmRelease = helmReleaseStatus(hr)
-	} else {
-		st.HelmRelease = &HelmReleaseStatus{Exists: false}
+	if tpl == nil && hr == nil {
+		return nil, notFoundf("agent %s/%s: no AgentTemplate and no HelmRelease of that name", ns, name)
 	}
-	if cr == nil && hr == nil {
-		return nil, notFoundf("agent %s/%s: no Agent and no HelmRelease of that name", ns, name)
-	}
-
-	// The workload: kagent names the Deployment after the Agent and labels its
-	// pods kagent=<name>.
-	deploy, err := client.Typed().AppsV1().Deployments(ns).Get(ctx, name, metav1.GetOptions{})
-	switch {
-	case apierrors.IsNotFound(err):
-		st.Deployment = &DeploymentStatus{Exists: false}
-	case err != nil:
-		return nil, wrapKube(err, fmt.Sprintf("get deployment %s/%s", ns, name))
-	default:
-		ds := &DeploymentStatus{Exists: true, Replicas: deploy.Status.Replicas, ReadyReplicas: deploy.Status.ReadyReplicas, AvailableReplicas: deploy.Status.AvailableReplicas}
-		for _, c := range deploy.Status.Conditions {
-			ds.Conditions = append(ds.Conditions, Condition{Type: string(c.Type), Status: string(c.Status), Reason: c.Reason, Message: c.Message, LastTransitionTime: c.LastTransitionTime.UTC().Format("2006-01-02T15:04:05Z")})
+	st := &Status{Name: name, Namespace: ns, Template: templateStatusOf(tpl), HelmRelease: helmReleaseStatus(hr)}
+	st.Events = s.warningEvents(ctx, client, ns, name)
+	st.Verdict, st.Summary = verdict(st, s.cfg.Compose.HarnessName)
+	if st.Verdict == VerdictFailed && tpl != nil && len(st.Template.Harnesses) == 0 {
+		// Nobody admits the template: say which Harnesses exist and what
+		// they admit, so the label mismatch is visible from the answer.
+		if described := s.describeHarnesses(ctx, dyn, ns, tpl.GetLabels()); described != "" {
+			st.Summary += "; " + described
 		}
-		st.Deployment = ds
 	}
-
-	pods, err := client.Typed().CoreV1().Pods(ns).List(ctx, metav1.ListOptions{LabelSelector: "kagent=" + name})
-	if err != nil {
-		return nil, wrapKube(err, fmt.Sprintf("list pods of %s/%s", ns, name))
-	}
-	for i := range pods.Items {
-		st.Pods = append(st.Pods, podStatus(&pods.Items[i]))
-	}
-	sort.Slice(st.Pods, func(i, j int) bool { return st.Pods[i].Name < st.Pods[j].Name })
-
-	st.Events = s.warningEvents(ctx, client, ns, name, st.Pods)
-
-	st.Verdict, st.Summary = verdict(st)
 	return st, nil
 }
 
+// templateStatusOf reads status.harnesses[] and the generations; Exists is
+// false when the template is absent.
+func templateStatusOf(tpl *unstructured.Unstructured) *TemplateStatus {
+	if tpl == nil {
+		return &TemplateStatus{Harnesses: []HarnessStatus{}}
+	}
+	ts := &TemplateStatus{Exists: true, Generation: tpl.GetGeneration(), Harnesses: []HarnessStatus{}}
+	ts.ObservedGeneration, _, _ = unstructured.NestedInt64(tpl.Object, "status", "observedGeneration")
+	entries, _, _ := unstructured.NestedSlice(tpl.Object, "status", "harnesses")
+	for _, e := range entries {
+		m, ok := e.(map[string]any)
+		if !ok {
+			continue
+		}
+		hs := HarnessStatus{}
+		hs.Harness, _ = m["harness"].(string)
+		hs.DesiredRevision, _ = m["desiredRevision"].(string)
+		hs.LatestSuccessfulRevision, _ = m["latestSuccessfulRevision"].(string)
+		hs.Conditions = conditionsOf(m["conditions"])
+		hs.Ready = conditionStatus(hs.Conditions, conditionReady)
+		hs.Accepted = conditionStatus(hs.Conditions, conditionAccepted)
+		hs.ResolvedRefs = conditionStatus(hs.Conditions, conditionResolvedRefs)
+		hs.Compatible = conditionStatus(hs.Conditions, conditionCompatible)
+		warnings, _ := m["warnings"].([]any)
+		for _, w := range warnings {
+			if str, ok := w.(string); ok {
+				hs.Warnings = append(hs.Warnings, str)
+			}
+		}
+		ts.Harnesses = append(ts.Harnesses, hs)
+	}
+	sort.Slice(ts.Harnesses, func(i, j int) bool { return ts.Harnesses[i].Harness < ts.Harnesses[j].Harness })
+	return ts
+}
+
+// harnessEntry is the status entry of the named Harness, nil when it has not
+// reported.
+func harnessEntry(harnesses []HarnessStatus, name string) *HarnessStatus {
+	for i := range harnesses {
+		if harnesses[i].Harness == name {
+			return &harnesses[i]
+		}
+	}
+	return nil
+}
+
+// harnessReady is the platform Harness's verdict on a template: Ready and the
+// desired revision is the latest successful one. nil while unreported.
+func harnessReady(harnesses []HarnessStatus, name string) *bool {
+	h := harnessEntry(harnesses, name)
+	if h == nil || h.Ready == nil {
+		return nil
+	}
+	return boolPtr(*h.Ready && h.DesiredRevision == h.LatestSuccessfulRevision)
+}
+
 func helmReleaseStatus(hr *unstructured.Unstructured) *HelmReleaseStatus {
-	conds := conditionsOf(hr)
-	out := &HelmReleaseStatus{Exists: true, Conditions: conds, Ready: conditionStatus(conds, "Ready"), GitOpsOwned: gitOpsOwnedHR(hr), Deleting: hr.GetDeletionTimestamp() != nil}
+	if hr == nil {
+		return &HelmReleaseStatus{Exists: false}
+	}
+	conds := conditionsOfObject(hr)
+	out := &HelmReleaseStatus{Exists: true, Conditions: conds, Ready: conditionStatus(conds, conditionReady), GitOpsOwned: gitOpsOwnedHR(hr), Deleting: hr.GetDeletionTimestamp() != nil}
 	out.Suspended, _, _ = unstructured.NestedBool(hr.Object, "spec", "suspend")
 	out.LastAttemptedRevision, _, _ = unstructured.NestedString(hr.Object, "status", "lastAttemptedRevision")
 	if history, found, _ := unstructured.NestedSlice(hr.Object, "status", "history"); found {
@@ -148,54 +173,20 @@ func helmReleaseStatus(hr *unstructured.Unstructured) *HelmReleaseStatus {
 	return out
 }
 
-func podStatus(pod *corev1.Pod) PodStatus {
-	ps := PodStatus{Name: pod.Name, Phase: string(pod.Status.Phase)}
-	for _, c := range pod.Status.Conditions {
-		if c.Type == corev1.PodReady && c.Status == corev1.ConditionTrue {
-			ps.Ready = true
-		}
-	}
-	collect := func(statuses []corev1.ContainerStatus, init bool) {
-		for _, cs := range statuses {
-			ps.Restarts += cs.RestartCount
-			switch {
-			case cs.State.Waiting != nil:
-				ps.Containers = append(ps.Containers, ContainerStatus{Name: cs.Name, State: "waiting", Reason: cs.State.Waiting.Reason, Message: cs.State.Waiting.Message, Init: init})
-			case cs.State.Terminated != nil && (!init || cs.State.Terminated.ExitCode != 0):
-				ps.Containers = append(ps.Containers, ContainerStatus{Name: cs.Name, State: "terminated", Reason: cs.State.Terminated.Reason, Message: cs.State.Terminated.Message, Init: init})
-			case cs.State.Running != nil && !cs.Ready && !init:
-				ps.Containers = append(ps.Containers, ContainerStatus{Name: cs.Name, State: "running", Reason: "NotReady", Init: init})
-			}
-		}
-	}
-	collect(pod.Status.InitContainerStatuses, true)
-	collect(pod.Status.ContainerStatuses, false)
-	return ps
-}
-
-// warningEvents lists recent Warning events on the agent's objects (Agent,
-// HelmRelease, Deployment, ReplicaSets and pods named after it), newest
-// first, at most ten. Events are diagnostics: a list failure yields none.
-func (s *Service) warningEvents(ctx context.Context, client kube.Client, ns, name string, pods []PodStatus) []Event {
-	list, err := client.Typed().CoreV1().Events(ns).List(ctx, metav1.ListOptions{FieldSelector: "type=Warning"})
+// warningEvents lists recent Warning events on the agent's objects (the
+// AgentTemplate, the RemoteMCPServer and the HelmRelease share its name),
+// newest first, at most ten. Events are diagnostics: a list failure yields
+// none.
+func (s *Service) warningEvents(ctx context.Context, client kube.Client, ns, name string) []Event {
+	list, err := client.Typed().CoreV1().Events(ns).List(ctx, metav1.ListOptions{FieldSelector: "type=Warning,involvedObject.name=" + name})
 	if err != nil {
 		s.log.Debug("listing events failed", "namespace", ns, "error", err)
 		return nil
 	}
-	podNames := map[string]bool{}
-	for _, p := range pods {
-		podNames[p.Name] = true
-	}
 	var out []Event
 	for i := range list.Items {
 		ev := &list.Items[i]
-		if ev.Type != corev1.EventTypeWarning {
-			continue
-		}
-		obj := ev.InvolvedObject
-		owned := obj.Name == name || podNames[obj.Name] ||
-			((obj.Kind == "ReplicaSet" || obj.Kind == "Pod") && strings.HasPrefix(obj.Name, name+"-"))
-		if !owned {
+		if ev.Type != corev1.EventTypeWarning || ev.InvolvedObject.Name != name {
 			continue
 		}
 		last := ev.LastTimestamp.Time
@@ -205,7 +196,7 @@ func (s *Service) warningEvents(ctx context.Context, client kube.Client, ns, nam
 		if last.IsZero() {
 			last = ev.CreationTimestamp.Time
 		}
-		e := Event{Type: ev.Type, Reason: ev.Reason, Message: ev.Message, Object: obj.Kind + "/" + obj.Name, Count: ev.Count}
+		e := Event{Type: ev.Type, Reason: ev.Reason, Message: ev.Message, Object: ev.InvolvedObject.Kind + "/" + ev.InvolvedObject.Name, Count: ev.Count}
 		if !last.IsZero() {
 			e.Last = last.UTC().Format("2006-01-02T15:04:05Z")
 		}
@@ -219,72 +210,171 @@ func (s *Service) warningEvents(ctx context.Context, client kube.Client, ns, nam
 }
 
 // verdict folds the gathered facts into ready / progressing / failed / unknown
-// and one actionable sentence.
-func verdict(st *Status) (string, string) {
-	if st.HelmRelease != nil && st.HelmRelease.Deleting {
-		return VerdictProgressing, "HelmRelease is being uninstalled by helm-controller; the Agent disappears with it"
+// and one actionable sentence. harness is the platform Harness whose status
+// entry decides.
+func verdict(st *Status, harness string) (string, string) {
+	hr, ts := st.HelmRelease, st.Template
+	if hr != nil && hr.Deleting {
+		return VerdictProgressing, "HelmRelease is being uninstalled by helm-controller; the AgentTemplate disappears with it"
 	}
-	if st.HelmRelease != nil && st.HelmRelease.Exists && st.HelmRelease.Ready != nil && !*st.HelmRelease.Ready {
-		c := findCondition(st.HelmRelease.Conditions, "Ready")
-		reason, msg := "", ""
-		if c != nil {
-			reason, msg = c.Reason, c.Message
+	if hr != nil && hr.Exists && hr.Ready != nil && !*hr.Ready {
+		c := findCondition(hr.Conditions, conditionReady)
+		return VerdictFailed, "HelmRelease is not ready: " + conditionText(c)
+	}
+	if ts != nil && ts.Exists {
+		if h := harnessEntry(ts.Harnesses, harness); h != nil {
+			return harnessVerdict(h)
 		}
-		return VerdictFailed, fmt.Sprintf("HelmRelease is not ready (%s): %s", reason, msg)
-	}
-	for _, pod := range st.Pods {
-		for _, c := range pod.Containers {
-			if failedWaitingReasons[c.Reason] {
-				return VerdictFailed, fmt.Sprintf("pod %s container %s is %s: %s", pod.Name, c.Name, c.Reason, firstLine(c.Message))
-			}
+		switch {
+		case ts.ObservedGeneration == 0:
+			return VerdictProgressing, "kagent has not reported on the AgentTemplate yet"
+		case ts.ObservedGeneration < ts.Generation:
+			return VerdictProgressing, fmt.Sprintf("kagent has not observed generation %d of the AgentTemplate yet (observed %d)", ts.Generation, ts.ObservedGeneration)
+		case len(ts.Harnesses) == 0:
+			return VerdictFailed, "no Harness admits the AgentTemplate: no Harness of the namespace has an allowedAgentTemplates selector matching its labels"
 		}
-	}
-	if st.Agent != nil && st.Agent.Exists && st.Agent.Accepted != nil && !*st.Agent.Accepted {
-		c := findCondition(st.Agent.Conditions, "Accepted")
-		return VerdictFailed, "kagent rejected the Agent configuration: " + conditionText(c)
-	}
-	if st.Agent != nil && st.Agent.Exists && st.Agent.Ready != nil && *st.Agent.Ready {
-		if st.Deployment == nil || !st.Deployment.Exists || st.Deployment.AvailableReplicas > 0 || st.Deployment.Replicas == 0 {
-			return VerdictReady, fmt.Sprintf("Agent is Ready; %d/%d pods available", availableOf(st), replicasOf(st))
+		names := make([]string, 0, len(ts.Harnesses))
+		for _, h := range ts.Harnesses {
+			names = append(names, h.Harness)
 		}
+		return VerdictFailed, fmt.Sprintf("the platform Harness %q does not admit the AgentTemplate; it is admitted by %s only", harness, strings.Join(names, ", "))
 	}
-	for _, ev := range st.Events {
-		if strings.Contains(ev.Reason, "Failed") || ev.Reason == "BackOff" {
-			return VerdictProgressing, fmt.Sprintf("not ready yet; last warning on %s: %s: %s", ev.Object, ev.Reason, firstLine(ev.Message))
+	if hr != nil && hr.Exists {
+		if hr.Ready == nil {
+			return VerdictProgressing, "HelmRelease created; Flux has not reconciled it yet"
 		}
+		return VerdictProgressing, "HelmRelease is ready but the AgentTemplate has not been rendered yet"
 	}
-	if st.HelmRelease != nil && st.HelmRelease.Exists && st.HelmRelease.Ready == nil {
-		return VerdictProgressing, "HelmRelease created; Flux has not reconciled it yet"
-	}
-	if st.Agent != nil && !st.Agent.Exists && st.HelmRelease != nil && st.HelmRelease.Exists {
-		return VerdictProgressing, "HelmRelease is ready but the Agent has not been rendered yet"
-	}
-	if st.Agent != nil && st.Agent.Exists && st.Agent.Ready == nil {
-		return VerdictProgressing, "Agent accepted; kagent has not reported readiness yet"
-	}
-	if st.Deployment != nil && st.Deployment.Exists && st.Deployment.AvailableReplicas == 0 {
-		return VerdictProgressing, fmt.Sprintf("Deployment has %d/%d pods available", st.Deployment.AvailableReplicas, st.Deployment.Replicas)
-	}
-	if st.Agent != nil && st.Agent.Exists {
-		c := findCondition(st.Agent.Conditions, "Ready")
-		return VerdictProgressing, "Agent is not ready: " + conditionText(c)
-	}
-	return VerdictUnknown, "no Agent and no HelmRelease reported anything yet"
+	return VerdictUnknown, "no AgentTemplate and no HelmRelease reported anything yet"
 }
 
-func availableOf(st *Status) int32 {
-	if st.Deployment == nil {
-		return 0
+// harnessVerdict reads one Harness's entry: a False Accepted, ResolvedRefs or
+// Compatible is a failure with the condition's message; Ready on the desired
+// revision is ready; everything else is a revision still compiling.
+func harnessVerdict(h *HarnessStatus) (string, string) {
+	for _, typ := range []string{conditionAccepted, conditionResolvedRefs, conditionCompatible} {
+		if c := findCondition(h.Conditions, typ); c != nil && c.Status == "False" {
+			return VerdictFailed, fmt.Sprintf("Harness %s: %s is False (%s)", h.Harness, typ, conditionText(c))
+		}
 	}
-	return st.Deployment.AvailableReplicas
+	if h.Ready != nil && *h.Ready && h.DesiredRevision == h.LatestSuccessfulRevision {
+		summary := fmt.Sprintf("AgentTemplate is Ready on Harness %s (revision %s)", h.Harness, h.LatestSuccessfulRevision)
+		if n := len(h.Warnings); n > 0 {
+			summary += fmt.Sprintf(" with %d warning(s): %s", n, strings.Join(h.Warnings, "; "))
+		}
+		return VerdictReady, summary
+	}
+	if h.LatestSuccessfulRevision != "" && h.DesiredRevision != h.LatestSuccessfulRevision {
+		return VerdictProgressing, fmt.Sprintf("Harness %s is compiling revision %s; %s is the latest successful one", h.Harness, h.DesiredRevision, h.LatestSuccessfulRevision)
+	}
+	// Ready not yet True without a failed stage: the first revision is still
+	// compiling while the controller waits for the golden snapshot
+	// (readyReasonPending); any other False reason is a failure it will not
+	// get past on its own.
+	if c := findCondition(h.Conditions, conditionReady); c != nil && c.Status != "True" {
+		if c.Status == "False" && c.Reason != readyReasonPending {
+			return VerdictFailed, fmt.Sprintf("Harness %s: Ready is False (%s)", h.Harness, conditionText(c))
+		}
+		return VerdictProgressing, fmt.Sprintf("Harness %s is compiling revision %s; Ready is %s (%s)", h.Harness, h.DesiredRevision, c.Status, conditionText(c))
+	}
+	return VerdictProgressing, fmt.Sprintf("Harness %s is compiling revision %s; Ready not reported yet", h.Harness, h.DesiredRevision)
 }
 
-func replicasOf(st *Status) int32 {
-	if st.Deployment == nil {
-		return 0
+// describeHarnesses lists the Harnesses of ns with what they admit, for the
+// "no Harness admits the template" answer. Best effort: "" on any failure.
+func (s *Service) describeHarnesses(ctx context.Context, dyn dynamic.Interface, ns string, tplLabels map[string]string) string {
+	list, err := dyn.Resource(s.harnessGVR()).Namespace(ns).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		s.log.Debug("listing harnesses failed", "namespace", ns, "error", err)
+		return ""
 	}
-	return st.Deployment.Replicas
+	if len(list.Items) == 0 {
+		return fmt.Sprintf("no Harness exists in namespace %s", ns)
+	}
+	described := make([]string, 0, len(list.Items))
+	for i := range list.Items {
+		described = append(described, describeHarness(&list.Items[i]))
+	}
+	sort.Strings(described)
+	return fmt.Sprintf("the template carries %s; Harnesses: %s", labels.Set(tplLabels).String(), strings.Join(described, "; "))
 }
+
+func describeHarness(h *unstructured.Unstructured) string {
+	raw, found, _ := unstructured.NestedMap(h.Object, "spec", "allowedAgentTemplates", "selector")
+	if !found {
+		return h.GetName() + " (admits nothing: no allowedAgentTemplates selector)"
+	}
+	sel := &metav1.LabelSelector{}
+	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(raw, sel); err != nil {
+		return fmt.Sprintf("%s (unreadable selector: %v)", h.GetName(), err)
+	}
+	parsed, err := metav1.LabelSelectorAsSelector(sel)
+	if err != nil {
+		return fmt.Sprintf("%s (invalid selector: %v)", h.GetName(), err)
+	}
+	return fmt.Sprintf("%s (admits %s)", h.GetName(), parsed.String())
+}
+
+// conditionsOfObject flattens an object's status.conditions.
+func conditionsOfObject(obj *unstructured.Unstructured) []Condition {
+	raw, _, _ := unstructured.NestedSlice(obj.Object, "status", "conditions")
+	return conditionsOf(raw)
+}
+
+// conditionsOf flattens a conditions list.
+func conditionsOf(raw any) []Condition {
+	items, _ := raw.([]any)
+	if len(items) == 0 {
+		return nil
+	}
+	out := make([]Condition, 0, len(items))
+	for _, item := range items {
+		m, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		c := Condition{}
+		c.Type, _ = m["type"].(string)
+		c.Status, _ = m["status"].(string)
+		c.Reason, _ = m["reason"].(string)
+		c.Message, _ = m["message"].(string)
+		c.LastTransitionTime, _ = m["lastTransitionTime"].(string)
+		switch g := m["observedGeneration"].(type) {
+		case int64:
+			c.ObservedGeneration = g
+		case float64:
+			c.ObservedGeneration = int64(g)
+		}
+		out = append(out, c)
+	}
+	return out
+}
+
+func findCondition(conds []Condition, typ string) *Condition {
+	for i := range conds {
+		if conds[i].Type == typ {
+			return &conds[i]
+		}
+	}
+	return nil
+}
+
+// conditionStatus maps a condition to true/false, nil when absent or Unknown.
+func conditionStatus(conds []Condition, typ string) *bool {
+	c := findCondition(conds, typ)
+	if c == nil {
+		return nil
+	}
+	switch c.Status {
+	case "True":
+		return boolPtr(true)
+	case "False":
+		return boolPtr(false)
+	}
+	return nil
+}
+
+func boolPtr(b bool) *bool { return &b }
 
 func conditionText(c *Condition) string {
 	if c == nil {
@@ -294,11 +384,4 @@ func conditionText(c *Condition) string {
 		return c.Reason + ": " + c.Message
 	}
 	return c.Reason
-}
-
-func firstLine(s string) string {
-	if i := strings.IndexByte(s, '\n'); i >= 0 {
-		return s[:i]
-	}
-	return s
 }

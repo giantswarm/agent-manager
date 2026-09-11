@@ -1,20 +1,19 @@
 // Package skills discovers agent skills in git repositories the way the
 // portal backend's /agent-skills endpoint does: every SKILL.md in a GitHub
 // repository is one skill, its frontmatter name and description describe it,
-// and its directory is the kagent spec.skills.gitRefs entry (url + path + ref)
-// an agent mounts. Results are cached per repository for a short time so a
-// meta agent listing skills repeatedly does not exhaust GitHub's rate limit.
+// and its directory is the skill an agent mounts (url + path). kagent API v2
+// pins skills to immutable sources, so the ref that was read is resolved to
+// its head commit and reported next to it: the skills entry a listing yields
+// feeds create_agent as is. Results are cached per repository for a short time
+// so a meta agent listing skills repeatedly does not exhaust GitHub's rate
+// limit. The Resolver (resolve.go) is the same GitHub path for the composer:
+// a branch or tag to its head commit, a repository to its default branch.
 package skills
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
-	"net/url"
-	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -33,29 +32,40 @@ type Skill struct {
 	RepoURL string `json:"repoUrl"`
 	// Path is the skill directory; "" at the repository root.
 	Path string `json:"path"`
-	// Ref is the git ref the skill was read from.
+	// Ref is the git ref (branch) the skill was read from.
 	Ref string `json:"ref"`
+	// Commit is the commit Ref resolved to when it was read: the immutable
+	// reference an agent pins the skill to.
+	Commit string `json:"commit"`
 }
 
-// GitRef is the skill as a chart skills.gitRefs entry.
-func (s Skill) GitRef() map[string]string {
-	name := s.Name
-	if p := strings.Trim(s.Path, "/"); p != "" {
-		parts := strings.Split(p, "/")
-		name = parts[len(parts)-1]
-	}
-	out := map[string]string{"url": s.RepoURL, "name": name, "ref": s.Ref}
+// Entry is the skill as a create_agent/update_agent skills entry: pinned to
+// the commit it was read at.
+func (s Skill) Entry() map[string]any {
+	out := map[string]any{"name": s.mountName(), "git": map[string]any{"url": s.RepoURL, "commit": s.Commit}}
 	if s.Path != "" {
 		out["path"] = s.Path
 	}
 	return out
 }
 
+// mountName is the directory the skill mounts under: the last path segment,
+// else the frontmatter name.
+func (s Skill) mountName() string {
+	if p := strings.Trim(s.Path, "/"); p != "" {
+		parts := strings.Split(p, "/")
+		return parts[len(parts)-1]
+	}
+	return s.Name
+}
+
 // Repository is the discovery result of one configured repository.
 type Repository struct {
-	RepoURL string  `json:"repoUrl"`
-	Ref     string  `json:"ref,omitempty"`
-	Skills  []Skill `json:"skills"`
+	RepoURL string `json:"repoUrl"`
+	Ref     string `json:"ref,omitempty"`
+	// Commit is what Ref resolved to when the repository was read.
+	Commit string  `json:"commit,omitempty"`
+	Skills []Skill `json:"skills"`
 	// Truncated is true when GitHub capped the tree or a SKILL.md read failed:
 	// some skills may be missing.
 	Truncated bool `json:"truncated"`
@@ -71,7 +81,7 @@ type Result struct {
 	Skills []Skill `json:"skills"`
 }
 
-// Config tunes the discoverer.
+// Config tunes the discoverer and the resolver.
 type Config struct {
 	// Repositories are the configured skill repositories (github.com URLs).
 	Repositories []string
@@ -88,9 +98,9 @@ type Config struct {
 
 // Discoverer reads skills from GitHub with a per-repository cache.
 type Discoverer struct {
-	cfg  Config
-	http *http.Client
-	log  *slog.Logger
+	cfg Config
+	gh  *github
+	log *slog.Logger
 
 	mu    sync.Mutex
 	cache map[string]Repository
@@ -98,21 +108,13 @@ type Discoverer struct {
 
 // New builds a discoverer.
 func New(cfg Config, log *slog.Logger) *Discoverer {
-	if cfg.APIURL == "" {
-		cfg.APIURL = "https://api.github.com"
-	}
-	cfg.APIURL = strings.TrimRight(cfg.APIURL, "/")
 	if cfg.CacheTTL <= 0 {
 		cfg.CacheTTL = 5 * time.Minute
-	}
-	client := cfg.HTTPClient
-	if client == nil {
-		client = &http.Client{Timeout: 30 * time.Second}
 	}
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Discoverer{cfg: cfg, http: client, log: log, cache: map[string]Repository{}}
+	return &Discoverer{cfg: cfg, gh: newGitHub(cfg.APIURL, cfg.Token, cfg.HTTPClient), log: log, cache: map[string]Repository{}}
 }
 
 // Repositories returns the configured repositories.
@@ -163,17 +165,6 @@ func (d *Discoverer) discover(ctx context.Context, repoURL, ref string, refresh 
 	return repo
 }
 
-var repoURLRe = regexp.MustCompile(`^https://github\.com/([^/]+)/([^/]+?)(?:\.git)?/?$`)
-
-// parseRepoURL splits https://github.com/<owner>/<repo>.
-func parseRepoURL(repoURL string) (owner, repo string, err error) {
-	m := repoURLRe.FindStringSubmatch(strings.TrimSpace(repoURL))
-	if m == nil {
-		return "", "", fmt.Errorf("not a github.com repository URL: %s (expected https://github.com/<owner>/<repo>)", repoURL)
-	}
-	return m[1], m[2], nil
-}
-
 const skillFile = "SKILL.md"
 
 func isSkillFile(path string) bool {
@@ -192,19 +183,19 @@ func (d *Discoverer) read(ctx context.Context, repoURL, ref string) (Repository,
 	if err != nil {
 		return Repository{}, err
 	}
-	canonical := "https://github.com/" + owner + "/" + name
+	canonical := canonicalRepoURL(owner, name)
 	branch := ref
 	if branch == "" {
-		var meta struct {
-			DefaultBranch string `json:"default_branch"`
-		}
-		if err := d.getJSON(ctx, fmt.Sprintf("%s/repos/%s/%s", d.cfg.APIURL, owner, name), &meta); err != nil {
+		if branch, err = d.gh.defaultBranch(ctx, owner, name); err != nil {
 			return Repository{}, err
 		}
-		branch = meta.DefaultBranch
-		if branch == "" {
-			branch = "main"
-		}
+	}
+	// The commit the ref points at right now: what an agent pins. The tree
+	// and the files are read at that commit, not the branch, so the listing
+	// stays consistent even when the branch moves between the calls.
+	head, err := d.gh.headCommit(ctx, owner, name, branch)
+	if err != nil {
+		return Repository{}, err
 	}
 	var tree struct {
 		Tree []struct {
@@ -213,15 +204,15 @@ func (d *Discoverer) read(ctx context.Context, repoURL, ref string) (Repository,
 		} `json:"tree"`
 		Truncated bool `json:"truncated"`
 	}
-	if err := d.getJSON(ctx, fmt.Sprintf("%s/repos/%s/%s/git/trees/%s?recursive=1", d.cfg.APIURL, owner, name, url.PathEscape(branch)), &tree); err != nil {
+	if err := d.gh.getJSON(ctx, d.gh.apiURL+"/repos/"+owner+"/"+name+"/git/trees/"+head+"?recursive=1", &tree); err != nil {
 		return Repository{}, err
 	}
-	repo := Repository{RepoURL: canonical, Ref: branch, Skills: []Skill{}, Truncated: tree.Truncated}
+	repo := Repository{RepoURL: canonical, Ref: branch, Commit: head, Skills: []Skill{}, Truncated: tree.Truncated}
 	for _, entry := range tree.Tree {
 		if entry.Type != "blob" || !isSkillFile(entry.Path) {
 			continue
 		}
-		content, err := d.raw(ctx, owner, name, entry.Path, branch)
+		content, err := d.gh.raw(ctx, owner, name, entry.Path, head)
 		if err != nil {
 			d.log.Warn("skipping unreadable SKILL.md", "repository", canonical, "path", entry.Path, "error", err)
 			repo.Truncated = true
@@ -244,6 +235,7 @@ func (d *Discoverer) read(ctx context.Context, repoURL, ref string) (Repository,
 			RepoURL:     canonical,
 			Path:        dir,
 			Ref:         branch,
+			Commit:      head,
 		})
 	}
 	sort.Slice(repo.Skills, func(i, j int) bool {
@@ -253,62 +245,6 @@ func (d *Discoverer) read(ctx context.Context, repoURL, ref string) (Repository,
 		return repo.Skills[i].Name < repo.Skills[j].Name
 	})
 	return repo, nil
-}
-
-func (d *Discoverer) getJSON(ctx context.Context, target string, out any) error {
-	body, err := d.get(ctx, target, "application/vnd.github+json")
-	if err != nil {
-		return err
-	}
-	if err := json.Unmarshal(body, out); err != nil {
-		return fmt.Errorf("decode %s: %w", target, err)
-	}
-	return nil
-}
-
-func (d *Discoverer) raw(ctx context.Context, owner, repo, path, ref string) (string, error) {
-	segments := strings.Split(path, "/")
-	for i, s := range segments {
-		segments[i] = url.PathEscape(s)
-	}
-	target := fmt.Sprintf("%s/repos/%s/%s/contents/%s?ref=%s", d.cfg.APIURL, owner, repo, strings.Join(segments, "/"), url.QueryEscape(ref))
-	body, err := d.get(ctx, target, "application/vnd.github.raw+json")
-	return string(body), err
-}
-
-func (d *Discoverer) get(ctx context.Context, target, accept string) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Accept", accept)
-	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
-	if d.cfg.Token != "" {
-		req.Header.Set("Authorization", "Bearer "+d.cfg.Token)
-	}
-	resp, err := d.http.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("GET %s: %w", target, err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
-	if err != nil {
-		return nil, fmt.Errorf("GET %s: %w", target, err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("GitHub API %s returned %d: %s", target, resp.StatusCode, strings.TrimSpace(firstLine(string(body))))
-	}
-	return body, nil
-}
-
-func firstLine(s string) string {
-	if i := strings.IndexByte(s, '\n'); i >= 0 {
-		return s[:i]
-	}
-	if len(s) > 200 {
-		return s[:200]
-	}
-	return s
 }
 
 // parseFrontmatter reads the YAML block between the leading `---` lines and

@@ -1,0 +1,100 @@
+# The Role of every managed namespace names the kagent.dev/v1alpha3 resources
+# an agent renders to (AgentTemplate, RemoteMCPServer), the Harnesses and
+# ModelConfigs it reads, and the Flux objects it writes — never the v1alpha2
+# `agents` resource, never a Deployment or pod.
+#
+# Run with: make helm-test (helm unittest helm/agent-manager)
+suite: rbac
+templates:
+  - templates/rbac.yaml
+tests:
+  - it: reads the v1alpha3 resources next to the Flux objects it writes
+    documentIndex: 0
+    asserts:
+      - isKind:
+          of: Role
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["kagent.dev"]
+            resources: ["agenttemplates", "harnesses", "remotemcpservers", "modelconfigs"]
+            verbs: ["get", "list", "watch"]
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["kagent.dev"]
+            resources: ["agenttemplates", "remotemcpservers"]
+            verbs: ["delete"]
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["helm.toolkit.fluxcd.io"]
+            resources: ["helmreleases"]
+            verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["source.toolkit.fluxcd.io"]
+            resources: ["ocirepositories"]
+            verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+      - contains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["events"]
+            verbs: ["get", "list", "watch"]
+      - notContains:
+          path: rules
+          content:
+            apiGroups: ["kagent.dev"]
+            resources: ["agents", "modelconfigs"]
+            verbs: ["get", "list", "watch"]
+      - notContains:
+          path: rules
+          content:
+            apiGroups: ["apps"]
+            resources: ["deployments", "replicasets"]
+            verbs: ["get", "list", "watch"]
+      - notContains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["pods", "events"]
+            verbs: ["get", "list", "watch"]
+
+  - it: names nothing of the kagent v1alpha2 API
+    documentIndex: 0
+    asserts:
+      - notMatchRegex:
+          path: rules[?(@.apiGroups[0] == "kagent.dev")].resources[*]
+          pattern: ^agents$
+
+  - it: renders one Role per managed namespace
+    set:
+      kagent:
+        additionalNamespaces: [tenant-a]
+    asserts:
+      - hasDocuments:
+          count: 4
+      - equal:
+          path: metadata.namespace
+          value: kagent
+        documentIndex: 0
+      - equal:
+          path: metadata.namespace
+          value: tenant-a
+        documentIndex: 2
+
+  - it: renders no RBAC at all with downstream OAuth
+    set:
+      oauth:
+        enabled: true
+        baseURL: https://agent-manager.example.com
+        dex:
+          issuerURL: https://dex.example.com
+          clientID: platform
+        downstream:
+          enabled: true
+    asserts:
+      - hasDocuments:
+          count: 0

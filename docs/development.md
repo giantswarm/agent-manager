@@ -20,17 +20,25 @@ make helm-docs          # regenerate helm/agent-manager/README.md
 - `internal/identity` — the authenticated caller on the request context
   (subject, email, groups, source) and the IdP token downstream OAuth presents
   to the apiserver.
-- `internal/chart` — the agent chart: a minimal OCI distribution client
-  (anonymous bearer challenge, tag list, one file out of the chart archive), the
-  resolver that tracks the latest in-range version and its `values.schema.json`,
-  and the embedded copy of the schema as the offline fallback.
+- `internal/oci` — a minimal OCI distribution client (anonymous bearer
+  challenge, tag list, one file out of a chart archive, the digest a tag
+  resolves to) with a fake registry for tests in `ocitest`.
+- `internal/chart` — the agent chart: the resolver that tracks the latest
+  in-range version (`1.x`, Masterminds semantics like Flux) and its
+  `values.schema.json`, and the embedded copy of the chart 1.x schema as the
+  offline fallback.
+- `internal/skills` — SKILL.md discovery in GitHub repositories (the portal
+  backend's `/agent-skills` semantics, each skill with the head commit it was
+  read at) and the `Resolver` that pins a branch or tag to its head commit and
+  an image tag to its digest.
 - `internal/agents` — the domain: `compose.go` mirrors the portal's
-  `composeManifests.ts` (values, HelmRelease, OCIRepository), `validate.go`
-  runs the chart schema, `service.go` is list/get/create/update/delete plus
-  model configs, `status.go` folds Agent, HelmRelease, Deployment, pods and
-  events into one verdict.
-- `internal/skills` — SKILL.md discovery in GitHub repositories, the portal
-  backend's `/agent-skills` semantics, with a per-repository cache.
+  `composeManifests.ts` (chart 1.x values, HelmRelease, OCIRepository),
+  `skills.go` validates and pins skill entries, `validate.go` runs the chart
+  schema, `service.go` is list/get/create/update/delete plus model configs —
+  the read model comes from the AgentTemplate, the agent's RemoteMCPServer and
+  the owning HelmRelease — and `status.go` folds the platform Harness's entry
+  on the template, the HelmRelease and the Warning events into one verdict.
+  `testdata/` holds what Generic chart 1.x renders.
 - `internal/api` — REST handlers and MCP tools over the service.
 - `internal/server` — the HTTP listener; `oauth.go` is the mcp-oauth resource
   server (Dex or Google provider, forwarded-id_token validation through
@@ -41,47 +49,33 @@ make helm-docs          # regenerate helm/agent-manager/README.md
   private IPs allowed.
 - `api/openapi.yaml` — the REST contract; served at `/api/v1/openapi.yaml`.
 - `helm/agent-manager` — the chart.
+- `.ats/main.yaml` — the ATS smoke: the chart installs on a kind cluster with
+  the Flux and kagent.dev/v1alpha3 CRDs applied (pinned to the kagent line's
+  commit), so the startup discovery path is covered.
 
-## Local loop against the agentlab kind cluster
+## Local loop against a kind cluster with kagent API v2
 
 ```sh
 go build -o agent-manager .
 ./agent-manager serve --listen 127.0.0.1:18080 \
-  --kubeconfig ~/.kube/config --kube-context kind-agentlab --kagent-namespace kagent \
+  --kubeconfig <kubeconfig> --kagent-namespace kagent --harness-name kagent \
   --skills-repositories https://github.com/giantswarm/agent-skills -v
 
 curl -s localhost:18080/api/v1/info
 curl -s localhost:18080/api/v1/modelconfigs
-curl -s -X POST localhost:18080/api/v1/agents/validate -d '{"name":"probe","modelConfig":"default-model-config","displayName":"Probe"}'
-curl -s -X POST localhost:18080/api/v1/agents -d '{"name":"probe","modelConfig":"default-model-config","displayName":"Probe"}'
+curl -s localhost:18080/api/v1/skills
+curl -s -X POST localhost:18080/api/v1/agents/validate -d '{"name":"probe","modelConfig":"default-model-config","displayName":"Probe","toolset":["preset:read-only"],"skills":[{"git":{"url":"https://github.com/giantswarm/agent-skills","ref":"main"},"path":"agent-self-awareness"}]}'
+curl -s -X POST localhost:18080/api/v1/agents -d '{"name":"probe","modelConfig":"default-model-config","displayName":"Probe","toolset":["preset:read-only"]}'
 curl -s localhost:18080/api/v1/agents/kagent/probe/status
+curl -s -X PATCH localhost:18080/api/v1/agents/kagent/probe -d '{"refreshSkills":true}'
 curl -s -X DELETE localhost:18080/api/v1/agents/kagent/probe
 ```
 
 ## In the lab (agentlab)
 
-```sh
-make docker-build TAG=agent-manager:dev-$(git rev-parse --short HEAD)
-kind load docker-image agent-manager:dev-$(git rev-parse --short HEAD) --name agentlab
-helm upgrade --install agent-manager helm/agent-manager -n agent-platform \
-  --set image.registry=docker.io --set image.repository=library/agent-manager \
-  --set image.tag=dev-$(git rev-parse --short HEAD) --set image.pullPolicy=Never \
-  --set muster.mcpServer.enabled=true
-```
-
-The lab muster then lists the tools as `x_agent-manager_*`; the proof is a
-`create_agent` → `get_agent_status` (ready) → `delete_agent` round trip
-through `call_tool` while another agent keeps the shared OCIRepository alive.
-
-With the `agent-platform` meta chart the lab runs agent-manager as the
-caller (`oauth.enabled` + `oauth.downstream.enabled` from the chart's
-`agent-manager:` block, `requiredAudiences: [kubernetes]`, the `dex-localhost`
-sidecar agentlab patches in through the component's `postRenderers` so the pod
-reaches the lab issuer): swap the image through agentlab instead of installing
-a second release (`platform.devImages.agent-manager: agent-manager:dev-<sha>`
-in `agentlab.yaml`, then `agentlab platform`) and run
-`agentlab agents-test` — the admin's round trip succeeds with
-`requestedBy=admin@lab.local`, a `viewers`-group user's create is refused by
-the apiserver as `User "oidc:viewer@lab.local"`, and
-`kubectl auth can-i --list --as=system:serviceaccount:agent-platform:agent-manager -n kagent`
-shows nothing beyond discovery.
+The lab installs the platform through the `agent-platform` meta chart; swap
+this component in with `platform.devImages.agent-manager: <image:tag>` after
+`make docker-build TAG=<image:tag>` — the image must run with the chart the lab
+installs for agent-manager, so on a chart change point the component at the
+branch's published chart build instead — and prove it with the lab's
+`agents-test` and `toolsets-test` (see the agentlab README).

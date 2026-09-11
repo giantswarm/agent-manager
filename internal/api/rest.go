@@ -63,8 +63,9 @@ type errorDetail struct {
 // update when `update` is true (the spec's non-empty fields become the change).
 type validateRequest struct {
 	agents.Spec
-	Update bool `json:"update,omitempty"`
-	Force  bool `json:"force,omitempty"`
+	Update        bool `json:"update,omitempty"`
+	Force         bool `json:"force,omitempty"`
+	RefreshSkills bool `json:"refreshSkills,omitempty"`
 }
 
 func (h *REST) getInfo(w http.ResponseWriter, r *http.Request) {
@@ -120,6 +121,7 @@ func (h *REST) validateAgent(w http.ResponseWriter, r *http.Request) {
 	if req.Update {
 		upd := SpecToUpdate(req.Spec)
 		upd.Force = req.Force
+		upd.RefreshSkills = req.RefreshSkills
 		res, err = h.svc.ValidateUpdate(r.Context(), upd)
 	} else {
 		res, err = h.svc.ValidateCreate(r.Context(), req.Spec)
@@ -203,15 +205,16 @@ func SpecToUpdate(s agents.Spec) agents.Update {
 	upd.SystemMessage = str(s.SystemMessage)
 	upd.ModelConfig = str(s.ModelConfig)
 	upd.IconURL = str(s.IconURL)
-	upd.Runtime = str(s.Runtime)
 	if s.Skills != nil {
-		upd.Skills = s.Skills
+		skills := s.Skills
+		upd.Skills = &skills
 	}
 	if s.Toolset != nil {
 		toolset := s.Toolset
 		upd.Toolset = &toolset
 	}
 	upd.RemovedToolNames = s.RemovedToolNames
+	upd.RemovedRuntime = s.RemovedRuntime
 	if s.Labels != nil {
 		labels := s.Labels
 		upd.Labels = &labels

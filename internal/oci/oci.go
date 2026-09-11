@@ -1,33 +1,45 @@
-package chart
+// Package oci is the minimal OCI distribution client agent-manager needs:
+// anonymous pulls with the registry's bearer-token challenge (RFC 6750 style
+// Www-Authenticate), the tag list of a repository, one file out of a Helm
+// chart archive, and the digest a tag resolves to — the way Flux's
+// source-controller reads the agent chart, and the way a tagged skill image is
+// pinned to the digest kagent requires.
+package oci
 
 import (
 	"archive/tar"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 )
 
-// A Helm chart in an OCI registry is one manifest whose single layer is the
-// chart archive. This file is the minimal OCI distribution client needed to
-// list the chart's tags and read one file out of that archive — anonymous
-// pulls with the registry's bearer-token challenge (RFC 6750 style
-// Www-Authenticate), the way Flux's source-controller reads the same chart.
 const (
-	helmChartLayerMediaType = "application/vnd.cncf.helm.chart.content.v1.tar+gzip"
-	ociManifestMediaType    = "application/vnd.oci.image.manifest.v1+json"
+	// HelmChartLayerMediaType is the media type of a chart archive layer.
+	HelmChartLayerMediaType = "application/vnd.cncf.helm.chart.content.v1.tar+gzip"
+
+	ociManifestMediaType = "application/vnd.oci.image.manifest.v1+json"
+	// manifestAccept lists every manifest media type a HEAD may resolve: a
+	// skill image can be a single-platform manifest or an index.
+	manifestAccept = ociManifestMediaType + ", application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.v2+json, application/vnd.docker.distribution.manifest.list.v2+json"
 
 	// maxChartBytes bounds the archive read: the agent chart is a few KiB.
 	maxChartBytes = 8 << 20
 )
 
-// Reference is a parsed oci:// chart URL.
+// digestPattern is a sha256 digest as the registry reports it.
+var digestPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+
+// Reference is a parsed registry repository.
 type Reference struct {
 	// Host is the registry host, e.g. gsoci.azurecr.io.
 	Host string
@@ -37,8 +49,9 @@ type Reference struct {
 	Insecure bool
 }
 
-// ParseReference parses oci://<host>/<repository>.
-func ParseReference(ociURL string) (Reference, error) {
+// ParseChartURL parses oci://<host>/<repository>, the form a Flux
+// OCIRepository carries.
+func ParseChartURL(ociURL string) (Reference, error) {
 	u, err := url.Parse(ociURL)
 	if err != nil {
 		return Reference{}, fmt.Errorf("parse chart URL %q: %w", ociURL, err)
@@ -49,7 +62,54 @@ func ParseReference(ociURL string) (Reference, error) {
 	return Reference{Host: u.Host, Repository: strings.Trim(u.Path, "/")}, nil
 }
 
-// Name is the chart name: the last path segment of the repository.
+// ImageReference is a parsed image reference: <host>/<repository>[:<tag>][@<digest>].
+type ImageReference struct {
+	Reference
+	Tag    string
+	Digest string
+}
+
+// Pinned renders the reference by digest, the immutable form.
+func (r ImageReference) Pinned() string {
+	return r.Host + "/" + r.Repository + "@" + r.Digest
+}
+
+// ParseImageReference parses <host>/<repository>[:<tag>][@sha256:<digest>].
+// The registry host is required (no Docker Hub defaulting): a skill reference
+// names where it comes from.
+func ParseImageReference(ref string) (ImageReference, error) {
+	ref = strings.TrimSpace(ref)
+	if ref == "" || strings.ContainsAny(ref, " \t\n") {
+		return ImageReference{}, fmt.Errorf("OCI reference %q is empty or contains whitespace", ref)
+	}
+	out := ImageReference{}
+	rest := ref
+	if at := strings.Index(rest, "@"); at >= 0 {
+		out.Digest = rest[at+1:]
+		rest = rest[:at]
+		if !digestPattern.MatchString(out.Digest) {
+			return ImageReference{}, fmt.Errorf("OCI reference %q: digest must be sha256:<64 hex digits>", ref)
+		}
+	}
+	slash := strings.Index(rest, "/")
+	if slash <= 0 {
+		return ImageReference{}, fmt.Errorf("OCI reference %q must be <registry>/<repository>[:<tag>][@sha256:<digest>]", ref)
+	}
+	out.Host, rest = rest[:slash], rest[slash+1:]
+	if !strings.ContainsAny(out.Host, ".:") && out.Host != "localhost" {
+		return ImageReference{}, fmt.Errorf("OCI reference %q must start with the registry host (e.g. registry.example.io/skills/runbooks:1.4.0)", ref)
+	}
+	if colon := strings.LastIndex(rest, ":"); colon >= 0 {
+		out.Tag, rest = rest[colon+1:], rest[:colon]
+	}
+	if rest == "" || strings.HasPrefix(rest, "/") || strings.HasSuffix(rest, "/") {
+		return ImageReference{}, fmt.Errorf("OCI reference %q has no repository", ref)
+	}
+	out.Repository = rest
+	return out, nil
+}
+
+// Name is the last path segment of the repository (the chart name).
 func (r Reference) Name() string {
 	parts := strings.Split(r.Repository, "/")
 	return parts[len(parts)-1]
@@ -63,7 +123,7 @@ func (r Reference) baseURL() string {
 	return scheme + "://" + r.Host
 }
 
-// Registry talks to one OCI registry.
+// Registry talks to OCI registries.
 type Registry struct {
 	http *http.Client
 	// tokens caches the anonymous bearer per scope until it expires.
@@ -124,6 +184,32 @@ func nextLink(ref Reference, header string) string {
 	return target
 }
 
+// ManifestDigest resolves a tag to the digest of its manifest: the registry's
+// Docker-Content-Digest on a HEAD, else the sha256 of the manifest body.
+func (c *Registry) ManifestDigest(ctx context.Context, ref Reference, tag string) (string, error) {
+	manifestURL := fmt.Sprintf("%s/v2/%s/manifests/%s", ref.baseURL(), ref.Repository, tag)
+	resp, err := c.do(ctx, ref, http.MethodHead, manifestURL, manifestAccept)
+	if err != nil {
+		return "", err
+	}
+	digest := resp.Header.Get("Docker-Content-Digest")
+	_ = resp.Body.Close()
+	if digestPattern.MatchString(digest) {
+		return digest, nil
+	}
+	resp, err = c.do(ctx, ref, http.MethodGet, manifestURL, manifestAccept)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return "", fmt.Errorf("read manifest %s:%s: %w", ref.Repository, tag, err)
+	}
+	sum := sha256.Sum256(body)
+	return "sha256:" + hex.EncodeToString(sum[:]), nil
+}
+
 // ReadChartFile pulls the chart at tag and returns the named file from the
 // archive (relative to the chart root, e.g. values.schema.json).
 func (c *Registry) ReadChartFile(ctx context.Context, ref Reference, tag, file string) ([]byte, error) {
@@ -146,13 +232,13 @@ func (c *Registry) ReadChartFile(ctx context.Context, ref Reference, tag, file s
 	}
 	var digest string
 	for _, l := range manifest.Layers {
-		if l.MediaType == helmChartLayerMediaType {
+		if l.MediaType == HelmChartLayerMediaType {
 			digest = l.Digest
 			break
 		}
 	}
 	if digest == "" {
-		return nil, fmt.Errorf("%s:%s has no Helm chart layer (%s)", ref.Repository, tag, helmChartLayerMediaType)
+		return nil, fmt.Errorf("%s:%s has no Helm chart layer (%s)", ref.Repository, tag, HelmChartLayerMediaType)
 	}
 	blobURL := fmt.Sprintf("%s/v2/%s/blobs/%s", ref.baseURL(), ref.Repository, digest)
 	blob, err := c.do(ctx, ref, http.MethodGet, blobURL, "")

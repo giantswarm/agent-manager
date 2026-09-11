@@ -1,17 +1,20 @@
 openapi: 3.1.0
 info:
   title: agent-manager API
-  version: 1.0.0
+  version: 2.0.0
   description: |
-    Agent lifecycle for the Giant Swarm Agent Platform.
+    Agent lifecycle for the Giant Swarm Agent Platform on kagent API v2.
 
-    An agent is a Flux `HelmRelease` of the `agent` chart (one release renders
-    one kagent `Agent`) that renders from the shared per-namespace
-    `OCIRepository` of that chart, tracking it by semver range. agent-manager
-    composes those two objects exactly like the portal's create flow, validates
-    the values against the chart's `values.schema.json` before anything is
-    applied, and reads an agent back from its Agent CR, its owning HelmRelease
-    and the workload kagent runs.
+    An agent is a Flux `HelmRelease` of the Generic `agent` chart (1.x: one
+    release renders one `kagent.dev/v1alpha3` `AgentTemplate` plus the agent's
+    own muster `RemoteMCPServer`) that renders from the shared per-namespace
+    `OCIRepository` of that chart, tracking it at `1.x`. agent-manager composes
+    those two objects exactly like the portal's create flow, pins every skill
+    to a commit or a digest, validates the values against the chart's
+    `values.schema.json` before anything is applied, and reads an agent back
+    from its AgentTemplate, its RemoteMCPServer and its owning HelmRelease.
+    Readiness is the platform Harness's entry in the template's
+    `status.harnesses[]`; there is no per-agent Deployment or pod.
 
     Clients MUST call `GET /api/v1/info` first: it reports the managed
     namespaces, the chart version whose schema validates right now, and the
@@ -31,8 +34,14 @@ info:
 
     Ownership rules: an agent whose HelmRelease is applied by a Flux
     Kustomization (`managed: gitops`) is refused for update and delete unless
-    `force` — its desired state lives in git. A bare Agent CR (`managed: none`)
-    has no HelmRelease to write to and is only deleted with `force`.
+    `force` — its desired state lives in git. A bare AgentTemplate
+    (`managed: none`) has no HelmRelease to write to and is only deleted with
+    `force`.
+
+    Removed with kagent API v2: `runtime` (the platform Harness is the runtime
+    of every agent) and `skills.gitAuthSecretName` (no per-source skill
+    credential; branches and tags of private repositories are resolved with the
+    service's own GitHub token). Both are refused with the reason.
 servers:
   - url: /
 tags:
@@ -70,7 +79,7 @@ paths:
   /api/v1/info:
     get:
       tags: [info]
-      summary: Service version, agent chart, managed namespaces and capability flags
+      summary: Service version, agent chart, managed namespaces, capability flags, API versions, platform Harness and muster URL
       operationId: getInfo
       x-mcp-tool: get_info
       responses:
@@ -95,9 +104,10 @@ paths:
       tags: [agents]
       summary: List the agents of a namespace
       description: |
-        Every Agent CR with its owning HelmRelease (found through the Flux
-        provenance labels), plus every HelmRelease of the agent chart that has
-        not rendered an Agent yet (`exists: false`).
+        Every AgentTemplate with its RemoteMCPServer and its owning HelmRelease
+        (found through the Flux provenance labels, possibly in another
+        namespace), plus every HelmRelease of the agent chart that has not
+        rendered a template yet (`exists: false`).
       operationId: listAgents
       x-mcp-tool: list_agents
       parameters:
@@ -118,12 +128,14 @@ paths:
       tags: [agents]
       summary: Create an agent
       description: |
-        Composes the OCIRepository (created when missing) and the HelmRelease,
-        validates the values against the chart schema and the modelConfig
-        against the namespace, then applies. A validation failure writes
-        nothing (`400 invalid_request`, the message lists the valid model
-        configs). `409 conflict` when a HelmRelease or Agent of that name
-        exists.
+        Composes the OCIRepository (created when missing, tracking `1.x`) and
+        the HelmRelease, pins every skill (a branch or tag to its head commit,
+        an image tag to its digest), validates the values against the chart
+        schema and the modelConfig against the namespace, then applies. A
+        validation failure writes nothing (`400 invalid_request`, the message
+        lists the valid model configs or names the unresolvable skill
+        reference). `409 conflict` when a HelmRelease or AgentTemplate of that
+        name exists.
       operationId: createAgent
       x-mcp-tool: create_agent
       requestBody:
@@ -145,9 +157,10 @@ paths:
       tags: [agents]
       summary: Dry run of create (or update)
       description: |
-        Composes and validates without writing. With `update: true` the
-        non-empty fields of the body are validated as a change to the existing
-        agent's values.
+        Composes and validates without writing; the manifests carry the skills
+        as they would be pinned. With `update: true` the non-empty fields of
+        the body are validated as a change to the existing agent's values
+        (`refreshSkills` applies the same way).
       operationId: validateAgent
       x-mcp-tool: validate_agent
       requestBody:
@@ -161,6 +174,7 @@ paths:
                   properties:
                     update: { type: boolean, description: Validate as an update of the existing agent }
                     force: { type: boolean, description: With update, ignore the GitOps/suspended guards }
+                    refreshSkills: { type: boolean, description: With update, re-pin every git skill to its default-branch head }
       responses:
         "200":
           description: the verdict (valid may be false)
@@ -192,11 +206,14 @@ paths:
       description: |
         Merges the given fields into the HelmRelease values (absent fields stay,
         an empty string clears a field back to the chart default, `skills`
-        replaces its whole block, `toolset` replaces the whole list — the way
-        to assign a toolset to an agent that reports `implicitFullAccess`),
+        replaces the whole list and is pinned, `toolset` replaces the whole
+        list — the way to assign a toolset to an agent that reports
+        `implicitFullAccess`; `refreshSkills` re-pins every git skill to the
+        head of its repository's default branch — a skill passed with a `ref`
+        in the same call to that ref's head — and changes nothing else),
         validates and updates the HelmRelease. `409 conflict` for GitOps-owned
-        or suspended releases and bare Agent CRs unless `force`. `400` for a
-        body still carrying the removed `toolNames`.
+        or suspended releases and bare AgentTemplates unless `force`. `400` for
+        a body still carrying the removed `toolNames` or `runtime`.
       operationId: updateAgent
       x-mcp-tool: update_agent
       parameters:
@@ -221,9 +238,12 @@ paths:
       tags: [agents]
       summary: Delete an agent
       description: |
-        Deletes the owning HelmRelease (helm-controller uninstalls the Agent)
-        and the shared OCIRepository when no other HelmRelease references it.
-        Bare Agent CRs, GitOps-owned and suspended releases need `force`.
+        Deletes the owning HelmRelease (helm-controller uninstalls the
+        AgentTemplate and the agent's RemoteMCPServer) and the shared
+        OCIRepository when no other HelmRelease references it. Bare
+        AgentTemplates, GitOps-owned and suspended releases need `force` (a
+        forced delete of a suspended release removes the rendered objects
+        too).
       operationId: deleteAgent
       x-mcp-tool: delete_agent
       parameters:
@@ -246,10 +266,14 @@ paths:
       tags: [agents]
       summary: Compact status verdict
       description: |
-        Agent conditions, HelmRelease conditions and history, Deployment
-        readiness, pods with waiting reasons (a CrashLoopBackOff pod is phase
-        Running — container statuses tell) and recent Warning events, folded
-        into `verdict` (ready | progressing | failed | unknown) and `summary`.
+        The AgentTemplate's `status.harnesses[]` entry for the platform Harness
+        (ready: Ready and the desired revision is the latest successful one;
+        progressing: a revision still compiling; failed: Accepted, ResolvedRefs
+        or Compatible False with the condition's message, Ready False for a
+        reason other than the pending one, or no Harness admitting the
+        template), the HelmRelease conditions and history, and the namespace's
+        recent Warning events on the agent's objects, folded into `verdict`
+        (ready | progressing | failed | unknown) and `summary`.
       operationId: getAgentStatus
       x-mcp-tool: get_agent_status
       responses:
@@ -284,9 +308,10 @@ paths:
       summary: Discover skills in the configured repositories
       description: |
         Every `SKILL.md` of a GitHub repository is one skill (frontmatter
-        `name`/`description`), returned as the `gitRefs` entry an agent mounts.
-        Cached briefly; `refresh=true` re-reads GitHub. `501 unsupported` when
-        no repositories are configured.
+        `name`/`description`), with the ref it was read from and the head
+        commit that ref resolved to — the commit a `skills` entry pins. Cached
+        briefly; `refresh=true` re-reads GitHub. `501 unsupported` when no
+        repositories are configured.
       operationId: listSkills
       x-mcp-tool: list_skills
       parameters:
@@ -296,7 +321,7 @@ paths:
           schema: { type: string }
         - name: ref
           in: query
-          description: Git ref; default the default branch
+          description: Git ref; default the default branch (the ref refreshSkills follows)
           schema: { type: string }
         - name: refresh
           in: query
@@ -351,7 +376,7 @@ components:
           type: object
           properties:
             ociUrl: { type: string }
-            semver: { type: string, description: The range the OCIRepository tracks }
+            semver: { type: string, description: The range the OCIRepository tracks (1.x) }
             latestVersion: { type: string, description: Newest published version in range ("" when the registry is unreachable) }
             schemaVersion: { type: string, description: Chart version whose values.schema.json validates right now }
             schemaSource: { type: string, enum: [registry, embedded] }
@@ -365,7 +390,7 @@ components:
         capabilities:
           type: object
           additionalProperties: { type: boolean }
-          description: "list, get, create, update, delete, status, validate, modelConfigs, skills, writesAsCaller (true when identity is caller)"
+          description: "list, get, create, update, delete, status, validate, modelConfigs, skills, writesAsCaller (true when identity is caller), commit (false: the write tools apply live, there is no pull-request mode)"
         identity:
           type: string
           enum: [caller, serviceAccount]
@@ -377,8 +402,11 @@ components:
             service's own identity behind a trusted proxy.
         apiVersions:
           type: object
+          description: The served kagent.dev version (agentTemplate, harness, remoteMcpServer, modelConfig) and the Flux versions composed into every agent
           properties:
-            agent: { type: string }
+            agentTemplate: { type: string, example: kagent.dev/v1alpha3 }
+            harness: { type: string }
+            remoteMcpServer: { type: string }
             modelConfig: { type: string }
             helmRelease: { type: string }
             ociRepository: { type: string }
@@ -388,21 +416,35 @@ components:
             helmReleaseInterval: { type: string }
             ociRepositoryInterval: { type: string }
             serviceAccountName: { type: string }
+        harness:
+          type: object
+          description: The platform Harness every agent runs on; composed as the chart value agent.harness and the status entry get_agent_status reads
+          properties:
+            name: { type: string, example: kagent }
+        muster:
+          type: object
+          properties:
+            url: { type: string, description: The muster MCP URL composed into every agent as muster.url; empty means the chart default applies }
         skillsRepositories: { type: array, items: { type: string } }
-    SkillGitRef:
+    GitSkill:
       type: object
       required: [url]
       properties:
-        url: { type: string }
-        path: { type: string, description: Skill directory; empty for the repository root }
-        ref: { type: string }
-        name: { type: string, description: Mount name under /skills; defaults to the directory name }
-    Skills:
+        url: { type: string, description: http(s) URL of the repository }
+        ref: { type: string, description: Branch or tag resolved to its head commit at write time; omit (with commit) for the pin, omit both for the default branch. Never written. }
+        commit: { type: string, pattern: '^([0-9a-fA-F]{40}|[0-9a-fA-F]{64})$', description: Full commit id, the pin (list_skills reports it); what is written and read back }
+    Skill:
       type: object
+      description: One skill, pinned to an immutable source — exactly one of git and oci
       properties:
-        refs: { type: array, items: { type: string }, description: OCI skill image references }
-        gitRefs: { type: array, items: { $ref: "#/components/schemas/SkillGitRef" } }
-        gitAuthSecretName: { type: string }
+        name: { type: string, description: Name the skill mounts under, unique per agent; defaults to the last path segment, else the repository or image name }
+        path: { type: string, description: Skill directory (git skills), relative without '..'; empty for the repository root }
+        git: { $ref: "#/components/schemas/GitSkill" }
+        oci: { type: string, description: "<registry>/<repository>:<tag> (resolved to its digest at write time) or <registry>/<repository>@sha256:<digest> (the pin)" }
+    Skills:
+      type: array
+      description: The agent's skills; every entry is pinned before it is written. The 0.x object shape ({refs, gitRefs, gitAuthSecretName}) is refused with the reason.
+      items: { $ref: "#/components/schemas/Skill" }
     Toolset:
       type: array
       minItems: 1
@@ -412,7 +454,7 @@ components:
         The selectors that bound which of the gateway's tools the agent's
         meta-tools can see and call — composed as the agent chart's top-level
         `toolset` value, rendered as the `X-Muster-Toolset` header on the
-        agent's muster tool entry, resolved by muster per caller. Each selector
+        agent's own RemoteMCPServer, resolved by muster per caller. Each selector
         is `preset:<name>`, `server:<name>`, `workflow:<name>` or `tool:<name>`
         (exact names, at most 32 — define a preset for more). Shipped presets:
         `read-only`, `none` (a chat-only agent without tools), `infrastructure`,
@@ -426,28 +468,27 @@ components:
       required: [name, modelConfig, toolset]
       properties:
         namespace: { type: string }
-        name: { type: string, description: DNS-1123 technical name (HelmRelease and Agent name), max 63 chars }
+        name: { type: string, description: DNS-1123 technical name (HelmRelease and AgentTemplate name), max 63 chars }
         displayName: { type: string, maxLength: 63 }
         description: { type: string }
         systemMessage: { type: string }
         modelConfig: { type: string, description: An existing ModelConfig of the namespace }
-        iconUrl: { type: string }
-        runtime: { type: string, enum: [go, python] }
+        iconUrl: { type: string, description: Avatar URL (chart agent.iconUrl, the ui.giantswarm.io/icon-url annotation) }
         skills: { $ref: "#/components/schemas/Skills" }
         toolset: { $ref: "#/components/schemas/Toolset" }
         labels: { type: object, additionalProperties: { type: string } }
         annotations: { type: object, additionalProperties: { type: string } }
     Update:
       type: object
-      description: Partial change; absent fields stay, "" clears, skills replace their block, toolset replaces the whole list
+      description: Partial change; absent fields stay, "" clears, skills replace the whole list (pinned), toolset replaces the whole list, refreshSkills re-pins every git skill
       properties:
         displayName: { type: string }
         description: { type: string }
         systemMessage: { type: string }
         modelConfig: { type: string }
         iconUrl: { type: string }
-        runtime: { type: string, enum: [go, python] }
         skills: { $ref: "#/components/schemas/Skills" }
+        refreshSkills: { type: boolean, description: Re-resolve every git skill to the head of its repository's default branch (a skill in skills with a ref goes to that ref's head); nothing else changes }
         toolset: { $ref: "#/components/schemas/Toolset" }
         labels: { type: object, additionalProperties: { type: string } }
         annotations: { type: object, additionalProperties: { type: string } }
@@ -460,6 +501,26 @@ components:
         reason: { type: string }
         message: { type: string }
         lastTransitionTime: { type: string }
+        observedGeneration: { type: integer }
+    HarnessStatus:
+      type: object
+      description: One AgentTemplate.status.harnesses[] entry
+      properties:
+        harness: { type: string }
+        ready: { type: [boolean, "null"] }
+        accepted: { type: [boolean, "null"] }
+        resolvedRefs: { type: [boolean, "null"] }
+        compatible: { type: [boolean, "null"] }
+        desiredRevision: { type: string }
+        latestSuccessfulRevision: { type: string }
+        conditions: { type: array, items: { $ref: "#/components/schemas/Condition" } }
+        warnings: { type: array, items: { type: string } }
+    ToolBinding:
+      type: object
+      description: One MCP binding of the AgentTemplate (spec.tools[].mcp)
+      properties:
+        server: { type: string, description: The RemoteMCPServer bound, same namespace }
+        tools: { type: array, items: { type: string }, description: The binding narrowed to these tools; empty is every tool }
     HelmReleaseRef:
       type: object
       properties:
@@ -472,7 +533,7 @@ components:
         lastAttemptedRevision: { type: string }
         suspended: { type: boolean }
         gitOpsOwned: { type: boolean }
-        deleting: { type: boolean, description: helm-controller is uninstalling the release }
+        deleting: { type: boolean, description: helm-controller is uninstalling the release; the template disappears with it }
         chartRef:
           type: object
           properties:
@@ -484,19 +545,18 @@ components:
       properties:
         name: { type: string }
         namespace: { type: string }
-        exists: { type: boolean, description: The Agent CR exists (false while the HelmRelease has not rendered it) }
-        displayName: { type: string }
+        exists: { type: boolean, description: The AgentTemplate exists (false while the HelmRelease has not rendered it) }
+        displayName: { type: string, description: From the ui.giantswarm.io/display-name annotation }
         description: { type: string }
         modelConfig: { type: string }
-        runtime: { type: string }
-        iconUrl: { type: string }
+        iconUrl: { type: string, description: From the ui.giantswarm.io/icon-url annotation }
         systemMessage: { type: string }
-        skills: { $ref: "#/components/schemas/Skills" }
-        toolset: { $ref: "#/components/schemas/Toolset", description: The declared toolset (the HelmRelease's `toolset` value; for a bare Agent CR the X-Muster-Toolset header it carries); absent when none is declared }
-        implicitFullAccess: { type: boolean, description: True when the agent declares no toolset but wires the gateway — its meta-tools see every tool the gateway exposes to the caller; such agents predate toolsets and still need one (update_agent) }
-        ready: { type: [boolean, "null"] }
-        accepted: { type: [boolean, "null"] }
-        conditions: { type: array, items: { $ref: "#/components/schemas/Condition" } }
+        skills: { $ref: "#/components/schemas/Skills", description: As pinned — git skills by commit, OCI skills by digest }
+        toolset: { $ref: "#/components/schemas/Toolset", description: The declared toolset (the HelmRelease's `toolset` value; for a bare AgentTemplate the X-Muster-Toolset header of the agent's RemoteMCPServer); absent when none is declared }
+        implicitFullAccess: { type: boolean, description: True when the agent declares no toolset but binds muster — its meta-tools see every tool the gateway exposes to the caller; such agents predate toolsets and still need one (update_agent) }
+        tools: { type: array, items: { $ref: "#/components/schemas/ToolBinding" } }
+        ready: { type: [boolean, "null"], description: The platform Harness's verdict on the template (Ready and the desired revision is the latest successful one); null while unreported }
+        harnesses: { type: array, items: { $ref: "#/components/schemas/HarnessStatus" } }
         managed: { type: string, enum: [helmrelease, gitops, none] }
         helmRelease: { $ref: "#/components/schemas/HelmReleaseRef" }
         values: { type: object, description: The HelmRelease's inline values (the chart contract) }
@@ -542,7 +602,8 @@ components:
         name: { type: string }
         namespace: { type: string }
         helmReleaseDeleted: { type: boolean }
-        agentDeleted: { type: boolean, description: A bare Agent CR was deleted directly (force) }
+        agentTemplateDeleted: { type: boolean, description: The AgentTemplate was deleted directly (force, a bare template or a suspended release) }
+        remoteMcpServerDeleted: { type: boolean, description: The agent's RemoteMCPServer was deleted directly (force, a suspended release) }
         ociRepositoryDeleted: { type: boolean }
         ociRepositoryKept: { type: string, description: Why the shared chart source stays }
         requestedBy: { type: string, description: The authenticated caller the delete ran as }
@@ -553,13 +614,14 @@ components:
         namespace: { type: string }
         verdict: { type: string, enum: [ready, progressing, failed, unknown] }
         summary: { type: string }
-        agent:
+        template:
           type: object
+          description: The AgentTemplate's status, one entry per admitting Harness
           properties:
             exists: { type: boolean }
-            ready: { type: [boolean, "null"] }
-            accepted: { type: [boolean, "null"] }
-            conditions: { type: array, items: { $ref: "#/components/schemas/Condition" } }
+            generation: { type: integer }
+            observedGeneration: { type: integer }
+            harnesses: { type: array, items: { $ref: "#/components/schemas/HarnessStatus" } }
         helmRelease:
           type: object
           properties:
@@ -579,35 +641,9 @@ components:
                   status: { type: string }
                   lastDeployed: { type: string }
             lastAttemptedRevision: { type: string }
-        deployment:
-          type: object
-          properties:
-            exists: { type: boolean }
-            replicas: { type: integer }
-            readyReplicas: { type: integer }
-            availableReplicas: { type: integer }
-            conditions: { type: array, items: { $ref: "#/components/schemas/Condition" } }
-        pods:
-          type: array
-          items:
-            type: object
-            properties:
-              name: { type: string }
-              phase: { type: string }
-              ready: { type: boolean }
-              restarts: { type: integer }
-              containers:
-                type: array
-                items:
-                  type: object
-                  properties:
-                    name: { type: string }
-                    state: { type: string, enum: [waiting, terminated, running] }
-                    reason: { type: string }
-                    message: { type: string }
-                    init: { type: boolean }
         events:
           type: array
+          description: Recent Warning events on the agent's objects (AgentTemplate, RemoteMCPServer, HelmRelease)
           items:
             type: object
             properties:
@@ -627,14 +663,16 @@ components:
         accepted: { type: [boolean, "null"] }
         message: { type: string }
         managedBy: { type: string }
-    Skill:
+    DiscoveredSkill:
       type: object
+      description: A SKILL.md found in a repository, with the commit an agent pins it at
       properties:
         name: { type: string }
         description: { type: string }
         repoUrl: { type: string }
         path: { type: string }
-        ref: { type: string }
+        ref: { type: string, description: The ref read (the default branch unless ref was given) }
+        commit: { type: string, description: The head commit of that ref when it was read — the pin for a skills entry }
     SkillsResult:
       type: object
       properties:
@@ -645,8 +683,9 @@ components:
             properties:
               repoUrl: { type: string }
               ref: { type: string }
-              skills: { type: array, items: { $ref: "#/components/schemas/Skill" } }
+              commit: { type: string, description: What ref resolved to when the repository was read }
+              skills: { type: array, items: { $ref: "#/components/schemas/DiscoveredSkill" } }
               truncated: { type: boolean }
               error: { type: string }
               fetchedAt: { type: string, format: date-time }
-        skills: { type: array, items: { $ref: "#/components/schemas/Skill" } }
+        skills: { type: array, items: { $ref: "#/components/schemas/DiscoveredSkill" } }

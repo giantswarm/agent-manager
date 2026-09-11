@@ -30,11 +30,13 @@ func newRootCmd() *cobra.Command {
 		Use:   "agent-manager",
 		Short: "Agent lifecycle service for the Agent Platform",
 		Long: `agent-manager is the write surface for agents on the Agent Platform: it
-creates, updates, deletes and inspects kagent agents as Flux HelmReleases of
-the agent chart (one release = one Agent), validates the values against the
-chart's schema before anything is applied, and lists the ModelConfigs and
-skills an agent can be built from. The API is served as REST/JSON (portal) and
-as MCP tools (muster) from one process.`,
+creates, updates, deletes and inspects agents as Flux HelmReleases of the
+Generic agent chart (one release renders one kagent.dev/v1alpha3 AgentTemplate
+plus the agent's muster RemoteMCPServer), pins every skill to a commit or a
+digest, validates the values against the chart's schema before anything is
+applied, reads readiness from the platform Harness's status on the template,
+and lists the ModelConfigs and skills an agent can be built from. The API is
+served as REST/JSON (portal) and as MCP tools (muster) from one process.`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		PersistentPreRun: func(_ *cobra.Command, _ []string) {

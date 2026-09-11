@@ -18,11 +18,19 @@ import (
 	"time"
 
 	"github.com/Masterminds/semver/v3"
+
+	"github.com/giantswarm/agent-manager/internal/oci"
 )
 
 // EmbeddedSchemaVersion is the agent chart version whose values.schema.json is
-// compiled into the binary (internal/chart/embedded/).
-const EmbeddedSchemaVersion = "0.6.0"
+// compiled into the binary (internal/chart/embedded/): the Generic chart 1.x
+// values contract — one release renders a kagent.dev/v1alpha3 AgentTemplate
+// plus the agent's muster RemoteMCPServer; skills are a list of commit- or
+// digest-pinned sources (bundled $defs/skill.schema.json); `agent.harness`,
+// `muster.url`, `muster.tools`, `muster.discovery`; none of the 0.x runtime
+// keys. The copy is the chart's own values.schema.json at the commit that made
+// the contract final (giantswarm/agent, chart-1-0-agenttemplate @ 82815864).
+const EmbeddedSchemaVersion = "1.0.0"
 
 //go:embed embedded/agent-values.schema.json
 var embeddedSchema []byte
@@ -37,7 +45,7 @@ const (
 type Info struct {
 	// OCIURL is the chart's OCI URL as the OCIRepository carries it.
 	OCIURL string `json:"ociUrl"`
-	// Semver is the range the OCIRepository tracks (x.x.x: every release).
+	// Semver is the range the OCIRepository tracks (1.x: every 1.x release).
 	Semver string `json:"semver"`
 	// LatestVersion is the newest published version inside that range, or ""
 	// when the registry could not be read.
@@ -62,11 +70,11 @@ type Schema struct {
 
 // Resolver reads the chart from the registry and caches the result.
 type Resolver struct {
-	ref      Reference
+	ref      oci.Reference
 	ociURL   string
 	semver   string
 	refresh  time.Duration
-	registry *Registry
+	registry *oci.Registry
 	log      *slog.Logger
 
 	mu       sync.Mutex
@@ -79,8 +87,8 @@ type Resolver struct {
 
 // NewResolver builds a resolver for ociURL tracking semverRange, re-reading the
 // registry every refresh.
-func NewResolver(ociURL, semverRange string, refresh time.Duration, registry *Registry, log *slog.Logger) (*Resolver, error) {
-	ref, err := ParseReference(ociURL)
+func NewResolver(ociURL, semverRange string, refresh time.Duration, registry *oci.Registry, log *slog.Logger) (*Resolver, error) {
+	ref, err := oci.ParseChartURL(ociURL)
 	if err != nil {
 		return nil, err
 	}
@@ -88,7 +96,7 @@ func NewResolver(ociURL, semverRange string, refresh time.Duration, registry *Re
 		return nil, fmt.Errorf("chart semver range %q: %w", semverRange, err)
 	}
 	if registry == nil {
-		registry = NewRegistry(nil)
+		registry = oci.NewRegistry(nil)
 	}
 	if log == nil {
 		log = slog.Default()
@@ -131,7 +139,7 @@ func (r *Resolver) Schema(ctx context.Context) Schema {
 	if r.cached != nil {
 		return *r.cached
 	}
-	return r.embedded()
+	return EmbeddedSchema()
 }
 
 // Info reports the resolution state without forcing a registry read.
@@ -141,8 +149,6 @@ func (r *Resolver) Info(ctx context.Context) Info {
 	defer r.mu.Unlock()
 	return r.info
 }
-
-func (r *Resolver) embedded() Schema { return EmbeddedSchema() }
 
 // EmbeddedSchema is the compiled-in values.schema.json of the agent chart at
 // EmbeddedSchemaVersion — the offline fallback, and what tests validate with.
@@ -231,7 +237,8 @@ func (r *Resolver) fail(err error) error {
 
 // Latest picks the highest stable version among tags that satisfies the
 // constraint, the way Flux's OCIRepository ref.semver does (Masterminds
-// semver; pre-releases are excluded unless the range names one).
+// semver; pre-releases are excluded unless the range names one — `1.x` never
+// matches a `1.0.0-dev.…` branch build).
 func Latest(tags []string, constraint string) (string, error) {
 	c, err := semver.NewConstraint(constraint)
 	if err != nil {

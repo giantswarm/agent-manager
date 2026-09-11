@@ -52,6 +52,10 @@ spec:
             - --managed-namespaces={{ join "," . }}
             {{- end }}
             - --kagent-api-version={{ .Values.kagent.apiVersion }}
+            - --harness-name={{ .Values.harness.name }}
+            {{- with .Values.muster.url }}
+            - --muster-url={{ . }}
+            {{- end }}
             - --flux-helmrelease-api-version={{ .Values.flux.helmReleaseApiVersion }}
             - --flux-ocirepository-api-version={{ .Values.flux.ociRepositoryApiVersion }}
             - --agent-chart-oci-url={{ .Values.agentChart.ociUrl }}

@@ -37,27 +37,36 @@ global: {}  # @schema type: object; additionalProperties: true
 
 kagent:
   # -- Namespace agents are created in and listed from by default — the
-  # namespace kagent watches and the platform admin provisions ModelConfigs
-  # into. The Role for HelmReleases, OCIRepositories, Agents, ModelConfigs,
-  # Deployments, pods and events is created here.
+  # namespace the kagent controller watches, the platform admin provisions
+  # ModelConfigs into and the connectivity chart renders the platform Harness
+  # into. The Role for HelmReleases, OCIRepositories, AgentTemplates,
+  # RemoteMCPServers, Harnesses, ModelConfigs and events is created here.
   namespace: kagent
   # -- Additional namespaces agents may live in (multi-tenant installs). Each
   # gets the same Role; requests naming any other namespace are refused.
   additionalNamespaces: []
-  # -- kagent.dev API version for Agents and ModelConfigs; `auto` discovers
-  # the server's preferred version.
+  # -- kagent.dev API version for AgentTemplates, Harnesses, RemoteMCPServers
+  # and ModelConfigs; `auto` discovers the version serving `agenttemplates`
+  # (default v1alpha3).
   apiVersion: auto
 
+harness:
+  # -- Name of the platform Harness every agent runs on (the connectivity
+  # chart renders it): the `status.harnesses[]` entry of that name on the
+  # AgentTemplate is what `get_agent_status` reports.
+  name: kagent
+
 agentChart:
-  # -- OCI URL of the `agent` chart every agent renders from. Written into the
-  # shared per-namespace OCIRepository, and read at run time for the chart's
-  # values.schema.json that validates every create/update before it is
-  # applied (the pod needs egress to this registry; the embedded copy of the
-  # schema is the offline fallback).
+  # -- OCI URL of the Generic `agent` chart every agent renders from (1.x:
+  # one release renders one kagent.dev/v1alpha3 AgentTemplate plus the agent's
+  # muster RemoteMCPServer). Written into the shared per-namespace
+  # OCIRepository, and read at run time for the chart's values.schema.json that
+  # validates every create/update before it is applied (the pod needs egress
+  # to this registry; the embedded copy of the schema is the offline fallback).
   ociUrl: oci://gsoci.azurecr.io/charts/giantswarm/agent
-  # -- Semver range the OCIRepository tracks. `x.x.x` follows every published
-  # release, the platform convention for agents.
-  semver: x.x.x
+  # -- Semver range the OCIRepository tracks. `1.x` follows every 1.x release
+  # of the Generic chart and never a pre-release build or a next major.
+  semver: 1.x
   # -- How often the registry is re-read for the latest version and schema.
   refresh: 10m
 
@@ -78,15 +87,20 @@ flux:
 
 skills:
   # -- GitHub repositories whose SKILL.md files list_skills offers (the same
-  # list the portal's create flow reads). Empty turns the skills capability off.
+  # list the portal's create flow reads), each with the head commit an agent
+  # pins. Empty turns the skills capability off; skills given by URL are still
+  # resolved through the GitHub API.
   repositories:
     - https://github.com/giantswarm/agent-skills
   github:
     # -- GitHub API base URL.
     apiUrl: https://api.github.com
     tokenSecret:
-      # -- Existing Secret in the release namespace with a GitHub token
-      # (private skill repositories, higher rate limit). Empty: anonymous.
+      # -- Existing Secret in the release namespace with a GitHub token: the
+      # credential that resolves a skill's branch or tag to its head commit
+      # in a private repository (there is no per-agent skill credential) and
+      # lifts the anonymous rate limit. Empty: anonymous, public repositories
+      # only.
       name: ""
       # -- Key of the token in that Secret.
       key: token
@@ -162,8 +176,9 @@ oauth:
   allowPublicClientRegistration: false
   downstream:
     # -- Call the Kubernetes API as the caller: everything a request does
-    # (HelmReleases and OCIRepositories, the Agents, ModelConfigs,
-    # Deployments, pods and events it reads) presents the caller's IdP token,
+    # (HelmReleases and OCIRepositories, the AgentTemplates, RemoteMCPServers,
+    # Harnesses, ModelConfigs and events it reads) presents the caller's IdP
+    # token,
     # so the caller's RBAC governs — the apiserver must trust the IdP and the
     # token's audience (a Dex install lists that audience in
     # `muster.mcpServer.auth.requiredAudiences`; a Google install's client id
@@ -177,6 +192,12 @@ oauth:
     enabled: false
 
 muster:
+  # -- The platform's muster MCP URL, composed into every agent as the chart
+  # value `muster.url` (the URL of the agent's own RemoteMCPServer). Empty
+  # composes nothing and the Generic chart's default applies
+  # (`http://muster.agent-platform.svc.cluster.local:8090/mcp`). The
+  # `agent-platform` meta chart forwards it from its connectivity helper.
+  url: ""
   mcpServer:
     # -- Register this server with muster by rendering an
     # `mcpservers.muster.giantswarm.io` CR in the release namespace. Tools then
@@ -227,8 +248,10 @@ networkPolicy:
   # -- Allow egress to the Kubernetes API server.
   allowKubeAPI: true
   # -- Allow egress on 443 to every destination: the chart registry (schema
-  # and version) and GitHub (skills). Vanilla NetworkPolicy cannot select by
-  # name; narrow with egressCIDRs instead when the addresses are known.
+  # and version), GitHub (skill discovery and commit resolution) and the
+  # registries of OCI skills (digest resolution). Vanilla NetworkPolicy cannot
+  # select by name; narrow with egressCIDRs instead when the addresses are
+  # known.
   allowInternet: true
   # -- Extra egress CIDRs.
   egressCIDRs: []
@@ -244,7 +267,9 @@ serviceAccount:
 rbac:
   # -- Create the Role/RoleBinding in `kagent.namespace` (and every
   # `kagent.additionalNamespaces` entry): HelmReleases and OCIRepositories
-  # read/write; Agents, ModelConfigs, Deployments, pods and events read — the
+  # read/write; AgentTemplates, RemoteMCPServers, Harnesses, ModelConfigs and
+  # events read (AgentTemplates and RemoteMCPServers also delete, for the
+  # forced removal of what a suspended or bare release leaves behind) — the
   # ServiceAccount's own permissions. Ignored with `oauth.downstream.enabled`:
   # the ServiceAccount then gets no RBAC at all, the caller's RBAC governs.
   create: true
