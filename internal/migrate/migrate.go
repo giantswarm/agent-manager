@@ -520,7 +520,7 @@ func (r *Runner) rewriteRelease(ctx context.Context, st *nsState, dyn dynamic.In
 		rep.Reason = "dry run: would be written"
 		return rep
 	}
-	if _, err := dyn.Resource(r.helmReleaseGVR()).Namespace(rel.ns).Update(ctx, rewrittenHR, metav1.UpdateOptions{}); err != nil {
+	if _, err := dyn.Resource(r.helmReleaseGVR()).Namespace(rel.ns).Update(ctx, rewrittenHR, metav1.UpdateOptions{FieldManager: agents.FieldManager}); err != nil {
 		rel.onTarget = false
 		rep.Action, rep.Reason = ActionFailed, fmt.Sprintf("update refused: %v", err)
 		st.fail(fmt.Errorf("update HelmRelease %s: %w", rel.id(), err))
@@ -578,7 +578,7 @@ func (r *Runner) moveSource(ctx context.Context, st *nsState, dyn dynamic.Interf
 		rep.Reason = "dry run: would be moved"
 		return rep
 	}
-	if _, err := dyn.Resource(r.ociRepositoryGVR()).Namespace(src.ns).Update(ctx, moved, metav1.UpdateOptions{}); err != nil {
+	if _, err := dyn.Resource(r.ociRepositoryGVR()).Namespace(src.ns).Update(ctx, moved, metav1.UpdateOptions{FieldManager: agents.FieldManager}); err != nil {
 		rep.Action, rep.Reason = SourceNotMoved, fmt.Sprintf("update refused: %v", err)
 		st.fail(fmt.Errorf("update OCIRepository %s/%s: %w", src.ns, src.name, err))
 		return rep

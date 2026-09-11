@@ -234,14 +234,14 @@ func writeReport(ctx context.Context, typed kubernetes.Interface, name string, r
 			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: r.Namespace, Labels: map[string]string{agents.ManagedByLabel: agents.ManagedByValue}},
 			Data:       data,
 		}
-		_, err = cms.Create(ctx, cm, metav1.CreateOptions{})
+		_, err = cms.Create(ctx, cm, metav1.CreateOptions{FieldManager: agents.FieldManager})
 	case err == nil:
 		existing.Data = data
 		if existing.Labels == nil {
 			existing.Labels = map[string]string{}
 		}
 		existing.Labels[agents.ManagedByLabel] = agents.ManagedByValue
-		_, err = cms.Update(ctx, existing, metav1.UpdateOptions{})
+		_, err = cms.Update(ctx, existing, metav1.UpdateOptions{FieldManager: agents.FieldManager})
 	}
 	if err != nil {
 		return fmt.Errorf("write report ConfigMap %s/%s: %w", r.Namespace, name, err)
