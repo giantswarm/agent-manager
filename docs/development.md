@@ -11,7 +11,9 @@ make helm-docs          # regenerate helm/agent-manager/README.md
 
 ## Layout
 
-- `cmd/` — cobra CLI (`serve`, `version`); every flag has an environment variable.
+- `cmd/` — cobra CLI (`serve`, `migrate`, `version`); every flag has an
+  environment variable, and `migrate` shares `serve`'s names (a test guards
+  the parity).
 - `internal/kube` — the Kubernetes clients behind the `Client` / `Provider`
   interfaces: `CallerProvider` builds one client set per caller token
   (`rest.AnonymousClientConfig` + the bearer the OAuth layer put on the
@@ -39,6 +41,11 @@ make helm-docs          # regenerate helm/agent-manager/README.md
   the owning HelmRelease — and `status.go` folds the platform Harness's entry
   on the template, the HelmRelease and the Warning events into one verdict.
   `testdata/` holds what Generic chart 1.x renders.
+- `internal/migrate` — the `migrate` command: `values.go` rewrites 0.x
+  values into the 1.x contract through the composer's own lists and skill
+  pinning, `diff.go` renders a GitOps-owned release's rewrite as a unified
+  diff, `report.go` is the per-namespace report ConfigMap, `migrate.go` the
+  expand / wait / contract phases. `testdata/` holds the four fleet shapes.
 - `internal/api` — REST handlers and MCP tools over the service.
 - `internal/server` — the HTTP listener; `oauth.go` is the mcp-oauth resource
   server (Dex or Google provider, forwarded-id_token validation through

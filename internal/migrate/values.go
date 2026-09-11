@@ -143,9 +143,6 @@ func rewriteSkills(ctx context.Context, out map[string]any, pinner agents.SkillP
 // {url, ref, path, name}. gitAuthSecretRef is gone already (a removed path).
 func legacySkills(m map[string]any) agents.Skills {
 	var out agents.Skills
-	for _, ref := range stringsOf(m["refs"]) {
-		out = append(out, agents.Skill{OCI: ref})
-	}
 	gitRefs, _ := m["gitRefs"].([]any)
 	for _, item := range gitRefs {
 		g, ok := item.(map[string]any)
@@ -161,6 +158,9 @@ func legacySkills(m map[string]any) agents.Skills {
 			s.Git.Commit, s.Git.Ref = s.Git.Ref, ""
 		}
 		out = append(out, s)
+	}
+	for _, ref := range stringsOf(m["refs"]) {
+		out = append(out, agents.Skill{OCI: ref})
 	}
 	return out
 }

@@ -1,0 +1,31 @@
+# A bundled example agent of the kagent 0.10 chart: rendered by the kagent
+# HelmRelease (not a Generic-chart release), so there is nothing to rewrite —
+# it disappears with the chart, or the contract phase removes what is left.
+# Fleet shape 4.
+apiVersion: kagent.dev/v1alpha2
+kind: Agent
+metadata:
+  name: k8s-agent
+  namespace: kagent
+  labels:
+    app.kubernetes.io/instance: kagent
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: kagent
+    helm.sh/chart: kagent-0.10.1
+    helm.toolkit.fluxcd.io/name: kagent
+    helm.toolkit.fluxcd.io/namespace: agent-platform
+spec:
+  type: Declarative
+  description: An agent specializing in Kubernetes operations.
+  declarative:
+    runtime: go
+    modelConfig: default-model-config
+    systemMessage: You are a Kubernetes expert.
+    tools:
+      - type: McpServer
+        mcpServer:
+          kind: MCPServer
+          apiGroup: kagent.dev
+          name: kagent-tool-server
+          toolNames:
+            - k8s_get_resources

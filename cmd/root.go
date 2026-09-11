@@ -50,7 +50,7 @@ served as REST/JSON (portal) and as MCP tools (muster) from one process.`,
 	root.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "Enable debug logging")
 	root.Version = version
 	root.SetVersionTemplate("agent-manager version {{.Version}}\n")
-	root.AddCommand(newServeCmd(), newVersionCmd())
+	root.AddCommand(newServeCmd(), newMigrateCmd(), newVersionCmd())
 	return root
 }
 
