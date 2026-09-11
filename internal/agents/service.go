@@ -664,7 +664,7 @@ func (s *Service) Create(ctx context.Context, spec Spec) (*CreateResult, error) 
 	existing, err := dyn.Resource(s.ociRepositoryGVR()).Namespace(ns).Get(ctx, ociRepo.GetName(), metav1.GetOptions{})
 	switch {
 	case apierrors.IsNotFound(err):
-		if _, err := dyn.Resource(s.ociRepositoryGVR()).Namespace(ns).Create(ctx, ociRepo, metav1.CreateOptions{}); err != nil {
+		if _, err := dyn.Resource(s.ociRepositoryGVR()).Namespace(ns).Create(ctx, ociRepo, metav1.CreateOptions{FieldManager: FieldManager}); err != nil {
 			return nil, wrapKube(err, fmt.Sprintf("create OCIRepository %s/%s", ns, ociRepo.GetName()))
 		}
 		res.Created.OCIRepository = true
@@ -680,7 +680,7 @@ func (s *Service) Create(ctx context.Context, spec Spec) (*CreateResult, error) 
 	}
 
 	hr := BuildHelmRelease(spec.Name, ns, values, s.cfg.Compose)
-	created, err := dyn.Resource(s.helmReleaseGVR()).Namespace(ns).Create(ctx, hr, metav1.CreateOptions{})
+	created, err := dyn.Resource(s.helmReleaseGVR()).Namespace(ns).Create(ctx, hr, metav1.CreateOptions{FieldManager: FieldManager})
 	if err != nil {
 		return nil, wrapKube(err, fmt.Sprintf("create HelmRelease %s/%s", ns, spec.Name))
 	}
@@ -865,7 +865,7 @@ func (s *Service) Update(ctx context.Context, upd Update) (*UpdateResult, error)
 	if err := unstructured.SetNestedMap(hr.Object, after, "spec", "values"); err != nil {
 		return nil, fmt.Errorf("set values: %w", err)
 	}
-	updated, err := dyn.Resource(s.helmReleaseGVR()).Namespace(hr.GetNamespace()).Update(ctx, hr, metav1.UpdateOptions{})
+	updated, err := dyn.Resource(s.helmReleaseGVR()).Namespace(hr.GetNamespace()).Update(ctx, hr, metav1.UpdateOptions{FieldManager: FieldManager})
 	if err != nil {
 		return nil, wrapKube(err, fmt.Sprintf("update HelmRelease %s/%s", hr.GetNamespace(), hr.GetName()))
 	}

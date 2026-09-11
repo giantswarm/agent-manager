@@ -44,6 +44,13 @@ type ComposeConfig struct {
 }
 
 // Defaults of the composition, the values composeManifests.ts uses.
+// FieldManager names this service as the manager of the fields it writes on
+// HelmRelease and OCIRepository objects (metadata.managedFields[].manager): a
+// field manager names the tool that applied a field, never the person — the
+// caller is recorded in the requestedBy annotation and in the apiserver audit
+// log (every write runs with the caller's token).
+const FieldManager = "agent-manager"
+
 const (
 	DefaultChartOCIURL = "oci://gsoci.azurecr.io/charts/giantswarm/agent"
 	// DefaultChartSemver is the range the per-namespace OCIRepository tracks:
