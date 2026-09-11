@@ -276,6 +276,159 @@ the server on `agenttemplates` (`--kagent-api-version auto`, fallback
 (`AGENT_MUSTER_URL`) composes the platform's muster MCP URL into every agent as
 `muster.url`; unset, nothing is composed and the chart default applies.
 
+## Migrating an installation: `agent-manager migrate`
+
+An installation that moves from the 0.10 platform to kagent API v2 has agents
+as Generic chart 0.x releases rendering `kagent.dev/v1alpha2` `Agent` objects.
+Chart 1.x refuses their values, upstream ships no migration, and the old CRD
+and its objects survive the kagent upgrade untouched (`helm.sh/resource-policy:
+keep`). `agent-manager migrate` is the expand–contract migration for that: the
+connectivity chart of the [`agent-platform`](https://github.com/giantswarm/agent-platform)
+meta chart runs it once per installation as a Job under the platform's Flux
+identity, and it runs by hand with a kubeconfig the same way. Every phase is
+idempotent and gated on the previous one; re-running is always safe, and a
+second run on a migrated installation changes nothing and says so.
+
+```sh
+agent-manager migrate --dry-run \
+  --kubeconfig ~/.kube/config --kagent-namespace kagent --harness-name kagent \
+  --agent-chart-oci-url oci://gsoci.azurecr.io/charts/giantswarm/agent --agent-chart-semver 1.x \
+  --gitops-namespaces flux-giantswarm
+GITHUB_TOKEN=… agent-manager migrate --kubeconfig ~/.kube/config     # writes
+```
+
+It works on every Generic-chart release that renders into a managed namespace
+(`--kagent-namespace`, `--managed-namespaces` — the same flags and variables
+`serve` takes): the HelmReleases of the namespace whose `chartRef` is an
+`OCIRepository` of the agent chart (`--agent-chart-oci-url`), plus the releases
+elsewhere that the rendered objects' Flux provenance labels
+(`helm.toolkit.fluxcd.io/name`, `helm.toolkit.fluxcd.io/namespace`) point at —
+the fleet's GitOps-owned `sre-agent` releases live in `flux-giantswarm` with
+`targetNamespace: kagent` — and any Generic-chart release in
+`--gitops-namespaces` with a `targetNamespace` in the managed set. Releases
+outside the managed namespaces, and releases applied by a Flux Kustomization
+(`kustomize.toolkit.fluxcd.io/name`), are read and never written.
+
+### The phases
+
+1. **Expand.** For every release on the 0.x values: the removed keys are
+   dropped (`agent.runtime`, `replicas`, `resources`, `nodeSelector`,
+   `tolerations`, the whole `muster.serverRef`, `muster.allowedHeaders`,
+   `muster.stsWellKnownUri`, `skills.gitAuthSecretRef` — the composer's own
+   list), `muster.toolNames` becomes `muster.tools`, the 0.x `skills` object
+   (`refs[]`, `gitRefs[]`) becomes the 1.x list with every git ref resolved to
+   that ref's head commit and every tagged image to its digest (the same path
+   `create_agent` pins with), `agent.harness` is set when `--harness-name` is
+   not the chart default, and everything else — `agent.*`, `modelConfig`,
+   `toolset`, `muster.enabled`, `extraTools`, `extraAgentSpec`, `labels`,
+   `annotations` — is kept (`agent.iconUrl` keeps its name; chart 1.x renders
+   it as `ui.giantswarm.io/icon-url`). The result is validated against the
+   chart 1.x `values.schema.json` **before** anything is written; a release
+   whose rewrite fails validation, or whose skill reference cannot be resolved
+   (a private repository without a token), is left untouched and reported. A
+   writable release is updated in place; a GitOps-owned or external release
+   gets its rewrite as a unified diff of the manifest in the report — values,
+   the `driftDetection.ignore` paths under `/spec/declarative` (v1alpha2
+   fields), and its OCIRepository's range — for the pull request in the owning
+   repository. Last, the namespace's agent-chart `OCIRepository` moves to the
+   target range (`--agent-chart-semver`, `1.x`), only when every release it
+   serves is on 1.x values and the registry has a version in that range; a
+   pending or failed release leaves the range untouched. Nothing is written
+   while the registry has no 1.x chart (1.x values under a 0.x chart would
+   fail every render).
+2. **Wait.** The contract runs only when every release rendering into the
+   namespace is deployed from a chart in the target range, every
+   `AgentTemplate` of the namespace is Ready on the platform Harness (the
+   `get_agent_status` verdict, `--harness-name`) and no v1alpha2 `Agent` is
+   still rendered by a release Flux has yet to upgrade. Until then the report
+   names what is pending and the command exits 0.
+3. **Contract.** The leftover `kagent.dev/v1alpha2` `Agent` objects of the
+   managed namespaces are deleted (the bundled example agents of the kagent
+   0.10 chart among them — an `Agent` no Generic-chart release renders is not
+   migratable and is listed for this phase), then the CRDs `agents`,
+   `sandboxagents`, `agentharnesses`, `memories` and `toolservers` of
+   `kagent.dev`, once every managed namespace has passed the gate and no
+   v1alpha2 `Agent` exists outside the managed namespaces.
+
+### The report
+
+Every run writes a ConfigMap **`agent-manager-migrate-report`**
+(`--report-configmap`) in each managed namespace and prints the same to
+stdout; `--dry-run` prints and writes nothing, not even the report. Keys:
+
+| Key | Content |
+|---|---|
+| `phase` | `expand` (a release still on 0.x values, a diff not merged, a source not on the range), `wait` (expand done, Flux/kagent catching up), `contract` (the gate passed; leftovers deleted this run), `complete` (nothing of the 0.x world left) |
+| `summary` | one sentence |
+| `report.yaml` | the structured report below |
+
+```yaml
+namespace: kagent
+phase: expand
+summary: "expand phase: 2 release(s) rewritten, 0 unchanged, 1 with a diff for the owning repository, 0 pending, 0 failed; 1 item(s) gate the next phase"
+run: {at: 2026-09-11T02:00:00Z, dryRun: false, version: 1.1.0, harness: kagent,
+      chart: {ociUrl: oci://gsoci.azurecr.io/charts/giantswarm/agent, targetSemver: 1.x, latestVersion: 1.0.0, schemaVersion: 1.0.0, schemaSource: registry}}
+changed: true                      # this run wrote something in the namespace
+releases:
+  - name: sre
+    namespace: kagent
+    ownership: helmrelease         # helmrelease | gitops | external
+    action: rewritten              # rewritten | unchanged | diff | pending | failed
+    chartVersion: 0.6.1            # deployed chart version
+    changes:
+      removed: [agent.runtime, replicas, resources, skills.gitAuthSecretRef]
+      renamed: ["muster.toolNames -> muster.tools"]
+      set: ["agent.harness=kagent"]                         # only when not the chart default
+      skills:
+        - {name: runbooks, source: "https://github.com/giantswarm/agent-skills@main path=runbooks", pinned: 0123456789abcdef0123456789abcdef01234567}
+      driftIgnoreRemoved: [/spec/declarative/deployment/podSecurityContext]
+    template: {name: sre, exists: true, verdict: ready, summary: "…"}   # wait phase
+  - name: sre-agent
+    namespace: flux-giantswarm
+    targetNamespace: kagent
+    ownership: external
+    action: diff
+    reason: "never written by this command: …"
+    diff: |                        # unified diff of the manifest (runtime metadata and Flux labels stripped)
+      --- a/helmrelease-flux-giantswarm-sre-agent.yaml
+      +++ b/helmrelease-flux-giantswarm-sre-agent.yaml
+      …
+sources:                           # the agent-chart OCIRepositories
+  - {name: agent, namespace: kagent, ownership: helmrelease, action: moved, from: ">=0.2.1 <1.0.0", to: 1.x}      # moved | unchanged | not-moved | diff
+agents:                            # kagent.dev/v1alpha2 Agent objects found
+  - {name: k8s-agent, namespace: kagent, owner: agent-platform/kagent, action: not-migratable, reason: "rendered by HelmRelease agent-platform/kagent, which is not a Generic-chart release …"}
+  - {name: sre, namespace: kagent, owner: kagent/sre, action: awaiting-upgrade}      # awaiting-upgrade | not-migratable | deleted
+pending:                           # what gates the next phase
+  - "release flux-giantswarm/sre-agent: its rewrite (the diff in this report) is not applied in the owning repository yet"
+contract:                          # once the gate passed
+  agentsDeleted: [k8s-agent]
+  crds:
+    - {name: agents.kagent.dev, action: deleted}          # deleted | absent | kept
+```
+
+### Exit codes and permissions
+
+The exit code is `0` whenever the run did what the cluster's state admits —
+pending or failed releases included, they are in the report — and non-zero
+only for what needs an operator: no cluster access, kagent API v2 not served
+(the command refuses to touch a 0.10 installation), a read or write the API
+server refused, the report not writable.
+
+The Job's identity (the connectivity chart binds the platform's Flux
+ServiceAccount) needs, in the managed namespaces: `helmreleases` and
+`ocirepositories` get/list/update/patch, `agenttemplates`, `harnesses` and
+`remotemcpservers` get/list, `agents` (`kagent.dev/v1alpha2`) list/delete,
+`configmaps` get/create/update, `events` list (diagnostics; optional); in the
+namespaces the provenance labels and `--gitops-namespaces` name:
+`helmreleases` and `ocirepositories` get/list; cluster-wide:
+`customresourcedefinitions` get/delete for the five names above, and — best
+effort, the run goes on without it — `agents` list to refuse the CRD deletion
+while objects exist outside the managed namespaces. Skill refs are resolved
+through the GitHub API (`--skills-github-api`, `GITHUB_TOKEN`) as `list_skills`
+does; without a token public repositories resolve and a private ref is
+reported as pending. The Job also needs egress to the GitHub API and the chart
+registry.
+
 ## Helm chart
 
 `helm/agent-manager` — see its [README](helm/agent-manager/README.md). Keys

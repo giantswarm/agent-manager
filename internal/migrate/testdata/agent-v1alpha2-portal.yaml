@@ -1,0 +1,68 @@
+# What Generic chart 0.6.1 renders for a portal-created release `sre` in
+# kagent: a kagent.dev/v1alpha2 Agent with the Flux provenance labels of the
+# release. Fleet shape 1 (portal-created, git skills on a branch).
+apiVersion: kagent.dev/v1alpha2
+kind: Agent
+metadata:
+  name: sre
+  namespace: kagent
+  labels:
+    app: agent
+    app.kubernetes.io/instance: sre
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: agent
+    app.kubernetes.io/version: 0.6.1
+    application.giantswarm.io/team: bumblebee
+    helm.sh/chart: agent-0.6.1
+    helm.toolkit.fluxcd.io/name: sre
+    helm.toolkit.fluxcd.io/namespace: kagent
+    team: sre
+  annotations:
+    ui.giantswarm.io/display-name: SRE Assistant
+    owner: sre@example.com
+spec:
+  type: Declarative
+  description: helps
+  iconUrl: https://avatars.example/v1/sre.png
+  skills:
+    refs:
+      - ghcr.io/giantswarm/skills/kubectl:1.4.0
+    gitRefs:
+      - url: https://github.com/giantswarm/agent-skills
+        ref: main
+        path: nested/runbooks
+        name: runbooks
+      - url: https://github.com/giantswarm/agent-skills
+        ref: feature
+        path: agent-self-awareness
+    gitAuthSecretRef:
+      name: kagent-skills-token
+  declarative:
+    runtime: go
+    modelConfig: default-model-config
+    systemMessage: Be brief.
+    tools:
+      - type: McpServer
+        headersFrom:
+          - name: X-Muster-Toolset
+            value: preset:read-only,workflow:incident-triage
+        mcpServer:
+          kind: RemoteMCPServer
+          apiGroup: kagent.dev
+          name: muster
+          namespace: agent-platform
+          allowedHeaders:
+            - authorization
+    deployment:
+      replicas: 2
+      env:
+        - name: KAGENT_PROPAGATE_TOKEN
+          value: "true"
+      resources:
+        requests:
+          cpu: 100m
+status:
+  conditions:
+    - type: Ready
+      status: "True"
+      reason: AgentReconciled
