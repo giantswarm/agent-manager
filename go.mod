@@ -99,7 +99,7 @@ require (
 // golang.org/x/mod < v0.40.0 (CVE-2026-56864, CVE-2026-56865). The module is
 // not imported by agent-manager, so a plain `go get` bump is dropped by
 // `go mod tidy`; the replace pins the graph to a fixed version instead.
-replace golang.org/x/mod => golang.org/x/mod v0.40.0
+replace golang.org/x/mod => golang.org/x/mod v0.41.0
 
 // Same for golang.org/x/crypto < v0.56.0 (CVE-2026-56854, CVE-2026-78662; ssh source-address
 // permissions): pulled in through the Kubernetes client, never imported here.
