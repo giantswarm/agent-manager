@@ -145,7 +145,7 @@ func pinSkills(ctx context.Context, p SkillPinner, list Skills, refresh bool) (S
 				}
 				commit, err := p.GitHead(ctx, g.URL, s.Git.Ref)
 				if err != nil {
-					return nil, invalidf("skills[%d] (%s): %v", i, pinned.Name, err)
+					return nil, fmt.Errorf("%w: skills[%d] (%s): %w", ErrInvalid, i, pinned.Name, err)
 				}
 				g.Commit = commit
 			}
@@ -157,7 +157,7 @@ func pinSkills(ctx context.Context, p SkillPinner, list Skills, refresh bool) (S
 			}
 			digest, err := p.OCIDigest(ctx, s.OCI)
 			if err != nil {
-				return nil, invalidf("skills[%d] (%s): %v", i, pinned.Name, err)
+				return nil, fmt.Errorf("%w: skills[%d] (%s): %w", ErrInvalid, i, pinned.Name, err)
 			}
 			pinned.OCI = digest
 		}

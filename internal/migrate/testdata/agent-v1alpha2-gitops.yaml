@@ -1,0 +1,41 @@
+# The Agent the GitOps-owned release renders into kagent: its provenance
+# labels lead to flux-giantswarm/sre-agent — the way the migration finds a
+# release that lives in another namespace.
+apiVersion: kagent.dev/v1alpha2
+kind: Agent
+metadata:
+  name: sre-agent
+  namespace: kagent
+  labels:
+    app: agent
+    app.kubernetes.io/instance: sre-agent
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: agent
+    helm.sh/chart: agent-0.6.1
+    helm.toolkit.fluxcd.io/name: sre-agent
+    helm.toolkit.fluxcd.io/namespace: flux-giantswarm
+  annotations:
+    ui.giantswarm.io/display-name: SRE Agent
+spec:
+  type: Declarative
+  description: Giant Swarm SRE agent
+  declarative:
+    runtime: python
+    modelConfig: default-model-config
+    systemMessage: You are a Giant Swarm SRE agent. Prefer read-only diagnosis.
+    tools:
+      - type: McpServer
+        mcpServer:
+          kind: RemoteMCPServer
+          apiGroup: kagent.dev
+          name: muster
+          namespace: agent-platform
+          allowedHeaders:
+            - authorization
+          toolNames:
+            - list_tools
+            - describe_tool
+            - filter_tools
+            - call_tool
+    deployment:
+      replicas: 1

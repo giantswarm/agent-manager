@@ -107,6 +107,10 @@ type Report struct {
 	Agents []AgentReport `json:"agents"`
 	// Pending names what gates the next phase.
 	Pending []string `json:"pending,omitempty"`
+	// Warnings are what the wait phase found when nothing gates on it any
+	// more (a template not Ready in a namespace that has nothing left to
+	// contract).
+	Warnings []string `json:"warnings,omitempty"`
 	// Contract is what the contract phase did, when it ran.
 	Contract *ContractReport `json:"contract,omitempty"`
 }

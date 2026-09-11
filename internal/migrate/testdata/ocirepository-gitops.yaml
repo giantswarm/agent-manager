@@ -1,0 +1,22 @@
+# The GitOps-owned agent-chart source next to the sre-agent release, bounded
+# by the fleet prerequisite. Never written by the migration: the range move is
+# part of the emitted diff.
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: OCIRepository
+metadata:
+  name: agent
+  namespace: flux-giantswarm
+  labels:
+    kustomize.toolkit.fluxcd.io/name: flux-giantswarm
+    kustomize.toolkit.fluxcd.io/namespace: flux-giantswarm
+  uid: 9d8c7b6a-5f4e-4d3c-8b2a-1f0e9d8c7b6a
+  resourceVersion: "812000"
+spec:
+  interval: 10m
+  url: oci://gsoci.azurecr.io/charts/giantswarm/agent
+  ref:
+    semver: ">=0.2.1 <1.0.0"
+  provider: generic
+status:
+  artifact:
+    revision: 0.6.1@sha256:0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0

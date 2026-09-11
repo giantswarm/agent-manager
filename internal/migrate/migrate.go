@@ -439,17 +439,17 @@ func (r *Runner) classifyAgents(st *nsState) {
 	for _, a := range st.agents {
 		rep := &AgentReport{Name: a.obj.GetName(), Namespace: st.ns}
 		name, hrNs := ownerOf(a.obj)
-		switch {
-		case name == "":
+		if name == "" {
 			rep.Action, rep.Reason = AgentNotMigratable, "no Flux provenance labels: not rendered by a HelmRelease; only the contract phase removes it"
-		default:
-			rep.Owner = orDefault(hrNs, st.ns) + "/" + name
-			if owner, ok := byID[rep.Owner]; ok {
-				a.owner = owner
-				rep.Action, rep.Reason = AgentAwaitingUpgrade, fmt.Sprintf("rendered by Generic-chart release %s: Helm replaces it with the AgentTemplate when the release upgrades to chart %s; the contract phase sweeps what is left", rep.Owner, r.opts.TargetSemver)
-			} else {
-				rep.Action, rep.Reason = AgentNotMigratable, fmt.Sprintf("rendered by HelmRelease %s, which is not a Generic-chart release (a bundled example agent of the kagent chart, or a chart this command does not know): nothing to rewrite; only the contract phase removes it", rep.Owner)
-			}
+			a.report = rep
+			continue
+		}
+		rep.Owner = orDefault(hrNs, st.ns) + "/" + name
+		if owner, ok := byID[rep.Owner]; ok {
+			a.owner = owner
+			rep.Action, rep.Reason = AgentAwaitingUpgrade, fmt.Sprintf("rendered by Generic-chart release %s: Helm replaces it with the AgentTemplate when the release upgrades to chart %s; the contract phase sweeps what is left", rep.Owner, r.opts.TargetSemver)
+		} else {
+			rep.Action, rep.Reason = AgentNotMigratable, fmt.Sprintf("rendered by HelmRelease %s, which is not a Generic-chart release (a bundled example agent of the kagent chart, or a chart this command does not know): nothing to rewrite; only the contract phase removes it", rep.Owner)
 		}
 		a.report = rep
 	}
@@ -858,16 +858,23 @@ func (st *nsState) phase() (string, string) {
 	for _, rel := range st.releases {
 		counts[rel.report.Action]++
 	}
-	switch {
-	case !st.expandDone:
+	if !st.expandDone {
 		return PhaseExpand, fmt.Sprintf("expand phase: %d release(s) rewritten, %d unchanged, %d with a diff for the owning repository, %d pending, %d failed; %d item(s) gate the next phase",
 			counts[ActionRewritten], counts[ActionUnchanged], counts[ActionDiff], counts[ActionPending], counts[ActionFailed], len(st.report.Pending))
-	case !st.gatePassed:
-		return PhaseWait, fmt.Sprintf("expand done (%d release(s) on 1.x values); waiting for Flux and kagent: %d item(s) pending before the contract phase", len(st.releases), len(st.report.Pending))
 	}
 	contracted := st.report.Contract != nil && len(st.report.Contract.AgentsDeleted) > 0
-	if !contracted && !st.crdsPresent && !crdsDeletedThisRun(st.report.Contract) {
-		return PhaseComplete, fmt.Sprintf("nothing left to migrate: %d Generic-chart release(s) on 1.x values, no kagent.dev/v1alpha2 Agent objects, none of the removed CRDs", len(st.releases))
+	if len(st.agents) == 0 && !contracted && !st.crdsPresent && !crdsDeletedThisRun(st.report.Contract) {
+		// Nothing of the 0.x world is left: readiness gates nothing any more,
+		// what the wait phase found is informational.
+		summary := fmt.Sprintf("nothing left to migrate: %d Generic-chart release(s) on 1.x values, no kagent.dev/v1alpha2 Agent objects, none of the removed CRDs", len(st.releases))
+		if len(st.report.Pending) > 0 {
+			summary += fmt.Sprintf("; %d item(s) not Ready yet (see warnings)", len(st.report.Pending))
+		}
+		st.report.Warnings, st.report.Pending = st.report.Pending, nil
+		return PhaseComplete, summary
+	}
+	if !st.gatePassed {
+		return PhaseWait, fmt.Sprintf("expand done (%d release(s) on 1.x values); waiting for Flux and kagent: %d item(s) pending before the contract phase", len(st.releases), len(st.report.Pending))
 	}
 	deleted := 0
 	if st.report.Contract != nil {
