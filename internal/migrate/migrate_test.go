@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -207,7 +208,7 @@ func (c *cluster) delete(t *testing.T, gvr schema.GroupVersionResource, ns, name
 
 func load(t *testing.T, name string) *unstructured.Unstructured {
 	t.Helper()
-	raw, err := os.ReadFile("testdata/" + name)
+	raw, err := os.ReadFile(filepath.Clean(filepath.Join("testdata", name)))
 	require.NoError(t, err)
 	var obj map[string]any
 	require.NoError(t, yaml.Unmarshal(raw, &obj))
