@@ -243,3 +243,15 @@ func skillsFromTemplate(tpl *unstructured.Unstructured) Skills {
 	}
 	return out
 }
+
+// PinSkills is the composer's pinning for other callers (the migrate command
+// rewriting 0.x releases): every entry pinned to a commit or a digest and
+// named the way create_agent names it, or an ErrInvalid naming the reference
+// that could not be resolved.
+func PinSkills(ctx context.Context, p SkillPinner, list Skills) (Skills, error) {
+	return pinSkills(ctx, p, list, false)
+}
+
+// SkillsValues renders a pinned skills list as the chart 1.x `skills` value;
+// nil when the list is empty.
+func SkillsValues(list Skills) []any { return skillsValues(list) }
