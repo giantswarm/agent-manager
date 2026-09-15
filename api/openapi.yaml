@@ -212,8 +212,10 @@ paths:
         head of its repository's default branch — a skill passed with a `ref`
         in the same call to that ref's head — and changes nothing else),
         validates and updates the HelmRelease. `409 conflict` for GitOps-owned
-        or suspended releases and bare AgentTemplates unless `force`. `400` for
-        a body still carrying the removed `toolNames` or `runtime`.
+        or suspended releases and bare AgentTemplates unless `force`; a write
+        that races helm-controller's status update of the release is retried
+        on a fresh read, not reported. `400` for a body still carrying the
+        removed `toolNames` or `runtime`.
       operationId: updateAgent
       x-mcp-tool: update_agent
       parameters:

@@ -3,6 +3,7 @@ package migrate
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -20,6 +21,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	kubefake "k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 	"sigs.k8s.io/yaml"
 
 	"github.com/giantswarm/agent-manager/internal/agents"
@@ -879,4 +881,63 @@ func TestVersionInRange(t *testing.T) {
 	assert.False(t, versionInRange("0.6.1", target))
 	assert.False(t, versionInRange("1.0.0-dev.branch.h123", target), "a pre-release build never satisfies 1.x")
 	assert.False(t, versionInRange("", target))
+}
+
+// helm-controller and source-controller write the status of the objects the
+// migration rewrites: a write that lands on a stale resourceVersion is retried
+// on a fresh read. A release whose values themselves changed underneath is
+// left for the next run instead of being overwritten.
+func TestExpandRetriesAWriteThatRacesTheControllers(t *testing.T) {
+	ctx := context.Background()
+	c := newCluster(fleet(t)...)
+	writes := map[string]int{}
+	for _, resource := range []string{"helmreleases", "ocirepositories"} {
+		c.dyn.PrependReactor("update", resource, func(action k8stesting.Action) (bool, runtime.Object, error) {
+			obj := action.(k8stesting.UpdateAction).GetObject().(*unstructured.Unstructured)
+			key := action.GetResource().Resource + " " + obj.GetNamespace() + "/" + obj.GetName()
+			writes[key]++
+			if writes[key] > 1 {
+				return false, nil, nil
+			}
+			if key == "helmreleases tenant/tenant-bot" {
+				// Not a status write: the values moved under the migration.
+				stored, err := c.dyn.Tracker().Get(hrGVR, "tenant", "tenant-bot")
+				require.NoError(t, err)
+				edited := stored.(*unstructured.Unstructured)
+				require.NoError(t, unstructured.SetNestedField(edited.Object, "edited meanwhile", "spec", "values", "agent", "description"))
+				require.NoError(t, c.dyn.Tracker().Update(hrGVR, edited, "tenant"))
+			}
+			return true, nil, apierrors.NewConflict(action.GetResource().GroupResource(), obj.GetName(), errors.New("the object has been modified; please apply your changes to the latest version and try again"))
+		})
+	}
+	r := c.runner(t, twoNamespaces, "1.0.0", "secret")
+
+	res, err := r.Run(ctx)
+	require.ErrorContains(t, err, "spec.values changed since they were read")
+	require.Len(t, res.Reports, 2)
+	kagent, tenant := res.Reports[0], res.Reports[1]
+
+	// Status writes only: every object of the kagent namespace took a second
+	// write and landed as if nothing had happened.
+	releases, sources := byRelease(kagent), bySource(kagent)
+	assert.Equal(t, ActionRewritten, releases["kagent/sre"].Action)
+	assert.Equal(t, ActionRewritten, releases["kagent/narrow"].Action)
+	assert.Equal(t, portalRewritten(), c.values(t, "kagent", "sre"))
+	assert.Equal(t, narrowRewritten(), c.values(t, "kagent", "narrow"))
+	assert.Equal(t, SourceMoved, sources["kagent/agent"].Action)
+	assert.Equal(t, target, c.semver(t, "kagent", "agent"))
+	assert.Equal(t, 2, writes["helmreleases kagent/sre"])
+	assert.Equal(t, 2, writes["helmreleases kagent/narrow"])
+	assert.Equal(t, 2, writes["ocirepositories kagent/agent"])
+
+	// The edited release: failed for this run with the reason, its values
+	// untouched, its source not moved behind it.
+	bot := byRelease(tenant)["tenant/tenant-bot"]
+	assert.Equal(t, ActionFailed, bot.Action)
+	assert.Contains(t, bot.Reason, "the next run rewrites the current values")
+	assert.Equal(t, 1, writes["helmreleases tenant/tenant-bot"], "the guard refuses before a second write")
+	botAgent := c.values(t, "tenant", "tenant-bot")["agent"].(map[string]any)
+	assert.Equal(t, "edited meanwhile", botAgent["description"])
+	assert.Equal(t, "go", botAgent["runtime"], "nothing of the rewrite was written")
+	assert.Equal(t, SourceNotMoved, bySource(tenant)["tenant/agent"].Action)
 }

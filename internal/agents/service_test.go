@@ -3,6 +3,7 @@ package agents
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,12 +13,14 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	kubefake "k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 	"sigs.k8s.io/yaml"
 
 	"github.com/giantswarm/agent-manager/internal/chart"
@@ -874,4 +877,61 @@ func TestMutationsCarryTheCaller(t *testing.T) {
 	assert.ErrorIs(t, err, ErrUnauthenticated)
 	_, err = callerOnly.Create(context.Background(), Spec{Name: "sre", ModelConfig: "default-model-config", Toolset: []string{"preset:read-only"}})
 	assert.ErrorIs(t, err, ErrUnauthenticated)
+}
+
+// The write is a read-modify-write that races helm-controller: it writes the
+// release's status after every change, so an update following another closely
+// carries a stale resourceVersion. The API server's Conflict is retried on a
+// fresh read — both calls of the lab's agents-test proof (a description, then
+// refreshSkills) succeed — and a Conflict that outlasts the attempts is still
+// reported as one.
+func TestUpdateRetriesTheWriteWhenTheReleaseMovedUnderneath(t *testing.T) {
+	f := seeded(t)
+	ctx := context.Background()
+	str := func(s string) *string { return &s }
+	conflict := apierrors.NewConflict(hrGVR.GroupResource(), "verifier", errors.New("the object has been modified; please apply your changes to the latest version and try again"))
+
+	// Between the read and the write another writer renamed the agent and
+	// helm-controller wrote the status: the first Update answers Conflict, the
+	// second attempt merges into the re-read release.
+	updates := 0
+	f.dyn.PrependReactor("update", "helmreleases", func(k8stesting.Action) (bool, runtime.Object, error) {
+		updates++
+		if updates > 1 {
+			return false, nil, nil
+		}
+		stored, err := f.dyn.Tracker().Get(hrGVR, "kagent", "verifier")
+		require.NoError(t, err)
+		moved := stored.(*unstructured.Unstructured)
+		require.NoError(t, unstructured.SetNestedField(moved.Object, "Renamed elsewhere", "spec", "values", "agent", "displayName"))
+		require.NoError(t, unstructured.SetNestedField(moved.Object, int64(7), "status", "observedGeneration"))
+		require.NoError(t, f.dyn.Tracker().Update(hrGVR, moved, "kagent"))
+		return true, nil, conflict
+	})
+	res, err := f.svc.Update(ctx, Update{Name: "verifier", Description: str("a new description")})
+	require.NoError(t, err)
+	assert.Equal(t, 2, updates, "one Conflict, one write")
+	assert.Equal(t, []string{"agent.description"}, res.Changed)
+	assert.Equal(t, "Renamed elsewhere", res.Before["agent"].(map[string]any)["displayName"], "the second attempt read the moved release")
+	hr, err := f.dyn.Resource(hrGVR).Namespace("kagent").Get(ctx, "verifier", metav1.GetOptions{})
+	require.NoError(t, err)
+	agent := mustValues(hr)["agent"].(map[string]any)
+	assert.Equal(t, "a new description", agent["description"])
+	assert.Equal(t, "Renamed elsewhere", agent["displayName"], "the concurrent change survived the retry")
+	generation, _, _ := unstructured.NestedInt64(hr.Object, "status", "observedGeneration")
+	assert.Equal(t, int64(7), generation)
+
+	// A Conflict on every attempt is reported as one, and nothing is written.
+	updates = 0
+	f.dyn.PrependReactor("update", "helmreleases", func(k8stesting.Action) (bool, runtime.Object, error) {
+		updates++
+		return true, nil, conflict
+	})
+	_, err = f.svc.Update(ctx, Update{Name: "verifier", Description: str("never lands")})
+	require.ErrorIs(t, err, ErrConflict)
+	assert.True(t, apierrors.IsConflict(err), "the API server's error stays in the chain")
+	assert.Greater(t, updates, 1, "retried before giving up")
+	hr, err = f.dyn.Resource(hrGVR).Namespace("kagent").Get(ctx, "verifier", metav1.GetOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, "a new description", mustValues(hr)["agent"].(map[string]any)["description"])
 }
