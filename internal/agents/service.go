@@ -13,6 +13,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/util/retry"
 
 	"github.com/giantswarm/agent-manager/internal/chart"
 	"github.com/giantswarm/agent-manager/internal/identity"
@@ -217,7 +218,9 @@ func (s *Service) dyn(ctx context.Context) (dynamic.Interface, kube.Client, erro
 	return c.Dynamic(), c, nil
 }
 
-// wrapKube maps API server errors onto the domain sentinels.
+// wrapKube maps API server errors onto the domain sentinels. The API server's
+// error stays in the chain, so apierrors.IsConflict still answers on a wrapped
+// write error — what the retry around a read-modify-write looks for.
 func wrapKube(err error, what string) error {
 	switch {
 	case err == nil:
@@ -225,11 +228,11 @@ func wrapKube(err error, what string) error {
 	case apierrors.IsNotFound(err):
 		return fmt.Errorf("%w: %s", ErrNotFound, what)
 	case apierrors.IsForbidden(err):
-		return fmt.Errorf("%w: %s: %v", ErrForbidden, what, err)
+		return fmt.Errorf("%w: %s: %w", ErrForbidden, what, err)
 	case apierrors.IsAlreadyExists(err), apierrors.IsConflict(err):
-		return fmt.Errorf("%w: %s: %v", ErrConflict, what, err)
+		return fmt.Errorf("%w: %s: %w", ErrConflict, what, err)
 	case apierrors.IsInvalid(err), apierrors.IsBadRequest(err):
-		return fmt.Errorf("%w: %s: %v", ErrInvalid, what, err)
+		return fmt.Errorf("%w: %s: %w", ErrInvalid, what, err)
 	default:
 		return fmt.Errorf("%s: %w", what, err)
 	}
@@ -821,6 +824,15 @@ func setOrDelete(m map[string]any, key string, v *string) {
 // Update merges the change into the HelmRelease values, validates the result
 // against the chart schema and writes it. The rendered objects are never
 // touched: helm-controller renders the change.
+//
+// The write is a read-modify-write, retried when the API server answers
+// Conflict: helm-controller writes the release's status while it reconciles
+// the previous change, so an update that follows another closely reads a
+// resourceVersion that is stale by the time it writes — nothing the caller
+// asked for is in conflict. Every attempt reads the release again and merges
+// into its latest values; a Conflict that outlasts the attempts is reported.
+// The refusals of writableHelmRelease are conflicts of the domain, not of the
+// API server, and end the attempts at once.
 func (s *Service) Update(ctx context.Context, upd Update) (*UpdateResult, error) {
 	ns, err := s.Namespace(upd.Namespace)
 	if err != nil {
@@ -829,13 +841,26 @@ func (s *Service) Update(ctx context.Context, upd Update) (*UpdateResult, error)
 	if err := ValidateName(upd.Name); err != nil {
 		return nil, err
 	}
+	if err := rejectRemoved(upd.removed()...); err != nil {
+		return nil, err
+	}
 	dyn, _, err := s.dyn(ctx)
 	if err != nil {
 		return nil, err
 	}
-	if err := rejectRemoved(upd.removed()...); err != nil {
+	var res *UpdateResult
+	if err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+		var err error
+		res, err = s.update(ctx, dyn, ns, upd)
+		return err
+	}); err != nil {
 		return nil, err
 	}
+	return res, nil
+}
+
+// update is one attempt of Update: read the release, merge, validate, write.
+func (s *Service) update(ctx context.Context, dyn dynamic.Interface, ns string, upd Update) (*UpdateResult, error) {
 	hr, _, err := s.writableHelmRelease(ctx, dyn, ns, upd.Name, upd.Force)
 	if err != nil {
 		return nil, err
@@ -867,6 +892,9 @@ func (s *Service) Update(ctx context.Context, upd Update) (*UpdateResult, error)
 	}
 	updated, err := dyn.Resource(s.helmReleaseGVR()).Namespace(hr.GetNamespace()).Update(ctx, hr, metav1.UpdateOptions{FieldManager: FieldManager})
 	if err != nil {
+		if apierrors.IsConflict(err) {
+			s.log.Debug("HelmRelease moved between read and write", identity.LogAttr(ctx), "namespace", hr.GetNamespace(), "name", hr.GetName(), "resourceVersion", hr.GetResourceVersion())
+		}
 		return nil, wrapKube(err, fmt.Sprintf("update HelmRelease %s/%s", hr.GetNamespace(), hr.GetName()))
 	}
 	agent, err := s.get(ctx, dyn, ns, upd.Name)

@@ -41,6 +41,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/util/retry"
 
 	"github.com/giantswarm/agent-manager/internal/agents"
 	"github.com/giantswarm/agent-manager/internal/kube"
@@ -476,9 +477,7 @@ func (r *Runner) rewriteRelease(ctx context.Context, st *nsState, dyn dynamic.In
 		rep.TargetNamespace = target
 	}
 	values, _, _ := unstructured.NestedMap(rel.obj.Object, "spec", "values")
-	if values == nil {
-		values = map[string]any{}
-	}
+	values = orEmpty(values)
 	rewritten, changes, err := rewriteValues(ctx, values, r.opts.HarnessName, r.pinner)
 	if err != nil {
 		rep.Action, rep.Reason = ActionFailed, err.Error()
@@ -520,7 +519,13 @@ func (r *Runner) rewriteRelease(ctx context.Context, st *nsState, dyn dynamic.In
 		rep.Reason = "dry run: would be written"
 		return rep
 	}
-	if _, err := dyn.Resource(r.helmReleaseGVR()).Namespace(rel.ns).Update(ctx, rewrittenHR, metav1.UpdateOptions{FieldManager: agents.FieldManager}); err != nil {
+	if err := updateOnConflict(ctx, dyn.Resource(r.helmReleaseGVR()).Namespace(rel.ns), rel.name, func(hr *unstructured.Unstructured) error {
+		if current, _, _ := unstructured.NestedMap(hr.Object, "spec", "values"); !reflect.DeepEqual(orEmpty(current), values) {
+			return errors.New("spec.values changed since they were read; the next run rewrites the current values")
+		}
+		removeDriftIgnore(hr)
+		return unstructured.SetNestedMap(hr.Object, rewritten, "spec", "values")
+	}); err != nil {
 		rel.onTarget = false
 		rep.Action, rep.Reason = ActionFailed, fmt.Sprintf("update refused: %v", err)
 		st.fail(fmt.Errorf("update HelmRelease %s: %w", rel.id(), err))
@@ -578,7 +583,9 @@ func (r *Runner) moveSource(ctx context.Context, st *nsState, dyn dynamic.Interf
 		rep.Reason = "dry run: would be moved"
 		return rep
 	}
-	if _, err := dyn.Resource(r.ociRepositoryGVR()).Namespace(src.ns).Update(ctx, moved, metav1.UpdateOptions{FieldManager: agents.FieldManager}); err != nil {
+	if err := updateOnConflict(ctx, dyn.Resource(r.ociRepositoryGVR()).Namespace(src.ns), src.name, func(o *unstructured.Unstructured) error {
+		return unstructured.SetNestedField(o.Object, r.opts.TargetSemver, "spec", "ref", "semver")
+	}); err != nil {
 		rep.Action, rep.Reason = SourceNotMoved, fmt.Sprintf("update refused: %v", err)
 		st.fail(fmt.Errorf("update OCIRepository %s/%s: %w", src.ns, src.name, err))
 		return rep
@@ -587,6 +594,34 @@ func (r *Runner) moveSource(ctx context.Context, st *nsState, dyn dynamic.Interf
 	st.report.Changed = true
 	r.log.Info("chart source moved", "source", src.ns+"/"+src.name, "from", rep.From, "to", rep.To)
 	return rep
+}
+
+// updateOnConflict writes an object as a read-modify-write that survives a
+// concurrent writer: mutate is applied to a fresh read on every attempt, so a
+// Conflict from the API server — helm-controller or source-controller wrote the
+// object's status between the read and the write — is retried instead of
+// failing the object for this run. An error from mutate and any other error
+// of the API server end the attempts at once.
+func updateOnConflict(ctx context.Context, res dynamic.ResourceInterface, name string, mutate func(*unstructured.Unstructured) error) error {
+	return retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+		obj, err := res.Get(ctx, name, metav1.GetOptions{})
+		if err != nil {
+			return err
+		}
+		if err := mutate(obj); err != nil {
+			return err
+		}
+		_, err = res.Update(ctx, obj, metav1.UpdateOptions{FieldManager: agents.FieldManager})
+		return err
+	})
+}
+
+// orEmpty is the values map of a release, never nil.
+func orEmpty(values map[string]any) map[string]any {
+	if values == nil {
+		return map[string]any{}
+	}
+	return values
 }
 
 // ---- wait ---------------------------------------------------------------------
