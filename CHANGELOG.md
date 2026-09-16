@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- An untagged local build reports the toolchain's pseudo-version (`1.1.9-0.20260916142110-aef0725928df`: the next patch and the commit) instead of `dev`, as the other Agent Platform managers, muster and agentlab do; `dev` remains for a build without version-control information.
 - The chart README no longer renders a version badge (`chart.badgesSection` removed from `README.md.gotmpl`): a release PR bumping `Chart.yaml`'s `version` no longer changes the checked-in `README.md`, so the helm-docs pre-commit hook no longer fails on it. ([giantswarm/devctl#2180](https://github.com/giantswarm/devctl/issues/2180))
 
 ### Fixed

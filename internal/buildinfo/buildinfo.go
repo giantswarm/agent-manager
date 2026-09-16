@@ -9,8 +9,6 @@ package buildinfo
 import (
 	"runtime/debug"
 	"strings"
-
-	"golang.org/x/mod/module"
 )
 
 // The ldflags defaults a build without -X leaves in place.
@@ -67,19 +65,19 @@ func Resolve(version, commit, date string, bi *debug.BuildInfo) Info {
 func unset(v, def string) bool { return v == "" || v == def }
 
 // moduleVersion is the main module's version as a release version: without
-// its v, and without the +dirty the toolchain appends for a modified working
-// tree — a CI checkout carries build artefacts when the binary is built, so
-// the suffix says nothing about the source; the commit keeps the dirty marker
-// for a local build. Neither the toolchain's "(devel)" placeholder nor the
-// pseudo-version it stamps on an untagged commit (v1.1.9-0.20260916142110-aef0725928df)
-// is a release: both leave the version at dev, the commit says where the
-// build is from.
+// its v, never the toolchain's "(devel)" placeholder (an untagged commit is
+// reported as the pseudo-version the toolchain stamps, which names the next
+// patch and the commit, as the other Agent Platform managers do), and without
+// the +dirty the toolchain appends for a modified working tree — a CI
+// checkout carries build artefacts when the binary is built, so the suffix
+// says nothing about the source; the commit keeps the dirty marker for a
+// local build.
 func moduleVersion(v string) string {
-	v = strings.TrimSuffix(v, "+dirty")
-	if v == "(devel)" || module.IsPseudoVersion(v) {
+	v = strings.TrimSuffix(strings.TrimPrefix(v, "v"), "+dirty")
+	if v == "(devel)" {
 		return ""
 	}
-	return strings.TrimPrefix(v, "v")
+	return v
 }
 
 // shortRevision abbreviates a commit hash the way `git rev-parse --short`

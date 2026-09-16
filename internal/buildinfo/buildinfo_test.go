@@ -42,13 +42,13 @@ func TestResolve(t *testing.T) {
 			version: "1.2.0", commit: "1234567", date: "2026-10-01T00:00:00Z", bi: tagged,
 			want: Info{Version: "1.2.0", Commit: "1234567", Date: "2026-10-01T00:00:00Z"},
 		},
-		"untagged commit's pseudo-version stays dev": {
+		"untagged commit reports the toolchain's pseudo-version": {
 			version: DevVersion, commit: UnknownCommit, date: UnknownDate,
 			bi: &debug.BuildInfo{
 				Main:     debug.Module{Version: "v1.1.9-0.20260916142110-aef0725928df"},
 				Settings: []debug.BuildSetting{{Key: "vcs.revision", Value: "aef0725928df0c1b2a3f6e3caf2d9c1f4b7a8e2d"}, {Key: "vcs.time", Value: "2026-09-16T14:21:10Z"}, {Key: "vcs.modified", Value: "false"}},
 			},
-			want: Info{Version: "dev", Commit: "aef0725", Date: "2026-09-16T14:21:10Z"},
+			want: Info{Version: "1.1.9-0.20260916142110-aef0725928df", Commit: "aef0725", Date: "2026-09-16T14:21:10Z"},
 		},
 		"untagged dirty checkout stays dev and marks the commit": {
 			version: DevVersion, commit: UnknownCommit, date: UnknownDate, bi: untaggedDirty,
