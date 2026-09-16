@@ -255,9 +255,18 @@ type hints struct {
 	OpenWorldHint   *bool `json:"openWorldHint"`
 }
 
-func annotations(readOnly, destructive, idempotent, openWorld bool) hints {
-	return hints{&readOnly, &destructive, &idempotent, &openWorld}
+func annotations(readOnlyHint, destructiveHint, idempotentHint, openWorldHint bool) hints {
+	return hints{&readOnlyHint, &destructiveHint, &idempotentHint, &openWorldHint}
 }
+
+// The hint values, so the table below reads as words rather than as four
+// positional booleans.
+const (
+	readOnly, writes          = true, false
+	destructive, additive     = true, false
+	idempotent, notIdempotent = true, false
+	openWorld, closedWorld    = true, false
+)
 
 // wantHints is the annotation every tool must advertise. Reads are read-only and
 // never destructive; create only adds (it refuses a name that exists); update
@@ -265,16 +274,16 @@ func annotations(readOnly, destructive, idempotent, openWorld bool) hints {
 // idempotent; delete is destructive. Open-world is the tools that resolve a
 // caller-named GitHub repository or OCI reference.
 var wantHints = map[string]hints{
-	ToolGetInfo:          annotations(true, false, false, false),
-	ToolListAgents:       annotations(true, false, false, false),
-	ToolGetAgent:         annotations(true, false, false, false),
-	ToolGetAgentStatus:   annotations(true, false, false, false),
-	ToolListModelConfigs: annotations(true, false, false, false),
-	ToolValidateAgent:    annotations(true, false, false, true),
-	ToolListSkills:       annotations(true, false, false, true),
-	ToolCreateAgent:      annotations(false, false, false, true),
-	ToolUpdateAgent:      annotations(false, true, false, true),
-	ToolDeleteAgent:      annotations(false, true, false, false),
+	ToolGetInfo:          annotations(readOnly, additive, notIdempotent, closedWorld),
+	ToolListAgents:       annotations(readOnly, additive, notIdempotent, closedWorld),
+	ToolGetAgent:         annotations(readOnly, additive, notIdempotent, closedWorld),
+	ToolGetAgentStatus:   annotations(readOnly, additive, notIdempotent, closedWorld),
+	ToolListModelConfigs: annotations(readOnly, additive, notIdempotent, closedWorld),
+	ToolValidateAgent:    annotations(readOnly, additive, notIdempotent, openWorld),
+	ToolListSkills:       annotations(readOnly, additive, notIdempotent, openWorld),
+	ToolCreateAgent:      annotations(writes, additive, notIdempotent, openWorld),
+	ToolUpdateAgent:      annotations(writes, destructive, notIdempotent, openWorld),
+	ToolDeleteAgent:      annotations(writes, destructive, notIdempotent, closedWorld),
 }
 
 func TestMCPToolsMirrorREST(t *testing.T) {
