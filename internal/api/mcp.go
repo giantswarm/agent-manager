@@ -93,13 +93,14 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 	nsProp := mcp.WithString(argNamespace, mcp.Description("Namespace of the agent; default: the installation's kagent namespace (get_info reports the managed ones)."))
 
 	// Every tool spells out all four hints: mcp-go pre-fills an unset hint with
-	// the spec default, so destructiveHint and openWorldHint would ship as true.
-	// openWorldHint is false throughout: the tools act on the agents of this
-	// installation.
+	// the spec default, so a hint left out ships as a claim. openWorldHint is true
+	// where a caller-named GitHub repository or OCI reference is resolved, false
+	// for the tools that only read and write this installation's own resources.
 	s.AddTool(mcp.NewTool(ToolGetInfo,
 		mcp.WithDescription("Read-only. Report the service version, the agent chart (OCI URL, the tracked 1.x range, resolved latest version, which values schema validates right now), the managed namespaces, the capability flags (commit is false: writes apply live), the served API versions (apiVersions.agentTemplate, harness, remoteMcpServer, modelConfig, helmRelease, ociRepository), the platform Harness (harness.name), the muster MCP URL composed into every agent (muster.url; empty means the chart default), the Flux settings composed into every agent and how writes are authenticated. Call first."),
 		mcp.WithReadOnlyHintAnnotation(true),
 		mcp.WithDestructiveHintAnnotation(false),
+		mcp.WithIdempotentHintAnnotation(false),
 		mcp.WithOpenWorldHintAnnotation(false),
 	), t.getInfo)
 
@@ -108,6 +109,7 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 		nsProp,
 		mcp.WithReadOnlyHintAnnotation(true),
 		mcp.WithDestructiveHintAnnotation(false),
+		mcp.WithIdempotentHintAnnotation(false),
 		mcp.WithOpenWorldHintAnnotation(false),
 	), t.listAgents)
 
@@ -117,6 +119,7 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 		nsProp,
 		mcp.WithReadOnlyHintAnnotation(true),
 		mcp.WithDestructiveHintAnnotation(false),
+		mcp.WithIdempotentHintAnnotation(false),
 		mcp.WithOpenWorldHintAnnotation(false),
 	), t.getAgent)
 
@@ -136,7 +139,7 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 		mcp.WithReadOnlyHintAnnotation(false),
 		mcp.WithDestructiveHintAnnotation(false),
 		mcp.WithIdempotentHintAnnotation(false),
-		mcp.WithOpenWorldHintAnnotation(false),
+		mcp.WithOpenWorldHintAnnotation(true),
 	), t.createAgent)
 
 	s.AddTool(mcp.NewTool(ToolUpdateAgent,
@@ -156,8 +159,8 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 		nsProp,
 		mcp.WithReadOnlyHintAnnotation(false),
 		mcp.WithDestructiveHintAnnotation(true),
-		mcp.WithIdempotentHintAnnotation(true),
-		mcp.WithOpenWorldHintAnnotation(false),
+		mcp.WithIdempotentHintAnnotation(false),
+		mcp.WithOpenWorldHintAnnotation(true),
 	), t.updateAgent)
 
 	s.AddTool(mcp.NewTool(ToolDeleteAgent,
@@ -177,6 +180,7 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 		nsProp,
 		mcp.WithReadOnlyHintAnnotation(true),
 		mcp.WithDestructiveHintAnnotation(false),
+		mcp.WithIdempotentHintAnnotation(false),
 		mcp.WithOpenWorldHintAnnotation(false),
 	), t.getAgentStatus)
 
@@ -198,7 +202,8 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 		nsProp,
 		mcp.WithReadOnlyHintAnnotation(true),
 		mcp.WithDestructiveHintAnnotation(false),
-		mcp.WithOpenWorldHintAnnotation(false),
+		mcp.WithIdempotentHintAnnotation(false),
+		mcp.WithOpenWorldHintAnnotation(true),
 	), t.validateAgent)
 
 	s.AddTool(mcp.NewTool(ToolListModelConfigs,
@@ -206,6 +211,7 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 		nsProp,
 		mcp.WithReadOnlyHintAnnotation(true),
 		mcp.WithDestructiveHintAnnotation(false),
+		mcp.WithIdempotentHintAnnotation(false),
 		mcp.WithOpenWorldHintAnnotation(false),
 	), t.listModelConfigs)
 
@@ -216,7 +222,8 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 		mcp.WithBoolean(argRefresh, mcp.Description("Bypass the cache (default false)")),
 		mcp.WithReadOnlyHintAnnotation(true),
 		mcp.WithDestructiveHintAnnotation(false),
-		mcp.WithOpenWorldHintAnnotation(false),
+		mcp.WithIdempotentHintAnnotation(false),
+		mcp.WithOpenWorldHintAnnotation(true),
 	), t.listSkills)
 
 	return s

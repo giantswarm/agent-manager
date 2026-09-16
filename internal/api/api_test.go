@@ -255,25 +255,26 @@ type hints struct {
 	OpenWorldHint   *bool `json:"openWorldHint"`
 }
 
-func annotations(readOnly, destructive, idempotent bool) hints {
-	return hints{&readOnly, &destructive, &idempotent, new(bool)}
+func annotations(readOnly, destructive, idempotent, openWorld bool) hints {
+	return hints{&readOnly, &destructive, &idempotent, &openWorld}
 }
 
 // wantHints is the annotation every tool must advertise. Reads are read-only and
 // never destructive; create only adds (it refuses a name that exists); update
-// overwrites in place but converges; delete is destructive and not idempotent.
-// No tool is open-world.
+// overwrites in place, and re-resolves a ref, so it is neither additive nor
+// idempotent; delete is destructive. Open-world is the tools that resolve a
+// caller-named GitHub repository or OCI reference.
 var wantHints = map[string]hints{
-	ToolGetInfo:          annotations(true, false, false),
-	ToolListAgents:       annotations(true, false, false),
-	ToolGetAgent:         annotations(true, false, false),
-	ToolGetAgentStatus:   annotations(true, false, false),
-	ToolValidateAgent:    annotations(true, false, false),
-	ToolListModelConfigs: annotations(true, false, false),
-	ToolListSkills:       annotations(true, false, false),
-	ToolCreateAgent:      annotations(false, false, false),
-	ToolUpdateAgent:      annotations(false, true, true),
-	ToolDeleteAgent:      annotations(false, true, false),
+	ToolGetInfo:          annotations(true, false, false, false),
+	ToolListAgents:       annotations(true, false, false, false),
+	ToolGetAgent:         annotations(true, false, false, false),
+	ToolGetAgentStatus:   annotations(true, false, false, false),
+	ToolListModelConfigs: annotations(true, false, false, false),
+	ToolValidateAgent:    annotations(true, false, false, true),
+	ToolListSkills:       annotations(true, false, false, true),
+	ToolCreateAgent:      annotations(false, false, false, true),
+	ToolUpdateAgent:      annotations(false, true, false, true),
+	ToolDeleteAgent:      annotations(false, true, false, false),
 }
 
 func TestMCPToolsMirrorREST(t *testing.T) {
