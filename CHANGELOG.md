@@ -21,6 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The MCP tool annotations now spell out all four hints. mcp-go pre-fills an unset hint with the spec default, so every tool advertised `destructiveHint: true` and `openWorldHint: true` — `create_agent` in particular, although it only ever adds (it refuses a name that already exists). Reads are now `readOnly: true, destructive: false`, `create_agent` is `destructive: false`, `update_agent` keeps `destructive: true, idempotent: true` (it overwrites values in place), `delete_agent` keeps `destructive: true`, and no tool claims an open world.
+
 - `update_agent`: a HelmRelease write that lands on a stale `resourceVersion` — helm-controller writes the release's status while it reconciles the previous change, so an update following another closely raced it and failed with `conflict: … the object has been modified` — is retried on a fresh read of the release, merging into its latest values; a Conflict that outlasts the attempts is still reported. `migrate` retries its HelmRelease and OCIRepository writes the same way and leaves a release whose values changed underneath to the next run. (#47)
 
 ### Fixed
