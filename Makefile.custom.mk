@@ -1,11 +1,10 @@
 ##@ Development
 
 BINARY := agent-manager
-GIT_SHA := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 
 .PHONY: build-linux-amd64
-build-linux-amd64: ## Build the linux/amd64 binary the Dockerfile expects.
-	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w -X main.version=dev-$(GIT_SHA) -X main.commit=$(GIT_SHA)" -o $(BINARY)-linux-amd64 .
+build-linux-amd64: ## Build the linux/amd64 binary the Dockerfile expects; version and commit come from the Go build info (the tag at HEAD, else dev).
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o $(BINARY)-linux-amd64 .
 
 .PHONY: docker-build
 docker-build: build-linux-amd64 ## Build a local dev image (TAG=agent-manager:dev).

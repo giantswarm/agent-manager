@@ -23,6 +23,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `update_agent`: a HelmRelease write that lands on a stale `resourceVersion` — helm-controller writes the release's status while it reconciles the previous change, so an update following another closely raced it and failed with `conflict: … the object has been modified` — is retried on a fresh read of the release, merging into its latest values; a Conflict that outlasts the attempts is still reported. `migrate` retries its HelmRelease and OCIRepository writes the same way and leaves a release whose values changed underneath to the next run. (#47)
 
+### Fixed
+
+- The released image reported `version=dev` (start-up log, `agent-manager version`, `get_info`): the generated release pipeline passes no `-ldflags -X`. The version, commit and build time are now resolved from the Go build info when the build left them at their defaults — the tag at HEAD (without `v`), the short `vcs.revision` (`-dirty` for a modified tree) and `vcs.time`; an untagged local build still says `dev`. The start-up log names the commit next to the version. (#53)
+
 ### Removed
 
 - `toolNames` on the three tools and the REST surface: it never narrowed anything against muster (kagent filters muster's meta-tools only). A request still carrying it is refused with that explanation and pointed at `toolset`. `muster.toolNames` is never composed. (#27)

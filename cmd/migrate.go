@@ -132,7 +132,7 @@ func runMigrate(ctx context.Context, out io.Writer, o *migrateOptions) error {
 	// The service is the status reader: the wait phase asks get_agent_status
 	// about every template, so the two agree on what Ready means.
 	svc := agents.New(kube.NewServiceAccountProvider(clients), resolver, nil, pinner, agents.Config{
-		DefaultNamespace: o.kagentNamespace, ManagedNamespaces: splitList(o.managedNamespaces), Compose: compose, KagentAPIVersion: kagentVersion, Version: version,
+		DefaultNamespace: o.kagentNamespace, ManagedNamespaces: splitList(o.managedNamespaces), Compose: compose, KagentAPIVersion: kagentVersion, Version: build.Version,
 	}, log)
 	runner := migrate.New(clients, resolver, pinner, svc, migrate.Options{
 		Namespaces:              svc.Info(ctx).Namespaces.Managed,
@@ -145,9 +145,9 @@ func runMigrate(ctx context.Context, out io.Writer, o *migrateOptions) error {
 		KagentAPIVersion:        kagentVersion,
 		HelmReleaseAPIVersion:   helmReleaseAPI,
 		OCIRepositoryAPIVersion: ociRepositoryAPI,
-		Version:                 version,
+		Version:                 build.Version,
 	}, log)
-	log.Info("agent-manager migrate starting", "version", version, "namespaces", svc.Info(ctx).Namespaces.Managed, "gitopsNamespaces", splitList(o.gitopsNamespaces),
+	log.Info("agent-manager migrate starting", "version", build.Version, "commit", build.Commit, "namespaces", svc.Info(ctx).Namespaces.Managed, "gitopsNamespaces", splitList(o.gitopsNamespaces),
 		"chart", o.chartOCIURL, "targetSemver", o.chartSemver, "harness", o.harnessName, "kagentAPI", kagentVersion, "dryRun", o.dryRun, "report", o.reportConfigMap, "githubToken", o.skillsToken != "")
 
 	res, runErr := runner.Run(ctx)
