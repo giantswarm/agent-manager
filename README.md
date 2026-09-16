@@ -27,8 +27,9 @@ The same operations are exposed twice from one process:
   `list_agents`, `get_agent`, `create_agent`, `update_agent`, `delete_agent`,
   `get_agent_status`, `validate_agent`, `list_model_configs`, `list_skills`
   (through muster: `x_agent-manager_<tool>`). Every tool description says
-  whether it writes and what it writes; the read-only and destructive
-  annotations are set.
+  whether it writes and what it writes, and every tool sets all four
+  annotations: read-only, destructive, idempotent and open-world (true for the
+  tools that resolve a caller-named GitHub repository or OCI reference).
 
 Part of the [Agent Control Plane epic](https://github.com/giantswarm/giantswarm/issues/36796)
 ("create and manage versioned agents"): the reconciler half is the `agent`
