@@ -92,15 +92,25 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 	annotationsProp := mcp.WithObject(argAnnotations, mcp.Description("Extra annotations on the AgentTemplate (string values)."), mcp.AdditionalProperties(map[string]any{"type": "string"}))
 	nsProp := mcp.WithString(argNamespace, mcp.Description("Namespace of the agent; default: the installation's kagent namespace (get_info reports the managed ones)."))
 
+	// Every tool spells out all four hints: mcp-go pre-fills an unset hint with
+	// the spec default, so a hint left out ships as a claim. openWorldHint is true
+	// where a caller-named GitHub repository or OCI reference is resolved, false
+	// for the tools that only read and write this installation's own resources.
 	s.AddTool(mcp.NewTool(ToolGetInfo,
 		mcp.WithDescription("Read-only. Report the service version, the agent chart (OCI URL, the tracked 1.x range, resolved latest version, which values schema validates right now), the managed namespaces, the capability flags (commit is false: writes apply live), the served API versions (apiVersions.agentTemplate, harness, remoteMcpServer, modelConfig, helmRelease, ociRepository), the platform Harness (harness.name), the muster MCP URL composed into every agent (muster.url; empty means the chart default), the Flux settings composed into every agent and how writes are authenticated. Call first."),
 		mcp.WithReadOnlyHintAnnotation(true),
+		mcp.WithDestructiveHintAnnotation(false),
+		mcp.WithIdempotentHintAnnotation(false),
+		mcp.WithOpenWorldHintAnnotation(false),
 	), t.getInfo)
 
 	s.AddTool(mcp.NewTool(ToolListAgents,
 		mcp.WithDescription("Read-only. List the agents of a namespace: display name, description, icon URL, model config, pinned skills, the declared toolset (or implicitFullAccess: true for an agent without one — it sees every tool the gateway exposes and still needs a toolset), the MCP bindings, ready (the platform Harness's verdict on the AgentTemplate) with the per-Harness status, the owning HelmRelease (Ready, chart version) and how each is managed (helmrelease: writable here; gitops: applied from git, read-only without force; none: a bare AgentTemplate). HelmReleases of the agent chart that have not rendered a template yet are listed too (exists: false)."),
 		nsProp,
 		mcp.WithReadOnlyHintAnnotation(true),
+		mcp.WithDestructiveHintAnnotation(false),
+		mcp.WithIdempotentHintAnnotation(false),
+		mcp.WithOpenWorldHintAnnotation(false),
 	), t.listAgents)
 
 	s.AddTool(mcp.NewTool(ToolGetAgent,
@@ -108,6 +118,9 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 		mcp.WithString(argName, mcp.Required(), mcp.Description("Agent name")),
 		nsProp,
 		mcp.WithReadOnlyHintAnnotation(true),
+		mcp.WithDestructiveHintAnnotation(false),
+		mcp.WithIdempotentHintAnnotation(false),
+		mcp.WithOpenWorldHintAnnotation(false),
 	), t.getAgent)
 
 	s.AddTool(mcp.NewTool(ToolCreateAgent,
@@ -123,6 +136,10 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 		labelsProp,
 		annotationsProp,
 		nsProp,
+		mcp.WithReadOnlyHintAnnotation(false),
+		mcp.WithDestructiveHintAnnotation(false),
+		mcp.WithIdempotentHintAnnotation(false),
+		mcp.WithOpenWorldHintAnnotation(true),
 	), t.createAgent)
 
 	s.AddTool(mcp.NewTool(ToolUpdateAgent,
@@ -140,7 +157,10 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 		annotationsProp,
 		mcp.WithBoolean(argForce, mcp.Description("Write even when the HelmRelease is GitOps-owned or suspended (default false)")),
 		nsProp,
-		mcp.WithIdempotentHintAnnotation(true),
+		mcp.WithReadOnlyHintAnnotation(false),
+		mcp.WithDestructiveHintAnnotation(true),
+		mcp.WithIdempotentHintAnnotation(false),
+		mcp.WithOpenWorldHintAnnotation(true),
 	), t.updateAgent)
 
 	s.AddTool(mcp.NewTool(ToolDeleteAgent,
@@ -148,7 +168,10 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 		mcp.WithString(argName, mcp.Required(), mcp.Description("Agent name")),
 		mcp.WithBoolean(argForce, mcp.Description("Also delete bare AgentTemplates, and GitOps-owned or suspended releases (default false)")),
 		nsProp,
+		mcp.WithReadOnlyHintAnnotation(false),
 		mcp.WithDestructiveHintAnnotation(true),
+		mcp.WithIdempotentHintAnnotation(false),
+		mcp.WithOpenWorldHintAnnotation(false),
 	), t.deleteAgent)
 
 	s.AddTool(mcp.NewTool(ToolGetAgentStatus,
@@ -156,6 +179,9 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 		mcp.WithString(argName, mcp.Required(), mcp.Description("Agent name")),
 		nsProp,
 		mcp.WithReadOnlyHintAnnotation(true),
+		mcp.WithDestructiveHintAnnotation(false),
+		mcp.WithIdempotentHintAnnotation(false),
+		mcp.WithOpenWorldHintAnnotation(false),
 	), t.getAgentStatus)
 
 	s.AddTool(mcp.NewTool(ToolValidateAgent,
@@ -175,12 +201,18 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 		mcp.WithBoolean(argForce, mcp.Description("With update: ignore the GitOps/suspended guards (default false)")),
 		nsProp,
 		mcp.WithReadOnlyHintAnnotation(true),
+		mcp.WithDestructiveHintAnnotation(false),
+		mcp.WithIdempotentHintAnnotation(false),
+		mcp.WithOpenWorldHintAnnotation(true),
 	), t.validateAgent)
 
 	s.AddTool(mcp.NewTool(ToolListModelConfigs,
 		mcp.WithDescription("Read-only. List the kagent ModelConfigs of a namespace (name, provider, model, Accepted condition, who manages it) — the values create_agent accepts for modelConfig. ModelConfigs are platform-admin owned; agent-manager never writes them."),
 		nsProp,
 		mcp.WithReadOnlyHintAnnotation(true),
+		mcp.WithDestructiveHintAnnotation(false),
+		mcp.WithIdempotentHintAnnotation(false),
+		mcp.WithOpenWorldHintAnnotation(false),
 	), t.listModelConfigs)
 
 	s.AddTool(mcp.NewTool(ToolListSkills,
@@ -189,6 +221,8 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 		mcp.WithString(argRef, mcp.Description("Git ref to read; default: the default branch (the ref refreshSkills follows)")),
 		mcp.WithBoolean(argRefresh, mcp.Description("Bypass the cache (default false)")),
 		mcp.WithReadOnlyHintAnnotation(true),
+		mcp.WithDestructiveHintAnnotation(false),
+		mcp.WithIdempotentHintAnnotation(false),
 		mcp.WithOpenWorldHintAnnotation(true),
 	), t.listSkills)
 

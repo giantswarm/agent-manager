@@ -246,6 +246,46 @@ func callTool(t *testing.T, srv interface {
 	return parsed.Result.Content[0].Text, parsed.Result.IsError
 }
 
+// hints is the annotation block of tools/list. The pointers catch an omitted
+// hint, which a client reads as the spec default.
+type hints struct {
+	ReadOnlyHint    *bool `json:"readOnlyHint"`
+	DestructiveHint *bool `json:"destructiveHint"`
+	IdempotentHint  *bool `json:"idempotentHint"`
+	OpenWorldHint   *bool `json:"openWorldHint"`
+}
+
+func annotations(readOnlyHint, destructiveHint, idempotentHint, openWorldHint bool) hints {
+	return hints{&readOnlyHint, &destructiveHint, &idempotentHint, &openWorldHint}
+}
+
+// The hint values, so the table below reads as words rather than as four
+// positional booleans.
+const (
+	readOnly, writes          = true, false
+	destructive, additive     = true, false
+	idempotent, notIdempotent = true, false
+	openWorld, closedWorld    = true, false
+)
+
+// wantHints is the annotation every tool must advertise. Reads are read-only and
+// never destructive; create only adds (it refuses a name that exists); update
+// overwrites in place, and re-resolves a ref, so it is neither additive nor
+// idempotent; delete is destructive. Open-world is the tools that resolve a
+// caller-named GitHub repository or OCI reference.
+var wantHints = map[string]hints{
+	ToolGetInfo:          annotations(readOnly, additive, notIdempotent, closedWorld),
+	ToolListAgents:       annotations(readOnly, additive, notIdempotent, closedWorld),
+	ToolGetAgent:         annotations(readOnly, additive, notIdempotent, closedWorld),
+	ToolGetAgentStatus:   annotations(readOnly, additive, notIdempotent, closedWorld),
+	ToolListModelConfigs: annotations(readOnly, additive, notIdempotent, closedWorld),
+	ToolValidateAgent:    annotations(readOnly, additive, notIdempotent, openWorld),
+	ToolListSkills:       annotations(readOnly, additive, notIdempotent, openWorld),
+	ToolCreateAgent:      annotations(writes, additive, notIdempotent, openWorld),
+	ToolUpdateAgent:      annotations(writes, destructive, notIdempotent, openWorld),
+	ToolDeleteAgent:      annotations(writes, destructive, notIdempotent, closedWorld),
+}
+
 func TestMCPToolsMirrorREST(t *testing.T) {
 	svc, dyn := newService(t)
 	srv := NewMCPServer(svc, "test")
@@ -261,10 +301,7 @@ func TestMCPToolsMirrorREST(t *testing.T) {
 					Properties map[string]any `json:"properties"`
 					Required   []string       `json:"required"`
 				} `json:"inputSchema"`
-				Annotations struct {
-					ReadOnlyHint    *bool `json:"readOnlyHint"`
-					DestructiveHint *bool `json:"destructiveHint"`
-				} `json:"annotations"`
+				Annotations hints `json:"annotations"`
 			} `json:"tools"`
 		} `json:"result"`
 	}
@@ -294,17 +331,12 @@ func TestMCPToolsMirrorREST(t *testing.T) {
 		switch tool.Name {
 		case ToolCreateAgent, ToolUpdateAgent, ToolDeleteAgent:
 			assert.Contains(t, tool.Description, "WRITES", tool.Name)
-			require.NotNil(t, tool.Annotations.ReadOnlyHint, tool.Name)
-			assert.False(t, *tool.Annotations.ReadOnlyHint, tool.Name)
 		default:
 			assert.Contains(t, tool.Description, "Read-only", tool.Name)
-			require.NotNil(t, tool.Annotations.ReadOnlyHint, tool.Name)
-			assert.True(t, *tool.Annotations.ReadOnlyHint, tool.Name)
 		}
-		if tool.Name == ToolDeleteAgent {
-			require.NotNil(t, tool.Annotations.DestructiveHint)
-			assert.True(t, *tool.Annotations.DestructiveHint)
-		}
+		want, known := wantHints[tool.Name]
+		require.True(t, known, "no expected hints for %s", tool.Name)
+		assert.Equal(t, want, tool.Annotations, tool.Name)
 	}
 	for _, want := range ToolNames() {
 		assert.True(t, names[want], "tool %s missing", want)
