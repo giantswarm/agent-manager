@@ -178,7 +178,7 @@ func runServe(ctx context.Context, o *serveOptions) error {
 			HarnessName:             o.harnessName,
 		},
 		KagentAPIVersion: kagentVersion,
-		Version:          version,
+		Version:          build.Version,
 	}, log)
 
 	srvCfg := server.Config{Addr: o.listen, MCPEnabled: o.mcpEnabled, MCPPath: o.mcpPath}
@@ -199,12 +199,12 @@ func runServe(ctx context.Context, o *serveOptions) error {
 			DownstreamOAuth:               o.downstreamOAuth,
 		}
 	}
-	srv, err := server.New(srvCfg, svc, api.NewMCPServer(svc, version), log)
+	srv, err := server.New(srvCfg, svc, api.NewMCPServer(svc, build.Version), log)
 	if err != nil {
 		return err
 	}
 	info := svc.Info(ctx)
-	log.Info("agent-manager starting", "version", version, "listen", o.listen, "rest", api.Prefix, "mcp", o.mcpPath, "mcpEnabled", o.mcpEnabled,
+	log.Info("agent-manager starting", "version", build.Version, "commit", build.Commit, "listen", o.listen, "rest", api.Prefix, "mcp", o.mcpPath, "mcpEnabled", o.mcpEnabled,
 		"oauth", o.oauthEnabled, "downstreamOAuth", o.downstreamOAuth, "identity", info.Identity,
 		"namespaces", info.Namespaces.Managed, "chart", o.chartOCIURL, "chartSemver", o.chartSemver, "chartVersion", info.Chart.LatestVersion, "schemaSource", info.Chart.SchemaSource,
 		"kagentAPI", kagentVersion, "harness", info.Harness.Name, "musterURL", info.Muster.URL, "helmReleaseAPI", helmReleaseAPI, "ociRepositoryAPI", ociRepositoryAPI, "skillsRepositories", info.SkillsRepositories)
