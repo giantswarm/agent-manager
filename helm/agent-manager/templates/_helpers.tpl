@@ -22,12 +22,12 @@ Create a default fully qualified app name.
 {{- end }}
 
 {{/*
-Chart label value. A label must end alphanumeric: the 63-character cut of a
-dev version (0.2.10-dev.<branch>.<date>.<time>.h<sha>) can land on a "." or
-"_", so those are trimmed as well as "-".
+Chart label value. A label value must begin and end alphanumeric: the
+63-character cut of a dev version (0.2.10-dev.<branch>.<date>.<time>.h<sha>)
+can land on any run of ".", "_" (from "+") and "-", so the whole run is trimmed.
 */}}
 {{- define "agent-manager.chart" -}}
-{{- printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" | trimSuffix "." | trimSuffix "_" | trimSuffix "-" }}
+{{- printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimAll "-._" }}
 {{- end }}
 
 {{/*
