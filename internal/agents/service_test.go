@@ -518,6 +518,33 @@ func TestValidateCreateIsADryRun(t *testing.T) {
 	assert.Len(t, hrs.Items, 1, "validate writes nothing")
 }
 
+func TestCreateAndUpdateRefuseATooLongSystemMessage(t *testing.T) {
+	f := seeded(t)
+	ctx := t.Context()
+	tooLong := strings.Repeat("é", MaxSystemMessageLength+1)
+	want := "systemMessage is 20001 characters; the agent chart accepts at most 20000. Move long reference material into a skill"
+
+	_, err := f.svc.Create(ctx, Spec{Name: "long", ModelConfig: "default-model-config", Toolset: []string{"preset:read-only"}, SystemMessage: tooLong})
+	require.ErrorIs(t, err, ErrInvalid)
+	require.ErrorContains(t, err, want)
+	dry, err := f.svc.ValidateCreate(ctx, Spec{Name: "long", ModelConfig: "default-model-config", Toolset: []string{"preset:read-only"}, SystemMessage: tooLong})
+	require.NoError(t, err)
+	require.False(t, dry.Valid)
+	require.Contains(t, dry.Errors, want)
+
+	_, err = f.svc.Update(ctx, Update{Name: "verifier", SystemMessage: &tooLong})
+	require.ErrorIs(t, err, ErrInvalid)
+	require.ErrorContains(t, err, want)
+	dry, err = f.svc.ValidateUpdate(ctx, Update{Name: "verifier", SystemMessage: &tooLong})
+	require.NoError(t, err)
+	require.False(t, dry.Valid)
+	require.Contains(t, dry.Errors, want)
+
+	atCap := strings.Repeat("é", MaxSystemMessageLength)
+	_, err = f.svc.Update(ctx, Update{Name: "verifier", SystemMessage: &atCap})
+	require.NoError(t, err)
+}
+
 func TestUpdateMergesIntoValuesAndHonorsOwnership(t *testing.T) {
 	f := seeded(t)
 	ctx := context.Background()

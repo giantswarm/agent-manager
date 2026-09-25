@@ -198,6 +198,16 @@ func TestValidateName(t *testing.T) {
 	assert.ErrorIs(t, ValidateName("a.b"), ErrInvalid)
 }
 
+func TestValidateSystemMessage(t *testing.T) {
+	require.NoError(t, ValidateSystemMessage(strings.Repeat("a", MaxSystemMessageLength)))
+	// Counted in characters: 20000 two-byte characters are 40000 bytes.
+	require.NoError(t, ValidateSystemMessage(strings.Repeat("é", MaxSystemMessageLength)))
+
+	err := ValidateSystemMessage(strings.Repeat("日", MaxSystemMessageLength+1))
+	require.ErrorIs(t, err, ErrInvalid)
+	require.EqualError(t, err, "invalid request: systemMessage is 20001 characters; the agent chart accepts at most 20000. Move long reference material into a skill")
+}
+
 func TestValidateSkills(t *testing.T) {
 	assert.NoError(t, ValidateSkills(nil))
 	assert.NoError(t, ValidateSkills(Skills{
