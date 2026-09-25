@@ -53,6 +53,21 @@ spec:
         - protocol: TCP
           port: 443
     {{- end }}
+    {{- with include "agent-manager.otlpEgress" . | fromYaml }}
+    # The OTLP collector.
+    - to:
+        {{- if .namespace }}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .namespace }}
+        {{- else }}
+        - ipBlock:
+            cidr: 0.0.0.0/0
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: {{ .port }}
+    {{- end }}
     {{- range .Values.networkPolicy.egressCIDRs }}
     - to:
         - ipBlock:

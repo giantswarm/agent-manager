@@ -1,0 +1,106 @@
+# The OTLP trace export: its environment on the container and the egress
+# rule to the collector.
+#
+# Run with: make helm-test (helm unittest helm/agent-manager)
+suite: otel
+templates:
+  - templates/deployment.yaml
+  - templates/networkpolicy.yaml
+tests:
+  - it: renders no OTEL environment without an endpoint
+    template: templates/deployment.yaml
+    asserts:
+      - notExists:
+          path: spec.template.spec.containers[0].env
+
+  - it: exports to the endpoint with the tenant header and the parent-based sampler
+    template: templates/deployment.yaml
+    set:
+      observability.otel.endpoint: http://otlp-gateway.kube-system.svc:4317
+      observability.otel.headers: X-Scope-OrgID=giantswarm
+      observability.otel.resourceAttributes: deployment.environment=glean
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: OTEL_EXPORTER_OTLP_ENDPOINT, value: http://otlp-gateway.kube-system.svc:4317}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: OTEL_EXPORTER_OTLP_PROTOCOL, value: grpc}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: OTEL_EXPORTER_OTLP_HEADERS, value: X-Scope-OrgID=giantswarm}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: OTEL_TRACES_SAMPLER, value: parentbased_traceidratio}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: OTEL_TRACES_SAMPLER_ARG, value: "0.1"}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OTEL_RESOURCE_ATTRIBUTES
+            value: k8s.namespace.name=$(K8S_NAMESPACE),k8s.pod.name=$(K8S_POD_NAME),k8s.node.name=$(K8S_NODE_NAME),deployment.environment=glean
+
+  - it: opens no OTLP egress without an endpoint
+    template: templates/networkpolicy.yaml
+    set:
+      networkPolicy.enabled: true
+    asserts:
+      - notContains:
+          path: spec.egress
+          content:
+            to:
+              - namespaceSelector:
+                  matchLabels:
+                    kubernetes.io/metadata.name: kube-system
+            ports:
+              - {protocol: TCP, port: 4317}
+
+  - it: opens egress to an in-cluster collector's namespace on its port
+    template: templates/networkpolicy.yaml
+    set:
+      networkPolicy.enabled: true
+      observability.otel.endpoint: http://otlp-gateway.kube-system.svc:4317
+    asserts:
+      - contains:
+          path: spec.egress
+          content:
+            to:
+              - namespaceSelector:
+                  matchLabels:
+                    kubernetes.io/metadata.name: kube-system
+            ports:
+              - {protocol: TCP, port: 4317}
+
+  - it: opens egress on the protocol's default port for a host without one
+    template: templates/networkpolicy.yaml
+    set:
+      networkPolicy.enabled: true
+      observability.otel.endpoint: tempo-distributor.tempo.svc.cluster.local
+      observability.otel.protocol: http/protobuf
+    asserts:
+      - contains:
+          path: spec.egress
+          content:
+            to:
+              - namespaceSelector:
+                  matchLabels:
+                    kubernetes.io/metadata.name: tempo
+            ports:
+              - {protocol: TCP, port: 4318}
+
+  - it: opens egress to every address for an external collector
+    template: templates/networkpolicy.yaml
+    set:
+      networkPolicy.enabled: true
+      observability.otel.endpoint: https://otlp.example.com:443
+      observability.otel.protocol: http/protobuf
+    asserts:
+      - contains:
+          path: spec.egress
+          content:
+            to:
+              - ipBlock:
+                  cidr: 0.0.0.0/0
+            ports:
+              - {protocol: TCP, port: 443}

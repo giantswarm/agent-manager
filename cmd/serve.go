@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/giantswarm/mcp-toolkit/tracing"
 	"github.com/spf13/cobra"
 
 	"github.com/giantswarm/agent-manager/internal/agents"
@@ -124,6 +125,20 @@ func runServe(ctx context.Context, o *serveOptions) error {
 	if o.downstreamOAuth && !o.oauthEnabled {
 		return fmt.Errorf("--downstream-oauth needs --enable-oauth: without OAuth there is no caller token to present to the Kubernetes API")
 	}
+
+	// Exports only when OTEL_EXPORTER_OTLP_ENDPOINT (or OTEL_TRACES_EXPORTER)
+	// is set; the W3C propagator is installed either way.
+	shutdownTracing, err := tracing.Init(ctx, tracing.WithServiceName("agent-manager"), tracing.WithServiceVersion(build.Version))
+	if err != nil {
+		return fmt.Errorf("tracing: %w", err)
+	}
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		if err := shutdownTracing(shutdownCtx); err != nil {
+			log.Warn("flushing traces failed", "error", err)
+		}
+	}()
 
 	// The pod's own client: the in-cluster address and CA, and API discovery
 	// at startup (what every authenticated principal may read). With

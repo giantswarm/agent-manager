@@ -141,6 +141,12 @@ meta chart (`components.agent-manager.enabled`), which sets `kagent.namespace`,
 | service.type | string | `"ClusterIP"` | Service type. |
 | service.port | int | `8080` | Service port (container listens on 8080). |
 | resources | object | `{"limits":{"cpu":"500m","ephemeral-storage":"100Mi","memory":"256Mi"},"requests":{"cpu":"50m","ephemeral-storage":"50Mi","memory":"64Mi"}}` | Container resources. |
+| observability.otel.endpoint | string | `""` | OTLP collector URL for traces, e.g. `http://otlp-gateway.kube-system.svc:4317` (gRPC) or `https://tempo.example.com:4318` (with protocol `http/protobuf`). Empty exports nothing; inbound `traceparent` headers still propagate. With `networkPolicy.enabled` the policy opens egress to it: the Service's namespace for an in-cluster host, every address otherwise. |
+| observability.otel.protocol | string | `"grpc"` | OTLP protocol: `grpc` or `http/protobuf`. |
+| observability.otel.headers | string | `""` | OTLP headers (`OTEL_EXPORTER_OTLP_HEADERS`), e.g. `X-Scope-OrgID=giantswarm` for a multi-tenant collector. |
+| observability.otel.resourceAttributes | string | `""` | Resource attributes appended to the downward-API `k8s.pod.name`, `k8s.namespace.name` and `k8s.node.name`, e.g. `deployment.environment=glean`. |
+| observability.otel.sampler | string | `"parentbased_traceidratio"` | `OTEL_TRACES_SAMPLER`. The parent-based default follows the caller's sampling decision and samples `samplerArg` of the traces that start here. |
+| observability.otel.samplerArg | string | `"0.1"` | `OTEL_TRACES_SAMPLER_ARG`. |
 | logging.verbose | bool | `false` | Enable debug logging. |
 | extraArgs | list | `[]` | Extra container arguments. |
 | extraEnv | list | `[]` | Extra environment variables. |
