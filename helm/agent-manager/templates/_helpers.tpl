@@ -162,3 +162,28 @@ the union adds nothing there.
 {{- end -}}
 {{- $all | uniq | join "," -}}
 {{- end }}
+
+{{/*
+The OTLP collector the pod exports to, as YAML {namespace, port}: the
+namespace of an in-cluster Service host (<svc>.<ns>.svc[.cluster.local]),
+empty for any other host; the endpoint's port, else the protocol's default
+(4317 gRPC, 4318 HTTP). Empty when no endpoint is set.
+*/}}
+{{- define "agent-manager.otlpEgress" -}}
+{{- with .Values.observability.otel.endpoint -}}
+{{- $url := urlParse (ternary . (printf "grpc://%s" .) (contains "://" .)) -}}
+{{- $hostPort := splitList ":" $url.host -}}
+{{- $host := first $hostPort -}}
+{{- $port := ternary (last $hostPort) "" (gt (len $hostPort) 1) -}}
+{{- if not $port -}}
+{{- $port = ternary "4318" "4317" (hasPrefix "http/" ($.Values.observability.otel.protocol | default "grpc")) -}}
+{{- end -}}
+{{- $labels := splitList "." $host -}}
+{{- $namespace := "" -}}
+{{- if and (ge (len $labels) 3) (eq (index $labels 2) "svc") -}}
+{{- $namespace = index $labels 1 -}}
+{{- end -}}
+namespace: {{ $namespace | quote }}
+port: {{ $port }}
+{{- end -}}
+{{- end -}}

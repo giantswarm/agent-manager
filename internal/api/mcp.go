@@ -6,7 +6,12 @@ import (
 	"fmt"
 
 	"github.com/mark3labs/mcp-go/mcp"
+	mcpotel "github.com/mark3labs/mcp-go/otel"
 	mcpserver "github.com/mark3labs/mcp-go/server"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/giantswarm/agent-manager/internal/agents"
 )
@@ -56,10 +61,25 @@ const (
 
 var systemMessageLimit = fmt.Sprintf("At most %d characters; put long reference material in a skill.", agents.MaxSystemMessageLength)
 
+const tracerName = "github.com/giantswarm/agent-manager"
+
+// genAIToolName labels the mcp.tools/call server span with the called tool
+// under the GenAI semantic-convention key.
+func genAIToolName(next mcpserver.ToolHandlerFunc) mcpserver.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		trace.SpanFromContext(ctx).SetAttributes(attribute.String("gen_ai.tool.name", req.Params.Name))
+		return next(ctx, req)
+	}
+}
+
 // NewMCPServer builds an MCP server exposing the same operations as the REST
 // API as tools. Results are JSON text with the same shapes as the REST bodies.
 func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 	s := mcpserver.NewMCPServer("agent-manager", version,
+		mcpserver.WithToolHandlerMiddleware(genAIToolName),
+		// The HTTP server span already joined the inbound traceparent, so the
+		// MCP spans nest under it instead of extracting it a second time.
+		mcpotel.WithServerTracingPropagator(otel.Tracer(tracerName), propagation.NewCompositeTextMapPropagator()),
 		mcpserver.WithToolCapabilities(false),
 		mcpserver.WithInstructions("Manage the agents of the Agent Platform. An agent is a Flux HelmRelease of the Generic agent chart (1.x; one release renders one kagent.dev/v1alpha3 AgentTemplate plus the agent's own muster RemoteMCPServer carrying its toolset) plus the shared per-namespace OCIRepository of that chart. Call get_info first for the managed namespaces, the chart range and version, the platform Harness and the muster URL; list_model_configs before create_agent (the modelConfig must exist in the namespace); list_skills for the skills an agent can mount — it reports each skill's head commit, and every skill is written pinned to a commit or a digest (a branch, tag or image tag is resolved at write time). Names are DNS-1123 labels the caller chooses and confirms — the service never derives a name from a display name. validate_agent is a dry run of create/update. Every agent declares a toolset — create_agent requires it: the selectors (preset:<name>, server:<name>, workflow:<name>, tool:<name>) that bound which of the gateway's tools the agent's meta-tools can see and call; presets shipped on every installation: read-only, none, infrastructure, agent-platform, full. list_agents reports the toolset of each agent, or implicitFullAccess: true for agents created before toolsets existed — assign them one with update_agent. Readiness is the platform Harness's verdict on the AgentTemplate (get_agent_status). There is no runtime argument (the platform Harness on the Go ADK runs every agent) and no per-source skill credential. Agents whose HelmRelease is applied from git (managed: gitops) are read-only here unless force is passed: change them in the GitOps repository instead."),
 	)

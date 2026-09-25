@@ -277,6 +277,20 @@ the server on `agenttemplates` (`--kagent-api-version auto`, fallback
 (`AGENT_MUSTER_URL`) composes the platform's muster MCP URL into every agent as
 `muster.url`; unset, nothing is composed and the chart default applies.
 
+### Tracing
+
+With `OTEL_EXPORTER_OTLP_ENDPOINT` set (chart: `observability.otel.endpoint`)
+the server exports traces over OTLP, configured by the standard `OTEL_*`
+variables (`OTEL_EXPORTER_OTLP_PROTOCOL`, `OTEL_EXPORTER_OTLP_HEADERS`,
+`OTEL_TRACES_SAMPLER`, `OTEL_RESOURCE_ATTRIBUTES`). Every request but the
+probes is a server span named after its route (`POST /mcp`, `GET /api/v1/`),
+joined to an inbound `traceparent`. Under it an MCP request is an
+`mcp.<method>` server span; a tool call's `mcp.tools/call` span carries
+`gen_ai.tool.name` and `mcp.tool.name`, with a `tool.<name>` span around the
+handler. The chart samples parent-based (`parentbased_traceidratio`, `0.1` of
+the traces that start here). Unset, nothing is exported and `traceparent`
+still propagates.
+
 ## Migrating an installation: `agent-manager migrate`
 
 An installation that moves from the 0.10 platform to kagent API v2 has agents

@@ -12,9 +12,11 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	mcpserver "github.com/mark3labs/mcp-go/server"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
 	"github.com/giantswarm/agent-manager/internal/agents"
 	"github.com/giantswarm/agent-manager/internal/api"
@@ -83,12 +85,33 @@ func New(cfg Config, svc *agents.Service, mcpSrv *mcpserver.MCPServer, log *slog
 	}
 	s.http = &http.Server{
 		Addr:              cfg.Addr,
-		Handler:           mux,
+		Handler:           traced(mux),
 		ReadHeaderTimeout: 10 * time.Second,
 		// No WriteTimeout: MCP streams outlive any fixed value.
 		IdleTimeout: 120 * time.Second,
 	}
 	return s, nil
+}
+
+// traced opens a server span per request, joined to an inbound traceparent,
+// named after the matched route so the name stays low-cardinality. Probes
+// are not traced.
+func traced(mux *http.ServeMux) http.Handler {
+	return otelhttp.NewHandler(mux, "agent-manager",
+		otelhttp.WithFilter(func(r *http.Request) bool {
+			return r.URL.Path != "/healthz" && r.URL.Path != "/readyz"
+		}),
+		otelhttp.WithSpanNameFormatter(func(_ string, r *http.Request) string {
+			switch {
+			case r.Pattern == "":
+				return r.Method
+			case strings.Contains(r.Pattern, " "):
+				return r.Pattern
+			default:
+				return r.Method + " " + r.Pattern
+			}
+		}),
+	)
 }
 
 // guard requires an authenticated caller when OAuth is on.
