@@ -54,6 +54,8 @@ const (
 	argRefresh       = "refresh"
 )
 
+var systemMessageLimit = fmt.Sprintf("At most %d characters; put long reference material in a skill.", agents.MaxSystemMessageLength)
+
 // NewMCPServer builds an MCP server exposing the same operations as the REST
 // API as tools. Results are JSON text with the same shapes as the REST bodies.
 func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
@@ -129,7 +131,7 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 		mcp.WithString(argModelConfig, mcp.Required(), mcp.Description("Name of an existing kagent ModelConfig in the namespace (list_model_configs)")),
 		mcp.WithString(argDisplayName, mcp.Description("Friendly Unicode name (max 63 chars), shown by the portal")),
 		mcp.WithString(argDescription, mcp.Description("What the agent is for")),
-		mcp.WithString(argSystemMessage, mcp.Description("System prompt; omit for the chart's default prompt")),
+		mcp.WithString(argSystemMessage, mcp.Description("System prompt; omit for the chart's default prompt. "+systemMessageLimit)),
 		mcp.WithString(argIconURL, mcp.Description("Avatar URL (chart agent.iconUrl, rendered as the ui.giantswarm.io/icon-url annotation); omit unless the installation serves avatars")),
 		toolsetRequiredProp,
 		skillsProp,
@@ -147,7 +149,7 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 		mcp.WithString(argName, mcp.Required(), mcp.Description("Agent name")),
 		mcp.WithString(argDisplayName, mcp.Description("New friendly name; \"\" clears it")),
 		mcp.WithString(argDescription, mcp.Description("New description; \"\" clears it")),
-		mcp.WithString(argSystemMessage, mcp.Description("New system prompt; \"\" restores the chart default")),
+		mcp.WithString(argSystemMessage, mcp.Description("New system prompt; \"\" restores the chart default. "+systemMessageLimit)),
 		mcp.WithString(argModelConfig, mcp.Description("Name of an existing ModelConfig in the namespace")),
 		mcp.WithString(argIconURL, mcp.Description("New avatar URL; \"\" clears it")),
 		skillsReplaceProp,
@@ -190,7 +192,7 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 		mcp.WithString(argModelConfig, mcp.Description("ModelConfig name (required for a create)")),
 		mcp.WithString(argDisplayName, mcp.Description("Friendly name")),
 		mcp.WithString(argDescription, mcp.Description("Description")),
-		mcp.WithString(argSystemMessage, mcp.Description("System prompt")),
+		mcp.WithString(argSystemMessage, mcp.Description("System prompt. "+systemMessageLimit)),
 		mcp.WithString(argIconURL, mcp.Description("Avatar URL")),
 		toolsetProp,
 		skillsProp,

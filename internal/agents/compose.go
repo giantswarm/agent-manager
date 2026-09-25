@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/yaml"
@@ -75,6 +76,19 @@ var (
 	}
 	RenamedValuePaths = map[string]string{"muster.toolNames": "muster.tools"}
 )
+
+// MaxSystemMessageLength is the agent chart's cap on agent.systemMessage: the
+// compiled agent config must fit Substrate's 32768-character env value limit.
+const MaxSystemMessageLength = 20000
+
+// ValidateSystemMessage checks the system prompt against the chart's cap,
+// counted in characters (code points), as the chart schema counts it.
+func ValidateSystemMessage(message string) error {
+	if length := utf8.RuneCountInString(message); length > MaxSystemMessageLength {
+		return invalidf("systemMessage is %d characters; the agent chart accepts at most %d. Move long reference material into a skill", length, MaxSystemMessageLength)
+	}
+	return nil
+}
 
 var dns1123 = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
 

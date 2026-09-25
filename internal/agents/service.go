@@ -511,6 +511,9 @@ func checkSpec(spec Spec) []error {
 	if err := ValidateSkills(spec.Skills); err != nil {
 		errs = append(errs, err)
 	}
+	if err := ValidateSystemMessage(spec.SystemMessage); err != nil {
+		errs = append(errs, err)
+	}
 	return errs
 }
 
@@ -740,6 +743,11 @@ func (s *Service) writableHelmRelease(ctx context.Context, dyn dynamic.Interface
 // re-pins every git skill to the head of its ref (the default branch unless
 // the request names one).
 func (s *Service) mergedValues(ctx context.Context, dyn dynamic.Interface, ns string, upd Update, hr *unstructured.Unstructured) (map[string]any, map[string]any, error) {
+	if upd.SystemMessage != nil {
+		if err := ValidateSystemMessage(*upd.SystemMessage); err != nil {
+			return nil, nil, err
+		}
+	}
 	current, _, _ := unstructured.NestedMap(hr.Object, "spec", "values")
 	if current == nil {
 		current = map[string]any{}

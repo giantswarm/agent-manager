@@ -151,7 +151,7 @@ type Spec struct {
 	// Description goes to AgentTemplate.spec.description.
 	Description string `json:"description,omitempty"`
 	// SystemMessage is the system prompt (spec.systemPrompt); empty keeps the
-	// chart default.
+	// chart default. At most MaxSystemMessageLength characters.
 	SystemMessage string `json:"systemMessage,omitempty"`
 	// ModelConfig names an existing kagent ModelConfig in the namespace.
 	ModelConfig string `json:"modelConfig"`
