@@ -46,6 +46,10 @@ const (
 	// Portal, Swarmgeist and agent-manager.
 	DisplayNameAnnotation = "ui.giantswarm.io/display-name"
 	IconURLAnnotation     = "ui.giantswarm.io/icon-url"
+	// HarnessLabel names the Harness that runs an agent: the Generic chart
+	// renders agent.harness into it and a Harness's allowedAgentTemplates
+	// selector matches it.
+	HarnessLabel = "agent-platform.giantswarm.io/harness"
 	// HelmReleaseNameLabel / HelmReleaseNamespaceLabel are the Flux provenance
 	// labels helm-controller stamps on every object a release renders.
 	HelmReleaseNameLabel      = "helm.toolkit.fluxcd.io/name"

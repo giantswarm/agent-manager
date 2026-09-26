@@ -804,6 +804,20 @@ func TestStatusVerdictsComeFromThePlatformHarness(t *testing.T) {
 	assert.Equal(t, VerdictFailed, st.Verdict, st.Summary)
 	assert.Contains(t, st.Summary, `"kagent" does not admit`)
 	assert.Contains(t, st.Summary, "claude")
+	// A coding agent names its own Harness: its entry decides, not the
+	// platform Harness's.
+	coding := withStatus(agentTemplate("kagent", "coder", "coder", "kagent", true, true), 1, harnessEntryObj("claude", "rev-1", "rev-1", true, ""))
+	coding.SetLabels(map[string]string{HelmReleaseNameLabel: "coder", HelmReleaseNamespaceLabel: "kagent", HarnessLabel: "claude"})
+	f = newFixture(t, []runtime.Object{release("coder"), coding})
+	st, err = f.svc.Status(ctx, "", "coder")
+	require.NoError(t, err)
+	assert.Equal(t, VerdictReady, st.Verdict, st.Summary)
+	assert.Contains(t, st.Summary, "Harness claude")
+	listed, err := f.svc.List(ctx, "")
+	require.NoError(t, err)
+	require.Len(t, listed, 1)
+	require.NotNil(t, listed[0].Ready)
+	assert.True(t, *listed[0].Ready, "the list reads the agent's own Harness entry too")
 	// kagent has not observed the template yet.
 	f = newFixture(t, []runtime.Object{release("sre"), withStatus(agentTemplate("kagent", "sre", "sre", "kagent", false, true), 0)})
 	st, err = f.svc.Status(ctx, "", "sre")
