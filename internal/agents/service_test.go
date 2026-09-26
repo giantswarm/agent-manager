@@ -976,3 +976,34 @@ func TestUpdateRetriesTheWriteWhenTheReleaseMovedUnderneath(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "a new description", mustValues(hr)["agent"].(map[string]any)["description"])
 }
+
+func TestCreateOnTheHarnessTheCallerNames(t *testing.T) {
+	f := seeded(t)
+	mustCreate(t, f, f.svc.harnessGVR(), harness("kagent", "claude", "claude"))
+	ctx := t.Context()
+	readOnly := []string{"preset:read-only"}
+
+	dry, err := f.svc.ValidateCreate(ctx, Spec{Name: "coder", ModelConfig: "default-model-config", Toolset: readOnly, Harness: "claude"})
+	require.NoError(t, err)
+	require.True(t, dry.Valid, dry.Errors)
+	assert.Equal(t, "claude", dry.Manifests.Values["agent"].(map[string]any)["harness"])
+
+	dry, err = f.svc.ValidateCreate(ctx, Spec{Name: "coder", ModelConfig: "default-model-config", Toolset: readOnly, Harness: "codex"})
+	require.NoError(t, err)
+	assert.False(t, dry.Valid)
+	assert.Contains(t, dry.Errors, `harness "codex" does not exist in namespace kagent; valid: claude, kagent`)
+
+	_, err = f.svc.Create(ctx, Spec{Name: "coder", ModelConfig: "default-model-config", Toolset: readOnly, Harness: "codex"})
+	require.ErrorIs(t, err, ErrInvalid)
+
+	_, err = f.svc.Create(ctx, Spec{Name: "coder", ModelConfig: "default-model-config", Toolset: readOnly, Harness: "claude"})
+	require.NoError(t, err)
+	hr, err := f.dyn.Resource(hrGVR).Namespace("kagent").Get(ctx, "coder", metav1.GetOptions{})
+	require.NoError(t, err)
+	got, _, _ := unstructured.NestedString(hr.Object, "spec", "values", "agent", "harness")
+	assert.Equal(t, "claude", got)
+
+	plain, err := f.svc.ValidateCreate(ctx, Spec{Name: "plain", ModelConfig: "default-model-config", Toolset: readOnly})
+	require.NoError(t, err)
+	assert.Equal(t, DefaultHarnessName, plain.Manifests.Values["agent"].(map[string]any)["harness"], "no harness is the platform Harness")
+}

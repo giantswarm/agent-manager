@@ -11,13 +11,14 @@ chart tracking `1.x`; agent-manager composes both the way the portal's create
 flow does, pins every skill to a commit or a digest, validates the values
 against the chart's `values.schema.json` before applying, and reads agents back
 from the AgentTemplate, the RemoteMCPServer and the HelmRelease. Readiness is
-the platform Harness's verdict on the template (`status.harnesses[]`).
+the verdict of the agent's own Harness on the template (`status.harnesses[]`).
 
 - `kagent.namespace` (plus `kagent.additionalNamespaces`) are the namespaces
   agents live in; the Role is created there. Requests naming another
   namespace are refused.
-- `harness.name` is the platform Harness every agent runs on (rendered by the
-  connectivity chart of the `agent-platform` meta chart); its entry on the
+- `harness.name` is the platform Harness an agent runs on unless
+  `create_agent` names another (rendered by the connectivity chart of the
+  `agent-platform` meta chart); the agent's Harness entry on the
   AgentTemplate decides `get_agent_status`.
 - `agentChart.ociUrl` / `agentChart.semver` are what the composed
   OCIRepository carries (`1.x` — never a pre-release build); the same registry

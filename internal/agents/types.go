@@ -159,6 +159,9 @@ type Spec struct {
 	SystemMessage string `json:"systemMessage,omitempty"`
 	// ModelConfig names an existing kagent ModelConfig in the namespace.
 	ModelConfig string `json:"modelConfig"`
+	// Harness names the Harness of the namespace that runs the agent (chart
+	// agent.harness); empty selects the platform Harness. Fixed at create.
+	Harness string `json:"harness,omitempty"`
 	// IconURL is the avatar URL (chart agent.iconUrl, rendered as the
 	// ui.giantswarm.io/icon-url annotation).
 	IconURL string `json:"iconUrl,omitempty"`
