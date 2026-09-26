@@ -73,7 +73,7 @@ func (s *Service) Status(ctx context.Context, ns, name string) (*Status, error) 
 	}
 	st := &Status{Name: name, Namespace: ns, Template: templateStatusOf(tpl), HelmRelease: helmReleaseStatus(hr)}
 	st.Events = s.warningEvents(ctx, client, ns, name)
-	st.Verdict, st.Summary = verdict(st, s.cfg.Compose.HarnessName)
+	st.Verdict, st.Summary = verdict(st, s.harnessOf(tpl))
 	if st.Verdict == VerdictFailed && tpl != nil && len(st.Template.Harnesses) == 0 {
 		// Nobody admits the template: say which Harnesses exist and what
 		// they admit, so the label mismatch is visible from the answer.
@@ -82,6 +82,17 @@ func (s *Service) Status(ctx context.Context, ns, name string) (*Status, error) 
 		}
 	}
 	return st, nil
+}
+
+// harnessOf is the Harness an agent runs on: the one its template names in
+// HarnessLabel, else the platform Harness agent-manager composes by default.
+func (s *Service) harnessOf(tpl *unstructured.Unstructured) string {
+	if tpl != nil {
+		if name := tpl.GetLabels()[HarnessLabel]; name != "" {
+			return name
+		}
+	}
+	return s.cfg.Compose.HarnessName
 }
 
 // templateStatusOf reads status.harnesses[] and the generations; Exists is
@@ -237,7 +248,7 @@ func verdict(st *Status, harness string) (string, string) {
 		for _, h := range ts.Harnesses {
 			names = append(names, h.Harness)
 		}
-		return VerdictFailed, fmt.Sprintf("the platform Harness %q does not admit the AgentTemplate; it is admitted by %s only", harness, strings.Join(names, ", "))
+		return VerdictFailed, fmt.Sprintf("the agent's Harness %q does not admit the AgentTemplate; it is admitted by %s only", harness, strings.Join(names, ", "))
 	}
 	if hr != nil && hr.Exists {
 		if hr.Ready == nil {

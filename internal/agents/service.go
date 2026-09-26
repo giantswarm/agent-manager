@@ -1111,7 +1111,7 @@ func (s *Service) agentFromTemplate(tpl, server *unstructured.Unstructured) Agen
 	a.Toolset, a.ImplicitFullAccess = toolsetOf(tpl, server)
 	ts := templateStatusOf(tpl)
 	a.Harnesses = ts.Harnesses
-	a.Ready = harnessReady(ts.Harnesses, s.cfg.Compose.HarnessName)
+	a.Ready = harnessReady(ts.Harnesses, s.harnessOf(tpl))
 	return a
 }
 
