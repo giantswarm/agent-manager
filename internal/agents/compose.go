@@ -129,9 +129,9 @@ func BuildValues(spec Spec, cfg ComposeConfig) map[string]any {
 	if strings.TrimSpace(spec.SystemMessage) != "" {
 		agent["systemMessage"] = spec.SystemMessage
 	}
-	// The platform's Harness, so the template lands on the Harness whose
-	// status entry get_agent_status reads.
-	agent["harness"] = orDefault(cfg.HarnessName, DefaultHarnessName)
+	// The Harness the caller named, else the platform's; get_agent_status
+	// reads that Harness's entry.
+	agent["harness"] = orDefault(spec.Harness, orDefault(cfg.HarnessName, DefaultHarnessName))
 	values := map[string]any{
 		"agent":       agent,
 		"modelConfig": map[string]any{"name": spec.ModelConfig},

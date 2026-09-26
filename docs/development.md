@@ -38,7 +38,7 @@ make helm-docs          # regenerate helm/agent-manager/README.md
   `skills.go` validates and pins skill entries, `validate.go` runs the chart
   schema, `service.go` is list/get/create/update/delete plus model configs —
   the read model comes from the AgentTemplate, the agent's RemoteMCPServer and
-  the owning HelmRelease — and `status.go` folds the platform Harness's entry
+  the owning HelmRelease — and `status.go` folds the agent's Harness entry
   on the template, the HelmRelease and the Warning events into one verdict.
   `testdata/` holds what Generic chart 1.x renders.
 - `internal/migrate` — the `migrate` command: `values.go` rewrites 0.x
