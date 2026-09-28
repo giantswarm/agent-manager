@@ -1,0 +1,119 @@
+# Prometheus metrics: the exporter environment and metrics port on the
+# Deployment and Service, the ServiceMonitor, and the NetworkPolicy ingress
+# rule admitting a scrape.
+#
+# Run with: make helm-test (helm unittest helm/agent-manager)
+suite: metrics
+templates:
+  - templates/deployment.yaml
+  - templates/service.yaml
+  - templates/servicemonitor.yaml
+  - templates/networkpolicy.yaml
+tests:
+  - it: serves Prometheus metrics on the metrics port by default
+    template: templates/deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: OTEL_METRICS_EXPORTER, value: prometheus}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: OTEL_EXPORTER_PROMETHEUS_HOST, value: "0.0.0.0"}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: OTEL_EXPORTER_PROMETHEUS_PORT, value: "9464"}
+      - contains:
+          path: spec.template.spec.containers[0].ports
+          content: {name: metrics, containerPort: 9464, protocol: TCP}
+
+  - it: exports no metrics with observability.metrics.enabled false
+    template: templates/deployment.yaml
+    set:
+      observability.metrics.enabled: false
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: OTEL_METRICS_EXPORTER, value: none}
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content: {name: OTEL_EXPORTER_PROMETHEUS_PORT, value: "9464"}
+      - notContains:
+          path: spec.template.spec.containers[0].ports
+          content: {name: metrics, containerPort: 9464, protocol: TCP}
+
+  - it: exposes the metrics port on the Service by default
+    template: templates/service.yaml
+    asserts:
+      - contains:
+          path: spec.ports
+          content: {name: metrics, port: 9464, targetPort: metrics, protocol: TCP}
+
+  - it: drops the metrics Service port with observability.metrics.enabled false
+    template: templates/service.yaml
+    set:
+      observability.metrics.enabled: false
+    asserts:
+      - notContains:
+          path: spec.ports
+          content: {name: metrics, port: 9464, targetPort: metrics, protocol: TCP}
+
+  - it: renders no ServiceMonitor by default
+    template: templates/servicemonitor.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders no ServiceMonitor with metrics disabled even if enabled
+    template: templates/servicemonitor.yaml
+    set:
+      serviceMonitor.enabled: true
+      observability.metrics.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders a ServiceMonitor for the metrics port with the tenant label
+    template: templates/servicemonitor.yaml
+    set:
+      serviceMonitor.enabled: true
+      serviceMonitor.interval: 30s
+      serviceMonitor.labels:
+        observability.giantswarm.io/tenant: giantswarm
+    asserts:
+      - equal:
+          path: spec.endpoints[0]
+          value: {port: metrics, path: /metrics, interval: 30s}
+      - equal:
+          path: metadata.labels["observability.giantswarm.io/tenant"]
+          value: giantswarm
+
+  - it: admits the metrics namespaces to the metrics port
+    template: templates/networkpolicy.yaml
+    set:
+      networkPolicy.enabled: true
+    asserts:
+      - contains:
+          path: spec.ingress
+          content:
+            from:
+              - namespaceSelector:
+                  matchLabels:
+                    kubernetes.io/metadata.name: kube-system
+            ports:
+              - {protocol: TCP, port: 9464}
+
+  - it: admits no metrics scrape with observability.metrics.enabled false
+    template: templates/networkpolicy.yaml
+    set:
+      networkPolicy.enabled: true
+      observability.metrics.enabled: false
+    asserts:
+      - notContains:
+          path: spec.ingress
+          content:
+            from:
+              - namespaceSelector:
+                  matchLabels:
+                    kubernetes.io/metadata.name: kube-system
+            ports:
+              - {protocol: TCP, port: 9464}

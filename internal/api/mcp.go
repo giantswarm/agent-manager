@@ -78,6 +78,7 @@ func genAIToolName(next mcpserver.ToolHandlerFunc) mcpserver.ToolHandlerFunc {
 func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 	s := mcpserver.NewMCPServer("agent-manager", version,
 		mcpserver.WithToolHandlerMiddleware(genAIToolName),
+		mcpserver.WithToolHandlerMiddleware(toolDuration(otel.Meter(tracerName))),
 		// The HTTP server span already joined the inbound traceparent, so the
 		// MCP spans nest under it instead of extracting it a second time.
 		mcpotel.WithServerTracingPropagator(otel.Tracer(tracerName), propagation.NewCompositeTextMapPropagator()),
