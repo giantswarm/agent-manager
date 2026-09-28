@@ -1043,7 +1043,7 @@ func TestUpdateKeepsTheSkillsCredentialInStep(t *testing.T) {
 
 func TestCreateRefusesSkillsFromARepositoryTheCallerCannotRead(t *testing.T) {
 	f := seeded(t)
-	private := Skills{{Name: "gips", Path: "gips", Git: &GitSkill{URL: privateSkillsRepo, Commit: mainHead}}}
+	private := Skills{{Name: "runbooks", Path: "runbooks", Git: &GitSkill{URL: privateSkillsRepo, Commit: mainHead}}}
 	spec := func(name string) Spec {
 		return Spec{Name: name, ModelConfig: "default-model-config", Toolset: []string{"preset:read-only"}, Skills: private}
 	}
@@ -1066,7 +1066,7 @@ func TestCreateRefusesSkillsFromARepositoryTheCallerCannotRead(t *testing.T) {
 	_, err := f.svc.Update(asGitHub("john"), Update{Name: "verifier", Skills: &private})
 	require.ErrorIs(t, err, ErrForbidden, "an update cannot add what the caller cannot read either")
 
-	res, err := f.svc.Create(asGitHub("jane"), spec("gips-analyst"))
+	res, err := f.svc.Create(asGitHub("jane"), spec("private-analyst"))
 	require.NoError(t, err)
-	assert.Equal(t, "gips-analyst", res.Agent.Name)
+	assert.Equal(t, "private-analyst", res.Agent.Name)
 }
