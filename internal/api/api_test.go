@@ -331,6 +331,10 @@ func TestMCPToolsMirrorREST(t *testing.T) {
 		switch tool.Name {
 		case ToolCreateAgent, ToolUpdateAgent, ToolDeleteAgent:
 			assert.Contains(t, tool.Description, "WRITES", tool.Name)
+			for _, arg := range []string{"mode", "dryRun", "repository", "branch", "path"} {
+				assert.Contains(t, tool.InputSchema.Properties, arg, "%s takes %s", tool.Name, arg)
+			}
+			assert.Equal(t, []any{agents.ModeApply, agents.ModeCommit}, tool.InputSchema.Properties["mode"].(map[string]any)["enum"])
 		default:
 			assert.Contains(t, tool.Description, "Read-only", tool.Name)
 		}
@@ -453,6 +457,8 @@ func TestStatusForMapsEverySentinel(t *testing.T) {
 		{agents.ErrForbidden, http.StatusForbidden, "forbidden"},
 		{agents.ErrUnauthenticated, http.StatusUnauthorized, "unauthenticated"},
 		{agents.ErrUnsupported, http.StatusNotImplemented, "unsupported"},
+		{agents.ErrGitOpsOwned, http.StatusConflict, "gitops_owned"},
+		{agents.ErrAuthRequired, http.StatusUnauthorized, "auth_required"},
 		{errors.New("boom"), http.StatusBadGateway, "backend_error"},
 	} {
 		status, code := statusFor(fmt.Errorf("%w: detail", tc.err))

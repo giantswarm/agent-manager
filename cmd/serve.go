@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/giantswarm/gitops-commit/commit"
 	"github.com/giantswarm/mcp-toolkit/metrics"
 	"github.com/giantswarm/mcp-toolkit/tracing"
 	"github.com/spf13/cobra"
@@ -67,6 +68,8 @@ type serveOptions struct {
 	ssoAllowPrivateIPs            bool
 	allowPublicClientRegistration bool
 	downstreamOAuth               bool
+	githubAuthorizationServer     string
+	githubAPIURL                  string
 }
 
 func newServeCmd() *cobra.Command {
@@ -118,11 +121,16 @@ environment variable named next to it; flags win over the environment.`,
 	f.BoolVar(&o.ssoAllowPrivateIPs, "sso-allow-private-ips", envBool("SSO_ALLOW_PRIVATE_IPS", false), "Let the IdP's JWKS endpoint resolve to a private address when validating forwarded tokens (SSO_ALLOW_PRIVATE_IPS)")
 	f.BoolVar(&o.allowPublicClientRegistration, "allow-public-client-registration", envBool("AGENT_MANAGER_OAUTH_ALLOW_PUBLIC_REGISTRATION", false), "Accept unauthenticated dynamic client registration; labs only (AGENT_MANAGER_OAUTH_ALLOW_PUBLIC_REGISTRATION)")
 	f.BoolVar(&o.downstreamOAuth, "downstream-oauth", envBool("AGENT_MANAGER_DOWNSTREAM_OAUTH", false), "Call the Kubernetes API as the caller, with the caller's IdP token, for everything a request does — the ServiceAccount holds no permissions (the chart renders none) and nothing runs without a caller. Needs --enable-oauth and an apiserver that trusts the IdP (AGENT_MANAGER_DOWNSTREAM_OAUTH)")
+	f.StringVar(&o.githubAuthorizationServer, "github-authorization-server", envOr("AGENT_MANAGER_GITHUB_AUTHORIZATION_SERVER", ""), "Issuer identity of the GitHub App muster pins this server's MCP registration to (https://github.com/apps/giantswarm-agent-manager): the bearer of every MCP call is then the person's App user token, verified with GET /user and used for commit mode's pull request, and the person's IdP ID token arrives in X-Muster-Id-Token (MCPServer auth.forwardIdentity). Empty: commit mode is not offered. Needs --enable-oauth (AGENT_MANAGER_GITHUB_AUTHORIZATION_SERVER)")
+	f.StringVar(&o.githubAPIURL, "github-api-url", envOr("AGENT_MANAGER_GITHUB_API_URL", server.DefaultGitHubAPIURL), "GitHub REST API base URL for GET /user and commit mode (AGENT_MANAGER_GITHUB_API_URL)")
 	return cmd
 }
 
 func runServe(ctx context.Context, o *serveOptions) error {
 	log := slog.Default()
+	if o.githubAuthorizationServer != "" && !o.oauthEnabled {
+		return fmt.Errorf("--github-authorization-server needs --enable-oauth: the forwarded IdP ID token is validated by the OAuth resource server")
+	}
 	if o.downstreamOAuth && !o.oauthEnabled {
 		return fmt.Errorf("--downstream-oauth needs --enable-oauth: without OAuth there is no caller token to present to the Kubernetes API")
 	}
@@ -206,6 +214,7 @@ func runServe(ctx context.Context, o *serveOptions) error {
 		},
 		KagentAPIVersion: kagentVersion,
 		Version:          build.Version,
+		GitHub:           gitHubRemote(o.githubAuthorizationServer, o.githubAPIURL),
 	}, log)
 
 	srvCfg := server.Config{Addr: o.listen, MCPEnabled: o.mcpEnabled, MCPPath: o.mcpPath}
@@ -225,6 +234,9 @@ func runServe(ctx context.Context, o *serveOptions) error {
 			AllowPublicClientRegistration: o.allowPublicClientRegistration,
 			DownstreamOAuth:               o.downstreamOAuth,
 		}
+		if o.githubAuthorizationServer != "" {
+			srvCfg.OAuth.GitHub = &server.GitHubPin{AuthorizationServer: o.githubAuthorizationServer, APIURL: o.githubAPIURL}
+		}
 	}
 	srv, err := server.New(srvCfg, svc, api.NewMCPServer(svc, build.Version), log)
 	if err != nil {
@@ -232,7 +244,7 @@ func runServe(ctx context.Context, o *serveOptions) error {
 	}
 	info := svc.Info(ctx)
 	log.Info("agent-manager starting", "version", build.Version, "commit", build.Commit, "listen", o.listen, "rest", api.Prefix, "mcp", o.mcpPath, "mcpEnabled", o.mcpEnabled,
-		"oauth", o.oauthEnabled, "downstreamOAuth", o.downstreamOAuth, "identity", info.Identity,
+		"oauth", o.oauthEnabled, "downstreamOAuth", o.downstreamOAuth, "commit", info.Capabilities["commit"], "identity", info.Identity,
 		"namespaces", info.Namespaces.Managed, "chart", o.chartOCIURL, "chartSemver", o.chartSemver, "chartVersion", info.Chart.LatestVersion, "schemaSource", info.Chart.SchemaSource,
 		"kagentAPI", kagentVersion, "harness", info.Harness.Name, "musterURL", info.Muster.URL, "helmReleaseAPI", helmReleaseAPI, "ociRepositoryAPI", ociRepositoryAPI, "skillsRepositories", info.SkillsRepositories)
 
@@ -297,4 +309,19 @@ func envDuration(key string, def time.Duration) time.Duration {
 		return def
 	}
 	return d
+}
+
+// gitHubRemote offers commit mode on an App-pinned registration: the pull
+// request is opened as the person, with the App user token muster puts on the
+// call. Nil without the pin: commit mode is unsupported.
+func gitHubRemote(authorizationServer, apiURL string) agents.RemoteFor {
+	if authorizationServer == "" {
+		return nil
+	}
+	return func(token string) (agents.GitHubRemote, error) {
+		if apiURL == server.DefaultGitHubAPIURL {
+			return commit.NewGitHub(token)
+		}
+		return commit.NewGitHub(token, commit.WithBaseURL(apiURL))
+	}
 }

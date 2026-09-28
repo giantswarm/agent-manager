@@ -74,3 +74,21 @@ tests:
       - contains:
           path: spec.template.spec.containers[0].args
           content: --dex-client-id=explicit-client
+
+  - it: passes the GitHub App pin with github.enabled
+    set:
+      github:
+        enabled: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --github-authorization-server=https://github.com/apps/giantswarm-agent-manager
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --github-api-url=https://api.github.com
+
+  - it: offers no commit mode by default
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --github-api-url=https://api.github.com

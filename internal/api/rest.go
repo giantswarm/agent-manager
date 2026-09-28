@@ -106,7 +106,12 @@ func (h *REST) createAgent(w http.ResponseWriter, r *http.Request) {
 		h.writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, res)
+	status := http.StatusCreated
+	if res.DryRun || res.Mode == agents.ModeCommit {
+		// Nothing was created on the installation.
+		status = http.StatusOK
+	}
+	writeJSON(w, status, res)
 }
 
 func (h *REST) validateAgent(w http.ResponseWriter, r *http.Request) {
@@ -152,8 +157,13 @@ func (h *REST) updateAgent(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *REST) deleteAgent(w http.ResponseWriter, r *http.Request) {
-	force := strings.EqualFold(r.URL.Query().Get("force"), "true")
-	res, err := h.svc.Delete(r.Context(), r.PathValue("namespace"), r.PathValue("name"), force)
+	q := r.URL.Query()
+	force := strings.EqualFold(q.Get("force"), "true")
+	opts := agents.WriteOptions{
+		Mode: q.Get("mode"), DryRun: strings.EqualFold(q.Get("dryRun"), "true"),
+		Repository: q.Get("repository"), Branch: q.Get("branch"), Path: q.Get("path"),
+	}
+	res, err := h.svc.Delete(r.Context(), r.PathValue("namespace"), r.PathValue("name"), force, opts)
 	if err != nil {
 		h.writeError(w, err)
 		return
@@ -261,6 +271,10 @@ func statusFor(err error) (int, string) {
 		return http.StatusNotFound, "not_found"
 	case errors.Is(err, agents.ErrInvalid):
 		return http.StatusBadRequest, "invalid_request"
+	case errors.Is(err, agents.ErrGitOpsOwned):
+		return http.StatusConflict, "gitops_owned"
+	case errors.Is(err, agents.ErrAuthRequired):
+		return http.StatusUnauthorized, "auth_required"
 	case errors.Is(err, agents.ErrConflict):
 		return http.StatusConflict, "conflict"
 	case errors.Is(err, agents.ErrForbidden):

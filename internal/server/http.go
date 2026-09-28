@@ -81,7 +81,7 @@ func New(cfg Config, svc *agents.Service, mcpSrv *mcpserver.MCPServer, log *slog
 	mux.Handle(api.Prefix+"/", s.guard(rest))
 
 	if cfg.MCPEnabled && mcpSrv != nil {
-		mux.Handle(cfg.MCPPath, s.guard(mcpserver.NewStreamableHTTPServer(mcpSrv, mcpserver.WithEndpointPath(cfg.MCPPath))))
+		mux.Handle(cfg.MCPPath, s.guardMCP(mcpserver.NewStreamableHTTPServer(mcpSrv, mcpserver.WithEndpointPath(cfg.MCPPath))))
 	}
 	s.http = &http.Server{
 		Addr:              cfg.Addr,
@@ -120,6 +120,14 @@ func (s *Server) guard(next http.Handler) http.Handler {
 		return next
 	}
 	return s.oauth.protect(next)
+}
+
+// guardMCP is guard for the MCP endpoint, where the GitHub App pin applies.
+func (s *Server) guardMCP(next http.Handler) http.Handler {
+	if s.oauth == nil {
+		return next
+	}
+	return s.oauth.protectMCP(next)
 }
 
 // Handler exposes the mux (tests).

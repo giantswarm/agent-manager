@@ -44,6 +44,10 @@ type Config struct {
 	KagentAPIVersion string
 	// Version is the service version reported by GET /info.
 	Version string
+	// GitHub offers commit mode: the pull request is opened as the person
+	// with the GitHub token the App-pinned registration carries. Nil: commit
+	// mode is refused as unsupported.
+	GitHub RemoteFor
 }
 
 // Service is the agent lifecycle.
@@ -141,9 +145,9 @@ func (s *Service) Info(ctx context.Context) InfoResponse {
 		"status": true, "validate": true, "modelConfigs": true,
 		"skills":         s.skills != nil,
 		"writesAsCaller": s.kube.Identity() == kube.IdentityCaller,
-		// The write tools apply live; landing the manifests as a pull
-		// request in the owning GitOps repository is not available.
-		"commit": false,
+		// mode commit: the manifests land as a pull request, opened as the
+		// person, in the repository that owns the namespace.
+		"commit": s.CommitAvailable(),
 	}
 	out.Identity = s.kube.Identity()
 	kagentAPI := "kagent.dev/" + s.cfg.KagentAPIVersion
@@ -628,7 +632,7 @@ func (s *Service) ValidateUpdate(ctx context.Context, upd Update) (*ValidateResu
 	if err != nil {
 		return nil, err
 	}
-	hr, _, err := s.writableHelmRelease(ctx, dyn, ns, upd.Name, upd.Force)
+	hr, _, err := s.writableHelmRelease(ctx, dyn, ns, upd.Name, upd.Force, upd.Force)
 	if err != nil {
 		return nil, err
 	}
@@ -653,7 +657,7 @@ func (r *ValidateResult) addError(err error) {
 }
 
 func isDomainError(err error) bool {
-	for _, sentinel := range []error{ErrInvalid, ErrNotFound, ErrConflict, ErrUnsupported} {
+	for _, sentinel := range []error{ErrInvalid, ErrNotFound, ErrConflict, ErrGitOpsOwned, ErrUnsupported} {
 		if errorsIs(err, sentinel) {
 			return true
 		}
@@ -665,7 +669,9 @@ func isDomainError(err error) bool {
 
 // Create composes and applies the OCIRepository (when missing) and the
 // HelmRelease of a new agent after pinning its skills and validating the
-// values against the chart schema. Nothing is written when a check fails.
+// values against the chart schema. Nothing is written when a check fails, or
+// on a dry run. In commit mode the two land as files of a pull request in the
+// repository that owns the namespace instead.
 func (s *Service) Create(ctx context.Context, spec Spec) (*CreateResult, error) {
 	ns, err := s.Namespace(spec.Namespace)
 	if err != nil {
@@ -673,6 +679,10 @@ func (s *Service) Create(ctx context.Context, spec Spec) (*CreateResult, error) 
 	}
 	spec.Namespace = ns
 	if err := rejectRemoved(spec.removed()...); err != nil {
+		return nil, err
+	}
+	mode, err := s.checkMode(spec.WriteOptions)
+	if err != nil {
 		return nil, err
 	}
 	if errs := checkSpec(spec); len(errs) > 0 {
@@ -700,16 +710,21 @@ func (s *Service) Create(ctx context.Context, spec Spec) (*CreateResult, error) 
 		return nil, invalidf("values do not satisfy the agent chart schema %s (%s): %s", sch.Version, sch.Source, strings.Join(violations, "; "))
 	}
 
-	res := &CreateResult{RequestedBy: identity.Caller(ctx)}
+	res := &CreateResult{RequestedBy: identity.Caller(ctx), WriteOutcome: WriteOutcome{Mode: mode, DryRun: spec.DryRun}}
 	res.Manifests = ComposeManifests(spec.Name, ns, values, s.cfg.Compose)
+	if mode == ModeCommit {
+		return s.createCommit(ctx, dyn, spec, values, res)
+	}
 
 	// The chart source is shared per namespace: create it once, reuse it after.
 	ociRepo := BuildOCIRepository(ns, s.cfg.Compose)
 	existing, err := dyn.Resource(s.ociRepositoryGVR()).Namespace(ns).Get(ctx, ociRepo.GetName(), metav1.GetOptions{})
 	switch {
 	case apierrors.IsNotFound(err):
-		if _, err := dyn.Resource(s.ociRepositoryGVR()).Namespace(ns).Create(ctx, ociRepo, metav1.CreateOptions{FieldManager: FieldManager}); err != nil {
-			return nil, wrapKube(err, fmt.Sprintf("create OCIRepository %s/%s", ns, ociRepo.GetName()))
+		if !spec.DryRun {
+			if _, err := dyn.Resource(s.ociRepositoryGVR()).Namespace(ns).Create(ctx, ociRepo, metav1.CreateOptions{FieldManager: FieldManager}); err != nil {
+				return nil, wrapKube(err, fmt.Sprintf("create OCIRepository %s/%s", ns, ociRepo.GetName()))
+			}
 		}
 		res.Created.OCIRepository = true
 	case err != nil:
@@ -724,6 +739,12 @@ func (s *Service) Create(ctx context.Context, spec Spec) (*CreateResult, error) 
 	}
 
 	hr := BuildHelmRelease(spec.Name, ns, values, s.cfg.Compose)
+	if spec.DryRun {
+		res.Created.HelmRelease = true
+		res.Agent = Agent{Name: spec.Name, Namespace: ns, Managed: ManagedHelmRelease}
+		applyHelmRelease(&res.Agent, hr)
+		return res, nil
+	}
 	created, err := dyn.Resource(s.helmReleaseGVR()).Namespace(ns).Create(ctx, hr, metav1.CreateOptions{FieldManager: FieldManager})
 	if err != nil {
 		return nil, wrapKube(err, fmt.Sprintf("create HelmRelease %s/%s", ns, spec.Name))
@@ -739,12 +760,60 @@ func (s *Service) Create(ctx context.Context, spec Spec) (*CreateResult, error) 
 	return res, nil
 }
 
+// createCommit is Create in commit mode: the HelmRelease as a file of
+// agent-manager's directory in the repository that owns the namespace, with
+// the shared chart source beside it when the namespace has none yet (or the
+// directory carries it already), in one pull request as the caller. Nothing
+// is written live.
+func (s *Service) createCommit(ctx context.Context, dyn dynamic.Interface, spec Spec, values map[string]any, res *CreateResult) (*CreateResult, error) {
+	ns := spec.Namespace
+	if err := s.requireOwnFile(spec.Name); err != nil {
+		return nil, err
+	}
+	loc, err := s.namespaceLocation(ctx, dyn, ns, spec.WriteOptions)
+	if err != nil {
+		return nil, err
+	}
+	c, err := s.newCommit(ctx, loc)
+	if err != nil {
+		return nil, err
+	}
+	write := map[string][]byte{c.file("HelmRelease", spec.Name): []byte(res.Manifests.HelmRelease)}
+	source, err := s.getObject(ctx, dyn, s.ociRepositoryGVR(), ns, s.cfg.Compose.ChartName, "ocirepository")
+	if err != nil {
+		return nil, err
+	}
+	sourceFile := c.file(kindOCIRepository, s.cfg.Compose.ChartName)
+	inDirectory, err := c.exists(ctx, sourceFile)
+	if err != nil {
+		return nil, err
+	}
+	if source == nil || inDirectory {
+		write[sourceFile] = []byte(res.Manifests.OCIRepository)
+	}
+	res.Created.OCIRepository = source == nil
+	res.Created.HelmRelease = true
+	title := fmt.Sprintf("feat(agents): add agent %s in %s", spec.Name, ns)
+	body := fmt.Sprintf("Adds the agent `%s` to namespace `%s`: a HelmRelease of the agent chart (`%s`, range `%s`) with model config `%s` and toolset `%s`. Flux applies it after the merge, and the agent's Harness compiles it.",
+		spec.Name, ns, s.cfg.Compose.ChartOCIURL, s.cfg.Compose.ChartSemver, spec.ModelConfig, strings.Join(spec.Toolset, ", "))
+	if res.Commit, err = c.open(ctx, write, nil, commitBranch("create", ns, spec.Name), title, body, spec.DryRun); err != nil {
+		return nil, err
+	}
+	res.Agent = Agent{Name: spec.Name, Namespace: ns}
+	applyHelmRelease(&res.Agent, BuildHelmRelease(spec.Name, ns, values, s.cfg.Compose))
+	res.Agent.Managed = ManagedGitOps
+	s.log.Info("agent create committed", identity.LogAttr(ctx), "namespace", ns, "name", spec.Name, "repository", res.Commit.Repository, "pullRequest", res.Commit.PullRequest, "dryRun", spec.DryRun)
+	return res, nil
+}
+
 // ---- update --------------------------------------------------------------------
 
 // writableHelmRelease fetches the HelmRelease an update or delete targets and
 // applies the ownership rules: a bare AgentTemplate has nothing to write to; a
-// GitOps-owned or suspended release is refused unless force.
-func (s *Service) writableHelmRelease(ctx context.Context, dyn dynamic.Interface, ns, name string, force bool) (*unstructured.Unstructured, *unstructured.Unstructured, error) {
+// suspended release is refused unless force; a GitOps-owned one is refused
+// with gitops_owned, naming mode commit, unless allowGitOps (commit mode,
+// which changes it in git).
+func (s *Service) writableHelmRelease(ctx context.Context, dyn dynamic.Interface, ns, name string, force, allowGitOps bool) (*unstructured.Unstructured, *unstructured.Unstructured, error) {
 	tpl, err := s.getTemplate(ctx, dyn, ns, name)
 	if err != nil {
 		return nil, nil, err
@@ -765,10 +834,10 @@ func (s *Service) writableHelmRelease(ctx context.Context, dyn dynamic.Interface
 		}
 		return nil, tpl, conflictf("AgentTemplate %s/%s is a bare template with no HelmRelease behind it; agent-manager only writes HelmRelease values (recreate it with create_agent, or delete it with force)", ns, name)
 	}
+	if gitOpsOwnedHR(hr) && !allowGitOps {
+		return nil, tpl, s.gitOpsRefusal(ctx, dyn, hr)
+	}
 	if !force {
-		if gitOpsOwnedHR(hr) {
-			return nil, tpl, conflictf("HelmRelease %s/%s is applied by Flux Kustomization %q: its desired state lives in git, a live write would be undone. Change it in the GitOps repository, or pass force to write anyway", hrNs, hrName, hr.GetLabels()[KustomizationNameLabel])
-		}
 		if suspended, _, _ := unstructured.NestedBool(hr.Object, "spec", "suspend"); suspended {
 			return nil, tpl, conflictf("HelmRelease %s/%s is suspended: Flux will not act on a change. Resume it first, or pass force", hrNs, hrName)
 		}
@@ -890,6 +959,9 @@ func (s *Service) Update(ctx context.Context, upd Update) (*UpdateResult, error)
 	if err := rejectRemoved(upd.removed()...); err != nil {
 		return nil, err
 	}
+	if upd.Mode, err = s.checkMode(upd.WriteOptions); err != nil {
+		return nil, err
+	}
 	dyn, _, err := s.dyn(ctx)
 	if err != nil {
 		return nil, err
@@ -907,7 +979,7 @@ func (s *Service) Update(ctx context.Context, upd Update) (*UpdateResult, error)
 
 // update is one attempt of Update: read the release, merge, validate, write.
 func (s *Service) update(ctx context.Context, dyn dynamic.Interface, ns string, upd Update) (*UpdateResult, error) {
-	hr, _, err := s.writableHelmRelease(ctx, dyn, ns, upd.Name, upd.Force)
+	hr, _, err := s.writableHelmRelease(ctx, dyn, ns, upd.Name, upd.Force, upd.Mode == ModeCommit)
 	if err != nil {
 		return nil, err
 	}
@@ -923,9 +995,12 @@ func (s *Service) update(ctx context.Context, dyn dynamic.Interface, ns string, 
 	if changed == nil {
 		changed = []string{}
 	}
-	res := &UpdateResult{Before: before, After: after, Changed: changed, RequestedBy: identity.Caller(ctx)}
+	res := &UpdateResult{Before: before, After: after, Changed: changed, RequestedBy: identity.Caller(ctx), WriteOutcome: WriteOutcome{Mode: upd.Mode, DryRun: upd.DryRun}}
 	res.Manifests = ComposeManifests(upd.Name, ns, after, s.cfg.Compose)
-	if len(changed) == 0 {
+	if upd.Mode == ModeCommit {
+		return s.updateCommit(ctx, dyn, ns, upd, hr, res)
+	}
+	if len(changed) == 0 || upd.DryRun {
 		agent, err := s.get(ctx, dyn, ns, upd.Name)
 		if err != nil {
 			return nil, err
@@ -950,6 +1025,37 @@ func (s *Service) update(ctx context.Context, dyn dynamic.Interface, ns string, 
 	}
 	res.Agent = *agent
 	s.log.Info("agent updated", identity.LogAttr(ctx), "namespace", ns, "name", upd.Name, "changed", changed, "refreshSkills", upd.RefreshSkills)
+	return res, nil
+}
+
+// updateCommit is Update in commit mode: the release's file in
+// agent-manager's directory rewritten with the merged values, in one pull
+// request as the caller; a release defined elsewhere in the repository is
+// refused. Nothing is written live.
+func (s *Service) updateCommit(ctx context.Context, dyn dynamic.Interface, ns string, upd Update, hr *unstructured.Unstructured, res *UpdateResult) (*UpdateResult, error) {
+	loc, err := s.releaseLocation(ctx, dyn, hr, upd.WriteOptions)
+	if err != nil {
+		return nil, err
+	}
+	c, err := s.newCommit(ctx, loc)
+	if err != nil {
+		return nil, err
+	}
+	p, err := c.requireReleaseFile(ctx, hr)
+	if err != nil {
+		return nil, err
+	}
+	title := fmt.Sprintf("chore(agents): update agent %s in %s", upd.Name, ns)
+	body := fmt.Sprintf("Updates the agent `%s` in namespace `%s`: %s.", upd.Name, ns, strings.Join(res.Changed, ", "))
+	if res.Commit, err = c.open(ctx, map[string][]byte{p: []byte(res.Manifests.HelmRelease)}, nil, commitBranch("update", ns, upd.Name), title, body, upd.DryRun); err != nil {
+		return nil, err
+	}
+	agent, err := s.get(ctx, dyn, ns, upd.Name)
+	if err != nil {
+		return nil, err
+	}
+	res.Agent = *agent
+	s.log.Info("agent update committed", identity.LogAttr(ctx), "namespace", ns, "name", upd.Name, "changed", res.Changed, "repository", res.Commit.Repository, "pullRequest", res.Commit.PullRequest, "dryRun", upd.DryRun)
 	return res, nil
 }
 
@@ -993,8 +1099,9 @@ func changedPaths(prefix string, before, after map[string]any) []string {
 // Delete removes the agent's HelmRelease (helm-controller uninstalls the
 // rendered AgentTemplate and RemoteMCPServer) and the shared OCIRepository
 // when no other release references it. A bare AgentTemplate is only deleted
-// with force.
-func (s *Service) Delete(ctx context.Context, ns, name string, force bool) (*DeleteResult, error) {
+// with force. A dry run reports what would go and deletes nothing; in commit
+// mode the files are removed with a pull request instead.
+func (s *Service) Delete(ctx context.Context, ns, name string, force bool, w WriteOptions) (*DeleteResult, error) {
 	ns, err := s.Namespace(ns)
 	if err != nil {
 		return nil, err
@@ -1002,54 +1109,58 @@ func (s *Service) Delete(ctx context.Context, ns, name string, force bool) (*Del
 	if err := ValidateName(name); err != nil {
 		return nil, err
 	}
+	mode, err := s.checkMode(w)
+	if err != nil {
+		return nil, err
+	}
 	dyn, _, err := s.dyn(ctx)
 	if err != nil {
 		return nil, err
 	}
-	res := &DeleteResult{Name: name, Namespace: ns, RequestedBy: identity.Caller(ctx)}
-	hr, tpl, err := s.writableHelmRelease(ctx, dyn, ns, name, force)
+	res := &DeleteResult{Name: name, Namespace: ns, RequestedBy: identity.Caller(ctx), WriteOutcome: WriteOutcome{Mode: mode, DryRun: w.DryRun}}
+	hr, tpl, err := s.writableHelmRelease(ctx, dyn, ns, name, force, mode == ModeCommit)
 	if err != nil {
-		if hr == nil && tpl != nil && force && errorsIs(err, ErrConflict) {
+		if mode == ModeApply && hr == nil && tpl != nil && force && errorsIs(err, ErrConflict) {
 			// A bare AgentTemplate, forced: delete the template itself.
-			if err := s.deleteRendered(ctx, dyn, ns, name, res, false); err != nil {
+			if err := s.deleteRendered(ctx, dyn, ns, name, res, false, w.DryRun); err != nil {
 				return nil, err
 			}
-			s.log.Info("bare agent template deleted", identity.LogAttr(ctx), "namespace", ns, "name", name)
+			s.log.Info("bare agent template deleted", identity.LogAttr(ctx), "namespace", ns, "name", name, "dryRun", w.DryRun)
 			return res, nil
 		}
 		return nil, err
 	}
+	if mode == ModeCommit {
+		return s.deleteCommit(ctx, dyn, hr, w, res)
+	}
 	suspended, _, _ := unstructured.NestedBool(hr.Object, "spec", "suspend")
-	if err := dyn.Resource(s.helmReleaseGVR()).Namespace(hr.GetNamespace()).Delete(ctx, hr.GetName(), metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
-		return nil, wrapKube(err, fmt.Sprintf("delete HelmRelease %s/%s", hr.GetNamespace(), hr.GetName()))
+	if !w.DryRun {
+		if err := dyn.Resource(s.helmReleaseGVR()).Namespace(hr.GetNamespace()).Delete(ctx, hr.GetName(), metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+			return nil, wrapKube(err, fmt.Sprintf("delete HelmRelease %s/%s", hr.GetNamespace(), hr.GetName()))
+		}
 	}
 	res.HelmReleaseDeleted = true
 	if suspended && force && tpl != nil {
 		// Flux drops the finalizer of a suspended release without uninstalling:
 		// the rendered objects would stay behind, so remove them directly.
-		if err := s.deleteRendered(ctx, dyn, ns, name, res, true); err != nil {
+		if err := s.deleteRendered(ctx, dyn, ns, name, res, true, w.DryRun); err != nil {
 			return nil, err
 		}
 	}
 
 	// Best-effort cleanup of the shared chart source: every uncertainty keeps
 	// it (an orphan is inert; a wrongly deleted one breaks every other agent).
-	ref := chartRefOf(hr)
-	if ref == nil || ref.Kind != kindOCIRepository {
-		res.OCIRepositoryKept = "the HelmRelease does not render from an OCIRepository"
+	source, kept := s.sourceToRemove(ctx, dyn, hr)
+	if source == "" {
+		res.OCIRepositoryKept = kept
 		return res, nil
 	}
-	sourceNs := orDefault(ref.Namespace, hr.GetNamespace())
-	others, err := s.otherReferences(ctx, dyn, sourceNs, ref.Name, hr.GetName())
-	if err != nil {
-		res.OCIRepositoryKept = "could not list the other HelmReleases of the namespace: " + err.Error()
+	if w.DryRun {
+		res.OCIRepositoryDeleted = true
 		return res, nil
 	}
-	if len(others) > 0 {
-		res.OCIRepositoryKept = fmt.Sprintf("still referenced by %d other HelmRelease(s): %s", len(others), strings.Join(others, ", "))
-		return res, nil
-	}
-	if err := dyn.Resource(s.ociRepositoryGVR()).Namespace(sourceNs).Delete(ctx, ref.Name, metav1.DeleteOptions{}); err != nil {
+	sourceNs := orDefault(chartRefOf(hr).Namespace, hr.GetNamespace())
+	if err := dyn.Resource(s.ociRepositoryGVR()).Namespace(sourceNs).Delete(ctx, source, metav1.DeleteOptions{}); err != nil {
 		if apierrors.IsNotFound(err) {
 			res.OCIRepositoryKept = "no OCIRepository to delete"
 		} else {
@@ -1062,12 +1173,70 @@ func (s *Service) Delete(ctx context.Context, ns, name string, force bool) (*Del
 	return res, nil
 }
 
+// sourceToRemove is the shared chart source a delete of hr takes with it —
+// the OCIRepository it renders from when no other release of its namespace
+// references it — or, empty, why it stays.
+func (s *Service) sourceToRemove(ctx context.Context, dyn dynamic.Interface, hr *unstructured.Unstructured) (name, kept string) {
+	ref := chartRefOf(hr)
+	if ref == nil || ref.Kind != kindOCIRepository {
+		return "", "the HelmRelease does not render from an OCIRepository"
+	}
+	others, err := s.otherReferences(ctx, dyn, orDefault(ref.Namespace, hr.GetNamespace()), ref.Name, hr.GetName())
+	if err != nil {
+		return "", "could not list the other HelmReleases of the namespace: " + err.Error()
+	}
+	if len(others) > 0 {
+		return "", fmt.Sprintf("still referenced by %d other HelmRelease(s): %s", len(others), strings.Join(others, ", "))
+	}
+	return ref.Name, ""
+}
+
+// deleteCommit is Delete in commit mode: the release's file removed from
+// agent-manager's directory, with the chart source's file when no other
+// release references it, in one pull request as the caller. Nothing is
+// deleted live; a Kustomization that does not prune leaves the release after
+// the merge, which the answer names.
+func (s *Service) deleteCommit(ctx context.Context, dyn dynamic.Interface, hr *unstructured.Unstructured, w WriteOptions, res *DeleteResult) (*DeleteResult, error) {
+	loc, err := s.releaseLocation(ctx, dyn, hr, w)
+	if err != nil {
+		return nil, err
+	}
+	c, err := s.newCommit(ctx, loc)
+	if err != nil {
+		return nil, err
+	}
+	p, err := c.requireReleaseFile(ctx, hr)
+	if err != nil {
+		return nil, err
+	}
+	remove := []string{p}
+	source, kept := s.sourceToRemove(ctx, dyn, hr)
+	if source != "" {
+		remove = append(remove, c.file(kindOCIRepository, source))
+	} else {
+		res.OCIRepositoryKept = kept
+	}
+	ns, name := hr.GetNamespace(), hr.GetName()
+	title := fmt.Sprintf("feat(agents): remove agent %s in %s", name, ns)
+	body := fmt.Sprintf("Removes the agent `%s` from namespace `%s`: its HelmRelease, and with it the AgentTemplate and the RemoteMCPServer it renders.", name, ns)
+	if res.Commit, err = c.open(ctx, nil, remove, commitBranch("delete", ns, name), title, body, w.DryRun); err != nil {
+		return nil, err
+	}
+	if !loc.prune && loc.kustomization != "" {
+		res.Commit.LiveSteps = append(res.Commit.LiveSteps, fmt.Sprintf("Kustomization %s does not prune: after the merge, delete HelmRelease %s/%s by hand (kubectl delete helmrelease -n %s %s)", loc.kustomization, ns, name, ns, name))
+	}
+	s.log.Info("agent delete committed", identity.LogAttr(ctx), "namespace", ns, "name", name, "repository", res.Commit.Repository, "pullRequest", res.Commit.PullRequest, "dryRun", w.DryRun)
+	return res, nil
+}
+
 // deleteRendered deletes the AgentTemplate named after the agent and, when
 // withServer, the RemoteMCPServer of the same name that the same release
 // rendered (its provenance labels name the release).
-func (s *Service) deleteRendered(ctx context.Context, dyn dynamic.Interface, ns, name string, res *DeleteResult, withServer bool) error {
-	if err := dyn.Resource(s.templateGVR()).Namespace(ns).Delete(ctx, name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
-		return wrapKube(err, fmt.Sprintf("delete AgentTemplate %s/%s", ns, name))
+func (s *Service) deleteRendered(ctx context.Context, dyn dynamic.Interface, ns, name string, res *DeleteResult, withServer, dryRun bool) error {
+	if !dryRun {
+		if err := dyn.Resource(s.templateGVR()).Namespace(ns).Delete(ctx, name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+			return wrapKube(err, fmt.Sprintf("delete AgentTemplate %s/%s", ns, name))
+		}
 	}
 	res.AgentTemplateDeleted = true
 	if !withServer {
@@ -1081,8 +1250,10 @@ func (s *Service) deleteRendered(ctx context.Context, dyn dynamic.Interface, ns,
 		// Not rendered by a release: somebody else's server of that name.
 		return nil
 	}
-	if err := dyn.Resource(s.mcpServerGVR()).Namespace(ns).Delete(ctx, name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
-		return wrapKube(err, fmt.Sprintf("delete RemoteMCPServer %s/%s", ns, name))
+	if !dryRun {
+		if err := dyn.Resource(s.mcpServerGVR()).Namespace(ns).Delete(ctx, name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+			return wrapKube(err, fmt.Sprintf("delete RemoteMCPServer %s/%s", ns, name))
+		}
 	}
 	res.RemoteMCPServerDeleted = true
 	return nil

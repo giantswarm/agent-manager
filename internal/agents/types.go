@@ -36,7 +36,39 @@ var (
 	// ErrUnauthenticated: the request reached the service without the caller
 	// token it needs to act (the server runs as the caller only). 401.
 	ErrUnauthenticated = errors.New("unauthenticated")
+	// ErrGitOpsOwned: an apply-mode write targets a HelmRelease a Flux
+	// Kustomization applies from git; the refusal names mode commit and the
+	// repository and directory it would write. 409.
+	ErrGitOpsOwned = errors.New("gitops_owned")
+	// ErrAuthRequired: commit mode needs the person's GitHub authorization
+	// and the call carries none (or GitHub refused it); the refusal names the
+	// consent. 401.
+	ErrAuthRequired = errors.New("auth_required")
 )
+
+// Write modes.
+const (
+	// ModeApply writes the objects live, as the caller.
+	ModeApply = "apply"
+	// ModeCommit writes them as files into the git repository that owns the
+	// target and opens a pull request as the caller.
+	ModeCommit = "commit"
+)
+
+// WriteOptions say how a write lands. Every write tool takes them.
+type WriteOptions struct {
+	// Mode is apply (default) or commit.
+	Mode string `json:"mode,omitempty"`
+	// DryRun returns the manifests and, in commit mode, the files and the
+	// pull request that would be opened, and writes nothing.
+	DryRun bool `json:"dryRun,omitempty"`
+	// Repository (owner/name), Branch and Path name the commit target where
+	// no Flux Kustomization owns the namespace yet; given, they override the
+	// target derived from Flux. Commit mode only.
+	Repository string `json:"repository,omitempty"`
+	Branch     string `json:"branch,omitempty"`
+	Path       string `json:"path,omitempty"`
+}
 
 // Labels and annotations the platform agrees on.
 const (
@@ -180,6 +212,8 @@ type Spec struct {
 	// "unknown field" error.
 	RemovedToolNames json.RawMessage `json:"toolNames,omitempty"`
 	RemovedRuntime   json.RawMessage `json:"runtime,omitempty"`
+
+	WriteOptions
 }
 
 // Update is a partial change to an existing agent: nil pointers leave the
@@ -205,8 +239,11 @@ type Update struct {
 	// Removed arguments: see Spec.
 	RemovedToolNames json.RawMessage `json:"toolNames,omitempty"`
 	RemovedRuntime   json.RawMessage `json:"runtime,omitempty"`
-	// Force writes to a GitOps-owned or suspended HelmRelease anyway.
+	// Force writes to a suspended HelmRelease anyway. A GitOps-owned one is
+	// never written live: mode commit changes it in git.
 	Force bool `json:"force,omitempty"`
+
+	WriteOptions
 }
 
 // Condition is a Kubernetes-style status condition, flattened.
@@ -358,6 +395,16 @@ type CreateResult struct {
 	// RequestedBy is the authenticated caller the write ran as (email, else
 	// subject); empty when the server runs without OAuth.
 	RequestedBy string `json:"requestedBy,omitempty"`
+	WriteOutcome
+}
+
+// WriteOutcome is how a write landed: its mode, whether it was a dry run
+// (Created, the deleted flags and the agent then say what would happen) and,
+// in commit mode, the pull request.
+type WriteOutcome struct {
+	Mode   string        `json:"mode"`
+	DryRun bool          `json:"dryRun"`
+	Commit *CommitResult `json:"commit,omitempty"`
 }
 
 // UpdateResult reports before/after values of an update.
@@ -369,6 +416,7 @@ type UpdateResult struct {
 	Manifests Manifests      `json:"manifests"`
 	// RequestedBy is the authenticated caller the write ran as.
 	RequestedBy string `json:"requestedBy,omitempty"`
+	WriteOutcome
 }
 
 // DeleteResult reports what a delete removed.
@@ -386,6 +434,7 @@ type DeleteResult struct {
 	OCIRepositoryKept string `json:"ociRepositoryKept,omitempty"`
 	// RequestedBy is the authenticated caller the delete ran as.
 	RequestedBy string `json:"requestedBy,omitempty"`
+	WriteOutcome
 }
 
 // Verdicts of a status check.
@@ -454,6 +503,14 @@ func invalidf(format string, args ...any) error {
 
 func conflictf(format string, args ...any) error {
 	return fmt.Errorf("%w: %s", ErrConflict, fmt.Sprintf(format, args...))
+}
+
+func gitOpsOwnedf(format string, args ...any) error {
+	return fmt.Errorf("%w: %s", ErrGitOpsOwned, fmt.Sprintf(format, args...))
+}
+
+func authRequiredf(format string, args ...any) error {
+	return fmt.Errorf("%w: %s", ErrAuthRequired, fmt.Sprintf(format, args...))
 }
 
 func notFoundf(format string, args ...any) error {

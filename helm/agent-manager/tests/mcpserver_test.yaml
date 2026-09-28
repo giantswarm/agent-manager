@@ -72,3 +72,42 @@ tests:
       - equal:
           path: metadata.labels["muster.giantswarm.io/type"]
           value: agent-manager
+
+  - it: pins the GitHub App and forwards the identity with github.enabled
+    set:
+      github:
+        enabled: true
+    asserts:
+      - equal:
+          path: spec.auth.type
+          value: oauth
+      - equal:
+          path: spec.auth.forwardIdentity
+          value: true
+      - notExists:
+          path: spec.auth.forwardToken
+      - equal:
+          path: spec.auth.authorizationServer
+          value:
+            issuer: https://github.com/apps/giantswarm-agent-manager
+            expectedIssuer: https://github.com/login/oauth
+            authorizationEndpoint: https://github.com/login/oauth/authorize
+            tokenEndpoint: https://github.com/login/oauth/access_token
+            clientCredentialsSecretRef:
+              name: giantswarm-agent-manager-oauth-client
+              namespace: NAMESPACE
+            grantScope: subject
+      - equal:
+          path: spec.auth.requiredAudiences
+          value:
+            - dex-k8s-authenticator
+
+  - it: refuses the GitHub pin without OAuth
+    set:
+      oauth:
+        enabled: false
+      github:
+        enabled: true
+    asserts:
+      - failedTemplate:
+          errorMessage: "github.enabled pins the MCPServer to the GitHub App and forwards the person's ID token next to its user token, which the server validates as an OAuth resource server: set oauth.enabled"

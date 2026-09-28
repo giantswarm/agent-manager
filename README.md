@@ -45,16 +45,22 @@ MCP-server-writer half.
 | One agent with its HelmRelease values, pinned skills, toolset and per-Harness status | `GET /api/v1/agents/{ns}/{name}` | `get_agent` | no |
 | Create: OCIRepository (when missing) + HelmRelease, after skill pinning, schema and ModelConfig validation | `POST /api/v1/agents` | `create_agent` | HelmRelease, OCIRepository |
 | Update: merge into the HelmRelease values (`refreshSkills` re-pins git skills), validate, update | `PATCH /api/v1/agents/{ns}/{name}[?force=true]` | `update_agent` | HelmRelease |
-| Delete: the HelmRelease; the OCIRepository only when nothing else references it | `DELETE /api/v1/agents/{ns}/{name}[?force=true]` | `delete_agent` | HelmRelease, OCIRepository, (bare AgentTemplate with force) |
+| Delete: the HelmRelease; the OCIRepository only when nothing else references it | `DELETE /api/v1/agents/{ns}/{name}[?force=true&mode=&dryRun=]` | `delete_agent` | HelmRelease, OCIRepository, (bare AgentTemplate with force) |
 | Status verdict: the agent's Harness entry on the AgentTemplate, HelmRelease conditions/history, Warning events | `GET /api/v1/agents/{ns}/{name}/status` | `get_agent_status` | no |
 | Dry run of create/update: pinned skills, composed manifests + every violation | `POST /api/v1/agents/validate` | `validate_agent` | no |
 | kagent ModelConfigs of a namespace | `GET /api/v1/modelconfigs?namespace=` | `list_model_configs` | no |
 | Skills (`SKILL.md`) of the configured GitHub repositories, each with its head commit | `GET /api/v1/skills[?repository=&ref=&refresh=]` | `list_skills` | no |
 | Health | `GET /healthz`, `GET /readyz` | — | no |
 
-Errors are `{"error":{"code":"not_found|invalid_request|conflict|forbidden|unsupported|backend_error","message":"…"}}`;
-`conflict` (409) covers "exists already", "GitOps-owned", "suspended" and
-"bare AgentTemplate" — the cases `force` overrides where documented.
+The three writes take `dryRun` and `mode` (`apply` | `commit`, see
+[Write modes](#write-modes-apply-and-commit)); in commit mode the "Writes"
+column is files of a pull request, nothing live.
+
+Errors are `{"error":{"code":"not_found|invalid_request|conflict|gitops_owned|forbidden|unauthenticated|auth_required|unsupported|backend_error","message":"…"}}`;
+`conflict` (409) covers "exists already", "suspended" and "bare
+AgentTemplate" — the cases `force` overrides where documented;
+`gitops_owned` (409) is an apply-mode write to a release applied from git,
+`auth_required` (401) a commit without the caller's GitHub authorization.
 
 ## What an agent is made of
 
@@ -185,8 +191,9 @@ unknown` and one sentence:
   manifest) owns: writable here.
 - `gitops` — the HelmRelease carries `kustomize.toolkit.fluxcd.io/name`: its
   desired state lives in git and a live write would be undone on the next
-  reconciliation. `update_agent` and `delete_agent` refuse it unless `force`.
-  A meta agent opens a pull request in the GitOps repository instead. The
+  reconciliation. `update_agent` and `delete_agent` refuse it in mode `apply`
+  with `gitops_owned`, `force` or not; mode `commit` changes it with a pull
+  request in the repository that owns it. The
   release may live in another namespace (the fleet's `sre-agent` releases sit
   in `flux-giantswarm` with `targetNamespace: kagent`); the template's
   provenance labels lead to it.
@@ -213,6 +220,40 @@ the error. The schema refuses every 0.x key the 1.x contract removed
 `skills.gitAuthSecretRef`; `muster.toolNames` became `muster.tools`), and
 agent-manager never composes one. `validate_agent` returns the composed
 manifests — skills pinned — and every violation without writing.
+
+## Write modes: apply and commit
+
+Every write tool (`create_agent`, `update_agent`, `delete_agent`) renders the
+standard manifests a kubectl or GitOps user would apply, returns them on
+`dryRun: true` and writes nothing then, and takes `mode`:
+
+- `apply` (default) writes live as the caller. It never writes a release
+  applied from git: that answer is `gitops_owned`, naming `mode: commit` and
+  the repository and directory it would write.
+- `commit` writes the manifests as files and opens a pull request **as the
+  caller**; nothing is written live. The target is derived from Flux: the
+  `kustomize.toolkit.fluxcd.io/name|namespace` labels of the release (update,
+  delete) or, for a new agent, of the namespace's chart source, one of its
+  agent releases or the Namespace → the Kustomization's `spec.path` → its
+  GitRepository's URL and branch. Where nothing GitOps-owned lives yet,
+  `repository` (owner/name), `branch` and `path` name it. The files follow
+  [gitops-commit](https://github.com/giantswarm/gitops-commit)'s `layout`, the
+  one cluster-manager and model-manager write: an `agent-manager/` directory
+  under that path, one file per object (`<agent>.yaml` for the HelmRelease,
+  `agent.yaml` for the chart source when the namespace has none yet), its
+  `kustomization.yaml` and the parent's entry. An update rewrites the
+  release's file and a delete removes it (and the chart source's when no
+  other release uses it); a release defined elsewhere in the repository is
+  refused. A Kustomization that does not prune leaves a removed release in
+  place, which the answer's `liveSteps` names. The result carries
+  `commit: {repository, base, directory, kustomization, prune, branch, files:
+  [{path, action, content (dry run)}], pullRequest, number, author}`.
+
+Commit mode needs the GitHub App pin (`github.enabled`, below) and reports
+itself in `get_info` as `capabilities.commit`; without it `mode: commit`
+answers `unsupported`. A call that carries no GitHub authorization answers
+`auth_required`, naming the one-time consent (`core_auth_login
+server=agent-manager`).
 
 ## Identity
 
@@ -256,6 +297,20 @@ audience it trusts (`dex-k8s-authenticator` on Giant Swarm clusters,
 `requiredAudiences`; a Google IdP has no cross-client scopes and the platform
 client id *is* the apiserver's `--oidc-client-id` (`requiredAudiences: []`).
 `get_info` reports `identity: caller` and `capabilities.writesAsCaller: true`.
+
+With `--github-authorization-server` (chart `github.enabled`) the MCP
+registration is pinned to agent-manager's own user-to-server GitHub App,
+`giantswarm-agent-manager`: the MCPServer's auth names the App as the
+authorization server with `forwardIdentity: true`, so muster runs the App's
+consent once per person and puts the person's App user token on every MCP call
+as the bearer, and the person's IdP ID token in `X-Muster-Id-Token`. The server
+verifies the GitHub token with `GET /user` (cached for 15 minutes), keeps it
+for commit mode's pull request, and validates the ID token exactly as a
+forwarded bearer, so apply mode and every read still act on Kubernetes as the
+person. The REST API keeps taking the ID token as its bearer. No GitHub
+credential other than the App's OAuth client (read by muster) exists in the
+pod or the chart. Operator precondition: the App installed with contents and
+pull-request write on every repository a commit may target.
 
 Without `--enable-oauth` the service checks no identity and acts as its
 ServiceAccount (the Role per managed namespace: HelmReleases and
