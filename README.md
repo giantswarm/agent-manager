@@ -46,7 +46,7 @@ MCP-server-writer half.
 | Create: OCIRepository (when missing) + HelmRelease, after skill pinning, schema and ModelConfig validation | `POST /api/v1/agents` | `create_agent` | HelmRelease, OCIRepository |
 | Update: merge into the HelmRelease values (`refreshSkills` re-pins git skills), validate, update | `PATCH /api/v1/agents/{ns}/{name}[?force=true]` | `update_agent` | HelmRelease |
 | Delete: the HelmRelease; the OCIRepository only when nothing else references it | `DELETE /api/v1/agents/{ns}/{name}[?force=true]` | `delete_agent` | HelmRelease, OCIRepository, (bare AgentTemplate with force) |
-| Status verdict: the platform Harness's entry on the AgentTemplate, HelmRelease conditions/history, Warning events | `GET /api/v1/agents/{ns}/{name}/status` | `get_agent_status` | no |
+| Status verdict: the agent's Harness entry on the AgentTemplate, HelmRelease conditions/history, Warning events | `GET /api/v1/agents/{ns}/{name}/status` | `get_agent_status` | no |
 | Dry run of create/update: pinned skills, composed manifests + every violation | `POST /api/v1/agents/validate` | `validate_agent` | no |
 | kagent ModelConfigs of a namespace | `GET /api/v1/modelconfigs?namespace=` | `list_model_configs` | no |
 | Skills (`SKILL.md`) of the configured GitHub repositories, each with its head commit | `GET /api/v1/skills[?repository=&ref=&refresh=]` | `list_skills` | no |
@@ -98,9 +98,12 @@ and `ui.giantswarm.io/icon-url`, the admission label
 toolset header). ModelConfigs, their Secrets and the platform Harness are
 platform-admin owned: agent-manager only reads them.
 
-There is no `runtime` argument: on kagent API v2 the platform Harness (the Go
-ADK) is the runtime of every agent. A request still carrying `runtime`, or the
-0.x `skills.gitAuthSecretName`, is refused with the reason.
+An agent runs on the platform Harness (the Go ADK) unless `create_agent` names
+another Harness of the namespace in `harness`, such as `claude` for a Claude
+Code coding agent; the name must be one a Harness of the namespace admits by
+`agent-platform.giantswarm.io/harness`, and it is fixed at create. There is no
+`runtime` argument: a request still carrying `runtime`, or the 0.x
+`skills.gitAuthSecretName`, is refused with the reason.
 
 ## Skills are pinned
 
@@ -160,8 +163,9 @@ backends' own authorization remain the boundary.
 `get_agent_status` folds three sources into `ready | progressing | failed |
 unknown` and one sentence:
 
-- the AgentTemplate's `status.harnesses[]` entry for the platform Harness
-  (`--harness-name`, default `kagent`): `ready` when `Ready` is True and
+- the AgentTemplate's `status.harnesses[]` entry for the agent's Harness (its
+  `agent-platform.giantswarm.io/harness` label, else the platform Harness,
+  `--harness-name`, default `kagent`): `ready` when `Ready` is True and
   `desiredRevision` equals `latestSuccessfulRevision`; `progressing` while a
   revision compiles (`desiredRevision` ahead, or `Ready` False with reason
   `ActorTemplatePending`); `failed` with the condition's message when

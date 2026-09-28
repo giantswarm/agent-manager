@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sort"
 	"strings"
 
@@ -483,6 +484,34 @@ func (s *Service) requireModelConfig(ctx context.Context, dyn dynamic.Interface,
 	return invalidf("modelConfig %q does not exist in namespace %s; valid: %s", name, ns, strings.Join(names, ", "))
 }
 
+// requireHarness fails, naming the Harnesses that admit agents by
+// HarnessLabel, when name is not one of them. Empty is the platform Harness.
+func (s *Service) requireHarness(ctx context.Context, dyn dynamic.Interface, ns, name string) error {
+	if name == "" {
+		return nil
+	}
+	list, err := dyn.Resource(s.harnessGVR()).Namespace(ns).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return fmt.Errorf("list Harnesses in %s: %w", ns, err)
+	}
+	var names []string
+	for _, h := range list.Items {
+		admits, _, _ := unstructured.NestedString(h.Object, "spec", "allowedAgentTemplates", "selector", "matchLabels", HarnessLabel)
+		if admits == "" {
+			continue
+		}
+		if admits == name {
+			return nil
+		}
+		names = append(names, admits)
+	}
+	if len(names) == 0 {
+		return invalidf("harness %q does not exist in namespace %s (no Harness there admits agents by %s)", name, ns, HarnessLabel)
+	}
+	slices.Sort(names)
+	return invalidf("harness %q does not exist in namespace %s; valid: %s", name, ns, strings.Join(names, ", "))
+}
+
 // ---- skills -------------------------------------------------------------------
 
 // ListSkills discovers skills in the configured (or the given) repository.
@@ -536,6 +565,12 @@ func (s *Service) ValidateCreate(ctx context.Context, spec Spec) (*ValidateResul
 		res.addError(e)
 	}
 	if err := s.requireModelConfig(ctx, dyn, ns, spec.ModelConfig); err != nil {
+		if !isDomainError(err) {
+			return nil, err
+		}
+		res.addError(err)
+	}
+	if err := s.requireHarness(ctx, dyn, ns, spec.Harness); err != nil {
 		if !isDomainError(err) {
 			return nil, err
 		}
@@ -651,6 +686,9 @@ func (s *Service) Create(ctx context.Context, spec Spec) (*CreateResult, error) 
 		return nil, err
 	}
 	if err := s.requireModelConfig(ctx, dyn, ns, spec.ModelConfig); err != nil {
+		return nil, err
+	}
+	if err := s.requireHarness(ctx, dyn, ns, spec.Harness); err != nil {
 		return nil, err
 	}
 	if spec.Skills, err = pinSkills(ctx, s.pinner, spec.Skills, false); err != nil {
