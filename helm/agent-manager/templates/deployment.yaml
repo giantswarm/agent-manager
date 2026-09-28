@@ -106,7 +106,10 @@ spec:
             {{- with .Values.extraArgs }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
-          {{- if or .Values.skills.github.tokenSecret.name .Values.oauth.enabled .Values.observability.otel.endpoint .Values.extraEnv }}
+          {{- /*
+          The metrics exporter env below always contributes at least one
+          entry (prometheus or none), so this block is unconditional.
+          */}}
           env:
             {{- if .Values.oauth.enabled }}
             {{- if eq .Values.oauth.provider "google" }}
@@ -174,14 +177,29 @@ spec:
               value: "k8s.namespace.name=$(K8S_NAMESPACE),k8s.pod.name=$(K8S_POD_NAME),k8s.node.name=$(K8S_NODE_NAME){{- with .resourceAttributes }},{{ . }}{{- end }}"
             {{- end }}
             {{- end }}
+            {{- if .Values.observability.metrics.enabled }}
+            - name: OTEL_METRICS_EXPORTER
+              value: prometheus
+            - name: OTEL_EXPORTER_PROMETHEUS_HOST
+              value: "0.0.0.0"
+            - name: OTEL_EXPORTER_PROMETHEUS_PORT
+              value: {{ .Values.observability.metrics.port | quote }}
+            {{- else }}
+            - name: OTEL_METRICS_EXPORTER
+              value: none
+            {{- end }}
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
-          {{- end }}
           ports:
             - name: http
               containerPort: 8080
               protocol: TCP
+            {{- if .Values.observability.metrics.enabled }}
+            - name: metrics
+              containerPort: {{ .Values.observability.metrics.port }}
+              protocol: TCP
+            {{- end }}
           livenessProbe:
             httpGet:
               path: /healthz

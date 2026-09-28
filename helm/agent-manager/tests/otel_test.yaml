@@ -7,11 +7,12 @@ templates:
   - templates/deployment.yaml
   - templates/networkpolicy.yaml
 tests:
-  - it: renders no OTEL environment without an endpoint
+  - it: renders no OTLP environment without an endpoint
     template: templates/deployment.yaml
     asserts:
-      - notExists:
+      - notContains:
           path: spec.template.spec.containers[0].env
+          content: {name: OTEL_EXPORTER_OTLP_ENDPOINT}
 
   - it: exports to the endpoint with the tenant header and the parent-based sampler
     template: templates/deployment.yaml

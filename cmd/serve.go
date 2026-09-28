@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/giantswarm/mcp-toolkit/metrics"
 	"github.com/giantswarm/mcp-toolkit/tracing"
 	"github.com/spf13/cobra"
 
@@ -137,6 +138,17 @@ func runServe(ctx context.Context, o *serveOptions) error {
 		defer cancel()
 		if err := shutdownTracing(shutdownCtx); err != nil {
 			log.Warn("flushing traces failed", "error", err)
+		}
+	}()
+	shutdownMetrics, err := metrics.Init(ctx, metrics.WithServiceName("agent-manager"), metrics.WithServiceVersion(build.Version))
+	if err != nil {
+		return fmt.Errorf("metrics: %w", err)
+	}
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		if err := shutdownMetrics(shutdownCtx); err != nil {
+			log.Warn("flushing metrics failed", "error", err)
 		}
 	}()
 
