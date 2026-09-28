@@ -48,9 +48,10 @@ info:
     release is written only with `force`.
 
     Removed with kagent API v2: `runtime` (the platform Harness is the runtime
-    of every agent) and `skills.gitAuthSecretName` (no per-source skill
-    credential; branches and tags of private repositories are resolved with the
-    service's own GitHub token). Both are refused with the reason.
+    of every agent), refused with the reason. The 0.x `skills.gitAuthSecretName`
+    is refused naming its replacement, the top-level `gitAuthSecretName`.
+    A skill from a private repository the caller's GitHub login cannot read
+    is refused with `403 forbidden`.
 servers:
   - url: /
 tags:
@@ -460,6 +461,7 @@ components:
           properties:
             url: { type: string, description: The muster MCP URL composed into every agent as muster.url; empty means the chart default applies }
         skillsRepositories: { type: array, items: { type: string } }
+        skillsGitAuthSecretName: { type: string, description: "The installation's skills credential Secret (key token) every agent with a git skill is fetched with unless it names its own; absent: anonymous" }
     GitSkill:
       type: object
       required: [url]
@@ -477,7 +479,7 @@ components:
         oci: { type: string, description: "<registry>/<repository>:<tag> (resolved to its digest at write time) or <registry>/<repository>@sha256:<digest> (the pin)" }
     Skills:
       type: array
-      description: The agent's skills; every entry is pinned before it is written. The 0.x object shape ({refs, gitRefs, gitAuthSecretName}) is refused with the reason.
+      description: The agent's skills; every entry is pinned before it is written. The 0.x object shape ({refs, gitRefs, gitAuthSecretName}) is refused with the reason. A skill from a private repository the caller's GitHub login cannot read is refused (403).
       items: { $ref: "#/components/schemas/Skill" }
     Toolset:
       type: array
@@ -509,6 +511,7 @@ components:
         modelConfig: { type: string, description: An existing ModelConfig of the namespace }
         iconUrl: { type: string, description: Avatar URL (chart agent.iconUrl, the ui.giantswarm.io/icon-url annotation) }
         skills: { $ref: "#/components/schemas/Skills" }
+        gitAuthSecretName: { type: string, description: "Secret (key token) in the agent's namespace its git skills are fetched with (chart skillsGitAuthSecretRef.name); omitted, the installation's (GET /info skillsGitAuthSecretName)" }
         toolset: { $ref: "#/components/schemas/Toolset" }
         labels: { type: object, additionalProperties: { type: string } }
         annotations: { type: object, additionalProperties: { type: string } }
@@ -527,6 +530,7 @@ components:
         modelConfig: { type: string }
         iconUrl: { type: string }
         skills: { $ref: "#/components/schemas/Skills" }
+        gitAuthSecretName: { type: string, description: "Replaces the skills credential Secret; an empty string goes back to the installation's" }
         refreshSkills: { type: boolean, description: Re-resolve every git skill to the head of its repository's default branch (a skill in skills with a ref goes to that ref's head); nothing else changes }
         toolset: { $ref: "#/components/schemas/Toolset" }
         labels: { type: object, additionalProperties: { type: string } }

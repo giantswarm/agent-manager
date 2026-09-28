@@ -66,6 +66,9 @@ type Repository struct {
 	// Commit is what Ref resolved to when the repository was read.
 	Commit string  `json:"commit,omitempty"`
 	Skills []Skill `json:"skills"`
+	// Private is true for a repository only its collaborators can read:
+	// list_skills shows it only to a caller who can read it.
+	Private bool `json:"private,omitempty"`
 	// Truncated is true when GitHub capped the tree or a SKILL.md read failed:
 	// some skills may be missing.
 	Truncated bool `json:"truncated"`
@@ -87,9 +90,10 @@ type Config struct {
 	Repositories []string
 	// APIURL is the GitHub API base (https://api.github.com; tests override).
 	APIURL string
-	// Token authenticates GitHub requests (private repositories, higher rate
-	// limit); empty is anonymous.
-	Token string
+	// Tokens authenticates GitHub requests (private repositories, higher
+	// rate limit): a GitHub App's installation tokens or a StaticToken; nil
+	// is anonymous.
+	Tokens TokenSource
 	// CacheTTL keeps a repository's result before it is re-read.
 	CacheTTL time.Duration
 	// HTTPClient overrides the client (tests).
@@ -114,7 +118,7 @@ func New(cfg Config, log *slog.Logger) *Discoverer {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Discoverer{cfg: cfg, gh: newGitHub(cfg.APIURL, cfg.Token, cfg.HTTPClient), log: log, cache: map[string]Repository{}}
+	return &Discoverer{cfg: cfg, gh: newGitHub(cfg.APIURL, cfg.Tokens, cfg.HTTPClient), log: log, cache: map[string]Repository{}}
 }
 
 // Repositories returns the configured repositories.
@@ -184,11 +188,13 @@ func (d *Discoverer) read(ctx context.Context, repoURL, ref string) (Repository,
 		return Repository{}, err
 	}
 	canonical := canonicalRepoURL(owner, name)
+	meta, err := d.gh.repository(ctx, owner, name)
+	if err != nil {
+		return Repository{}, err
+	}
 	branch := ref
 	if branch == "" {
-		if branch, err = d.gh.defaultBranch(ctx, owner, name); err != nil {
-			return Repository{}, err
-		}
+		branch = meta.DefaultBranch
 	}
 	// The commit the ref points at right now: what an agent pins. The tree
 	// and the files are read at that commit, not the branch, so the listing
@@ -207,7 +213,7 @@ func (d *Discoverer) read(ctx context.Context, repoURL, ref string) (Repository,
 	if err := d.gh.getJSON(ctx, d.gh.apiURL+"/repos/"+owner+"/"+name+"/git/trees/"+head+"?recursive=1", &tree); err != nil {
 		return Repository{}, err
 	}
-	repo := Repository{RepoURL: canonical, Ref: branch, Commit: head, Skills: []Skill{}, Truncated: tree.Truncated}
+	repo := Repository{RepoURL: canonical, Ref: branch, Commit: head, Private: meta.Private, Skills: []Skill{}, Truncated: tree.Truncated}
 	for _, entry := range tree.Tree {
 		if entry.Type != "blob" || !isSkillFile(entry.Path) {
 			continue

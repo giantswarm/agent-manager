@@ -42,6 +42,11 @@ type ComposeConfig struct {
 	// the chart value agent.harness (the admission label's value), and the
 	// status.harnesses[] entry that decides an agent's readiness.
 	HarnessName string
+	// SkillsGitAuthSecretName is the installation's skills credential: the
+	// Secret (key `token`) in the agent's namespace that every agent with a
+	// git skill reads its skills with, unless the agent names its own.
+	// Empty: such agents fetch anonymously.
+	SkillsGitAuthSecretName string
 }
 
 // Defaults of the composition, the values composeManifests.ts uses.
@@ -76,6 +81,21 @@ var (
 	}
 	RenamedValuePaths = map[string]string{"muster.toolNames": "muster.tools"}
 )
+
+// SkillsGitAuthValuesKey is the chart 1.x value that fans one read
+// credential out to every git skill: {name: <Secret>}.
+const SkillsGitAuthValuesKey = "skillsGitAuthSecretRef"
+
+// skillsGitAuth is the credential Secret an agent with these skills reads
+// them with: its own, else the installation's; none without a git skill.
+func skillsGitAuth(own string, skills Skills, cfg ComposeConfig) string {
+	for _, sk := range skills {
+		if sk.Git != nil {
+			return orDefault(own, cfg.SkillsGitAuthSecretName)
+		}
+	}
+	return ""
+}
 
 // MaxSystemMessageLength is the agent chart's cap on agent.systemMessage: the
 // compiled agent config must fit Substrate's 32768-character env value limit.
@@ -138,6 +158,9 @@ func BuildValues(spec Spec, cfg ComposeConfig) map[string]any {
 	}
 	if skills := skillsValues(spec.Skills); skills != nil {
 		values["skills"] = skills
+	}
+	if name := skillsGitAuth(spec.GitAuthSecretName, spec.Skills, cfg); name != "" {
+		values[SkillsGitAuthValuesKey] = map[string]any{"name": name}
 	}
 	if len(spec.Toolset) > 0 {
 		// Exactly the declared list, as the chart's top-level value. Never

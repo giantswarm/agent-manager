@@ -50,6 +50,8 @@ func (pinner) GitHead(_ context.Context, repoURL, ref string) (string, error) {
 	}
 	return mainHead, nil
 }
+func (pinner) RequireReadable(context.Context, string, string) error { return nil }
+
 func (pinner) OCIDigest(_ context.Context, ref string) (string, error) {
 	return "", fmt.Errorf("unresolvable skill reference: %s", ref)
 }
@@ -138,7 +140,7 @@ func TestRESTLifecycle(t *testing.T) {
 	assert.Contains(t, errorMessage(body), "runtime is gone")
 	code, body = do(t, mux, http.MethodPost, Prefix+"/agents", map[string]any{"name": "sre", "modelConfig": "default-model-config", "toolset": readOnly, "skills": map[string]any{"gitRefs": []any{}, "gitAuthSecretName": "tok"}})
 	assert.Equal(t, http.StatusBadRequest, code, body)
-	assert.Contains(t, errorMessage(body), "skills.gitAuthSecretName is gone")
+	assert.Contains(t, errorMessage(body), "skills.gitAuthSecretName moved")
 
 	code, body = do(t, mux, http.MethodPost, Prefix+"/agents/validate", map[string]any{"name": "sre", "modelConfig": "default-model-config"})
 	assert.Equal(t, http.StatusOK, code)

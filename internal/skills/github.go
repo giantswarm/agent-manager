@@ -3,6 +3,7 @@ package skills
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -13,21 +14,24 @@ import (
 )
 
 // github is the GitHub REST client the discoverer and the resolver share: one
-// base URL (tests override it), one optional token, one HTTP client.
+// base URL (tests override it), one token source, one HTTP client.
 type github struct {
 	apiURL string
-	token  string
+	tokens TokenSource
 	http   *http.Client
 }
 
-func newGitHub(apiURL, token string, client *http.Client) *github {
+func newGitHub(apiURL string, tokens TokenSource, client *http.Client) *github {
 	if apiURL == "" {
 		apiURL = "https://api.github.com"
 	}
 	if client == nil {
 		client = &http.Client{Timeout: 30 * time.Second}
 	}
-	return &github{apiURL: strings.TrimRight(apiURL, "/"), token: token, http: client}
+	if tokens == nil {
+		tokens = StaticToken("")
+	}
+	return &github{apiURL: strings.TrimRight(apiURL, "/"), tokens: tokens, http: client}
 }
 
 var repoURLRe = regexp.MustCompile(`^https://github\.com/([^/]+)/([^/]+?)(?:\.git)?/?$`)
@@ -47,18 +51,45 @@ func canonicalRepoURL(owner, repo string) string {
 	return "https://github.com/" + owner + "/" + repo
 }
 
-// defaultBranch reads the repository's default branch.
-func (g *github) defaultBranch(ctx context.Context, owner, repo string) (string, error) {
-	var meta struct {
-		DefaultBranch string `json:"default_branch"`
-	}
+// repoMeta is what the repository endpoint says about a repository.
+type repoMeta struct {
+	DefaultBranch string `json:"default_branch"`
+	Private       bool   `json:"private"`
+}
+
+// repository reads the repository's default branch and visibility.
+func (g *github) repository(ctx context.Context, owner, repo string) (repoMeta, error) {
+	var meta repoMeta
 	if err := g.getJSON(ctx, fmt.Sprintf("%s/repos/%s/%s", g.apiURL, owner, repo), &meta); err != nil {
-		return "", err
+		return repoMeta{}, err
 	}
 	if meta.DefaultBranch == "" {
-		return "main", nil
+		meta.DefaultBranch = "main"
 	}
-	return meta.DefaultBranch, nil
+	return meta, nil
+}
+
+// defaultBranch reads the repository's default branch.
+func (g *github) defaultBranch(ctx context.Context, owner, repo string) (string, error) {
+	meta, err := g.repository(ctx, owner, repo)
+	return meta.DefaultBranch, err
+}
+
+// permission is login's permission on the repository (admin, write, read or
+// none); a login GitHub does not know as a collaborator is none.
+func (g *github) permission(ctx context.Context, owner, repo, login string) (string, error) {
+	var out struct {
+		Permission string `json:"permission"`
+	}
+	err := g.getJSON(ctx, fmt.Sprintf("%s/repos/%s/%s/collaborators/%s/permission", g.apiURL, owner, repo, url.PathEscape(login)), &out)
+	var api *apiError
+	if errors.As(err, &api) && api.status == http.StatusNotFound {
+		return "none", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return out.Permission, nil
 }
 
 // headCommit resolves a ref (branch, tag or commit) to the commit it points
@@ -116,8 +147,12 @@ func (g *github) get(ctx context.Context, target, accept string) ([]byte, error)
 	}
 	req.Header.Set("Accept", accept)
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
-	if g.token != "" {
-		req.Header.Set("Authorization", "Bearer "+g.token)
+	token, err := g.tokens.Token(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	resp, err := g.http.Do(req)
 	if err != nil {

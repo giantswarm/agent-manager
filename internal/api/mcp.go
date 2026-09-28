@@ -49,6 +49,7 @@ const (
 	argHarness       = "harness"
 	argIconURL       = "iconUrl"
 	argSkills        = "skills"
+	argGitAuthSecret = "gitAuthSecretName" // #nosec G101 -- an argument name, not a credential
 	argRefreshSkills = "refreshSkills"
 	argToolset       = "toolset"
 	argLabels        = "labels"
@@ -109,6 +110,9 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 			"oci": schemaProp("string", "OCI reference: <registry>/<repository>:<tag> (resolved to its digest) or <registry>/<repository>@sha256:<digest>"),
 		},
 	}
+	gitAuthDesc := "Secret in the agent's namespace whose key token reads the agent's private git skills (a GitHub token; chart value skillsGitAuthSecretRef.name, offered to every git skill's https host). Omit it: the installation's skills credential (get_info skillsGitAuthSecretName) is used for every agent with a git skill"
+	gitAuthProp := mcp.WithString(argGitAuthSecret, mcp.Description(gitAuthDesc))
+	gitAuthReplaceProp := mcp.WithString(argGitAuthSecret, mcp.Description(gitAuthDesc+"; \"\" goes back to the installation's"))
 	skillsProp := mcp.WithArray(argSkills, mcp.Description(skillDesc), mcp.Items(skillEntry))
 	skillsReplaceProp := mcp.WithArray(argSkills, mcp.Description("Replaces the agent's whole skill list. "+skillDesc), mcp.Items(skillEntry))
 	refreshSkillsProp := mcp.WithBoolean(argRefreshSkills, mcp.Description("Re-resolve every git skill of the agent to the head of its repository's default branch (a skill passed in skills with a ref in the same call goes to that ref's head) and change nothing else on the release (default false)."))
@@ -167,6 +171,7 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 		mcp.WithString(argIconURL, mcp.Description("Avatar URL (chart agent.iconUrl, rendered as the ui.giantswarm.io/icon-url annotation); omit unless the installation serves avatars")),
 		toolsetRequiredProp,
 		skillsProp,
+		gitAuthProp,
 		labelsProp,
 		annotationsProp,
 		nsProp,
@@ -186,6 +191,7 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 		mcp.WithString(argModelConfig, mcp.Description("Name of an existing ModelConfig in the namespace")),
 		mcp.WithString(argIconURL, mcp.Description("New avatar URL; \"\" clears it")),
 		skillsReplaceProp,
+		gitAuthReplaceProp,
 		refreshSkillsProp,
 		toolsetReplaceProp,
 		labelsProp,
@@ -232,6 +238,7 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 		mcp.WithString(argIconURL, mcp.Description("Avatar URL")),
 		toolsetProp,
 		skillsProp,
+		gitAuthProp,
 		refreshSkillsProp,
 		labelsProp,
 		annotationsProp,

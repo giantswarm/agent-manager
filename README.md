@@ -108,8 +108,9 @@ An agent runs on the platform Harness (the Go ADK) unless `create_agent` names
 another Harness of the namespace in `harness`, such as `claude` for a Claude
 Code coding agent; the name must be one a Harness of the namespace admits by
 `agent-platform.giantswarm.io/harness`, and it is fixed at create. There is no
-`runtime` argument: a request still carrying `runtime`, or the 0.x
-`skills.gitAuthSecretName`, is refused with the reason.
+`runtime` argument: a request still carrying `runtime` is refused with the
+reason, and the 0.x `skills.gitAuthSecretName` is refused naming its
+replacement, the top-level `gitAuthSecretName`.
 
 ## Skills are pinned
 
@@ -133,6 +134,35 @@ agent to the head of its repository's default branch (a skill passed in
 nothing else on the release — the way to pick up new skill commits. `name`
 defaults to the last path segment (else the repository or image name) and
 must be unique per agent; `path` is relative without `..`.
+
+## Private skills
+
+Two credentials are involved, neither of them a person's token:
+
+- **Discovery and pinning** (`list_skills`, resolving a `ref`) read GitHub
+  with the read-only skills GitHub App's short-lived installation tokens
+  (`--skills-github-app-id`, `--skills-github-app-installation-id`,
+  `--skills-github-app-private-key-file`; chart `skills.github.app.secretName`,
+  a Secret with `app-id`, `installation-id` and `private-key`), at the App's
+  rate limit. A static `GITHUB_TOKEN` (chart `skills.github.tokenSecret`) is
+  the alternative; the two are mutually exclusive.
+- **Boot**: the platform fetches an agent's git skills with the Secret named
+  by the chart value `skillsGitAuthSecretRef.name` (key `token`, in the
+  agent's namespace). `create_agent`, `update_agent` and `validate_agent`
+  take `gitAuthSecretName`; omitted, every agent with a git skill gets the
+  installation's (`--skills-git-auth-secret-name`, chart
+  `skills.gitAuthSecretName`, reported by `get_info` as
+  `skillsGitAuthSecretName`). An update keeps the credential in step with the
+  skills — an agent written before the credential existed gets it on its next
+  update — and drops it when no git skill is left.
+
+A private repository is only for the people who can read it themselves:
+`list_skills` shows it only to a caller whose GitHub login has read access
+(`GET /repos/{owner}/{repo}/collaborators/{login}/permission`), and
+`create_agent`, `update_agent` and `validate_agent` refuse a skill from it
+otherwise (`403 forbidden`, naming the repository). The login is the one the
+GitHub App pin verifies (see "Write modes"); a caller without one can use
+public repositories only.
 
 ## The toolset
 

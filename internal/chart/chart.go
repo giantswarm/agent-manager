@@ -28,9 +28,9 @@ import (
 // plus the agent's muster RemoteMCPServer; skills are a list of commit- or
 // digest-pinned sources (bundled $defs/skill.schema.json); `agent.harness`,
 // `muster.url`, `muster.tools`, `muster.discovery`; none of the 0.x runtime
-// keys. The copy is the chart's own values.schema.json at the commit that made
-// the contract final (giantswarm/agent, chart-1-0-agenttemplate @ 82815864).
-const EmbeddedSchemaVersion = "1.0.0"
+// keys; `skillsGitAuthSecretRef`, the one read credential of every private
+// git skill. The copy is the values.schema.json of the released chart 1.5.1.
+const EmbeddedSchemaVersion = "1.5.1"
 
 //go:embed embedded/agent-values.schema.json
 var embeddedSchema []byte

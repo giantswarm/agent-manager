@@ -2,12 +2,14 @@ package agents
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
+	"github.com/giantswarm/agent-manager/internal/identity"
 	"github.com/giantswarm/agent-manager/internal/oci"
 	"github.com/giantswarm/agent-manager/internal/skills"
 )
@@ -24,13 +26,45 @@ type SkillPinner interface {
 	GitHead(ctx context.Context, repoURL, ref string) (string, error)
 	// OCIDigest pins an OCI reference to <repository>@sha256:<digest>.
 	OCIDigest(ctx context.Context, ref string) (string, error)
+	// RequireReadable refuses a repository login (the caller's GitHub login,
+	// empty when unknown) cannot read: skills.ErrNotReadable.
+	RequireReadable(ctx context.Context, repoURL, login string) error
+}
+
+// gitHubLogin is the caller's verified GitHub login (the App-pinned
+// registration), empty without one.
+func gitHubLogin(ctx context.Context) string {
+	if gh, ok := identity.GitHubFromContext(ctx); ok {
+		return gh.Login
+	}
+	return ""
+}
+
+// requireReadableSkills refuses skills from a repository the caller cannot
+// read: an agent never mounts a skill its creator could not read themselves,
+// though the platform's credential could.
+func requireReadableSkills(ctx context.Context, pinner SkillPinner, list Skills) error {
+	seen := map[string]bool{}
+	for _, sk := range list {
+		if sk.Git == nil || seen[sk.Git.URL] {
+			continue
+		}
+		seen[sk.Git.URL] = true
+		if err := pinner.RequireReadable(ctx, sk.Git.URL, gitHubLogin(ctx)); err != nil {
+			if errors.Is(err, skills.ErrNotReadable) {
+				return fmt.Errorf("%w: skill %q: %v", ErrForbidden, sk.Name, err)
+			}
+			return invalidf("skill %q: %v", sk.Name, err)
+		}
+	}
+	return nil
 }
 
 // What the removed arguments are told.
 const (
 	toolNamesRemoved   = `toolNames never narrowed anything against muster (kagent filters muster's meta-tools only); declare a toolset instead, e.g. toolset: ["preset:read-only"]`
 	runtimeRemoved     = `runtime is gone: on kagent API v2 the platform Harness (the Go ADK) is the runtime of every agent — there is no per-agent runtime and no Python runtime; drop the argument`
-	gitAuthRefRemoved  = `skills.gitAuthSecretName is gone: kagent API v2 and Generic chart 1.x carry no per-source skill credential — a skill is an immutable reference (a git commit or an OCI digest) the Harness reads without one; agent-manager resolves a branch or tag through the GitHub API with its own token (GITHUB_TOKEN) where a private repository needs it. Drop the field; skills is a list of {name, git: {url, ref | commit}, path} or {name, oci: <reference>}`
+	gitAuthRefRemoved  = `skills.gitAuthSecretName moved: the skills credential is the top-level gitAuthSecretName now (a Secret in the agent's namespace with the key token; omitted, the installation's), and skills is a list of {name, git: {url, ref | commit}, path} or {name, oci: <reference>}`
 	skillsShapeChanged = `skills is a list now — [{name, git: {url, ref | commit}, path} | {name, oci: <registry>/<repository>:<tag>|@sha256:<digest>}] — not the 0.x object {refs, gitRefs}; every entry is pinned to a commit or a digest before it is written (list_skills reports the commits)`
 )
 

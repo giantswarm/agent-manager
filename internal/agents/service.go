@@ -131,6 +131,10 @@ type InfoResponse struct {
 	} `json:"muster"`
 	// SkillsRepositories are the configured skill repositories.
 	SkillsRepositories []string `json:"skillsRepositories"`
+	// SkillsGitAuthSecretName is the installation's skills credential Secret
+	// (key token) an agent with a git skill fetches with unless it names its
+	// own; empty: anonymous fetches.
+	SkillsGitAuthSecretName string `json:"skillsGitAuthSecretName,omitempty"`
 }
 
 // Info reports the installation's capabilities.
@@ -167,6 +171,7 @@ func (s *Service) Info(ctx context.Context) InfoResponse {
 	} else {
 		out.SkillsRepositories = []string{}
 	}
+	out.SkillsGitAuthSecretName = s.cfg.Compose.SkillsGitAuthSecretName
 	return out
 }
 
@@ -527,7 +532,18 @@ func (s *Service) ListSkills(ctx context.Context, repository, ref string, refres
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalid, err)
 	}
-	return res, nil
+	// A private repository is listed only to a caller who can read it.
+	out := &skills.Result{Repositories: []skills.Repository{}, Skills: []skills.Skill{}}
+	for _, repo := range res.Repositories {
+		if repo.Private {
+			if err := s.pinner.RequireReadable(ctx, repo.RepoURL, gitHubLogin(ctx)); err != nil {
+				repo = skills.Repository{RepoURL: repo.RepoURL, Private: true, Skills: []skills.Skill{}, Error: err.Error(), FetchedAt: repo.FetchedAt}
+			}
+		}
+		out.Repositories = append(out.Repositories, repo)
+		out.Skills = append(out.Skills, repo.Skills...)
+	}
+	return out, nil
 }
 
 // ---- validate ------------------------------------------------------------------
@@ -584,6 +600,9 @@ func (s *Service) ValidateCreate(ctx context.Context, spec Spec) (*ValidateResul
 		if !isDomainError(err) {
 			return nil, err
 		}
+		res.addError(err)
+	}
+	if err := requireReadableSkills(ctx, s.pinner, spec.Skills); err != nil {
 		res.addError(err)
 	}
 	if pinned, err := pinSkills(ctx, s.pinner, spec.Skills, false); err != nil {
@@ -699,6 +718,9 @@ func (s *Service) Create(ctx context.Context, spec Spec) (*CreateResult, error) 
 		return nil, err
 	}
 	if err := s.requireHarness(ctx, dyn, ns, spec.Harness); err != nil {
+		return nil, err
+	}
+	if err := requireReadableSkills(ctx, s.pinner, spec.Skills); err != nil {
 		return nil, err
 	}
 	if spec.Skills, err = pinSkills(ctx, s.pinner, spec.Skills, false); err != nil {
@@ -849,6 +871,23 @@ func (s *Service) writableHelmRelease(ctx context.Context, dyn dynamic.Interface
 // (after, before). Skills given replace the list and are pinned; refreshSkills
 // re-pins every git skill to the head of its ref (the default branch unless
 // the request names one).
+// mergeSkillsGitAuth keeps the skills credential in step with the merged
+// skills: the caller's Secret when it names one (empty: back to the
+// installation's), otherwise the release's own, otherwise the installation's —
+// so an update of an agent written before the credential existed carries it
+// from then on. Without a git skill the value is dropped.
+func (s *Service) mergeSkillsGitAuth(values map[string]any, own *string) {
+	current, _, _ := unstructured.NestedString(values, SkillsGitAuthValuesKey, "name")
+	if own != nil {
+		current = *own
+	}
+	if name := skillsGitAuth(current, skillsFromValues(values), s.cfg.Compose); name != "" {
+		values[SkillsGitAuthValuesKey] = map[string]any{"name": name}
+	} else {
+		delete(values, SkillsGitAuthValuesKey)
+	}
+}
+
 func (s *Service) mergedValues(ctx context.Context, dyn dynamic.Interface, ns string, upd Update, hr *unstructured.Unstructured) (map[string]any, map[string]any, error) {
 	if upd.SystemMessage != nil {
 		if err := ValidateSystemMessage(*upd.SystemMessage); err != nil {
@@ -888,6 +927,9 @@ func (s *Service) mergedValues(ctx context.Context, dyn dynamic.Interface, ns st
 			if err := ValidateSkills(list); err != nil {
 				return after, before, err
 			}
+			if err := requireReadableSkills(ctx, s.pinner, list); err != nil {
+				return after, before, err
+			}
 		}
 		pinned, err := pinSkills(ctx, s.pinner, list, upd.RefreshSkills)
 		if err != nil {
@@ -899,6 +941,7 @@ func (s *Service) mergedValues(ctx context.Context, dyn dynamic.Interface, ns st
 			delete(after, "skills")
 		}
 	}
+	s.mergeSkillsGitAuth(after, upd.GitAuthSecretName)
 	if upd.Toolset != nil {
 		// Replaces the whole list; an empty list is refused (preset:none is
 		// the way to say "no tools"), so a toolset can never be cleared back

@@ -750,6 +750,10 @@
                     "type": "string",
                     "description": "How long a repository's discovered skills are reused."
                 },
+                "gitAuthSecretName": {
+                    "type": "string",
+                    "description": "Secret (key `token`) in the agents' namespace every agent with a git skill fetches its skills with at boot, unless the agent names its own `gitAuthSecretName`: composed as the agent chart's `skillsGitAuthSecretRef.name`. Empty: such agents fetch anonymously."
+                },
                 "github": {
                     "type": "object",
                     "additionalProperties": false,
@@ -757,6 +761,16 @@
                         "apiUrl": {
                             "type": "string",
                             "description": "GitHub API base URL."
+                        },
+                        "app": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "properties": {
+                                "secretName": {
+                                    "type": "string",
+                                    "description": "Existing Secret in the release namespace of the read-only skills GitHub App, with the keys `app-id`, `installation-id` and `private-key` (PEM): skills are discovered and pinned with the App's short-lived installation tokens, at the App's rate limit, and a private repository is offered to and usable by only the people who can read it themselves (their GitHub login, verified through the `github` pin below; without the pin private repositories are refused). Mutually exclusive with `tokenSecret`."
+                                }
+                            }
                         },
                         "tokenSecret": {
                             "type": "object",
@@ -768,7 +782,7 @@
                                 },
                                 "name": {
                                     "type": "string",
-                                    "description": "Existing Secret in the release namespace with a GitHub token: the credential that resolves a skill's branch or tag to its head commit in a private repository (there is no per-agent skill credential) and lifts the anonymous rate limit. Empty: anonymous, public repositories only."
+                                    "description": "Existing Secret in the release namespace with a static GitHub token for skill discovery and pinning. Prefer `app`. Empty (and no `app`): anonymous, public repositories only."
                                 }
                             }
                         }
