@@ -32,11 +32,20 @@ info:
     tool names in `x-mcp-tool` below; through muster they appear as
     `x_<server>_<tool>`).
 
-    Ownership rules: an agent whose HelmRelease is applied by a Flux
-    Kustomization (`managed: gitops`) is refused for update and delete unless
-    `force` — its desired state lives in git. A bare AgentTemplate
-    (`managed: none`) has no HelmRelease to write to and is only deleted with
-    `force`.
+    Write modes: every write takes `dryRun` (return what would be written,
+    write nothing) and `mode`. `apply` (the default) writes live as the caller
+    and never writes an agent whose HelmRelease is applied by a Flux
+    Kustomization (`managed: gitops`): that is `409 gitops_owned`, naming
+    `mode: commit` and the repository and directory it would write. `commit`
+    writes the manifests as files into `agent-manager/` under the directory the
+    owning Kustomization builds from (or under `path` of the `repository` and
+    `branch` the caller names) and opens a pull request as the caller, with
+    the GitHub App user token muster puts on the MCP call; nothing is written
+    live. Without that token commit answers `401 auth_required`; where the
+    installation offers no commit mode, `501 unsupported` (`GET /info`
+    `capabilities.commit`). A bare AgentTemplate (`managed: none`) has no
+    HelmRelease to write to and is only deleted with `force`; a suspended
+    release is written only with `force`.
 
     Removed with kagent API v2: `runtime` (the platform Harness is the runtime
     of every agent) and `skills.gitAuthSecretName` (no per-source skill
@@ -135,7 +144,9 @@ paths:
         validation failure writes nothing (`400 invalid_request`, the message
         lists the valid model configs or names the unresolvable skill
         reference). `409 conflict` when a HelmRelease or AgentTemplate of that
-        name exists.
+        name exists. `dryRun` and `mode: commit` answer `200` and create
+        nothing on the installation; commit reports the pull request in
+        `commit`.
       operationId: createAgent
       x-mcp-tool: create_agent
       requestBody:
@@ -144,6 +155,11 @@ paths:
           application/json:
             schema: { $ref: "#/components/schemas/Spec" }
       responses:
+        "200":
+          description: dry run or commit mode — nothing created on the installation
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CreateResult" }
         "201":
           description: created
           content:
@@ -152,6 +168,8 @@ paths:
         "400": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "501": { $ref: "#/components/responses/Error" }
   /api/v1/agents/validate:
     post:
       tags: [agents]
@@ -211,8 +229,12 @@ paths:
         `implicitFullAccess`; `refreshSkills` re-pins every git skill to the
         head of its repository's default branch — a skill passed with a `ref`
         in the same call to that ref's head — and changes nothing else),
-        validates and updates the HelmRelease. `409 conflict` for GitOps-owned
-        or suspended releases and bare AgentTemplates unless `force`; a write
+        validates and updates the HelmRelease (`mode: commit`: rewrites its file
+        in agent-manager's directory of the owning repository with a pull
+        request; a release defined elsewhere in the repository is `409
+        conflict`). `409 gitops_owned` for a GitOps-owned release in apply
+        mode; `409 conflict` for suspended releases and bare AgentTemplates
+        unless `force`; a write
         that races helm-controller's status update of the release is retried
         on a fresh read, not reported. `400` for a body still carrying the
         removed `toolNames` or `runtime`.
@@ -236,6 +258,8 @@ paths:
         "400": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "501": { $ref: "#/components/responses/Error" }
     delete:
       tags: [agents]
       summary: Delete an agent
@@ -243,23 +267,31 @@ paths:
         Deletes the owning HelmRelease (helm-controller uninstalls the
         AgentTemplate and the agent's RemoteMCPServer) and the shared
         OCIRepository when no other HelmRelease references it. Bare
-        AgentTemplates, GitOps-owned and suspended releases need `force` (a
-        forced delete of a suspended release removes the rendered objects
-        too).
+        AgentTemplates and suspended releases need `force` (a forced delete of
+        a suspended release removes the rendered objects too); a GitOps-owned
+        release is `409 gitops_owned` in apply mode, and `mode: commit`
+        removes its files with a pull request.
       operationId: deleteAgent
       x-mcp-tool: delete_agent
       parameters:
         - name: force
           in: query
           schema: { type: boolean }
+        - { name: mode, in: query, schema: { type: string, enum: [apply, commit] } }
+        - { name: dryRun, in: query, schema: { type: boolean } }
+        - { name: repository, in: query, description: "commit target owner/name where no Kustomization owns the namespace", schema: { type: string } }
+        - { name: branch, in: query, schema: { type: string } }
+        - { name: path, in: query, schema: { type: string } }
       responses:
         "200":
           description: what was removed
           content:
             application/json:
               schema: { $ref: "#/components/schemas/DeleteResult" }
+        "401": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
+        "501": { $ref: "#/components/responses/Error" }
   /api/v1/agents/{namespace}/{name}/status:
     parameters:
       - $ref: "#/components/parameters/namespacePath"
@@ -368,7 +400,7 @@ components:
           properties:
             code:
               type: string
-              enum: [not_found, invalid_request, conflict, forbidden, unauthenticated, unsupported, backend_error]
+              enum: [not_found, invalid_request, conflict, gitops_owned, forbidden, unauthenticated, auth_required, unsupported, backend_error]
             message: { type: string }
     Info:
       type: object
@@ -480,6 +512,11 @@ components:
         toolset: { $ref: "#/components/schemas/Toolset" }
         labels: { type: object, additionalProperties: { type: string } }
         annotations: { type: object, additionalProperties: { type: string } }
+        mode: { type: string, enum: [apply, commit], default: apply }
+        dryRun: { type: boolean, description: Return what would be written and write nothing }
+        repository: { type: string, description: "mode commit: owner/name to commit to where no Flux Kustomization owns the namespace; needs branch" }
+        branch: { type: string, description: "mode commit with repository: the base branch" }
+        path: { type: string, description: "mode commit with repository: the directory a Kustomization builds from; files go to its agent-manager/ subdirectory" }
     Update:
       type: object
       description: Partial change; absent fields stay, "" clears, skills replace the whole list (pinned), toolset replaces the whole list, refreshSkills re-pins every git skill
@@ -494,7 +531,12 @@ components:
         toolset: { $ref: "#/components/schemas/Toolset" }
         labels: { type: object, additionalProperties: { type: string } }
         annotations: { type: object, additionalProperties: { type: string } }
-        force: { type: boolean }
+        force: { type: boolean, description: Write a suspended release; a GitOps-owned one is never written live }
+        mode: { type: string, enum: [apply, commit], default: apply }
+        dryRun: { type: boolean, description: Return what would be written and write nothing }
+        repository: { type: string, description: "mode commit: owner/name to commit to where no Flux Kustomization owns the namespace; needs branch" }
+        branch: { type: string, description: "mode commit with repository: the base branch" }
+        path: { type: string, description: "mode commit with repository: the directory a Kustomization builds from; files go to its agent-manager/ subdirectory" }
     Condition:
       type: object
       properties:
@@ -589,6 +631,9 @@ components:
             helmRelease: { type: boolean }
         status: { $ref: "#/components/schemas/Status" }
         requestedBy: { type: string, description: The authenticated caller the write ran as (email, else subject); absent without OAuth }
+        mode: { type: string, enum: [apply, commit] }
+        dryRun: { type: boolean }
+        commit: { $ref: "#/components/schemas/CommitResult" }
     UpdateResult:
       type: object
       properties:
@@ -598,6 +643,9 @@ components:
         changed: { type: array, items: { type: string }, description: Dotted value paths that changed }
         requestedBy: { type: string, description: The authenticated caller the write ran as }
         manifests: { $ref: "#/components/schemas/Manifests" }
+        mode: { type: string, enum: [apply, commit] }
+        dryRun: { type: boolean }
+        commit: { $ref: "#/components/schemas/CommitResult" }
     DeleteResult:
       type: object
       properties:
@@ -609,6 +657,31 @@ components:
         ociRepositoryDeleted: { type: boolean }
         ociRepositoryKept: { type: string, description: Why the shared chart source stays }
         requestedBy: { type: string, description: The authenticated caller the delete ran as }
+        mode: { type: string, enum: [apply, commit] }
+        dryRun: { type: boolean }
+        commit: { $ref: "#/components/schemas/CommitResult" }
+    CommitResult:
+      type: object
+      description: The pull request a write in commit mode opened (or, dry run, would open) as the caller
+      properties:
+        repository: { type: string, description: owner/name }
+        base: { type: string, description: The branch the pull request goes to }
+        directory: { type: string, description: "agent-manager/ under the Kustomization's path" }
+        kustomization: { type: string, description: "namespace/name of the Flux Kustomization that lands the files; absent for a target the caller named" }
+        prune: { type: boolean }
+        branch: { type: string }
+        files:
+          type: array
+          items:
+            type: object
+            properties:
+              path: { type: string }
+              action: { type: string, enum: [add, update, remove, unchanged] }
+              content: { type: string, description: The new content, on a dry run }
+        pullRequest: { type: string, description: URL; absent on a dry run and when nothing changes }
+        number: { type: integer }
+        author: { type: string, description: The GitHub login the pull request is opened as }
+        liveSteps: { type: array, items: { type: string }, description: What the merge alone does not do on the installation }
     Status:
       type: object
       properties:

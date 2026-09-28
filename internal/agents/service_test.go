@@ -352,10 +352,13 @@ func TestGitOpsOwnedReleaseInAnotherNamespace(t *testing.T) {
 
 	desc := "x"
 	_, err = f.svc.Update(ctx, Update{Name: "sre-agent", Description: &desc})
-	require.ErrorIs(t, err, ErrConflict)
+	require.ErrorIs(t, err, ErrGitOpsOwned)
 	assert.Contains(t, err.Error(), "flux-giantswarm")
-	_, err = f.svc.Delete(ctx, "", "sre-agent", false)
-	assert.ErrorIs(t, err, ErrConflict)
+	assert.Contains(t, err.Error(), "mode commit")
+	_, err = f.svc.Delete(ctx, "", "sre-agent", false, WriteOptions{})
+	assert.ErrorIs(t, err, ErrGitOpsOwned)
+	_, err = f.svc.Delete(ctx, "", "sre-agent", true, WriteOptions{})
+	assert.ErrorIs(t, err, ErrGitOpsOwned, "force never writes a GitOps-owned release live")
 
 	st, err := f.svc.Status(ctx, "", "sre-agent")
 	require.NoError(t, err)
@@ -548,7 +551,6 @@ func TestCreateAndUpdateRefuseATooLongSystemMessage(t *testing.T) {
 func TestUpdateMergesIntoValuesAndHonorsOwnership(t *testing.T) {
 	f := seeded(t)
 	ctx := context.Background()
-	str := func(s string) *string { return &s }
 
 	// Assigning a toolset to an agent that had none. The verifier release
 	// predates agent.harness: an update leaves the values it does not touch.
@@ -646,15 +648,17 @@ func TestUpdateMergesIntoValuesAndHonorsOwnership(t *testing.T) {
 	_, err = f.svc.Update(ctx, Update{Name: "missing", DisplayName: str("x")})
 	assert.ErrorIs(t, err, ErrNotFound)
 
-	// GitOps-owned: refused without force.
+	// GitOps-owned: refused in apply mode, force or not; commit mode is the
+	// way (not offered by this service).
 	gitops := helmRelease("kagent", "gitops", map[string]any{"agent": map[string]any{"name": "gitops"}, "modelConfig": map[string]any{"name": "default-model-config"}}, true, map[string]any{KustomizationNameLabel: "flux-system"})
 	mustCreate(t, f, hrGVR, gitops)
 	_, err = f.svc.Update(ctx, Update{Name: "gitops", DisplayName: str("x")})
-	require.ErrorIs(t, err, ErrConflict)
+	require.ErrorIs(t, err, ErrGitOpsOwned)
 	assert.Contains(t, err.Error(), "flux-system")
-	res, err = f.svc.Update(ctx, Update{Name: "gitops", DisplayName: str("x"), Force: true})
-	require.NoError(t, err)
-	assert.Equal(t, []string{"agent.displayName"}, res.Changed)
+	_, err = f.svc.Update(ctx, Update{Name: "gitops", DisplayName: str("x"), Force: true})
+	require.ErrorIs(t, err, ErrGitOpsOwned)
+	_, err = f.svc.Update(ctx, Update{Name: "gitops", DisplayName: str("x"), WriteOptions: WriteOptions{Mode: ModeCommit}})
+	require.ErrorIs(t, err, ErrUnsupported)
 
 	// A bare AgentTemplate has nothing to write to.
 	mustCreate(t, f, tplGVR, agentTemplate("kagent", "bare", "", "", true, true))
@@ -674,7 +678,7 @@ func TestDeleteRemovesTheReleaseAndTheSourceOnlyWhenUnreferenced(t *testing.T) {
 	_, err := f.svc.Create(ctx, Spec{Name: "sre", ModelConfig: "default-model-config", Toolset: []string{"preset:read-only"}})
 	require.NoError(t, err)
 
-	res, err := f.svc.Delete(ctx, "", "sre", false)
+	res, err := f.svc.Delete(ctx, "", "sre", false, WriteOptions{})
 	require.NoError(t, err)
 	assert.True(t, res.HelmReleaseDeleted)
 	assert.False(t, res.OCIRepositoryDeleted)
@@ -682,20 +686,20 @@ func TestDeleteRemovesTheReleaseAndTheSourceOnlyWhenUnreferenced(t *testing.T) {
 	_, err = f.dyn.Resource(ociGVR).Namespace("kagent").Get(ctx, "agent", metav1.GetOptions{})
 	require.NoError(t, err, "the shared source stays while verifier references it")
 
-	res, err = f.svc.Delete(ctx, "", "verifier", false)
+	res, err = f.svc.Delete(ctx, "", "verifier", false, WriteOptions{})
 	require.NoError(t, err)
 	assert.True(t, res.HelmReleaseDeleted)
 	assert.True(t, res.OCIRepositoryDeleted)
 	_, err = f.dyn.Resource(ociGVR).Namespace("kagent").Get(ctx, "agent", metav1.GetOptions{})
 	assert.Error(t, err, "the last release takes the source with it")
 
-	_, err = f.svc.Delete(ctx, "", "verifier", false)
+	_, err = f.svc.Delete(ctx, "", "verifier", false, WriteOptions{})
 	assert.ErrorIs(t, err, ErrConflict, "the AgentTemplate is still there (the fake has no helm-controller): a bare template now")
-	_, err = f.svc.Delete(ctx, "", "nothing", false)
+	_, err = f.svc.Delete(ctx, "", "nothing", false, WriteOptions{})
 	assert.ErrorIs(t, err, ErrNotFound)
 
 	// Bare template: force deletes the template itself.
-	res, err = f.svc.Delete(ctx, "", "verifier", true)
+	res, err = f.svc.Delete(ctx, "", "verifier", true, WriteOptions{})
 	require.NoError(t, err)
 	assert.True(t, res.AgentTemplateDeleted)
 	assert.False(t, res.HelmReleaseDeleted)
@@ -710,9 +714,9 @@ func TestDeleteRemovesTheReleaseAndTheSourceOnlyWhenUnreferenced(t *testing.T) {
 	mustCreate(t, f, hrGVR, suspended)
 	mustCreate(t, f, tplGVR, agentTemplate("kagent", "susp", "susp", "kagent", true, true))
 	mustCreate(t, f, serverGVR, remoteMCPServer("kagent", "susp", "preset:none"))
-	_, err = f.svc.Delete(ctx, "", "susp", false)
+	_, err = f.svc.Delete(ctx, "", "susp", false, WriteOptions{})
 	assert.ErrorIs(t, err, ErrConflict)
-	res, err = f.svc.Delete(ctx, "", "susp", true)
+	res, err = f.svc.Delete(ctx, "", "susp", true, WriteOptions{})
 	require.NoError(t, err)
 	assert.True(t, res.HelmReleaseDeleted)
 	assert.True(t, res.AgentTemplateDeleted)
@@ -901,7 +905,7 @@ func TestMutationsCarryTheCaller(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "admin@lab.local", updated.RequestedBy)
 
-	deleted, err := f.svc.Delete(ctx, "", "sre", false)
+	deleted, err := f.svc.Delete(ctx, "", "sre", false, WriteOptions{})
 	require.NoError(t, err)
 	assert.Equal(t, "admin@lab.local", deleted.RequestedBy)
 
@@ -929,7 +933,6 @@ func TestMutationsCarryTheCaller(t *testing.T) {
 func TestUpdateRetriesTheWriteWhenTheReleaseMovedUnderneath(t *testing.T) {
 	f := seeded(t)
 	ctx := context.Background()
-	str := func(s string) *string { return &s }
 	conflict := apierrors.NewConflict(hrGVR.GroupResource(), "verifier", errors.New("the object has been modified; please apply your changes to the latest version and try again"))
 
 	// Between the read and the write another writer renamed the agent and
