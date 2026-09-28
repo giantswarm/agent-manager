@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- The GitHub App commit mode pins to is `agent-platform-agent-manager`, not `giantswarm-agent-manager`: agent-manager is part of the agent platform, and the `giantswarm-` prefix is kept for Giant Swarm-internal managers. `agent-manager` is taken on GitHub. The chart defaults `github.authorizationServer.issuer` to `https://github.com/apps/agent-platform-agent-manager` and `github.authorizationServer.clientCredentialsSecretRef.name` to `agent-platform-agent-manager-oauth-client`. No installation has `github.enabled` on yet.
+
 ### Added
 
 - Write modes on `create_agent`, `update_agent` and `delete_agent` (REST: the same fields, `DELETE` as query parameters): `dryRun` returns what the write would do and writes nothing; `mode: commit` writes the manifests as files into `agent-manager/` under the directory of the Flux Kustomization that owns the namespace (gitops-commit's `layout`; `repository`, `branch`, `path` name the target where nothing is GitOps-owned yet) and opens the pull request as the caller, returning `commit` with the repository, files, branch and pull request. Commit mode needs the GitHub App pin: `--github-authorization-server`/`--github-api-url`, chart `github.enabled` (the MCPServer pinned to the App `giantswarm-agent-manager` with `forwardIdentity: true`; the person's App user token on the MCP call, verified with `GET /user`, the ID token in `X-Muster-Id-Token`). `get_info` reports `capabilities.commit`; new error codes `gitops_owned` (409) and `auth_required` (401). ([#24](https://github.com/giantswarm/agent-manager/issues/24))

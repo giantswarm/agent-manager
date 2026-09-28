@@ -300,7 +300,7 @@ client id *is* the apiserver's `--oidc-client-id` (`requiredAudiences: []`).
 
 With `--github-authorization-server` (chart `github.enabled`) the MCP
 registration is pinned to agent-manager's own user-to-server GitHub App,
-`giantswarm-agent-manager`: the MCPServer's auth names the App as the
+`agent-platform-agent-manager`: the MCPServer's auth names the App as the
 authorization server with `forwardIdentity: true`, so muster runs the App's
 consent once per person and puts the person's App user token on every MCP call
 as the bearer, and the person's IdP ID token in `X-Muster-Id-Token`. The server

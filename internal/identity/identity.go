@@ -134,7 +134,7 @@ func TokenExpiry(token string) time.Time {
 
 // GitHub is the caller's GitHub identity on the App-pinned registration: the
 // login GET /user answered for the bearer muster put on the call — the
-// person's user token of the App giantswarm-agent-manager — and that token,
+// person's user token of the App agent-platform-agent-manager — and that token,
 // which commit mode opens the pull request with.
 type GitHub struct {
 	Login string

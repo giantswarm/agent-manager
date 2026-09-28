@@ -89,12 +89,12 @@ tests:
       - equal:
           path: spec.auth.authorizationServer
           value:
-            issuer: https://github.com/apps/giantswarm-agent-manager
+            issuer: https://github.com/apps/agent-platform-agent-manager
             expectedIssuer: https://github.com/login/oauth
             authorizationEndpoint: https://github.com/login/oauth/authorize
             tokenEndpoint: https://github.com/login/oauth/access_token
             clientCredentialsSecretRef:
-              name: giantswarm-agent-manager-oauth-client
+              name: agent-platform-agent-manager-oauth-client
               namespace: NAMESPACE
             grantScope: subject
       - equal:

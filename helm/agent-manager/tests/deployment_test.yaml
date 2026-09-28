@@ -82,7 +82,7 @@ tests:
     asserts:
       - contains:
           path: spec.template.spec.containers[0].args
-          content: --github-authorization-server=https://github.com/apps/giantswarm-agent-manager
+          content: --github-authorization-server=https://github.com/apps/agent-platform-agent-manager
       - contains:
           path: spec.template.spec.containers[0].args
           content: --github-api-url=https://api.github.com

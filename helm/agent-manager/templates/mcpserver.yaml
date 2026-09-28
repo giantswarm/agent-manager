@@ -8,7 +8,7 @@ oauth.enabled the CR carries the auth block: muster forwards the session's IdP
 id_token (forwardToken), which this server validates through
 oauth.trustedAudiences, and requests the requiredAudiences at login. Without
 OAuth muster connects anonymously. With github.enabled the auth pins the
-GitHub App giantswarm-agent-manager instead: the bearer is the person's App
+GitHub App agent-platform-agent-manager instead: the bearer is the person's App
 user token (commit mode's pull request) and forwardIdentity puts the ID token
 in X-Muster-Id-Token next to it.
 */}}
