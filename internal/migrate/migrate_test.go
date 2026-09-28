@@ -106,6 +106,10 @@ func (p pinner) GitHead(ctx context.Context, repoURL, ref string) (string, error
 	return p.git.GitHead(ctx, repoURL, ref)
 }
 
+func (p pinner) RequireReadable(ctx context.Context, repoURL, login string) error {
+	return p.git.RequireReadable(ctx, repoURL, login)
+}
+
 func (p pinner) OCIDigest(_ context.Context, ref string) (string, error) {
 	if strings.HasPrefix(ref, "ghcr.io/giantswarm/skills/kubectl") {
 		return kubectlPin, nil
@@ -147,7 +151,7 @@ func newCluster(objs ...runtime.Object) *cluster {
 func (c *cluster) runner(t *testing.T, opts Options, latest, token string) *Runner {
 	t.Helper()
 	ch := fakeChart{latest: latest}
-	p := pinner{git: skills.NewResolver(fakeGitHub(t).URL, token, nil, nil)}
+	p := pinner{git: skills.NewResolver(fakeGitHub(t).URL, skills.StaticToken(token), nil, nil)}
 	svc := agents.New(kube.NewServiceAccountProvider(c.client), ch, nil, p, agents.Config{
 		DefaultNamespace: opts.Namespaces[0], ManagedNamespaces: opts.Namespaces, Compose: agents.ComposeConfig{HarnessName: "kagent"}, KagentAPIVersion: "v1alpha3",
 	}, nil)
@@ -792,7 +796,7 @@ func TestNothingToMigrateIsComplete(t *testing.T) {
 
 func TestRewriteValues(t *testing.T) {
 	ctx := context.Background()
-	p := pinner{git: skills.NewResolver(fakeGitHub(t).URL, "", nil, nil)}
+	p := pinner{git: skills.NewResolver(fakeGitHub(t).URL, nil, nil, nil)}
 	cases := map[string]struct {
 		values  map[string]any
 		harness string

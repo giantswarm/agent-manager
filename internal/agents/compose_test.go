@@ -62,6 +62,16 @@ func (p *fakePinner) GitHead(_ context.Context, repoURL, ref string) (string, er
 	return "", fmt.Errorf("%w: ref %s of %s could not be resolved: unknown ref", skills.ErrUnresolvable, ref, repoURL)
 }
 
+// privateSkillsRepo is readable by the GitHub user jane only.
+const privateSkillsRepo = "https://github.com/giantswarm/agent-skills-internal"
+
+func (p *fakePinner) RequireReadable(_ context.Context, repoURL, login string) error {
+	if repoURL != privateSkillsRepo || login == "jane" {
+		return nil
+	}
+	return fmt.Errorf("%w: %s is private and the GitHub user %q cannot read it", skills.ErrNotReadable, repoURL, login)
+}
+
 func (p *fakePinner) OCIDigest(_ context.Context, ref string) (string, error) {
 	p.calls = append(p.calls, "oci "+ref)
 	if strings.HasPrefix(ref, kubectlRef) {
@@ -312,9 +322,8 @@ func TestSkillsUnmarshalExplainsThe0xShape(t *testing.T) {
 
 	err = json.Unmarshal([]byte(`{"gitRefs":[],"gitAuthSecretName":"kagent-skills-token"}`), &list)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "skills.gitAuthSecretName is gone")
-	assert.Contains(t, err.Error(), "no per-source skill credential")
-	assert.Contains(t, err.Error(), "GITHUB_TOKEN")
+	assert.Contains(t, err.Error(), "skills.gitAuthSecretName moved")
+	assert.Contains(t, err.Error(), "top-level gitAuthSecretName")
 
 	var spec Spec
 	err = json.Unmarshal([]byte(`{"name":"sre","skills":{"refs":["x:1"]}}`), &spec)
@@ -324,6 +333,33 @@ func TestSkillsUnmarshalExplainsThe0xShape(t *testing.T) {
 	require.NotNil(t, upd.Skills)
 	assert.Empty(t, *upd.Skills, "an empty list clears the skills; nil leaves them")
 	assert.True(t, upd.RefreshSkills)
+}
+
+func TestBuildValuesComposesTheSkillsCredential(t *testing.T) {
+	git := Skills{{Name: "a", Path: "a", Git: &GitSkill{URL: "https://github.com/o/private", Commit: strings.Repeat("a", 40)}}}
+	oci := Skills{{Name: "b", OCI: "gsoci.azurecr.io/s@sha256:" + strings.Repeat("b", 64)}}
+	installation := ComposeConfig{SkillsGitAuthSecretName: "kagent-skills-token"}
+	for _, tc := range []struct {
+		name   string
+		spec   Spec
+		cfg    ComposeConfig
+		secret string
+	}{
+		{"installation credential on a git skill", Spec{Name: "a", Skills: git}, installation, "kagent-skills-token"},
+		{"the agent's own wins", Spec{Name: "a", Skills: git, GitAuthSecretName: "team-token"}, installation, "team-token"},
+		{"the agent's own without an installation one", Spec{Name: "a", Skills: git, GitAuthSecretName: "team-token"}, ComposeConfig{}, "team-token"},
+		{"none without a git skill", Spec{Name: "a", Skills: oci, GitAuthSecretName: "team-token"}, installation, ""},
+		{"none without any credential", Spec{Name: "a", Skills: git}, ComposeConfig{}, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			values := BuildValues(tc.spec, tc.cfg)
+			if tc.secret == "" {
+				assert.NotContains(t, values, SkillsGitAuthValuesKey)
+				return
+			}
+			assert.Equal(t, map[string]any{"name": tc.secret}, values[SkillsGitAuthValuesKey])
+		})
+	}
 }
 
 func TestSkillMountName(t *testing.T) {

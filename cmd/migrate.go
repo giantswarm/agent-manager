@@ -124,7 +124,7 @@ func runMigrate(ctx context.Context, out io.Writer, o *migrateOptions) error {
 	if err != nil {
 		return err
 	}
-	pinner := skills.NewResolver(o.skillsGitHubAPI, o.skillsToken, nil, nil)
+	pinner := skills.NewResolver(o.skillsGitHubAPI, skills.StaticToken(o.skillsToken), nil, nil)
 	compose := agents.ComposeConfig{
 		ChartOCIURL: o.chartOCIURL, ChartName: resolver.Name(), ChartSemver: o.chartSemver,
 		HelmReleaseAPIVersion: helmReleaseAPI, OCIRepositoryAPIVersion: ociRepositoryAPI, HarnessName: o.harnessName,

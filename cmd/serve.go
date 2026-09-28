@@ -49,6 +49,10 @@ type serveOptions struct {
 	skillsRepositories string
 	skillsGitHubAPI    string
 	skillsToken        string
+	skillsAppID        string
+	skillsAppInstall   string
+	skillsAppKeyFile   string
+	skillsGitAuth      string
 	skillsCacheTTL     time.Duration
 
 	mcpEnabled bool
@@ -104,6 +108,10 @@ environment variable named next to it; flags win over the environment.`,
 	f.StringVar(&o.skillsRepositories, "skills-repositories", envOr("AGENT_MANAGER_SKILLS_REPOSITORIES", ""), "Comma-separated GitHub repository URLs whose SKILL.md files are offered by list_skills (AGENT_MANAGER_SKILLS_REPOSITORIES)")
 	f.StringVar(&o.skillsGitHubAPI, "skills-github-api", envOr("AGENT_MANAGER_SKILLS_GITHUB_API", "https://api.github.com"), "GitHub API base URL for skill discovery and for resolving a skill's branch or tag to its head commit (AGENT_MANAGER_SKILLS_GITHUB_API)")
 	f.StringVar(&o.skillsToken, "skills-github-token", envOr("GITHUB_TOKEN", ""), "GitHub token for private skill repositories and a higher rate limit; prefer the environment (GITHUB_TOKEN)")
+	f.StringVar(&o.skillsAppID, "skills-github-app-id", envOr("AGENT_MANAGER_SKILLS_GITHUB_APP_ID", ""), "ID of the read-only GitHub App skills are read with: installation tokens instead of a personal token, at the App's rate limit. Mutually exclusive with --skills-github-token (AGENT_MANAGER_SKILLS_GITHUB_APP_ID)")
+	f.StringVar(&o.skillsAppInstall, "skills-github-app-installation-id", envOr("AGENT_MANAGER_SKILLS_GITHUB_APP_INSTALLATION_ID", ""), "Installation ID of the skills GitHub App (AGENT_MANAGER_SKILLS_GITHUB_APP_INSTALLATION_ID)")
+	f.StringVar(&o.skillsAppKeyFile, "skills-github-app-private-key-file", envOr("AGENT_MANAGER_SKILLS_GITHUB_APP_PRIVATE_KEY_FILE", ""), "PEM private key file of the skills GitHub App (AGENT_MANAGER_SKILLS_GITHUB_APP_PRIVATE_KEY_FILE)")
+	f.StringVar(&o.skillsGitAuth, "skills-git-auth-secret-name", envOr("AGENT_MANAGER_SKILLS_GIT_AUTH_SECRET_NAME", ""), "Secret (key token) in the agent's namespace every agent with a git skill fetches its skills with, unless the agent names its own gitAuthSecretName; composed as the chart value skillsGitAuthSecretRef.name. Empty: such agents fetch anonymously (AGENT_MANAGER_SKILLS_GIT_AUTH_SECRET_NAME)")
 	f.DurationVar(&o.skillsCacheTTL, "skills-cache-ttl", envDuration("AGENT_MANAGER_SKILLS_CACHE_TTL", 5*time.Minute), "How long a repository's discovered skills are reused (AGENT_MANAGER_SKILLS_CACHE_TTL)")
 	f.BoolVar(&o.mcpEnabled, "mcp-enabled", envBool("AGENT_MANAGER_MCP_ENABLED", true), "Serve the MCP streamable-HTTP endpoint (AGENT_MANAGER_MCP_ENABLED)")
 	f.StringVar(&o.mcpPath, "mcp-path", envOr("AGENT_MANAGER_MCP_PATH", "/mcp"), "MCP endpoint path (AGENT_MANAGER_MCP_PATH)")
@@ -128,6 +136,10 @@ environment variable named next to it; flags win over the environment.`,
 
 func runServe(ctx context.Context, o *serveOptions) error {
 	log := slog.Default()
+	skillsTokens, err := skillsTokenSource(o)
+	if err != nil {
+		return err
+	}
 	if o.githubAuthorizationServer != "" && !o.oauthEnabled {
 		return fmt.Errorf("--github-authorization-server needs --enable-oauth: the forwarded IdP ID token is validated by the OAuth resource server")
 	}
@@ -191,11 +203,11 @@ func runServe(ctx context.Context, o *serveOptions) error {
 
 	var discoverer *skills.Discoverer
 	if repos := splitList(o.skillsRepositories); len(repos) > 0 {
-		discoverer = skills.New(skills.Config{Repositories: repos, APIURL: o.skillsGitHubAPI, Token: o.skillsToken, CacheTTL: o.skillsCacheTTL}, log)
+		discoverer = skills.New(skills.Config{Repositories: repos, APIURL: o.skillsGitHubAPI, Tokens: skillsTokens, CacheTTL: o.skillsCacheTTL}, log)
 	}
 	// Skills are pinned before they are written: a branch or tag to its head
 	// commit through the GitHub API, an image tag to its digest.
-	pinner := skills.NewResolver(o.skillsGitHubAPI, o.skillsToken, nil, nil)
+	pinner := skills.NewResolver(o.skillsGitHubAPI, skillsTokens, nil, nil)
 
 	svc := agents.New(provider, resolver, discoverer, pinner, agents.Config{
 		DefaultNamespace:  o.kagentNamespace,
@@ -211,6 +223,7 @@ func runServe(ctx context.Context, o *serveOptions) error {
 			OCIRepositoryAPIVersion: ociRepositoryAPI,
 			MusterURL:               o.musterURL,
 			HarnessName:             o.harnessName,
+			SkillsGitAuthSecretName: o.skillsGitAuth,
 		},
 		KagentAPIVersion: kagentVersion,
 		Version:          build.Version,
@@ -246,7 +259,7 @@ func runServe(ctx context.Context, o *serveOptions) error {
 	log.Info("agent-manager starting", "version", build.Version, "commit", build.Commit, "listen", o.listen, "rest", api.Prefix, "mcp", o.mcpPath, "mcpEnabled", o.mcpEnabled,
 		"oauth", o.oauthEnabled, "downstreamOAuth", o.downstreamOAuth, "commit", info.Capabilities["commit"], "identity", info.Identity,
 		"namespaces", info.Namespaces.Managed, "chart", o.chartOCIURL, "chartSemver", o.chartSemver, "chartVersion", info.Chart.LatestVersion, "schemaSource", info.Chart.SchemaSource,
-		"kagentAPI", kagentVersion, "harness", info.Harness.Name, "musterURL", info.Muster.URL, "helmReleaseAPI", helmReleaseAPI, "ociRepositoryAPI", ociRepositoryAPI, "skillsRepositories", info.SkillsRepositories)
+		"kagentAPI", kagentVersion, "harness", info.Harness.Name, "musterURL", info.Muster.URL, "helmReleaseAPI", helmReleaseAPI, "ociRepositoryAPI", ociRepositoryAPI, "skillsRepositories", info.SkillsRepositories, "skillsGitHubApp", o.skillsAppID, "skillsGitAuthSecretName", o.skillsGitAuth)
 
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -324,4 +337,20 @@ func gitHubRemote(authorizationServer, apiURL string) agents.RemoteFor {
 		}
 		return commit.NewGitHub(token, commit.WithBaseURL(apiURL))
 	}
+}
+
+// skillsTokenSource is what skills are read with: the skills GitHub App's
+// installation tokens, a static token, or nothing (anonymous).
+func skillsTokenSource(o *serveOptions) (skills.TokenSource, error) {
+	if o.skillsAppID == "" && o.skillsAppInstall == "" && o.skillsAppKeyFile == "" {
+		return skills.StaticToken(o.skillsToken), nil
+	}
+	if o.skillsToken != "" {
+		return nil, fmt.Errorf("--skills-github-app-id and --skills-github-token (GITHUB_TOKEN) are mutually exclusive: skills are read with one credential")
+	}
+	key, err := os.ReadFile(o.skillsAppKeyFile)
+	if err != nil {
+		return nil, fmt.Errorf("--skills-github-app-private-key-file: %w", err)
+	}
+	return skills.NewApp(o.skillsGitHubAPI, o.skillsAppID, o.skillsAppInstall, key, nil)
 }

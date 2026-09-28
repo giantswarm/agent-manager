@@ -2,13 +2,19 @@ package skills
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -80,7 +86,18 @@ func fakeGitHub(t *testing.T) (*httptest.Server, *int) {
 			http.Error(w, `{"message":"Not Found"}`, http.StatusNotFound)
 			return
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"default_branch": "trunk"})
+		_ = json.NewEncoder(w).Encode(map[string]any{"default_branch": "trunk", "private": true})
+	})
+	mux.HandleFunc("/repos/giantswarm/private-skills/collaborators/", func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		switch r.URL.Path {
+		case "/repos/giantswarm/private-skills/collaborators/alice/permission":
+			_ = json.NewEncoder(w).Encode(map[string]any{"permission": "read"})
+		case "/repos/giantswarm/private-skills/collaborators/carol/permission":
+			_ = json.NewEncoder(w).Encode(map[string]any{"permission": "none"})
+		default:
+			http.Error(w, `{"message":"Not Found"}`, http.StatusNotFound)
+		}
 	})
 	mux.HandleFunc("/repos/giantswarm/private-skills/commits/trunk", func(w http.ResponseWriter, _ *http.Request) {
 		hits++
@@ -93,7 +110,7 @@ func fakeGitHub(t *testing.T) (*httptest.Server, *int) {
 
 func TestDiscoverMirrorsThePortalSemantics(t *testing.T) {
 	ts, hits := fakeGitHub(t)
-	d := New(Config{Repositories: []string{"https://github.com/giantswarm/agent-skills.git"}, APIURL: ts.URL, Token: "secret", CacheTTL: time.Minute}, nil)
+	d := New(Config{Repositories: []string{"https://github.com/giantswarm/agent-skills.git"}, APIURL: ts.URL, Tokens: StaticToken("secret"), CacheTTL: time.Minute}, nil)
 
 	res, err := d.List(context.Background(), "", "", false)
 	require.NoError(t, err)
@@ -131,7 +148,7 @@ func TestDiscoverMirrorsThePortalSemantics(t *testing.T) {
 
 func TestListRejectsNonGitHubRepositoriesAndReportsUnreadableOnes(t *testing.T) {
 	ts, _ := fakeGitHub(t)
-	d := New(Config{APIURL: ts.URL, Token: "secret"}, nil)
+	d := New(Config{APIURL: ts.URL, Tokens: StaticToken("secret")}, nil)
 	_, err := d.List(context.Background(), "https://gitlab.com/x/y", "", false)
 	assert.Error(t, err)
 
@@ -145,7 +162,7 @@ func TestListRejectsNonGitHubRepositoriesAndReportsUnreadableOnes(t *testing.T) 
 func TestResolverPinsGitRefs(t *testing.T) {
 	ts, _ := fakeGitHub(t)
 	ctx := context.Background()
-	r := NewResolver(ts.URL, "secret", nil, nil)
+	r := NewResolver(ts.URL, StaticToken("secret"), nil, nil)
 	repo := "https://github.com/giantswarm/agent-skills"
 
 	for ref, want := range map[string]string{"": headCommit, "main": headCommit, "feature": featureCommit, "v1.2.0": tagCommit, tagCommit: tagCommit} {
@@ -161,11 +178,11 @@ func TestResolverPinsGitRefs(t *testing.T) {
 
 	// A private repository without a token: an error naming the repository
 	// and the missing credential, never a crash; with a token it resolves.
-	anonymous := NewResolver(ts.URL, "", nil, nil)
+	anonymous := NewResolver(ts.URL, nil, nil, nil)
 	_, err = anonymous.GitHead(ctx, "https://github.com/giantswarm/private-skills", "")
 	require.ErrorIs(t, err, ErrUnresolvable)
 	assert.Contains(t, err.Error(), "https://github.com/giantswarm/private-skills")
-	assert.Contains(t, err.Error(), "GITHUB_TOKEN")
+	assert.Contains(t, err.Error(), "skills GitHub App")
 	got, err := r.GitHead(ctx, "https://github.com/giantswarm/private-skills", "")
 	require.NoError(t, err)
 	assert.Equal(t, tagCommit, got)
@@ -175,7 +192,7 @@ func TestResolverPinsOCITags(t *testing.T) {
 	f := ocitest.New(t, "giantswarm/skills/kubectl")
 	f.Tags = []string{"1.4.0", "latest"}
 	ctx := context.Background()
-	r := NewResolver("", "", nil, oci.NewRegistry(nil))
+	r := NewResolver("", nil, nil, oci.NewRegistry(nil))
 	insecure := func(ref string) string { return f.Host() + "/" + f.Repo + ref }
 
 	// The fake speaks plain HTTP; ParseImageReference yields a secure
@@ -220,4 +237,67 @@ func TestParseFrontmatter(t *testing.T) {
 	assert.Equal(t, map[string]string{"name": "a", "description": "b c"}, parseFrontmatter("---\nname: a\ndescription: b c\nlist: [1]\n---\nrest"))
 	assert.Empty(t, parseFrontmatter("no frontmatter"))
 	assert.Empty(t, parseFrontmatter("---\nname: unterminated\n"))
+}
+
+func TestRequireReadableGatesPrivateRepositoriesOnThePerson(t *testing.T) {
+	ts, hits := fakeGitHub(t)
+	r := NewResolver(ts.URL, StaticToken("secret"), nil, nil)
+	ctx := context.Background()
+	private := "https://github.com/giantswarm/private-skills"
+
+	require.NoError(t, r.RequireReadable(ctx, "https://github.com/giantswarm/agent-skills", ""), "a public repository is everyone's")
+	require.NoError(t, r.RequireReadable(ctx, private, "alice"))
+	for _, login := range []string{"bob", "carol"} {
+		err := r.RequireReadable(ctx, private, login)
+		require.ErrorIs(t, err, ErrNotReadable, login)
+		assert.Contains(t, err.Error(), login)
+		assert.Contains(t, err.Error(), private)
+	}
+	err := r.RequireReadable(ctx, private, "")
+	require.ErrorIs(t, err, ErrNotReadable, "an unknown person cannot be checked, so a private repository is refused")
+	assert.Contains(t, err.Error(), "core_auth_login server=agent-manager")
+
+	before := *hits
+	require.NoError(t, r.RequireReadable(ctx, private, "Alice"), "logins are case-insensitive")
+	require.ErrorIs(t, r.RequireReadable(ctx, private, "bob"), ErrNotReadable)
+	assert.Equal(t, before, *hits, "answers are cached")
+}
+
+func TestAppMintsAndRenewsInstallationTokens(t *testing.T) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+	pemKey := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})
+	minted := 0
+	expiry := time.Now().Add(time.Hour)
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodPost, r.Method)
+		require.Equal(t, "/app/installations/42/access_tokens", r.URL.Path)
+		claims := jwt.RegisteredClaims{}
+		_, err := jwt.ParseWithClaims(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "), &claims, func(*jwt.Token) (any, error) { return &key.PublicKey, nil }, jwt.WithValidMethods([]string{"RS256"}))
+		require.NoError(t, err, "the App JWT is signed with the App's key")
+		assert.Equal(t, "1234", claims.Issuer)
+		minted++
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(map[string]any{"token": fmt.Sprintf("ghs_%d", minted), "expires_at": expiry})
+	}))
+	defer ts.Close()
+
+	app, err := NewApp(ts.URL, "1234", "42", pemKey, nil)
+	require.NoError(t, err)
+	ctx := context.Background()
+	for range 3 {
+		tok, err := app.Token(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, "ghs_1", tok)
+	}
+	expiry = time.Now().Add(2 * time.Hour)
+	app.expires = time.Now().Add(time.Minute) // about to expire
+	tok, err := app.Token(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, "ghs_2", tok)
+
+	_, err = NewApp(ts.URL, "", "42", pemKey, nil)
+	require.Error(t, err)
+	_, err = NewApp(ts.URL, "1234", "42", []byte("not a key"), nil)
+	require.Error(t, err)
 }

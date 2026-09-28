@@ -71,6 +71,15 @@ spec:
             {{- end }}
             - --skills-github-api={{ .Values.skills.github.apiUrl }}
             - --skills-cache-ttl={{ .Values.skills.cacheTTL }}
+            {{- with .Values.skills.gitAuthSecretName }}
+            - --skills-git-auth-secret-name={{ . }}
+            {{- end }}
+            {{- if .Values.skills.github.app.secretName }}
+            {{- if .Values.skills.github.tokenSecret.name }}
+            {{- fail "skills.github.app.secretName and skills.github.tokenSecret.name are mutually exclusive: skills are read with one credential" }}
+            {{- end }}
+            - --skills-github-app-private-key-file=/etc/agent-manager/skills-github-app/private-key
+            {{- end }}
             - --mcp-enabled={{ .Values.mcp.enabled }}
             - --mcp-path={{ .Values.mcp.path }}
             {{- if .Values.oauth.enabled }}
@@ -139,6 +148,18 @@ spec:
                   name: {{ include "agent-manager.oauthSecretName" . }}
                   key: dex-client-secret
             {{- end }}
+            {{- end }}
+            {{- with .Values.skills.github.app.secretName }}
+            - name: AGENT_MANAGER_SKILLS_GITHUB_APP_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ . }}
+                  key: app-id
+            - name: AGENT_MANAGER_SKILLS_GITHUB_APP_INSTALLATION_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ . }}
+                  key: installation-id
             {{- end }}
             {{- with .Values.skills.github.tokenSecret.name }}
             - name: GITHUB_TOKEN
@@ -232,6 +253,11 @@ spec:
               mountPath: /etc/agent-manager/idp-ca
               readOnly: true
             {{- end }}
+            {{- if .Values.skills.github.app.secretName }}
+            - name: skills-github-app
+              mountPath: /etc/agent-manager/skills-github-app
+              readOnly: true
+            {{- end }}
       volumes:
         - name: tmp
           emptyDir: {}
@@ -242,6 +268,14 @@ spec:
             items:
               - key: {{ include "agent-manager.oauthDexCASecretKey" . }}
                 path: {{ include "agent-manager.oauthDexCASecretKey" . }}
+        {{- end }}
+        {{- with .Values.skills.github.app.secretName }}
+        - name: skills-github-app
+          secret:
+            secretName: {{ . }}
+            items:
+              - key: private-key
+                path: private-key
         {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:

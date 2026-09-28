@@ -25,7 +25,7 @@
                         },
                         "url": {
                             "type": "string",
-                            "description": "http(s) URL of the repository.",
+                            "description": "http(s) URL of the repository. A private repository needs `skillsGitAuthSecretRef` and an https URL.",
                             "pattern": "^https?://\\S+$"
                         }
                     }
@@ -82,7 +82,7 @@
             "properties": {
                 "description": {
                     "type": "string",
-                    "description": "Rendered into the AgentTemplate's spec.description."
+                    "description": "Rendered into the AgentTemplate's spec.description. It shares the compiled agent config's size budget with the system prompt (see systemMessage), so keep it to a few sentences."
                 },
                 "displayName": {
                     "type": "string",
@@ -108,7 +108,8 @@
                 },
                 "systemMessage": {
                     "type": "string",
-                    "description": "The agent's system prompt. Rendered into the AgentTemplate's spec.systemPrompt.",
+                    "description": "The agent's system prompt. Rendered into the AgentTemplate's spec.systemPrompt. At most 20000 characters; move long reference material into a skill. A prompt heavy in `<`, `>` or `&` can still exceed the runtime limit under this cap, and the AgentTemplate then reports why.",
+                    "maxLength": 20000,
                     "minLength": 1
                 }
             }
@@ -150,6 +151,73 @@
         },
         "clusterID": {
             "type": "string"
+        },
+        "context": {
+            "type": "object",
+            "description": "Kept for the values of existing releases; rendered into nothing. Context compaction moved from the AgentTemplate to the platform Harness (kagent-dev/kagent#2790; Harness.spec.kagent.compaction, set by the platform as kagent.harness.compaction), where it applies to every agent the Harness admits. The kagent line from 1.1.0 has no spec.context on the AgentTemplate, and a template that carries it is refused at admission. Everything under this key is ignored.",
+            "additionalProperties": false,
+            "properties": {
+                "compaction": {
+                    "type": "object",
+                    "description": "Compaction keeps the prompt bounded as a turn grows. Without it every tool result stays in the history verbatim and every later model call of the turn re-reads all of it: a status question that lists pods and events grows from 6 k to 60 k input tokens in ten calls, waits 9-19 s for the first token of every call after a large listing, and pays for the whole history on every call. The default is tail retention, the strategy that bounds a long tool loop: before a model call whose prompt has passed `tokenThreshold`, the runtime replaces everything but the last `eventRetentionSize` events and the turn's own question with one rolling summary (the previous summary is folded into the next, so the history is one summary plus a raw tail). A summary is a model call too — on the agent's own model unless `summarizer` names another — and it reads the events it replaces once, so a turn under the threshold pays nothing and a turn over it pays one summary per crossing instead of re-reading the whole history on every call; what leaves the raw tail survives only as the summary describes it (values and the registered tool names verbatim, per the runtime's default prompt).",
+                    "additionalProperties": false,
+                    "properties": {
+                        "compactionInterval": {
+                            "type": [
+                                "integer",
+                                "null"
+                            ],
+                            "description": "Sliding window: after every N completed turns of a conversation, summarise those turns as a whole (a second strategy, for long conversations of short turns; it never re-summarises, so it reduces growth without bounding it). Unset (the default) leaves it off. At least one of `tokenThreshold` and `compactionInterval` must be set.",
+                            "minimum": 1
+                        },
+                        "enabled": {
+                            "type": "boolean",
+                            "description": "Render spec.context.compaction. `false` renders no spec.context at all: the agent keeps every word of a long turn verbatim and pays for re-reading it."
+                        },
+                        "eventRetentionSize": {
+                            "type": [
+                                "integer",
+                                "null"
+                            ],
+                            "description": "Most recent events kept verbatim when compaction fires; everything older is summarised. A tool exchange is two events (the model's call, the tool's result), so 4 keeps the last two exchanges raw — the results the agent is still working with; the turn's own question is always kept. Needs `tokenThreshold`.",
+                            "minimum": 1
+                        },
+                        "overlapSize": {
+                            "type": [
+                                "integer",
+                                "null"
+                            ],
+                            "description": "Already-compacted turns pulled back into the next window so consecutive summaries overlap; only with `compactionInterval`, and repeated text in the prompt is its price.",
+                            "minimum": 0
+                        },
+                        "summarizer": {
+                            "type": "object",
+                            "description": "Who writes the summaries. Both empty (the default): the agent's own model with the runtime's default prompt.",
+                            "additionalProperties": false,
+                            "properties": {
+                                "modelConfig": {
+                                    "type": "string",
+                                    "description": "Name of a ModelConfig in the agent's namespace to summarise with — a cheaper or faster model than the agent's. Its credentials and egress join the agent's revision; a change to it recompiles the agent.",
+                                    "maxLength": 63,
+                                    "pattern": "^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+                                },
+                                "promptTemplate": {
+                                    "type": "string",
+                                    "description": "Replaces the runtime's default summarisation prompt; must contain `{conversation_history}`, which the runtime fills with the rendered events. The runtime appends its tool-name instruction, so summaries keep the namespaced tool names the agent calls by. A prompt that asks only for brevity loses the concrete values the default carries forward; keep that instruction."
+                                }
+                            }
+                        },
+                        "tokenThreshold": {
+                            "type": [
+                                "integer",
+                                "null"
+                            ],
+                            "description": "Prompt token count at which tail-retention compaction summarises the history before the next model call — the last model response's prompt tokens plus an estimate of what the turn appended since. 24 000 leaves room for a system prompt with skills and the muster meta-tools (~6 k) plus a few tool results, and sits under where the first-token wait of an uncached pass starts to cost seconds on the platform's models. Needs `eventRetentionSize`; unset with `compactionInterval` set leaves tail retention off.",
+                            "minimum": 1
+                        }
+                    }
+                }
+            }
         },
         "extraAgentSpec": {
             "type": "object",
@@ -210,6 +278,15 @@
                     "type": "boolean",
                     "description": "Wire muster into the agent's tools: render the agent's RemoteMCPServer and bind it in the AgentTemplate."
                 },
+                "requireApproval": {
+                    "type": "boolean",
+                    "description": "Pause the agent before every tool call through muster until a person approves it. Rendered as `requireApproval: true` on the binding (kagent's human-in-the-loop): the Harness stops the task at `input-required` for each call and continues with the person's decision. It applies to the tools the binding exposes — `tools` when set, otherwise every muster tool. A client that negotiates kagent's HITL A2A extension (`https://kagent.dev/extensions/hitl/v1`) receives the structured `tool_approval_request` and answers it; one that does not sees a plain notice that human input is required. Off by default: the agent calls tools without asking."
+                },
+                "timeout": {
+                    "type": "string",
+                    "description": "How long one tool call through muster may run before the agent's runtime cancels it, rendered as given into the RemoteMCPServer's spec.timeout (a duration with a unit: `180s`, `5m`). Without the field kagent applies its own 30 s, which cuts a backend tool that legitimately runs longer — a write that creates a repository and opens a pull request in one call, a watch that blocks for minutes — although muster's own per-server budget for that backend allows more. The default matches the longest budget a muster backend declares in its spec.timeout, so a call is bounded by its backend, not by the caller.",
+                    "pattern": "^[0-9]+(ms|s|m|h)$"
+                },
                 "tools": {
                     "type": "array",
                     "description": "Set to narrow the binding to a subset of muster's meta-tools (`list_tools`, `call_tool`, ...); leave empty to bind every tool. Rendered into the binding's `tools`. A toolset is the way to narrow the tools behind the gateway. A Harness enforces a partial selection only when it can discover the server's tools; with discovery off (the default) it may expose the whole server and report a warning in the template's status.harnesses[].warnings.",
@@ -232,11 +309,24 @@
         },
         "skills": {
             "type": "array",
-            "description": "Agent skills, each pinned to an immutable source the Harness materialises for the agent. An entry is `{name, git: {url, commit}, path}` — a public http(s) git repository at a full 40- or 64-hex commit id, `path` the skill's directory within the checkout — or `{name, oci: <ref@sha256:...>}`, a digest-pinned image (`path` selects a directory within it). Rendered into the AgentTemplate's spec.skills[] as `{name, source: {git | oci, path}}`. Names are unique; exactly one of git and oci is set. A branch, a tag, a short SHA or an OCI tag fails the render with a message naming the field (the CRD refuses them at admission); the composers pin skills to a commit and re-pin them on demand. Private repositories are not supported in 1.x.",
+            "description": "Agent skills, each pinned to an immutable source the Harness materialises for the agent. An entry is `{name, git: {url, commit}, path}` — a public http(s) git repository at a full 40- or 64-hex commit id, `path` the skill's directory within the checkout — or `{name, oci: <ref@sha256:...>}`, a digest-pinned image (`path` selects a directory within it). Rendered into the AgentTemplate's spec.skills[] as `{name, source: {git | oci, path}}`. Names are unique; exactly one of git and oci is set. A branch, a tag, a short SHA or an OCI tag fails the render with a message naming the field (the CRD refuses them at admission); the composers pin skills to a commit and re-pin them on demand. A private repository needs `skillsGitAuthSecretRef` below.",
             "items": {
                 "$ref": "#/$defs/skill.schema.json"
             },
             "maxItems": 50
+        },
+        "skillsGitAuthSecretRef": {
+            "type": "object",
+            "description": "One read credential for every private git skill. The chart never creates the Secret; the tenant provisions it in the agent's namespace (on the platform: the namespace the templates are compiled in).",
+            "additionalProperties": false,
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "Name of a Secret in the agent's namespace whose key `token` holds a read token for the https hosts of the agent's private git skills — a GitHub fine-grained PAT or App installation token, a GitLab PAT (the runtime presents `x-access-token` as the username). When set, every `skills[]` entry with `git` renders `source.git.credentialRef: {name, key: token}`; OCI sources are unchanged. The runtime offers the token to that source's https host only, on challenge only — a public repository with a credential still fetches. Empty (the default) renders anonymous fetches. Requires an `https://` URL on every git skill: the CRD refuses a credential on a plain http source, and the chart fails the render first, naming the skill. Secret missing: the template's Harness condition reads `ResolvedRefs=False` (`secret \"…\" not found`), no actor boots, and it recovers when the Secret appears. Wrong token: `Ready=False ActorTemplatePending` with git's authentication error in the actor's log. Rotate the Secret's contents, never its name — a renamed Secret means editing every referencing agent, a rotated token re-boots only the referencing agents. Served by a kagent line that carries the field (giantswarm/kagent-upstream, `0.11.0-gs.x`); a kagent without it prunes the field and fetches anonymously.",
+                    "maxLength": 253,
+                    "pattern": "^$|^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$"
+                }
+            }
         },
         "subscriptionID": {
             "type": "string"

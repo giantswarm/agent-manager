@@ -199,6 +199,11 @@ type Spec struct {
 	IconURL string `json:"iconUrl,omitempty"`
 	// Skills the agent mounts; every entry is pinned before it is written.
 	Skills Skills `json:"skills,omitempty"`
+	// GitAuthSecretName names the Secret in the agent's namespace whose key
+	// `token` reads the agent's private git skills (chart value
+	// skillsGitAuthSecretRef.name, fanned out to every git skill). Empty
+	// selects the installation's (ComposeConfig.SkillsGitAuthSecretName).
+	GitAuthSecretName string `json:"gitAuthSecretName,omitempty"`
 	// Toolset is the list of selectors that bounds which of the gateway's
 	// tools the agent can use (chart value `toolset`). Required on create;
 	// see ValidateToolset for the grammar.
@@ -221,17 +226,20 @@ type Spec struct {
 // chart default). Skills replace the whole list; Toolset replaces the whole
 // list (an empty list is refused: use preset:none).
 type Update struct {
-	Namespace     string             `json:"namespace,omitempty"`
-	Name          string             `json:"name"`
-	DisplayName   *string            `json:"displayName,omitempty"`
-	Description   *string            `json:"description,omitempty"`
-	SystemMessage *string            `json:"systemMessage,omitempty"`
-	ModelConfig   *string            `json:"modelConfig,omitempty"`
-	IconURL       *string            `json:"iconUrl,omitempty"`
-	Skills        *Skills            `json:"skills,omitempty"`
-	Toolset       *[]string          `json:"toolset,omitempty"`
-	Labels        *map[string]string `json:"labels,omitempty"`
-	Annotations   *map[string]string `json:"annotations,omitempty"`
+	Namespace     string  `json:"namespace,omitempty"`
+	Name          string  `json:"name"`
+	DisplayName   *string `json:"displayName,omitempty"`
+	Description   *string `json:"description,omitempty"`
+	SystemMessage *string `json:"systemMessage,omitempty"`
+	ModelConfig   *string `json:"modelConfig,omitempty"`
+	IconURL       *string `json:"iconUrl,omitempty"`
+	Skills        *Skills `json:"skills,omitempty"`
+	// GitAuthSecretName replaces the skills credential Secret; empty clears it
+	// back to the installation's.
+	GitAuthSecretName *string            `json:"gitAuthSecretName,omitempty"`
+	Toolset           *[]string          `json:"toolset,omitempty"`
+	Labels            *map[string]string `json:"labels,omitempty"`
+	Annotations       *map[string]string `json:"annotations,omitempty"`
 	// RefreshSkills re-resolves every git skill of the agent to the head of
 	// its repository's default branch — a skill passed in Skills with a Ref
 	// goes to that ref's head — and changes nothing else on the release.

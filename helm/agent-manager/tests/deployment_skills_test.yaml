@@ -1,0 +1,81 @@
+# The skills credentials the Deployment renders: the read-only skills GitHub
+# App (installation tokens) or a static token for discovery and pinning, and
+# the Secret every agent with a git skill boots with.
+#
+# Run with: make helm-test (helm unittest helm/agent-manager)
+suite: deployment skills credentials
+templates:
+  - templates/deployment.yaml
+tests:
+  - it: reads skills with the skills GitHub App from its Secret
+    set:
+      skills:
+        github:
+          app:
+            secretName: skills-github-app
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --skills-github-app-private-key-file=/etc/agent-manager/skills-github-app/private-key
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: AGENT_MANAGER_SKILLS_GITHUB_APP_ID
+            valueFrom:
+              secretKeyRef:
+                name: skills-github-app
+                key: app-id
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: AGENT_MANAGER_SKILLS_GITHUB_APP_INSTALLATION_ID
+            valueFrom:
+              secretKeyRef:
+                name: skills-github-app
+                key: installation-id
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: skills-github-app
+            secret:
+              secretName: skills-github-app
+              items:
+                - key: private-key
+                  path: private-key
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: GITHUB_TOKEN
+          any: true
+
+  - it: refuses the App and a static token together
+    set:
+      skills:
+        github:
+          app:
+            secretName: skills-github-app
+          tokenSecret:
+            name: github-token
+    asserts:
+      - failedTemplate:
+          errorPattern: mutually exclusive
+
+  - it: composes the installation's skills credential only when set
+    set:
+      skills:
+        gitAuthSecretName: kagent-skills-token
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --skills-git-auth-secret-name=kagent-skills-token
+
+  - it: renders no skills credential by default
+    asserts:
+      - notContains:
+          path: spec.template.spec.volumes
+          content:
+            name: skills-github-app
+          any: true
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: skills-git-auth

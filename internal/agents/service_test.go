@@ -1010,3 +1010,63 @@ func TestCreateOnTheHarnessTheCallerNames(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, DefaultHarnessName, plain.Manifests.Values["agent"].(map[string]any)["harness"], "no harness is the platform Harness")
 }
+
+func TestUpdateKeepsTheSkillsCredentialInStep(t *testing.T) {
+	f := seeded(t)
+	f.svc.cfg.Compose.SkillsGitAuthSecretName = "kagent-skills-token"
+	ctx := context.Background()
+	credential := func(res *UpdateResult) any { return res.After[SkillsGitAuthValuesKey] }
+
+	// A git skill gets the installation's credential.
+	res, err := f.svc.Update(ctx, Update{Name: "verifier", Skills: &Skills{{Git: &GitSkill{URL: skillsRepo, Ref: "feature"}, Path: "runbooks"}}})
+	require.NoError(t, err)
+	assert.Equal(t, map[string]any{"name": "kagent-skills-token"}, credential(res))
+	assert.Contains(t, res.Changed, "skillsGitAuthSecretRef.name")
+
+	// The agent's own wins, "" goes back to the installation's.
+	res, err = f.svc.Update(ctx, Update{Name: "verifier", GitAuthSecretName: str("team-token")})
+	require.NoError(t, err)
+	assert.Equal(t, map[string]any{"name": "team-token"}, credential(res))
+	assert.Equal(t, []string{"skillsGitAuthSecretRef.name"}, res.Changed)
+	res, err = f.svc.Update(ctx, Update{Name: "verifier", Description: str("unrelated")})
+	require.NoError(t, err)
+	assert.Equal(t, map[string]any{"name": "team-token"}, credential(res), "an unrelated update keeps the agent's own")
+	res, err = f.svc.Update(ctx, Update{Name: "verifier", GitAuthSecretName: str("")})
+	require.NoError(t, err)
+	assert.Equal(t, map[string]any{"name": "kagent-skills-token"}, credential(res))
+
+	// Without a git skill the credential is dropped.
+	res, err = f.svc.Update(ctx, Update{Name: "verifier", Skills: &Skills{{OCI: kubectlRef + ":1.4.0"}}})
+	require.NoError(t, err)
+	assert.Nil(t, credential(res))
+}
+
+func TestCreateRefusesSkillsFromARepositoryTheCallerCannotRead(t *testing.T) {
+	f := seeded(t)
+	private := Skills{{Name: "gips", Path: "gips", Git: &GitSkill{URL: privateSkillsRepo, Commit: mainHead}}}
+	spec := func(name string) Spec {
+		return Spec{Name: name, ModelConfig: "default-model-config", Toolset: []string{"preset:read-only"}, Skills: private}
+	}
+	asGitHub := func(login string) context.Context {
+		return identity.ContextWithGitHub(context.Background(), &identity.GitHub{Login: login, Token: "ghu_" + login})
+	}
+
+	for name, ctx := range map[string]context.Context{"john": asGitHub("john"), "unknown": context.Background()} {
+		_, err := f.svc.Create(ctx, spec("refused-"+name))
+		require.ErrorIs(t, err, ErrForbidden, name)
+		assert.Contains(t, err.Error(), privateSkillsRepo)
+		_, getErr := f.dyn.Resource(hrGVR).Namespace("kagent").Get(ctx, "refused-"+name, metav1.GetOptions{})
+		assert.True(t, apierrors.IsNotFound(getErr), "a refusal writes nothing")
+		dry, err := f.svc.ValidateCreate(ctx, spec("refused-"+name))
+		require.NoError(t, err)
+		assert.False(t, dry.Valid)
+		assert.Contains(t, strings.Join(dry.Errors, "\n"), privateSkillsRepo)
+	}
+
+	_, err := f.svc.Update(asGitHub("john"), Update{Name: "verifier", Skills: &private})
+	require.ErrorIs(t, err, ErrForbidden, "an update cannot add what the caller cannot read either")
+
+	res, err := f.svc.Create(asGitHub("jane"), spec("gips-analyst"))
+	require.NoError(t, err)
+	assert.Equal(t, "gips-analyst", res.Agent.Name)
+}
