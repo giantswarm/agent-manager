@@ -30,6 +30,7 @@ import (
 	"fmt"
 	"log/slog"
 	"reflect"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -75,8 +76,8 @@ type Options struct {
 	ChartOCIURL  string
 	TargetSemver string
 	// TargetSemverFilter is the ref.semverFilter the sources move to with
-	// the range; empty removes one.
-	TargetSemverFilter string
+	// the range; empty removes one, nil leaves each source's as it is.
+	TargetSemverFilter *string
 	// ReportConfigMap names the report per namespace.
 	ReportConfigMap string
 	// DryRun prints the report and writes nothing.
@@ -103,6 +104,7 @@ type Runner struct {
 	pinner agents.SkillPinner
 	status StatusReader
 	opts   Options
+	filter *regexp.Regexp
 	log    *slog.Logger
 	now    func() time.Time
 }
@@ -119,7 +121,17 @@ func New(client kube.Client, c agents.ChartSource, p agents.SkillPinner, st Stat
 	opts.KagentAPIVersion = orDefault(opts.KagentAPIVersion, agents.DefaultKagentAPIVersion)
 	opts.HelmReleaseAPIVersion = orDefault(opts.HelmReleaseAPIVersion, agents.DefaultHelmReleaseAPIVersion)
 	opts.OCIRepositoryAPIVersion = orDefault(opts.OCIRepositoryAPIVersion, agents.DefaultOCIRepositoryAPIVersion)
-	return &Runner{client: client, chart: c, pinner: p, status: st, opts: opts, log: log, now: time.Now}
+	var filter *regexp.Regexp
+	if f := opts.TargetSemverFilter; f != nil && *f != "" {
+		re, err := regexp.Compile(*f)
+		if err != nil {
+			// The chart resolver compiled the same expression first; an invalid
+			// one never reaches here from the command.
+			log.Warn("target semver filter does not compile; releases are judged on the range only", "filter", *f, "error", err)
+		}
+		filter = re
+	}
+	return &Runner{client: client, chart: c, pinner: p, status: st, opts: opts, filter: filter, log: log, now: time.Now}
 }
 
 // Result is one run: a report per managed namespace.
@@ -134,7 +146,7 @@ func (r *Runner) Run(ctx context.Context) (*Result, error) {
 	info := r.chart.Info(ctx)
 	sch := r.chart.Schema(ctx)
 	run := RunInfo{At: r.now().UTC().Format(time.RFC3339), DryRun: r.opts.DryRun, Version: r.opts.Version, Harness: r.opts.HarnessName,
-		Chart: ChartInfo{OCIURL: r.opts.ChartOCIURL, TargetSemver: r.opts.TargetSemver, LatestVersion: info.LatestVersion, SchemaVersion: sch.Version, SchemaSource: sch.Source}}
+		Chart: ChartInfo{OCIURL: r.opts.ChartOCIURL, TargetSemver: r.opts.TargetSemver, TargetSemverFilter: r.opts.TargetSemverFilter, LatestVersion: info.LatestVersion, SchemaVersion: sch.Version, SchemaSource: sch.Source}}
 	chartAvailable := info.LatestVersion != ""
 	if !chartAvailable {
 		r.log.Warn("the registry has no chart version in the target range; no source is moved and no writable release is rewritten this run", "chart", r.opts.ChartOCIURL, "range", r.opts.TargetSemver, "error", info.Error)
@@ -546,7 +558,7 @@ func (r *Runner) rewriteRelease(ctx context.Context, st *nsState, dyn dynamic.In
 // version in the range; a GitOps-owned or external source gets the diff.
 func (r *Runner) moveSource(ctx context.Context, st *nsState, dyn dynamic.Interface, src *source, chartAvailable bool) *SourceReport {
 	rep := &SourceReport{Name: src.name, Namespace: src.ns, From: src.semver, To: r.opts.TargetSemver,
-		FromSemverFilter: src.semverFilter, ToSemverFilter: r.opts.TargetSemverFilter}
+		FromSemverFilter: src.semverFilter, ToSemverFilter: r.targetFilter(src)}
 	switch {
 	case src.external:
 		rep.Ownership = OwnershipExternal
@@ -555,12 +567,12 @@ func (r *Runner) moveSource(ctx context.Context, st *nsState, dyn dynamic.Interf
 	default:
 		rep.Ownership = OwnershipHelmRelease
 	}
-	if src.semver == r.opts.TargetSemver && src.semverFilter == r.opts.TargetSemverFilter {
+	if src.semver == r.opts.TargetSemver && src.semverFilter == rep.ToSemverFilter {
 		rep.Action, rep.Reason = ActionUnchanged, "already on the target range"
 		return rep
 	}
 	moved := &unstructured.Unstructured{Object: runtime.DeepCopyJSON(src.obj.Object)}
-	r.setTargetRef(moved)
+	r.setTargetRef(moved, rep.ToSemverFilter)
 	if src.gitops || src.external {
 		rep.Action, rep.Diff = ActionDiff, manifestDiff(src.obj, moved)
 		rep.Reason = "never written by this command: move the range in the owning repository together with its releases' values"
@@ -590,28 +602,36 @@ func (r *Runner) moveSource(ctx context.Context, st *nsState, dyn dynamic.Interf
 		return rep
 	}
 	if err := updateOnConflict(ctx, dyn.Resource(r.ociRepositoryGVR()).Namespace(src.ns), src.name, func(o *unstructured.Unstructured) error {
-		r.setTargetRef(o)
+		r.setTargetRef(o, rep.ToSemverFilter)
 		return nil
 	}); err != nil {
 		rep.Action, rep.Reason = SourceNotMoved, fmt.Sprintf("update refused: %v", err)
 		st.fail(fmt.Errorf("update OCIRepository %s/%s: %w", src.ns, src.name, err))
 		return rep
 	}
-	src.semver, src.semverFilter = r.opts.TargetSemver, r.opts.TargetSemverFilter
+	src.semver, src.semverFilter = r.opts.TargetSemver, rep.ToSemverFilter
 	st.report.Changed = true
 	r.log.Info("chart source moved", "source", src.ns+"/"+src.name, "from", rep.From, "to", rep.To)
 	return rep
 }
 
-// setTargetRef sets the target range and tag filter on an OCIRepository of the
-// agent chart; an empty target filter removes the source's.
-func (r *Runner) setTargetRef(o *unstructured.Unstructured) {
+// targetFilter is the tag filter src moves to: the target's, else its own.
+func (r *Runner) targetFilter(src *source) string {
+	if r.opts.TargetSemverFilter == nil {
+		return src.semverFilter
+	}
+	return *r.opts.TargetSemverFilter
+}
+
+// setTargetRef sets the target range and the tag filter on an OCIRepository of
+// the agent chart; an empty filter removes the source's.
+func (r *Runner) setTargetRef(o *unstructured.Unstructured, filter string) {
 	_ = unstructured.SetNestedField(o.Object, r.opts.TargetSemver, "spec", "ref", "semver")
-	if r.opts.TargetSemverFilter == "" {
+	if filter == "" {
 		unstructured.RemoveNestedField(o.Object, "spec", "ref", "semverFilter")
 		return
 	}
-	_ = unstructured.SetNestedField(o.Object, r.opts.TargetSemverFilter, "spec", "ref", "semverFilter")
+	_ = unstructured.SetNestedField(o.Object, filter, "spec", "ref", "semverFilter")
 }
 
 // updateOnConflict writes an object as a read-modify-write that survives a
@@ -709,17 +729,25 @@ func (r *Runner) templateVerdict(ctx context.Context, ns, name string) *Template
 }
 
 // releaseUpgraded is true when the release's deployed chart is in the target
-// range.
+// range and, with a target filter, one of the tags it admits.
 func (r *Runner) releaseUpgraded(rel *release) bool {
+	if r.filter != nil && !r.filter.MatchString(chartTag(rel.report.ChartVersion)) {
+		return false
+	}
 	return versionInRange(rel.report.ChartVersion, r.opts.TargetSemver)
 }
 
-// versionInRange checks a deployed chart version (Flux may append the OCI
-// digest as @sha256:… or build metadata) against the range.
-func versionInRange(version, constraint string) bool {
+// chartTag is a deployed chart version without the OCI digest (@sha256:…) or
+// build metadata Flux may append.
+func chartTag(version string) string {
 	v, _, _ := strings.Cut(version, "@")
 	v, _, _ = strings.Cut(v, "+")
-	parsed, err := semver.StrictNewVersion(v)
+	return v
+}
+
+// versionInRange checks a deployed chart version against the range.
+func versionInRange(version, constraint string) bool {
+	parsed, err := semver.StrictNewVersion(chartTag(version))
 	if err != nil {
 		return false
 	}

@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- `agentChart.semverFilter` (`--agent-chart-semver-filter`, `AGENT_CHART_SEMVER_FILTER`): a regular expression the agent chart's tags must match before `agentChart.semver` is evaluated. It is composed as the per-namespace OCIRepository's `ref.semverFilter`, the resolver picks the version whose values schema validates agents among the matching tags only, and `migrate` moves a source's filter together with its range (the report carries `fromSemverFilter`/`toSemverFilter`). With a range that admits pre-releases, `^v?[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$` follows release candidates and keeps the chart's branch builds out. Empty (default) filters nothing.
+- `agentChart.semverFilter` (`--agent-chart-semver-filter`, `AGENT_CHART_SEMVER_FILTER`): a regular expression the agent chart's tags must match before `agentChart.semver` is evaluated. It is composed as the per-namespace OCIRepository's `ref.semverFilter`, the resolver picks the version whose values schema validates agents among the matching tags only, and `migrate`, when the flag or variable is given (even empty), moves a source's filter together with its range; left unset, each source keeps its own. A release deployed from a tag the filter rejects counts as not upgraded yet. The report carries `targetSemverFilter` and each source's `fromSemverFilter`/`toSemverFilter`. With a range that admits pre-releases, `^v?[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$` follows release candidates and keeps the chart's branch builds out. Empty (default) filters nothing.
 
 ### Fixed
 

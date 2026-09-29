@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"strings"
 	"time"
 
@@ -36,6 +37,9 @@ type migrateOptions struct {
 	chartOCIURL       string
 	chartSemver       string
 	chartSemverFilter string
+	// chartSemverFilterSet is true when the flag or its variable is given,
+	// even empty: only then does migrate change the sources' filters.
+	chartSemverFilterSet bool
 
 	skillsGitHubAPI string
 	skillsToken     string
@@ -79,6 +83,8 @@ operator: no cluster access, kagent API v2 not served, a read or write the
 API server refused, the report not writable. Every flag can also be set
 through the environment variable named next to it; flags win.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			_, envSet := os.LookupEnv("AGENT_CHART_SEMVER_FILTER")
+			o.chartSemverFilterSet = envSet || cmd.Flags().Changed("agent-chart-semver-filter")
 			return runMigrate(cmd.Context(), cmd.OutOrStdout(), o)
 		},
 	}
@@ -95,7 +101,7 @@ through the environment variable named next to it; flags win.`,
 	f.StringVar(&o.ociRepositoryAPI, "flux-ocirepository-api-version", envOr("FLUX_OCIREPOSITORY_API_VERSION", "auto"), "source.toolkit.fluxcd.io API version composed into OCIRepositories; auto discovers it (FLUX_OCIREPOSITORY_API_VERSION)")
 	f.StringVar(&o.chartOCIURL, "agent-chart-oci-url", envOr("AGENT_CHART_OCI_URL", agents.DefaultChartOCIURL), "OCI URL of the agent chart every agent renders from (AGENT_CHART_OCI_URL)")
 	f.StringVar(&o.chartSemver, "agent-chart-semver", envOr("AGENT_CHART_SEMVER", agents.DefaultChartSemver), "Semver range the OCIRepository tracks; 1.x follows every 1.x release of the Generic chart and never a pre-release (AGENT_CHART_SEMVER)")
-	f.StringVar(&o.chartSemverFilter, "agent-chart-semver-filter", envOr("AGENT_CHART_SEMVER_FILTER", ""), "Regular expression the agent chart's tags must match before the range is evaluated, as the OCIRepository's ref.semverFilter; empty filters nothing (AGENT_CHART_SEMVER_FILTER)")
+	f.StringVar(&o.chartSemverFilter, "agent-chart-semver-filter", envOr("AGENT_CHART_SEMVER_FILTER", ""), "Regular expression the agent chart's tags must match before the range is evaluated, as the OCIRepository's ref.semverFilter; empty filters nothing; unset, each source keeps its own, set empty removes it (AGENT_CHART_SEMVER_FILTER)")
 	f.StringVar(&o.skillsGitHubAPI, "skills-github-api", envOr("AGENT_MANAGER_SKILLS_GITHUB_API", "https://api.github.com"), "GitHub API base URL for skill discovery and for resolving a skill's branch or tag to its head commit (AGENT_MANAGER_SKILLS_GITHUB_API)")
 	f.StringVar(&o.skillsToken, "skills-github-token", envOr("GITHUB_TOKEN", ""), "GitHub token for private skill repositories and a higher rate limit; prefer the environment (GITHUB_TOKEN)")
 	f.StringVar(&o.reportConfigMap, "report-configmap", envOr("AGENT_MANAGER_MIGRATE_REPORT_CONFIGMAP", migrate.DefaultReportConfigMap), "Name of the report ConfigMap written in every managed namespace (AGENT_MANAGER_MIGRATE_REPORT_CONFIGMAP)")
@@ -136,13 +142,17 @@ func runMigrate(ctx context.Context, out io.Writer, o *migrateOptions) error {
 	svc := agents.New(kube.NewServiceAccountProvider(clients), resolver, nil, pinner, agents.Config{
 		DefaultNamespace: o.kagentNamespace, ManagedNamespaces: splitList(o.managedNamespaces), Compose: compose, KagentAPIVersion: kagentVersion, Version: build.Version,
 	}, log)
+	var targetFilter *string
+	if o.chartSemverFilterSet {
+		targetFilter = &o.chartSemverFilter
+	}
 	runner := migrate.New(clients, resolver, pinner, svc, migrate.Options{
 		Namespaces:              svc.Info(ctx).Namespaces.Managed,
 		GitOpsNamespaces:        splitList(o.gitopsNamespaces),
 		HarnessName:             o.harnessName,
 		ChartOCIURL:             o.chartOCIURL,
 		TargetSemver:            o.chartSemver,
-		TargetSemverFilter:      o.chartSemverFilter,
+		TargetSemverFilter:      targetFilter,
 		ReportConfigMap:         o.reportConfigMap,
 		DryRun:                  o.dryRun,
 		KagentAPIVersion:        kagentVersion,
@@ -151,7 +161,7 @@ func runMigrate(ctx context.Context, out io.Writer, o *migrateOptions) error {
 		Version:                 build.Version,
 	}, log)
 	log.Info("agent-manager migrate starting", "version", build.Version, "commit", build.Commit, "namespaces", svc.Info(ctx).Namespaces.Managed, "gitopsNamespaces", splitList(o.gitopsNamespaces),
-		"chart", o.chartOCIURL, "targetSemver", o.chartSemver, "harness", o.harnessName, "kagentAPI", kagentVersion, "dryRun", o.dryRun, "report", o.reportConfigMap, "githubToken", o.skillsToken != "")
+		"chart", o.chartOCIURL, "targetSemver", o.chartSemver, "targetSemverFilter", o.chartSemverFilter, "targetSemverFilterSet", o.chartSemverFilterSet, "harness", o.harnessName, "kagentAPI", kagentVersion, "dryRun", o.dryRun, "report", o.reportConfigMap, "githubToken", o.skillsToken != "")
 
 	res, runErr := runner.Run(ctx)
 	if res != nil {

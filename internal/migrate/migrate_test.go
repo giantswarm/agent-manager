@@ -652,14 +652,16 @@ func (c *cluster) semverFilter(t *testing.T, ns, name string) (string, bool) {
 
 // A source on the target range moves when its tag filter is not the target's:
 // the filter travels with the range, set where the target has one and removed
-// where it has none; a source on both is unchanged.
+// where it is set empty; a source on both is unchanged, and without a target
+// filter every source keeps its own.
 func TestTheSourceMovesToTheTargetFilter(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	c := newCluster(migrated(t)...)
-	opts := Options{Namespaces: []string{"kagent"}, TargetSemverFilter: releaseTagFilter}
+	opts := Options{Namespaces: []string{"kagent"}, TargetSemverFilter: new(releaseTagFilter)}
 
 	res, err := c.runner(t, opts, "1.0.0", "secret").Run(ctx)
 	require.NoError(t, err)
+	assert.Equal(t, releaseTagFilter, *res.Reports[0].Run.Chart.TargetSemverFilter)
 	src := bySource(res.Reports[0])["kagent/agent"]
 	assert.Equal(t, SourceMoved, src.Action, src.Reason)
 	assert.Empty(t, src.FromSemverFilter)
@@ -674,9 +676,34 @@ func TestTheSourceMovesToTheTargetFilter(t *testing.T) {
 
 	res, err = c.runner(t, Options{Namespaces: []string{"kagent"}}, "1.0.0", "secret").Run(ctx)
 	require.NoError(t, err)
+	assert.Nil(t, res.Reports[0].Run.Chart.TargetSemverFilter)
+	src = bySource(res.Reports[0])["kagent/agent"]
+	assert.Equal(t, ActionUnchanged, src.Action, "no target filter keeps the source's")
+	assert.Equal(t, releaseTagFilter, src.ToSemverFilter)
+	got, _ = c.semverFilter(t, "kagent", "agent")
+	assert.Equal(t, releaseTagFilter, got)
+
+	res, err = c.runner(t, Options{Namespaces: []string{"kagent"}, TargetSemverFilter: new("")}, "1.0.0", "secret").Run(ctx)
+	require.NoError(t, err)
 	assert.Equal(t, SourceMoved, bySource(res.Reports[0])["kagent/agent"].Action)
 	_, found := c.semverFilter(t, "kagent", "agent")
-	assert.False(t, found, "a target without a filter removes the source's")
+	assert.False(t, found, "an empty target filter removes the source's")
+}
+
+// A release deployed from a tag the target filter rejects, a branch build in
+// a range that admits pre-releases, is not upgraded yet.
+func TestReleaseUpgradedHonoursTheTargetFilter(t *testing.T) {
+	c := newCluster(migrated(t)...)
+	deployed := func(version string) *release { return &release{report: &ReleaseReport{ChartVersion: version}} }
+
+	r := c.runner(t, Options{Namespaces: []string{"kagent"}, TargetSemver: ">=1.5.0-0 <2.0.0-0", TargetSemverFilter: new(releaseTagFilter)}, "1.5.0", "secret")
+	assert.True(t, r.releaseUpgraded(deployed("1.5.0")))
+	assert.True(t, r.releaseUpgraded(deployed("1.5.1-rc.2@sha256:abc")))
+	assert.False(t, r.releaseUpgraded(deployed("1.5.2-r3d2c6cdct20260925080552h5b17654")))
+	assert.False(t, r.releaseUpgraded(deployed("1.4.9")))
+
+	r = c.runner(t, Options{Namespaces: []string{"kagent"}, TargetSemver: ">=1.5.0-0 <2.0.0-0"}, "1.5.0", "secret")
+	assert.True(t, r.releaseUpgraded(deployed("1.5.2-r3d2c6cdct20260925080552h5b17654")), "without a filter the range decides")
 }
 
 // ---- wait and contract -------------------------------------------------------------

@@ -249,7 +249,7 @@ func (r *Resolver) resolve(ctx context.Context) error {
 	r.cached = &Schema{Document: doc, Version: latest, Source: SourceRegistry}
 	r.fetched = now
 	r.lastErr = nil
-	r.info = Info{OCIURL: r.ociURL, Semver: r.semver, LatestVersion: latest, SchemaVersion: latest, SchemaSource: SourceRegistry, ResolvedAt: &now}
+	r.info = Info{OCIURL: r.ociURL, Semver: r.semver, SemverFilter: r.info.SemverFilter, LatestVersion: latest, SchemaVersion: latest, SchemaSource: SourceRegistry, ResolvedAt: &now}
 	r.mu.Unlock()
 	r.log.Info("agent chart resolved", "chart", r.ociURL, "version", latest)
 	return nil
@@ -262,7 +262,7 @@ func (r *Resolver) fail(err error) error {
 	// Back off: do not hammer an unreachable registry on every request.
 	r.fetched = time.Now().Add(-r.refresh + time.Minute)
 	if r.cached == nil {
-		r.info = Info{OCIURL: r.ociURL, Semver: r.semver, SchemaVersion: EmbeddedSchemaVersion, SchemaSource: SourceEmbedded, Error: err.Error()}
+		r.info = Info{OCIURL: r.ociURL, Semver: r.semver, SemverFilter: r.info.SemverFilter, SchemaVersion: EmbeddedSchemaVersion, SchemaSource: SourceEmbedded, Error: err.Error()}
 	} else {
 		r.info.Error = err.Error()
 	}

@@ -80,7 +80,7 @@ func TestWithSemverFilter(t *testing.T) {
 func TestResolverPrefersTheRegistryAndFallsBackToTheEmbeddedSchema(t *testing.T) {
 	f := newFake(t)
 	chartURL := "oci://" + f.Host() + "/" + f.Repo
-	r, err := NewResolver(chartURL, "1.x", time.Hour, oci.NewRegistry(nil), nil)
+	r, err := NewResolver(chartURL, "1.x", time.Hour, oci.NewRegistry(nil), nil, WithSemverFilter(`^[0-9.]+$`))
 	require.NoError(t, err)
 	r.ref.Insecure = true
 
@@ -90,11 +90,12 @@ func TestResolverPrefersTheRegistryAndFallsBackToTheEmbeddedSchema(t *testing.T)
 	info := r.Info(context.Background())
 	assert.Equal(t, "1.2.3", info.LatestVersion)
 	assert.Equal(t, "1.x", info.Semver)
+	assert.Equal(t, `^[0-9.]+$`, info.SemverFilter, "the filter survives a registry read")
 	assert.Empty(t, info.Error)
 
 	// A broken registry on a fresh resolver: the embedded copy validates.
 	f.FailTags = true
-	r2, err := NewResolver(chartURL, "1.x", time.Hour, oci.NewRegistry(nil), nil)
+	r2, err := NewResolver(chartURL, "1.x", time.Hour, oci.NewRegistry(nil), nil, WithSemverFilter(`^[0-9.]+$`))
 	require.NoError(t, err)
 	r2.ref.Insecure = true
 	s2 := r2.Schema(context.Background())
@@ -103,6 +104,7 @@ func TestResolverPrefersTheRegistryAndFallsBackToTheEmbeddedSchema(t *testing.T)
 	info2 := r2.Info(context.Background())
 	assert.NotEmpty(t, info2.Error)
 	assert.Empty(t, info2.LatestVersion)
+	assert.Equal(t, `^[0-9.]+$`, info2.SemverFilter, "the filter survives a failed registry read")
 	props, ok := s2.Document.(map[string]any)["properties"].(map[string]any)
 	require.True(t, ok)
 	assert.Contains(t, props, "modelConfig", "the embedded copy is the real agent chart schema")

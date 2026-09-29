@@ -129,6 +129,9 @@ type ChartInfo struct {
 	OCIURL string `json:"ociUrl"`
 	// TargetSemver is the range every source moves to.
 	TargetSemver string `json:"targetSemver"`
+	// TargetSemverFilter is the tag filter every source moves to; absent
+	// when each source keeps its own.
+	TargetSemverFilter *string `json:"targetSemverFilter,omitempty"`
 	// LatestVersion is the newest published version in that range, "" when
 	// none exists (no source is moved then).
 	LatestVersion string `json:"latestVersion,omitempty"`
