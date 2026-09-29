@@ -41,6 +41,7 @@ type serveOptions struct {
 
 	chartOCIURL           string
 	chartSemver           string
+	chartSemverFilter     string
 	chartRefresh          time.Duration
 	helmReleaseInterval   string
 	ociRepositoryInterval string
@@ -101,6 +102,7 @@ environment variable named next to it; flags win over the environment.`,
 	f.StringVar(&o.ociRepositoryAPI, "flux-ocirepository-api-version", envOr("FLUX_OCIREPOSITORY_API_VERSION", "auto"), "source.toolkit.fluxcd.io API version composed into OCIRepositories; auto discovers it (FLUX_OCIREPOSITORY_API_VERSION)")
 	f.StringVar(&o.chartOCIURL, "agent-chart-oci-url", envOr("AGENT_CHART_OCI_URL", agents.DefaultChartOCIURL), "OCI URL of the agent chart every agent renders from (AGENT_CHART_OCI_URL)")
 	f.StringVar(&o.chartSemver, "agent-chart-semver", envOr("AGENT_CHART_SEMVER", agents.DefaultChartSemver), "Semver range the OCIRepository tracks; 1.x follows every 1.x release of the Generic chart and never a pre-release (AGENT_CHART_SEMVER)")
+	f.StringVar(&o.chartSemverFilter, "agent-chart-semver-filter", envOr("AGENT_CHART_SEMVER_FILTER", ""), "Regular expression the agent chart's tags must match before the range is evaluated, as the OCIRepository's ref.semverFilter; empty filters nothing (AGENT_CHART_SEMVER_FILTER)")
 	f.DurationVar(&o.chartRefresh, "agent-chart-refresh", envDuration("AGENT_CHART_REFRESH", 10*time.Minute), "How often the chart registry is re-read for the latest version and its values schema (AGENT_CHART_REFRESH)")
 	f.StringVar(&o.helmReleaseInterval, "helmrelease-interval", envOr("HELMRELEASE_INTERVAL", agents.DefaultHelmReleaseInterval), "HelmRelease.spec.interval of composed agents (HELMRELEASE_INTERVAL)")
 	f.StringVar(&o.ociRepositoryInterval, "ocirepository-interval", envOr("OCIREPOSITORY_INTERVAL", agents.DefaultOCIRepositoryInterval), "OCIRepository.spec.interval of the shared chart source (OCIREPOSITORY_INTERVAL)")
@@ -196,7 +198,7 @@ func runServe(ctx context.Context, o *serveOptions) error {
 	helmReleaseAPI := discoverGroupVersion(o.helmReleaseAPI, clients, "helm.toolkit.fluxcd.io", "helmreleases", agents.DefaultHelmReleaseAPIVersion, log)
 	ociRepositoryAPI := discoverGroupVersion(o.ociRepositoryAPI, clients, "source.toolkit.fluxcd.io", "ocirepositories", agents.DefaultOCIRepositoryAPIVersion, log)
 
-	resolver, err := chart.NewResolver(o.chartOCIURL, o.chartSemver, o.chartRefresh, nil, log)
+	resolver, err := chart.NewResolver(o.chartOCIURL, o.chartSemver, o.chartRefresh, nil, log, chart.WithSemverFilter(o.chartSemverFilter))
 	if err != nil {
 		return err
 	}
@@ -216,6 +218,7 @@ func runServe(ctx context.Context, o *serveOptions) error {
 			ChartOCIURL:             o.chartOCIURL,
 			ChartName:               resolver.Name(),
 			ChartSemver:             o.chartSemver,
+			ChartSemverFilter:       o.chartSemverFilter,
 			HelmReleaseInterval:     o.helmReleaseInterval,
 			OCIRepositoryInterval:   o.ociRepositoryInterval,
 			ServiceAccountName:      o.helmReleaseSA,

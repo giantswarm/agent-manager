@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `agentChart.semverFilter` (`--agent-chart-semver-filter`, `AGENT_CHART_SEMVER_FILTER`): a regular expression the agent chart's tags must match before `agentChart.semver` is evaluated. It is composed as the per-namespace OCIRepository's `ref.semverFilter`, the resolver picks the version whose values schema validates agents among the matching tags only, and `migrate` moves a source's filter together with its range (the report carries `fromSemverFilter`/`toSemverFilter`). With a range that admits pre-releases, `^v?[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$` follows release candidates and keeps the chart's branch builds out. Empty (default) filters nothing.
+
 ### Fixed
 
 - `list_skills` answers within muster's 30 s: the SKILL.md files of a repository are read in parallel (eight at a time) and the configured repositories side by side, where a cold read of three repositories took longer than 30 s and every meta agent's first call timed out.

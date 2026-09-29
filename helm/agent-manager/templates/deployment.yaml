@@ -60,6 +60,9 @@ spec:
             - --flux-ocirepository-api-version={{ .Values.flux.ociRepositoryApiVersion }}
             - --agent-chart-oci-url={{ .Values.agentChart.ociUrl }}
             - --agent-chart-semver={{ .Values.agentChart.semver }}
+            {{- with .Values.agentChart.semverFilter }}
+            - {{ printf "--agent-chart-semver-filter=%s" . | quote }}
+            {{- end }}
             - --agent-chart-refresh={{ .Values.agentChart.refresh }}
             - --helmrelease-interval={{ .Values.flux.helmReleaseInterval }}
             - --ocirepository-interval={{ .Values.flux.ociRepositoryInterval }}

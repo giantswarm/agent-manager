@@ -175,6 +175,11 @@ func TestBuildHelmReleaseAndOCIRepositoryTrackTheChartRange(t *testing.T) {
 	assert.Equal(t, map[string]any{"name": "agent", "namespace": "kagent", "labels": map[string]any{ManagedByLabel: ManagedByValue}}, got["metadata"])
 	assert.Equal(t, map[string]any{"interval": "30m", "url": DefaultChartOCIURL, "ref": map[string]any{"semver": "1.x"}}, got["spec"], "the range is 1.x, never x.x.x")
 	assert.Equal(t, "1.x", DefaultChartSemver)
+
+	cfg.ChartSemver, cfg.ChartSemverFilter = ">=1.5.0-0 <2.0.0-0", `^v?[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$`
+	repo = BuildOCIRepository("kagent", cfg)
+	require.NoError(t, yaml.Unmarshal([]byte(ToYAML(repo)), &got))
+	assert.Equal(t, map[string]any{"semver": cfg.ChartSemver, "semverFilter": cfg.ChartSemverFilter}, got["spec"].(map[string]any)["ref"], "the tag filter travels with the range")
 }
 
 func TestValidateValuesReportsSchemaViolations(t *testing.T) {

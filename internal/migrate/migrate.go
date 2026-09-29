@@ -74,6 +74,9 @@ type Options struct {
 	// range they move to (1.x).
 	ChartOCIURL  string
 	TargetSemver string
+	// TargetSemverFilter is the ref.semverFilter the sources move to with
+	// the range; empty removes one.
+	TargetSemverFilter string
 	// ReportConfigMap names the report per namespace.
 	ReportConfigMap string
 	// DryRun prints the report and writes nothing.
@@ -190,6 +193,7 @@ type nsState struct {
 type source struct {
 	obj              *unstructured.Unstructured
 	ns, name, semver string
+	semverFilter     string
 	gitops, external bool
 	report           *SourceReport
 	releases         []*release
@@ -380,6 +384,7 @@ func (r *Runner) sourceOf(obj *unstructured.Unstructured, external bool) *source
 	}
 	s := &source{obj: obj, ns: obj.GetNamespace(), name: obj.GetName(), gitops: gitOpsOwned(obj), external: external}
 	s.semver, _, _ = unstructured.NestedString(obj.Object, "spec", "ref", "semver")
+	s.semverFilter, _, _ = unstructured.NestedString(obj.Object, "spec", "ref", "semverFilter")
 	return s
 }
 
@@ -540,7 +545,8 @@ func (r *Runner) rewriteRelease(ctx context.Context, st *nsState, dyn dynamic.In
 // only when every release it serves is on 1.x values and the registry has a
 // version in the range; a GitOps-owned or external source gets the diff.
 func (r *Runner) moveSource(ctx context.Context, st *nsState, dyn dynamic.Interface, src *source, chartAvailable bool) *SourceReport {
-	rep := &SourceReport{Name: src.name, Namespace: src.ns, From: src.semver, To: r.opts.TargetSemver}
+	rep := &SourceReport{Name: src.name, Namespace: src.ns, From: src.semver, To: r.opts.TargetSemver,
+		FromSemverFilter: src.semverFilter, ToSemverFilter: r.opts.TargetSemverFilter}
 	switch {
 	case src.external:
 		rep.Ownership = OwnershipExternal
@@ -549,12 +555,12 @@ func (r *Runner) moveSource(ctx context.Context, st *nsState, dyn dynamic.Interf
 	default:
 		rep.Ownership = OwnershipHelmRelease
 	}
-	if src.semver == r.opts.TargetSemver {
+	if src.semver == r.opts.TargetSemver && src.semverFilter == r.opts.TargetSemverFilter {
 		rep.Action, rep.Reason = ActionUnchanged, "already on the target range"
 		return rep
 	}
 	moved := &unstructured.Unstructured{Object: runtime.DeepCopyJSON(src.obj.Object)}
-	_ = unstructured.SetNestedField(moved.Object, r.opts.TargetSemver, "spec", "ref", "semver")
+	r.setTargetRef(moved)
 	if src.gitops || src.external {
 		rep.Action, rep.Diff = ActionDiff, manifestDiff(src.obj, moved)
 		rep.Reason = "never written by this command: move the range in the owning repository together with its releases' values"
@@ -584,16 +590,28 @@ func (r *Runner) moveSource(ctx context.Context, st *nsState, dyn dynamic.Interf
 		return rep
 	}
 	if err := updateOnConflict(ctx, dyn.Resource(r.ociRepositoryGVR()).Namespace(src.ns), src.name, func(o *unstructured.Unstructured) error {
-		return unstructured.SetNestedField(o.Object, r.opts.TargetSemver, "spec", "ref", "semver")
+		r.setTargetRef(o)
+		return nil
 	}); err != nil {
 		rep.Action, rep.Reason = SourceNotMoved, fmt.Sprintf("update refused: %v", err)
 		st.fail(fmt.Errorf("update OCIRepository %s/%s: %w", src.ns, src.name, err))
 		return rep
 	}
-	src.semver = r.opts.TargetSemver
+	src.semver, src.semverFilter = r.opts.TargetSemver, r.opts.TargetSemverFilter
 	st.report.Changed = true
 	r.log.Info("chart source moved", "source", src.ns+"/"+src.name, "from", rep.From, "to", rep.To)
 	return rep
+}
+
+// setTargetRef sets the target range and tag filter on an OCIRepository of the
+// agent chart; an empty target filter removes the source's.
+func (r *Runner) setTargetRef(o *unstructured.Unstructured) {
+	_ = unstructured.SetNestedField(o.Object, r.opts.TargetSemver, "spec", "ref", "semver")
+	if r.opts.TargetSemverFilter == "" {
+		unstructured.RemoveNestedField(o.Object, "spec", "ref", "semverFilter")
+		return
+	}
+	_ = unstructured.SetNestedField(o.Object, r.opts.TargetSemverFilter, "spec", "ref", "semverFilter")
 }
 
 // updateOnConflict writes an object as a read-modify-write that survives a

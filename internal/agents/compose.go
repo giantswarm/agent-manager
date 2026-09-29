@@ -25,6 +25,10 @@ type ComposeConfig struct {
 	ChartName string
 	// ChartSemver is the OCIRepository ref.semver range (1.x).
 	ChartSemver string
+	// ChartSemverFilter is the OCIRepository ref.semverFilter: the regular
+	// expression the tags must match before the range is evaluated. Empty
+	// composes none.
+	ChartSemverFilter string
 	// HelmReleaseInterval / OCIRepositoryInterval are the Flux intervals.
 	HelmReleaseInterval   string
 	OCIRepositoryInterval string
@@ -218,9 +222,19 @@ func BuildOCIRepository(namespace string, cfg ComposeConfig) *unstructured.Unstr
 		"spec": map[string]any{
 			"interval": orDefault(cfg.OCIRepositoryInterval, DefaultOCIRepositoryInterval),
 			"url":      orDefault(cfg.ChartOCIURL, DefaultChartOCIURL),
-			"ref":      map[string]any{"semver": orDefault(cfg.ChartSemver, DefaultChartSemver)},
+			"ref":      chartRef(cfg),
 		},
 	}}
+}
+
+// chartRef is the OCIRepository's ref: the range, and the tag filter where one
+// is configured.
+func chartRef(cfg ComposeConfig) map[string]any {
+	ref := map[string]any{"semver": orDefault(cfg.ChartSemver, DefaultChartSemver)}
+	if cfg.ChartSemverFilter != "" {
+		ref["semverFilter"] = cfg.ChartSemverFilter
+	}
+	return ref
 }
 
 // ToYAML renders an object as YAML (what the applied manifest looks like).

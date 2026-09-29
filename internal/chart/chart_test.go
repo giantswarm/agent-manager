@@ -2,6 +2,7 @@ package chart
 
 import (
 	"context"
+	"regexp"
 	"testing"
 	"time"
 
@@ -38,6 +39,42 @@ func TestLatestFollowsFluxSemverSemantics(t *testing.T) {
 	assert.Equal(t, "1.0.0-dev.kagent-v2.2026-09-11.01-00-00.habcdef0", v, "a pre-release-aware range does")
 	_, err = Latest([]string{"artifacthub.io"}, "x.x.x")
 	assert.Error(t, err)
+}
+
+// A tag filter is applied before the range, as Flux applies an
+// OCIRepository's ref.semverFilter: a range that admits pre-releases then
+// selects release candidates and never a branch build.
+func TestLatestFilteredKeepsBranchBuildsOut(t *testing.T) {
+	tags := []string{"1.5.0", "1.5.1-rc.2", "1.5.2-r3d2c6cdct20260925080552h5b17654", "1.4.9-dev.main.2026-09-01.10-00-00.habcdef0"}
+	filter := regexp.MustCompile(`^v?[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$`)
+
+	v, err := Latest(tags, ">=1.5.0-0 <2.0.0-0")
+	require.NoError(t, err)
+	assert.Equal(t, "1.5.2-r3d2c6cdct20260925080552h5b17654", v, "without a filter the range selects the branch build")
+
+	v, err = LatestFiltered(tags, ">=1.5.0-0 <2.0.0-0", filter)
+	require.NoError(t, err)
+	assert.Equal(t, "1.5.1-rc.2", v, "the filter keeps the branch build out and the release candidate in")
+
+	v, err = LatestFiltered(tags, "1.x", filter)
+	require.NoError(t, err)
+	assert.Equal(t, "1.5.0", v, "a stable range still skips the candidate")
+
+	_, err = LatestFiltered([]string{"1.5.2-r3d2c6cdct20260925080552h5b17654"}, ">=1.5.0-0 <2.0.0-0", filter)
+	assert.Error(t, err, "a branch build alone is no version")
+}
+
+func TestWithSemverFilter(t *testing.T) {
+	r, err := NewResolver("oci://gsoci.azurecr.io/charts/giantswarm/agent", ">=1.5.0-0 <2.0.0-0", time.Hour, nil, nil, WithSemverFilter(`^[0-9.]+(-rc\.[0-9]+)?$`))
+	require.NoError(t, err)
+	assert.Equal(t, `^[0-9.]+(-rc\.[0-9]+)?$`, r.info.SemverFilter)
+
+	r, err = NewResolver("oci://gsoci.azurecr.io/charts/giantswarm/agent", "1.x", time.Hour, nil, nil, WithSemverFilter(""))
+	require.NoError(t, err)
+	assert.Nil(t, r.filter, "an empty filter filters nothing")
+
+	_, err = NewResolver("oci://gsoci.azurecr.io/charts/giantswarm/agent", "1.x", time.Hour, nil, nil, WithSemverFilter("("))
+	assert.ErrorContains(t, err, "chart semver filter")
 }
 
 func TestResolverPrefersTheRegistryAndFallsBackToTheEmbeddedSchema(t *testing.T) {

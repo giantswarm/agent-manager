@@ -175,8 +175,12 @@ type SourceReport struct {
 	Action    string `json:"action"`
 	From      string `json:"from,omitempty"`
 	To        string `json:"to,omitempty"`
-	Reason    string `json:"reason,omitempty"`
-	Diff      string `json:"diff,omitempty"`
+	// FromSemverFilter and ToSemverFilter are the source's ref.semverFilter
+	// before and after, beside the range.
+	FromSemverFilter string `json:"fromSemverFilter,omitempty"`
+	ToSemverFilter   string `json:"toSemverFilter,omitempty"`
+	Reason           string `json:"reason,omitempty"`
+	Diff             string `json:"diff,omitempty"`
 }
 
 // AgentReport is one kagent.dev/v1alpha2 Agent.

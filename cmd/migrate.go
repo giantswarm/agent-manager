@@ -33,8 +33,9 @@ type migrateOptions struct {
 	helmReleaseAPI    string
 	ociRepositoryAPI  string
 
-	chartOCIURL string
-	chartSemver string
+	chartOCIURL       string
+	chartSemver       string
+	chartSemverFilter string
 
 	skillsGitHubAPI string
 	skillsToken     string
@@ -94,6 +95,7 @@ through the environment variable named next to it; flags win.`,
 	f.StringVar(&o.ociRepositoryAPI, "flux-ocirepository-api-version", envOr("FLUX_OCIREPOSITORY_API_VERSION", "auto"), "source.toolkit.fluxcd.io API version composed into OCIRepositories; auto discovers it (FLUX_OCIREPOSITORY_API_VERSION)")
 	f.StringVar(&o.chartOCIURL, "agent-chart-oci-url", envOr("AGENT_CHART_OCI_URL", agents.DefaultChartOCIURL), "OCI URL of the agent chart every agent renders from (AGENT_CHART_OCI_URL)")
 	f.StringVar(&o.chartSemver, "agent-chart-semver", envOr("AGENT_CHART_SEMVER", agents.DefaultChartSemver), "Semver range the OCIRepository tracks; 1.x follows every 1.x release of the Generic chart and never a pre-release (AGENT_CHART_SEMVER)")
+	f.StringVar(&o.chartSemverFilter, "agent-chart-semver-filter", envOr("AGENT_CHART_SEMVER_FILTER", ""), "Regular expression the agent chart's tags must match before the range is evaluated, as the OCIRepository's ref.semverFilter; empty filters nothing (AGENT_CHART_SEMVER_FILTER)")
 	f.StringVar(&o.skillsGitHubAPI, "skills-github-api", envOr("AGENT_MANAGER_SKILLS_GITHUB_API", "https://api.github.com"), "GitHub API base URL for skill discovery and for resolving a skill's branch or tag to its head commit (AGENT_MANAGER_SKILLS_GITHUB_API)")
 	f.StringVar(&o.skillsToken, "skills-github-token", envOr("GITHUB_TOKEN", ""), "GitHub token for private skill repositories and a higher rate limit; prefer the environment (GITHUB_TOKEN)")
 	f.StringVar(&o.reportConfigMap, "report-configmap", envOr("AGENT_MANAGER_MIGRATE_REPORT_CONFIGMAP", migrate.DefaultReportConfigMap), "Name of the report ConfigMap written in every managed namespace (AGENT_MANAGER_MIGRATE_REPORT_CONFIGMAP)")
@@ -120,13 +122,13 @@ func runMigrate(ctx context.Context, out io.Writer, o *migrateOptions) error {
 	helmReleaseAPI := discoverGroupVersion(o.helmReleaseAPI, clients, "helm.toolkit.fluxcd.io", "helmreleases", agents.DefaultHelmReleaseAPIVersion, log)
 	ociRepositoryAPI := discoverGroupVersion(o.ociRepositoryAPI, clients, "source.toolkit.fluxcd.io", "ocirepositories", agents.DefaultOCIRepositoryAPIVersion, log)
 
-	resolver, err := chart.NewResolver(o.chartOCIURL, o.chartSemver, 10*time.Minute, nil, log)
+	resolver, err := chart.NewResolver(o.chartOCIURL, o.chartSemver, 10*time.Minute, nil, log, chart.WithSemverFilter(o.chartSemverFilter))
 	if err != nil {
 		return err
 	}
 	pinner := skills.NewResolver(o.skillsGitHubAPI, skills.StaticToken(o.skillsToken), nil, nil)
 	compose := agents.ComposeConfig{
-		ChartOCIURL: o.chartOCIURL, ChartName: resolver.Name(), ChartSemver: o.chartSemver,
+		ChartOCIURL: o.chartOCIURL, ChartName: resolver.Name(), ChartSemver: o.chartSemver, ChartSemverFilter: o.chartSemverFilter,
 		HelmReleaseAPIVersion: helmReleaseAPI, OCIRepositoryAPIVersion: ociRepositoryAPI, HarnessName: o.harnessName,
 	}
 	// The service is the status reader: the wait phase asks get_agent_status
@@ -140,6 +142,7 @@ func runMigrate(ctx context.Context, out io.Writer, o *migrateOptions) error {
 		HarnessName:             o.harnessName,
 		ChartOCIURL:             o.chartOCIURL,
 		TargetSemver:            o.chartSemver,
+		TargetSemverFilter:      o.chartSemverFilter,
 		ReportConfigMap:         o.reportConfigMap,
 		DryRun:                  o.dryRun,
 		KagentAPIVersion:        kagentVersion,

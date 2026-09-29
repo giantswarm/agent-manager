@@ -67,6 +67,13 @@ agentChart:
   # -- Semver range the OCIRepository tracks. `1.x` follows every 1.x release
   # of the Generic chart and never a pre-release build or a next major.
   semver: 1.x
+  # -- Regular expression the chart's tags must match before `semver` is
+  # evaluated (the OCIRepository's ref.semverFilter, and the version the
+  # values schema is read from). Set it beside a range that admits
+  # pre-releases (`>=1.5.0-0 <2.0.0-0`): the chart's branch builds are pushed
+  # to the same repository, and `^v?[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$`
+  # keeps them out while admitting release candidates. Empty filters nothing.
+  semverFilter: ""
   # -- How often the registry is re-read for the latest version and schema.
   refresh: 10m
 
