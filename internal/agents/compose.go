@@ -11,11 +11,11 @@ import (
 )
 
 // The composition mirrors the portal's composeManifests.ts: an agent is a Flux
-// HelmRelease with inline values following the Generic agent chart's 1.x
-// schema (agent, modelConfig, skills, toolset, muster as top-level keys) that
-// renders from the shared per-namespace OCIRepository named after the chart,
-// which tracks the chart by the 1.x range so every agent follows the latest
-// 1.x release.
+// HelmRelease with inline values following the Generic agent chart's 2.x
+// schema (agent, modelConfig, skills, plugins, toolset, muster as top-level
+// keys) that renders from the shared per-namespace OCIRepository named after
+// the chart, which tracks the chart by the 2.x range so every agent follows
+// the latest 2.x release.
 
 // ComposeConfig is the platform side of the composition.
 type ComposeConfig struct {
@@ -23,7 +23,7 @@ type ComposeConfig struct {
 	ChartOCIURL string
 	// ChartName is the OCIRepository's name (the chart name).
 	ChartName string
-	// ChartSemver is the OCIRepository ref.semver range (1.x).
+	// ChartSemver is the OCIRepository ref.semver range (2.x).
 	ChartSemver string
 	// ChartSemverFilter is the OCIRepository ref.semverFilter: the regular
 	// expression the tags must match before the range is evaluated. Empty
@@ -46,14 +46,14 @@ type ComposeConfig struct {
 	// workload cluster: one those clusters reach (the installation's public
 	// endpoint). Empty: agents are refused a target cluster.
 	TargetMusterURL string
-	// HarnessName is the platform Harness every agent runs on: composed as
-	// the chart value agent.harness (the admission label's value), and the
-	// status.harnesses[] entry that decides an agent's readiness.
+	// HarnessName is the platform Harness an agent runs on unless it names
+	// another: composed as the chart value agent.harness, the Agent object's
+	// spec.harnessRef.name.
 	HarnessName string
 	// SkillsGitAuthSecretName is the installation's skills credential: the
 	// Secret (key `token`) in the agent's namespace that every agent with a
-	// git skill reads its skills with, unless the agent names its own.
-	// Empty: such agents fetch anonymously.
+	// git skill or git plugin reads them with, unless the agent names its
+	// own. Empty: such agents fetch anonymously.
 	SkillsGitAuthSecretName string
 }
 
@@ -68,9 +68,9 @@ const FieldManager = "agent-manager"
 const (
 	DefaultChartOCIURL = "oci://gsoci.azurecr.io/charts/giantswarm/agent"
 	// DefaultChartSemver is the range the per-namespace OCIRepository tracks:
-	// every 1.x release of the Generic chart, never a pre-release build and
+	// every 2.x release of the Generic chart, never a pre-release build and
 	// never a next major.
-	DefaultChartSemver             = "1.x"
+	DefaultChartSemver             = "2.x"
 	DefaultHelmReleaseInterval     = "10m"
 	DefaultOCIRepositoryInterval   = "30m"
 	DefaultHelmReleaseAPIVersion   = "helm.toolkit.fluxcd.io/v2"
@@ -79,9 +79,9 @@ const (
 	DefaultHarnessName = "kagent"
 )
 
-// The Generic chart 1.x values contract, for anyone rewriting 0.x values:
-// RemovedValuePaths are the 0.x keys 1.x refuses (additionalProperties:
-// false), RenamedValuePaths the ones that moved.
+// The Generic chart values contract since 1.x, for anyone rewriting 0.x
+// values: RemovedValuePaths are the 0.x keys the chart refuses
+// (additionalProperties: false), RenamedValuePaths the ones that moved.
 var (
 	RemovedValuePaths = []string{
 		"agent.runtime", "replicas", "resources", "nodeSelector", "tolerations",
@@ -90,19 +90,25 @@ var (
 	RenamedValuePaths = map[string]string{"muster.toolNames": "muster.tools"}
 )
 
-// SkillsGitAuthValuesKey is the chart 1.x value that fans one read
-// credential out to every git skill: {name: <Secret>}.
+// SkillsGitAuthValuesKey is the chart value that fans one read credential
+// out to every git skill and git plugin: {name: <Secret>}.
 const SkillsGitAuthValuesKey = "skillsGitAuthSecretRef"
 
-// skillsGitAuth is the credential Secret an agent with these skills reads
-// them with: its own, else the installation's; none without a git skill.
-func skillsGitAuth(own string, skills Skills, cfg ComposeConfig) string {
+// skillsGitAuth is the credential Secret an agent with these skills and
+// plugins reads them with: its own, else the installation's; none without a
+// git source.
+func skillsGitAuth(own string, skills Skills, plugins Plugins, cfg ComposeConfig) string {
+	hasGit := false
 	for _, sk := range skills {
-		if sk.Git != nil {
-			return orDefault(own, cfg.SkillsGitAuthSecretName)
-		}
+		hasGit = hasGit || sk.Git != nil
 	}
-	return ""
+	for _, pl := range plugins {
+		hasGit = hasGit || pl.Git != nil
+	}
+	if !hasGit {
+		return ""
+	}
+	return orDefault(own, cfg.SkillsGitAuthSecretName)
 }
 
 // MaxSystemMessageLength is the agent chart's cap on agent.systemMessage: the
@@ -121,7 +127,7 @@ func ValidateSystemMessage(message string) error {
 var dns1123 = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
 
 // ValidateName checks the technical name: a DNS-1123 label of at most 63
-// characters, as the AgentTemplate, Helm and the chart's schema require.
+// characters, as the Agent object, Helm and the chart's schema require.
 func ValidateName(name string) error {
 	if name == "" {
 		return invalidf("name is required")
@@ -157,9 +163,12 @@ func BuildValues(spec Spec, cfg ComposeConfig) map[string]any {
 	if strings.TrimSpace(spec.SystemMessage) != "" {
 		agent["systemMessage"] = spec.SystemMessage
 	}
-	// The Harness the caller named, else the platform's; get_agent_status
-	// reads that Harness's entry.
+	// The Harness the caller named, else the platform's: the Agent object's
+	// spec.harnessRef.name.
 	agent["harness"] = orDefault(spec.Harness, orDefault(cfg.HarnessName, DefaultHarnessName))
+	if limits := limitsValues(spec.Limits); limits != nil {
+		agent["limits"] = limits
+	}
 	values := map[string]any{
 		"agent":       agent,
 		"modelConfig": map[string]any{"name": spec.ModelConfig},
@@ -167,7 +176,10 @@ func BuildValues(spec Spec, cfg ComposeConfig) map[string]any {
 	if skills := skillsValues(spec.Skills); skills != nil {
 		values["skills"] = skills
 	}
-	if name := skillsGitAuth(spec.GitAuthSecretName, spec.Skills, cfg); name != "" {
+	if plugins := pluginsValues(spec.Plugins); plugins != nil {
+		values["plugins"] = plugins
+	}
+	if name := skillsGitAuth(spec.GitAuthSecretName, spec.Skills, spec.Plugins, cfg); name != "" {
 		values[SkillsGitAuthValuesKey] = map[string]any{"name": name}
 	}
 	if len(spec.Toolset) > 0 {

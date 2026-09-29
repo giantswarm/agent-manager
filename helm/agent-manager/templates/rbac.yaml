@@ -8,12 +8,12 @@ mounted for the in-cluster API address and CA.
 {{- /*
 One Role per managed namespace. agent-manager writes the two Flux objects an
 agent consists of (HelmRelease + the shared OCIRepository of the Generic agent
-chart) and reads everything it reports on: the kagent.dev/v1alpha3
-AgentTemplate and the agent's RemoteMCPServer the chart renders, the Harnesses
-whose admission decides readiness, the ModelConfigs an agent may reference
-(platform-admin owned, never written), and the namespace's events for
-get_agent_status. Nothing names the v1alpha2 `agents` resource; there is no
-per-agent Deployment or pod to read.
+chart) and reads everything it reports on: the api.kagent.dev/v1alpha3 Agent
+and the agent's RemoteMCPServer the chart renders, the Harnesses an Agent
+references (a create checks the named one exists and which runtime it is),
+the ModelConfigs an agent may reference (platform-admin owned, never
+written), and the namespace's events for get_agent_status. Nothing names the
+kagent.dev group; there is no per-agent Deployment or pod to read.
 */}}
 {{- range $ns := (include "agent-manager.managedNamespaces" . | fromJsonArray) }}
 ---
@@ -31,13 +31,13 @@ rules:
   - apiGroups: ["source.toolkit.fluxcd.io"]
     resources: ["ocirepositories"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  - apiGroups: ["kagent.dev"]
-    resources: ["agenttemplates", "harnesses", "remotemcpservers", "modelconfigs"]
+  - apiGroups: ["api.kagent.dev"]
+    resources: ["agents", "harnesses", "remotemcpservers", "modelconfigs"]
     verbs: ["get", "list", "watch"]
-  - apiGroups: ["kagent.dev"]
-    resources: ["agenttemplates", "remotemcpservers"]
+  - apiGroups: ["api.kagent.dev"]
+    resources: ["agents", "remotemcpservers"]
     # What a release leaves behind is only ever deleted with force: a bare
-    # AgentTemplate (no HelmRelease behind it), or the rendered objects of a
+    # Agent (no HelmRelease behind it), or the rendered objects of a
     # suspended release Flux drops without uninstalling. helm-controller
     # removes the ones agent-manager created.
     verbs: ["delete"]

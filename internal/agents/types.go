@@ -1,13 +1,14 @@
 // Package agents is the domain of agent-manager: an agent on the platform is a
-// Flux HelmRelease of the Generic agent chart (1.x) — one release renders one
-// kagent.dev/v1alpha3 AgentTemplate plus the agent's own muster
-// RemoteMCPServer, the toolset carrier — sharing a per-namespace OCIRepository
+// Flux HelmRelease of the Generic agent chart (2.x). One release renders one
+// api.kagent.dev/v1alpha3 Agent (the template inline under spec.template, the
+// Harness by name in spec.harnessRef) plus the agent's own muster
+// RemoteMCPServer, the toolset carrier, sharing a per-namespace OCIRepository
 // that tracks the chart. The package composes those two Flux objects exactly
 // like the portal's create flow, pins every skill to an immutable source,
 // validates the values against the chart's schema before anything is applied,
-// and reads the agent back from the AgentTemplate, its RemoteMCPServer and its
-// owning HelmRelease. Readiness is what the platform Harness reports on the
-// template (status.harnesses[]); there is no per-agent Deployment or pod.
+// and reads the agent back from the Agent object, its RemoteMCPServer and its
+// owning HelmRelease. Readiness is the Agent object's own status.conditions;
+// there is no per-agent Deployment or pod.
 package agents
 
 import (
@@ -25,8 +26,8 @@ var (
 	// or names a skill reference that cannot be pinned.
 	ErrInvalid = errors.New("invalid request")
 	// ErrConflict: the object exists, is owned by GitOps, is suspended, or is
-	// a bare AgentTemplate — a write would be refused or undone; force
-	// overrides where documented.
+	// a bare Agent object with no HelmRelease behind it; force overrides
+	// where documented.
 	ErrConflict = errors.New("conflict")
 	// ErrForbidden: the Kubernetes API refused the write for the identity
 	// agent-manager runs with.
@@ -73,15 +74,11 @@ type WriteOptions struct {
 // Labels and annotations the platform agrees on.
 const (
 	// DisplayNameAnnotation is the agent chart's contract for the friendly
-	// name; IconURLAnnotation for the avatar (the AgentTemplate has no icon
-	// field). Both are rendered by Generic chart 1.x and read by the Dev
-	// Portal, Swarmgeist and agent-manager.
+	// name; IconURLAnnotation for the avatar (the template has no icon
+	// field). Both are rendered on the Agent object by the Generic chart and
+	// read by the Dev Portal, Swarmgeist and agent-manager.
 	DisplayNameAnnotation = "ui.giantswarm.io/display-name"
 	IconURLAnnotation     = "ui.giantswarm.io/icon-url"
-	// HarnessLabel names the Harness that runs an agent: the Generic chart
-	// renders agent.harness into it and a Harness's allowedAgentTemplates
-	// selector matches it.
-	HarnessLabel = "agent-platform.giantswarm.io/harness"
 	// HelmReleaseNameLabel / HelmReleaseNamespaceLabel are the Flux provenance
 	// labels helm-controller stamps on every object a release renders.
 	HelmReleaseNameLabel      = "helm.toolkit.fluxcd.io/name"
@@ -96,7 +93,7 @@ const (
 	ManagedByValue = "agent-manager"
 )
 
-// The kagent.dev kinds an agent renders to.
+// The kinds an agent renders to.
 const (
 	kindOCIRepository   = "OCIRepository"
 	kindRemoteMCPServer = "RemoteMCPServer"
@@ -109,7 +106,7 @@ const (
 	// ManagedGitOps: the owning HelmRelease is applied by a Flux Kustomization;
 	// changes belong in git (the meta agent opens a PR instead).
 	ManagedGitOps = "gitops"
-	// ManagedNone: a bare AgentTemplate with no HelmRelease behind it.
+	// ManagedNone: a bare Agent object with no HelmRelease behind it.
 	ManagedNone = "none"
 )
 
@@ -129,7 +126,7 @@ type GitSkill struct {
 	Commit string `json:"commit,omitempty"`
 }
 
-// Skill is one skills[] entry of the Generic chart 1.x values: a name, a
+// Skill is one skills[] entry of the Generic chart values: a name, a
 // subdirectory and exactly one source, git or OCI.
 type Skill struct {
 	// Name is the skill's name under the template (spec.skills[].name), the
@@ -172,6 +169,38 @@ func (s *Skills) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
+// Limits bounds every turn of the agent (chart agent.limits, rendered as
+// spec.template.limits). Only a Harness whose runtime is Claude Code enforces
+// them; a write refuses limits on any other Harness. At least one bound is set.
+type Limits struct {
+	// BudgetUSD is the most one turn may spend, in US dollars, as a decimal
+	// string such as "2.50" (up to four decimals).
+	BudgetUSD string `json:"budgetUsd,omitempty"`
+	// MaxTurns is the most model round-trips one turn may take (1 to 10000).
+	MaxTurns int `json:"maxTurns,omitempty"`
+}
+
+// IsZero is true when no bound is set.
+func (l Limits) IsZero() bool { return l.BudgetUSD == "" && l.MaxTurns == 0 }
+
+// Plugin is one plugins[] entry of the Generic chart values: an Agent Plugins
+// bundle at an immutable source plus the names of the bundle's skills to
+// enable. Unlike a skill, a plugin's source is written as given: a git
+// commit or an OCI digest, never a ref to resolve.
+type Plugin struct {
+	// Path is the bundle's directory within the artifact; empty for the root.
+	Path string `json:"path,omitempty"`
+	// Git is the git source: URL and Commit (Ref is refused).
+	Git *GitSkill `json:"git,omitempty"`
+	// OCI is the digest-pinned image reference.
+	OCI string `json:"oci,omitempty"`
+	// Skills names the bundle's skills to enable; at least one, unique.
+	Skills []string `json:"skills"`
+}
+
+// Plugins is an agent's plugin list.
+type Plugins []Plugin
+
 // Spec is what a caller provides to create an agent. Everything but Name,
 // ModelConfig and Toolset is optional; omitted fields keep the chart's
 // defaults.
@@ -181,36 +210,41 @@ type Spec struct {
 	// Fixed at create.
 	Location
 	// Name is the DNS-1123 technical name: the HelmRelease name and the
-	// AgentTemplate name. The caller confirms it; agent-manager never derives
-	// it.
+	// Agent object's name. The caller confirms it; agent-manager never
+	// derives it.
 	Name string `json:"name"`
 	// DisplayName is the friendly Unicode name (max 63 chars).
 	DisplayName string `json:"displayName,omitempty"`
-	// Description goes to AgentTemplate.spec.description.
+	// Description goes to spec.template.description.
 	Description string `json:"description,omitempty"`
-	// SystemMessage is the system prompt (spec.systemPrompt); empty keeps the
-	// chart default. At most MaxSystemMessageLength characters.
+	// SystemMessage is the system prompt (spec.template.systemPrompt); empty
+	// keeps the chart default. At most MaxSystemMessageLength characters.
 	SystemMessage string `json:"systemMessage,omitempty"`
 	// ModelConfig names an existing kagent ModelConfig in the namespace.
 	ModelConfig string `json:"modelConfig"`
 	// Harness names the Harness of the namespace that runs the agent (chart
-	// agent.harness); empty selects the platform Harness. Fixed at create.
+	// agent.harness, the Agent object's spec.harnessRef.name); empty selects
+	// the platform Harness. Fixed at create.
 	Harness string `json:"harness,omitempty"`
+	// Limits bounds every turn; only on a Harness whose runtime is Claude Code.
+	Limits *Limits `json:"limits,omitempty"`
 	// IconURL is the avatar URL (chart agent.iconUrl, rendered as the
 	// ui.giantswarm.io/icon-url annotation).
 	IconURL string `json:"iconUrl,omitempty"`
 	// Skills the agent mounts; every entry is pinned before it is written.
 	Skills Skills `json:"skills,omitempty"`
+	// Plugins the agent enables skills from; every entry comes pinned.
+	Plugins Plugins `json:"plugins,omitempty"`
 	// GitAuthSecretName names the Secret in the agent's namespace whose key
-	// `token` reads the agent's private git skills (chart value
-	// skillsGitAuthSecretRef.name, fanned out to every git skill). Empty
+	// `token` reads the agent's private git skills and plugins (chart value
+	// skillsGitAuthSecretRef.name, fanned out to every git source). Empty
 	// selects the installation's (ComposeConfig.SkillsGitAuthSecretName).
 	GitAuthSecretName string `json:"gitAuthSecretName,omitempty"`
 	// Toolset is the list of selectors that bounds which of the gateway's
 	// tools the agent can use (chart value `toolset`). Required on create;
 	// see ValidateToolset for the grammar.
 	Toolset []string `json:"toolset,omitempty"`
-	// Labels / Annotations are merged onto the AgentTemplate by the chart.
+	// Labels / Annotations are merged onto the Agent object by the chart.
 	Labels      map[string]string `json:"labels,omitempty"`
 	Annotations map[string]string `json:"annotations,omitempty"`
 
@@ -225,8 +259,8 @@ type Spec struct {
 
 // Update is a partial change to an existing agent: nil pointers leave the
 // current value; a pointer to an empty value clears it (falls back to the
-// chart default). Skills replace the whole list; Toolset replaces the whole
-// list (an empty list is refused: use preset:none).
+// chart default). Skills, Plugins and Toolset replace the whole list (an
+// empty toolset is refused: use preset:none).
 type Update struct {
 	Location
 	Name          string  `json:"name"`
@@ -235,7 +269,10 @@ type Update struct {
 	SystemMessage *string `json:"systemMessage,omitempty"`
 	ModelConfig   *string `json:"modelConfig,omitempty"`
 	IconURL       *string `json:"iconUrl,omitempty"`
-	Skills        *Skills `json:"skills,omitempty"`
+	// Limits replaces the bounds; a pointer to empty limits clears them.
+	Limits  *Limits  `json:"limits,omitempty"`
+	Skills  *Skills  `json:"skills,omitempty"`
+	Plugins *Plugins `json:"plugins,omitempty"`
 	// GitAuthSecretName replaces the skills credential Secret; empty clears it
 	// back to the installation's.
 	GitAuthSecretName *string            `json:"gitAuthSecretName,omitempty"`
@@ -294,10 +331,16 @@ type HelmReleaseRef struct {
 	ChartRef *ChartRef `json:"chartRef,omitempty"`
 }
 
-// HarnessStatus is what kagent reports for the template on one admitting
-// Harness (AgentTemplate.status.harnesses[]).
-type HarnessStatus struct {
-	Harness string `json:"harness"`
+// ObjectStatus is the Agent object's own status: what its Harness reports on
+// it (Accepted, ResolvedRefs, Compatible, then Ready once the golden snapshot
+// exists) and the generations that say whether kagent has caught up.
+type ObjectStatus struct {
+	// Exists is false while the HelmRelease has not rendered the Agent yet.
+	Exists             bool  `json:"exists"`
+	Generation         int64 `json:"generation,omitempty"`
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+	// Harness is spec.harnessRef.name, the Harness that runs the agent.
+	Harness string `json:"harness,omitempty"`
 	// Ready / Accepted / ResolvedRefs / Compatible mirror the conditions; nil
 	// while unreported.
 	Ready        *bool `json:"ready"`
@@ -313,7 +356,7 @@ type HarnessStatus struct {
 	Warnings []string `json:"warnings,omitempty"`
 }
 
-// ToolBinding is one MCP tool binding of the template (spec.tools[].mcp).
+// ToolBinding is one MCP tool binding of the template (spec.template.tools[].mcp).
 type ToolBinding struct {
 	// Server is the RemoteMCPServer bound (same namespace).
 	Server string `json:"server"`
@@ -328,18 +371,25 @@ type Agent struct {
 	// Target is the workload cluster the agent runs on; absent on the
 	// installation's own cluster.
 	Target
-	// Exists is false while the HelmRelease has not rendered the
-	// AgentTemplate yet (or failed to).
+	// Exists is false while the HelmRelease has not rendered the Agent
+	// object yet (or failed to).
 	Exists        bool   `json:"exists"`
 	DisplayName   string `json:"displayName,omitempty"`
 	Description   string `json:"description,omitempty"`
 	ModelConfig   string `json:"modelConfig,omitempty"`
 	IconURL       string `json:"iconUrl,omitempty"`
 	SystemMessage string `json:"systemMessage,omitempty"`
+	// Harness is the Harness that runs the agent (spec.harnessRef.name, else
+	// the chart value agent.harness while nothing is rendered).
+	Harness string `json:"harness,omitempty"`
+	// Limits are the agent's per-turn bounds, when set.
+	Limits *Limits `json:"limits,omitempty"`
 	// Skills as pinned: git skills by commit, OCI skills by digest.
 	Skills Skills `json:"skills,omitempty"`
+	// Plugins as pinned.
+	Plugins Plugins `json:"plugins,omitempty"`
 	// Toolset is the toolset the agent declares: the owning HelmRelease's
-	// `toolset` value, or — for a bare AgentTemplate — the X-Muster-Toolset
+	// `toolset` value, or, for a bare Agent object, the X-Muster-Toolset
 	// header of the agent's RemoteMCPServer. Absent when none is declared.
 	Toolset []string `json:"toolset,omitempty"`
 	// ImplicitFullAccess is true when the agent declares no toolset but binds
@@ -348,12 +398,12 @@ type Agent struct {
 	ImplicitFullAccess bool `json:"implicitFullAccess,omitempty"`
 	// Tools are the template's MCP bindings.
 	Tools []ToolBinding `json:"tools,omitempty"`
-	// Ready is the platform Harness's verdict on the template (Ready and the
-	// desired revision is the latest successful one); nil while the template
-	// is absent or the Harness has not reported.
+	// Ready is the Agent object's verdict (Ready and the desired revision is
+	// the latest successful one); nil while the object is absent or its
+	// Harness has not reported.
 	Ready *bool `json:"ready"`
-	// Harnesses is the template's per-Harness status.
-	Harnesses []HarnessStatus `json:"harnesses,omitempty"`
+	// Status is the Agent object's status, when it exists.
+	Status *ObjectStatus `json:"status,omitempty"`
 	// Managed is helmrelease, gitops or none.
 	Managed     string          `json:"managed"`
 	HelmRelease *HelmReleaseRef `json:"helmRelease,omitempty"`
@@ -499,9 +549,9 @@ type DeleteResult struct {
 	Namespace string `json:"namespace"`
 	Target
 	HelmReleaseDeleted bool `json:"helmReleaseDeleted"`
-	// AgentTemplateDeleted: the template was deleted directly (a bare one, or
-	// the rendered objects of a suspended release, both with force).
-	AgentTemplateDeleted   bool `json:"agentTemplateDeleted"`
+	// AgentDeleted: the Agent object was deleted directly (a bare one, or the
+	// rendered objects of a suspended release, both with force).
+	AgentDeleted           bool `json:"agentDeleted"`
 	RemoteMCPServerDeleted bool `json:"remoteMcpServerDeleted"`
 	OCIRepositoryDeleted   bool `json:"ociRepositoryDeleted"`
 	// OCIRepositoryKept explains why the chart source stays (other agents
@@ -529,22 +579,13 @@ type Status struct {
 	Verdict string `json:"verdict"`
 	// Summary is one sentence a human or an agent can act on.
 	Summary     string             `json:"summary"`
-	Template    *TemplateStatus    `json:"template,omitempty"`
+	Agent       *ObjectStatus      `json:"agent,omitempty"`
 	HelmRelease *HelmReleaseStatus `json:"helmRelease,omitempty"`
 	Events      []Event            `json:"events,omitempty"`
 
 	// sourceFailure is the Ready condition of a chart source that reports a
 	// failure while the HelmRelease waits for it.
 	sourceFailure *Condition
-}
-
-// TemplateStatus is the AgentTemplate's status: one entry per admitting
-// Harness, plus the generations that say whether kagent has caught up.
-type TemplateStatus struct {
-	Exists             bool            `json:"exists"`
-	Generation         int64           `json:"generation,omitempty"`
-	ObservedGeneration int64           `json:"observedGeneration,omitempty"`
-	Harnesses          []HarnessStatus `json:"harnesses"`
 }
 
 // HelmReleaseStatus is the release's conditions and recent history.

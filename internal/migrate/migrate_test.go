@@ -147,16 +147,47 @@ func newCluster(objs ...runtime.Object) *cluster {
 }
 
 // runner builds the command's wiring over the fake cluster: the fake chart,
-// the pinner, and the service as the status reader.
+// the pinner, and a status reader over the kagent.dev/v1alpha3 AgentTemplate
+// the wait phase gates on.
 func (c *cluster) runner(t *testing.T, opts Options, latest, token string) *Runner {
 	t.Helper()
 	ch := fakeChart{latest: latest}
 	p := pinner{git: skills.NewResolver(fakeGitHub(t).URL, skills.StaticToken(token), nil, nil)}
-	svc := agents.New(kube.NewServiceAccountProvider(c.client), ch, nil, p, agents.Config{
-		DefaultNamespace: opts.Namespaces[0], ManagedNamespaces: opts.Namespaces, Compose: agents.ComposeConfig{HarnessName: "kagent"}, KagentAPIVersion: "v1alpha3",
-	}, nil)
 	opts.Version = "test"
-	return New(c.client, ch, p, svc, opts, nil)
+	return New(c.client, ch, p, templateStatus{c: c}, opts, nil)
+}
+
+// templateStatus is the wait phase's verdict on a kagent.dev/v1alpha3
+// AgentTemplate: Ready on the kagent Harness's status.harnesses[] entry with
+// the desired revision the latest successful one, else progressing.
+type templateStatus struct{ c *cluster }
+
+func (r templateStatus) Status(ctx context.Context, loc agents.Location, name string) (*agents.Status, error) {
+	ns := loc.Namespace
+	tpl, err := r.c.dyn.Resource(tplGVR).Namespace(ns).Get(ctx, name, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return &agents.Status{Name: name, Namespace: ns, Verdict: agents.VerdictProgressing, Summary: "HelmRelease is ready but the AgentTemplate has not been rendered yet"}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	entries, _, _ := unstructured.NestedSlice(tpl.Object, "status", "harnesses")
+	for _, e := range entries {
+		entry, _ := e.(map[string]any)
+		if entry["harness"] != "kagent" {
+			continue
+		}
+		desired, _ := entry["desiredRevision"].(string)
+		latest, _ := entry["latestSuccessfulRevision"].(string)
+		conds, _ := entry["conditions"].([]any)
+		for _, c := range conds {
+			cond, _ := c.(map[string]any)
+			if cond["type"] == "Ready" && cond["status"] == "True" && desired == latest {
+				return &agents.Status{Name: name, Namespace: ns, Verdict: agents.VerdictReady, Summary: "AgentTemplate is Ready on Harness kagent"}, nil
+			}
+		}
+	}
+	return &agents.Status{Name: name, Namespace: ns, Verdict: agents.VerdictProgressing, Summary: "Harness kagent is compiling"}, nil
 }
 
 func (c *cluster) get(t *testing.T, gvr schema.GroupVersionResource, ns, name string) *unstructured.Unstructured {

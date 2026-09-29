@@ -13,7 +13,7 @@ import (
 	"github.com/giantswarm/agent-manager/internal/oci"
 )
 
-// Immutable skill sources as the kagent.dev/v1alpha3 AgentTemplate requires
+// Immutable skill sources as the api.kagent.dev/v1alpha3 template requires
 // them: a full git commit id, an OCI reference by digest.
 var (
 	// CommitPattern is a full commit id (40 or 64 hex characters).

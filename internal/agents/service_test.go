@@ -28,17 +28,17 @@ import (
 	"github.com/giantswarm/agent-manager/internal/kube"
 )
 
-const kagentAPI = "kagent.dev/v1alpha3"
+const kagentAPI = "api.kagent.dev/v1alpha3"
 
 var (
 	hrGVR      = schema.GroupVersionResource{Group: "helm.toolkit.fluxcd.io", Version: "v2", Resource: "helmreleases"}
 	ociGVR     = schema.GroupVersionResource{Group: "source.toolkit.fluxcd.io", Version: "v1", Resource: "ocirepositories"}
-	tplGVR     = schema.GroupVersionResource{Group: "kagent.dev", Version: "v1alpha3", Resource: "agenttemplates"}
-	serverGVR  = schema.GroupVersionResource{Group: "kagent.dev", Version: "v1alpha3", Resource: "remotemcpservers"}
-	harnessGVR = schema.GroupVersionResource{Group: "kagent.dev", Version: "v1alpha3", Resource: "harnesses"}
-	mcGVR      = schema.GroupVersionResource{Group: "kagent.dev", Version: "v1alpha3", Resource: "modelconfigs"}
+	agentGVR   = schema.GroupVersionResource{Group: "api.kagent.dev", Version: "v1alpha3", Resource: "agents"}
+	serverGVR  = schema.GroupVersionResource{Group: "api.kagent.dev", Version: "v1alpha3", Resource: "remotemcpservers"}
+	harnessGVR = schema.GroupVersionResource{Group: "api.kagent.dev", Version: "v1alpha3", Resource: "harnesses"}
+	mcGVR      = schema.GroupVersionResource{Group: "api.kagent.dev", Version: "v1alpha3", Resource: "modelconfigs"}
 	listKinds  = map[schema.GroupVersionResource]string{
-		hrGVR: "HelmReleaseList", ociGVR: "OCIRepositoryList", tplGVR: "AgentTemplateList",
+		hrGVR: "HelmReleaseList", ociGVR: "OCIRepositoryList", agentGVR: "AgentList",
 		serverGVR: "RemoteMCPServerList", harnessGVR: "HarnessList", mcGVR: "ModelConfigList",
 	}
 )
@@ -72,13 +72,16 @@ func modelConfig(ns, name, provider, model string) *unstructured.Unstructured {
 	}}
 }
 
-func harness(ns, name, label string) *unstructured.Unstructured {
+// harness is a Harness of ns whose spec carries the runtime discriminator
+// (kagent, claude, codex, byo) next to its workload.
+func harness(ns, name, runtime string) *unstructured.Unstructured {
 	return &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": kagentAPI, "kind": "Harness",
 		"metadata": map[string]any{"name": name, "namespace": ns},
-		"spec": map[string]any{"allowedAgentTemplates": map[string]any{"selector": map[string]any{"matchLabels": map[string]any{
-			"agent-platform.giantswarm.io/harness": label,
-		}}}},
+		"spec": map[string]any{
+			runtime:    map[string]any{},
+			"workload": map[string]any{"image": "ghcr.io/example/" + runtime + ":1"},
+		},
 	}}
 }
 
@@ -115,8 +118,8 @@ func helmRelease(ns, name string, values map[string]any, ready bool, labels map[
 	}}
 }
 
-// harnessEntryObj is one status.harnesses[] entry as kagent writes it.
-func harnessEntryObj(name, desired, latest string, ready bool, failing string) map[string]any {
+// agentStatusObj is an Agent's status as kagent writes it.
+func agentStatusObj(observed int64, desired, latest string, ready bool, failing string) map[string]any {
 	conds := []any{
 		map[string]any{"type": "Accepted", "status": "True", "reason": "Accepted"},
 		map[string]any{"type": "ResolvedRefs", "status": "True", "reason": "ResolvedRefs"},
@@ -136,15 +139,19 @@ func harnessEntryObj(name, desired, latest string, ready bool, failing string) m
 		readyCond = map[string]any{"type": "Ready", "status": "True", "reason": "Ready", "message": "golden snapshot ready"}
 	}
 	conds = append(conds, readyCond)
-	return map[string]any{"harness": name, "desiredRevision": desired, "latestSuccessfulRevision": latest, "conditions": conds}
+	st := map[string]any{"observedGeneration": observed, "desiredRevision": desired, "conditions": conds}
+	if latest != "" {
+		st["latestSuccessfulRevision"] = latest
+	}
+	return st
 }
 
-// agentTemplate is what the chart renders for hrName (the owning release in
-// hrNs; "" for a bare template), admitted and ready on the kagent Harness when
-// ready. It binds its own RemoteMCPServer (the toolset carrier) unless bound
-// is false.
-func agentTemplate(ns, name, hrName, hrNs string, ready bool, bound bool) *unstructured.Unstructured {
-	labels := map[string]any{"agent-platform.giantswarm.io/harness": "kagent"}
+// agentObject is what the chart renders for hrName (the owning release in
+// hrNs; "" for a bare Agent): the template inline, the kagent Harness by
+// name, Ready when ready. It binds its own RemoteMCPServer (the toolset
+// carrier) unless bound is false.
+func agentObject(ns, name, hrName, hrNs string, ready bool, bound bool) *unstructured.Unstructured {
+	labels := map[string]any{}
 	if hrName != "" {
 		labels[HelmReleaseNameLabel] = hrName
 		labels[HelmReleaseNamespaceLabel] = hrNs
@@ -154,15 +161,24 @@ func agentTemplate(ns, name, hrName, hrNs string, ready bool, bound bool) *unstr
 		tools = append(tools, map[string]any{"mcp": map[string]any{"server": map[string]any{"kind": kindRemoteMCPServer, "name": name}}})
 	}
 	return &unstructured.Unstructured{Object: map[string]any{
-		"apiVersion": kagentAPI, "kind": "AgentTemplate",
+		"apiVersion": kagentAPI, "kind": "Agent",
 		"metadata": map[string]any{"name": name, "namespace": ns, "generation": int64(1), "labels": labels, "annotations": map[string]any{DisplayNameAnnotation: "Display " + name, IconURLAnnotation: "https://avatars.example/" + name + ".png"}},
 		"spec": map[string]any{
-			"description": "desc " + name, "modelConfig": map[string]any{"name": "default-model-config"}, "systemPrompt": "You are " + name,
-			"skills": []any{map[string]any{"name": "a", "source": map[string]any{"git": map[string]any{"url": skillsRepo, "commit": mainHead}, "path": "a"}}},
-			"tools":  tools,
+			"harnessRef": map[string]any{"name": "kagent"},
+			"template": map[string]any{
+				"description": "desc " + name, "modelConfig": map[string]any{"name": "default-model-config"}, "systemPrompt": "You are " + name,
+				"skills": []any{map[string]any{"name": "a", "source": map[string]any{"git": map[string]any{"url": skillsRepo, "commit": mainHead}, "path": "a"}}},
+				"tools":  tools,
+			},
 		},
-		"status": map[string]any{"observedGeneration": int64(1), "harnesses": []any{harnessEntryObj("kagent", "rev-1", map[bool]string{true: "rev-1", false: ""}[ready], ready, "")}},
+		"status": agentStatusObj(1, "rev-1", map[bool]string{true: "rev-1", false: ""}[ready], ready, ""),
 	}}
+}
+
+// onHarness names another Harness in the Agent's spec.harnessRef.
+func onHarness(obj *unstructured.Unstructured, name string) *unstructured.Unstructured {
+	_ = unstructured.SetNestedField(obj.Object, name, "spec", "harnessRef", "name")
+	return obj
 }
 
 // remoteMCPServer is the agent's toolset carrier; no toolset means no header
@@ -184,10 +200,10 @@ func seeded(t *testing.T, typedObjs ...runtime.Object) *fixture {
 	return newFixture(t, []runtime.Object{
 		modelConfig("kagent", "default-model-config", "Anthropic", "claude-sonnet-4-6"),
 		modelConfig("kagent", "qwen3-8-27b", "OpenAI", "qwen3-8-27b"),
-		harness("kagent", "kagent", "kagent"),
-		ociRepository("kagent", "1.x"),
+		harness("kagent", "kagent", RuntimeKagent),
+		ociRepository("kagent", "2.x"),
 		helmRelease("kagent", "verifier", verifierValues, true, nil),
-		agentTemplate("kagent", "verifier", "verifier", "kagent", true, true),
+		agentObject("kagent", "verifier", "verifier", "kagent", true, true),
 		remoteMCPServer("kagent", "verifier"),
 	}, typedObjs...)
 }
@@ -208,34 +224,40 @@ func loadFixture(t *testing.T, name string) *unstructured.Unstructured {
 }
 
 func TestReadModelFromTheRenderedObjects(t *testing.T) {
-	f := seeded(t)
-	tpl, server := loadFixture(t, "agenttemplate-full.yaml"), loadFixture(t, "remotemcpserver.yaml")
-	a := f.svc.agentFromTemplate(tpl, server)
+	obj, server := loadFixture(t, "agent-full.yaml"), loadFixture(t, "remotemcpserver.yaml")
+	a := agentFromObject(obj, server)
 	assert.Equal(t, "SRE Assistant", a.DisplayName, "display name from the annotation")
 	assert.Equal(t, "https://avatars.example/v1/sre.png", a.IconURL, "icon URL from the annotation")
 	assert.Equal(t, "helps", a.Description)
 	assert.Equal(t, "default-model-config", a.ModelConfig)
 	assert.Equal(t, "Be brief.", a.SystemMessage)
+	assert.Equal(t, "claude", a.Harness, "the Harness is spec.harnessRef.name")
+	assert.Equal(t, &Limits{BudgetUSD: "2.50", MaxTurns: 40}, a.Limits)
 	assert.Equal(t, Skills{
 		{Name: "runbooks", Path: "nested/runbooks", Git: &GitSkill{URL: skillsRepo, Commit: mainHead}},
 		{Name: "kubectl", OCI: kubectlRef + "@" + kubectlSum},
 	}, a.Skills, "skills are reported as the pins the template carries")
+	assert.Equal(t, Plugins{
+		{Path: "bundles/sre", Git: &GitSkill{URL: skillsRepo, Commit: tagHead}, Skills: []string{"triage", "postmortem"}},
+		{OCI: kubectlRef + "@" + kubectlSum, Skills: []string{"k8s"}},
+	}, a.Plugins, "plugins are reported as {source, skills}")
 	assert.Equal(t, []string{"preset:read-only", "workflow:incident-triage"}, a.Toolset, "the toolset is the header of the agent's own RemoteMCPServer")
 	assert.False(t, a.ImplicitFullAccess)
 	assert.Equal(t, []ToolBinding{{Server: "sre"}, {Server: "github", Tools: []string{"get_issue", "list_issues"}}}, a.Tools)
 	require.NotNil(t, a.Ready)
 	assert.True(t, *a.Ready)
-	require.Len(t, a.Harnesses, 1)
-	assert.Equal(t, "kagent", a.Harnesses[0].Harness)
-	assert.Equal(t, []string{"tools narrowed for server github could not be verified: discovery disabled"}, a.Harnesses[0].Warnings)
+	require.NotNil(t, a.Status)
+	assert.Equal(t, "claude", a.Status.Harness)
+	assert.Equal(t, "sre-a1b2c3", a.Status.LatestSuccessfulRevision)
+	assert.Equal(t, []string{"tools narrowed for server github could not be verified: discovery disabled"}, a.Status.Warnings)
 	assert.Equal(t, ManagedNone, a.Managed, "before the owning release is folded in")
 
 	// A carrier without the header is implicit full access; no carrier bound
 	// at all (preset:none) is neither.
-	implicit := f.svc.agentFromTemplate(tpl, remoteMCPServer("kagent", "sre"))
+	implicit := agentFromObject(obj, remoteMCPServer("kagent", "sre"))
 	assert.Nil(t, implicit.Toolset)
 	assert.True(t, implicit.ImplicitFullAccess)
-	none := f.svc.agentFromTemplate(agentTemplate("kagent", "quiet", "quiet", "kagent", true, false), nil)
+	none := agentFromObject(agentObject("kagent", "quiet", "quiet", "kagent", true, false), nil)
 	assert.Nil(t, none.Toolset)
 	assert.False(t, none.ImplicitFullAccess)
 
@@ -250,16 +272,17 @@ func TestReadModelFromTheRenderedObjects(t *testing.T) {
 func TestListMergesTemplatesAndHelmReleases(t *testing.T) {
 	f := seeded(t)
 	ctx := context.Background()
-	// A HelmRelease that has not rendered its template yet (GitOps-owned), a
-	// bare template with a toolset on its carrier, and a scoped agent.
-	pending := map[string]any{"agent": map[string]any{"name": "pending", "displayName": "Pending"}, "modelConfig": map[string]any{"name": "qwen3-8-27b"},
-		"skills": []any{map[string]any{"name": "runbooks", "git": map[string]any{"url": skillsRepo, "commit": tagHead}}}}
+	// A HelmRelease that has not rendered its Agent yet (GitOps-owned), a
+	// bare Agent with a toolset on its carrier, and a scoped agent.
+	pending := map[string]any{"agent": map[string]any{"name": "pending", "displayName": "Pending", "harness": "claude", "limits": map[string]any{"maxTurns": int64(12)}}, "modelConfig": map[string]any{"name": "qwen3-8-27b"},
+		"skills":  []any{map[string]any{"name": "runbooks", "git": map[string]any{"url": skillsRepo, "commit": tagHead}}},
+		"plugins": []any{map[string]any{"oci": kubectlRef + "@" + kubectlSum, "skills": []any{"k8s"}}}}
 	mustCreate(t, f, hrGVR, helmRelease("kagent", "pending", pending, false, map[string]any{KustomizationNameLabel: "flux-system"}))
-	mustCreate(t, f, tplGVR, agentTemplate("kagent", "bare", "", "", true, true))
+	mustCreate(t, f, agentGVR, agentObject("kagent", "bare", "", "", true, true))
 	mustCreate(t, f, serverGVR, remoteMCPServer("kagent", "bare", "preset:read-only", "workflow:incident-triage"))
 	scoped := map[string]any{"agent": map[string]any{"name": "scoped"}, "modelConfig": map[string]any{"name": "qwen3-8-27b"}, ToolsetValuesKey: []any{"preset:infrastructure"}}
 	mustCreate(t, f, hrGVR, helmRelease("kagent", "scoped", scoped, true, nil))
-	mustCreate(t, f, tplGVR, agentTemplate("kagent", "scoped", "scoped", "kagent", true, true))
+	mustCreate(t, f, agentGVR, agentObject("kagent", "scoped", "scoped", "kagent", true, true))
 	mustCreate(t, f, serverGVR, remoteMCPServer("kagent", "scoped", "preset:infrastructure"))
 
 	list, err := f.svc.List(ctx, In(""))
@@ -292,13 +315,16 @@ func TestListMergesTemplatesAndHelmReleases(t *testing.T) {
 	assert.Equal(t, ManagedGitOps, p.Managed)
 	assert.Nil(t, p.Ready)
 	assert.False(t, *p.HelmRelease.Ready)
-	assert.True(t, p.ImplicitFullAccess, "reported before the template is rendered")
+	assert.True(t, p.ImplicitFullAccess, "reported before the Agent is rendered")
 	assert.Equal(t, Skills{{Name: "runbooks", Git: &GitSkill{URL: skillsRepo, Commit: tagHead}}}, p.Skills, "skills from the values while nothing is rendered")
+	assert.Equal(t, Plugins{{OCI: kubectlRef + "@" + kubectlSum, Skills: []string{"k8s"}}}, p.Plugins, "plugins from the values too")
+	assert.Equal(t, "claude", p.Harness)
+	assert.Equal(t, &Limits{MaxTurns: 12}, p.Limits)
 
 	b := byName["bare"]
 	assert.Equal(t, ManagedNone, b.Managed)
 	assert.Nil(t, b.HelmRelease)
-	assert.Equal(t, []string{"preset:read-only", "workflow:incident-triage"}, b.Toolset, "a bare template reports its carrier's header")
+	assert.Equal(t, []string{"preset:read-only", "workflow:incident-triage"}, b.Toolset, "a bare Agent reports its carrier's header")
 	assert.False(t, b.ImplicitFullAccess)
 
 	sc := byName["scoped"]
@@ -319,7 +345,7 @@ func TestListMergesTemplatesAndHelmReleases(t *testing.T) {
 
 // TestGitOpsOwnedReleaseInAnotherNamespace is the fleet's sre-agent shape:
 // HelmRelease + OCIRepository in flux-giantswarm, targetNamespace kagent. The
-// template's provenance labels lead to the release; it is read-only.
+// Agent's provenance labels lead to the release; it is read-only.
 func TestGitOpsOwnedReleaseInAnotherNamespace(t *testing.T) {
 	f := seeded(t)
 	ctx := context.Background()
@@ -328,7 +354,7 @@ func TestGitOpsOwnedReleaseInAnotherNamespace(t *testing.T) {
 	require.NoError(t, unstructured.SetNestedField(hr.Object, "kagent", "spec", "targetNamespace"))
 	mustCreate(t, f, hrGVR, hr)
 	mustCreate(t, f, ociGVR, ociRepository("flux-giantswarm", ">=0.2.1 <1.0.0"))
-	mustCreate(t, f, tplGVR, agentTemplate("kagent", "sre-agent", "sre-agent", "flux-giantswarm", true, true))
+	mustCreate(t, f, agentGVR, agentObject("kagent", "sre-agent", "sre-agent", "flux-giantswarm", true, true))
 	mustCreate(t, f, serverGVR, remoteMCPServer("kagent", "sre-agent", "preset:infrastructure"))
 
 	got, err := f.svc.Get(ctx, In(""), "sre-agent")
@@ -434,7 +460,7 @@ func TestCreateValidatesPinsThenAppliesBothObjects(t *testing.T) {
 	assert.False(t, res.Agent.ImplicitFullAccess)
 	assert.Equal(t, ManagedHelmRelease, res.Agent.Managed)
 	assert.Contains(t, res.Manifests.HelmRelease, "kind: HelmRelease")
-	assert.Contains(t, res.Manifests.OCIRepository, "semver: 1.x")
+	assert.Contains(t, res.Manifests.OCIRepository, "semver: 2.x")
 	require.NotNil(t, res.Status)
 	assert.Equal(t, VerdictProgressing, res.Status.Verdict)
 
@@ -453,14 +479,14 @@ func TestCreateValidatesPinsThenAppliesBothObjects(t *testing.T) {
 		"muster":  map[string]any{"url": "http://muster.agent-platform.svc.cluster.local:8090/mcp"},
 	}, values, "branches and tags are written as pins; the toolset is the chart's top-level value; muster.url is composed when configured")
 	assert.Equal(t, ManagedByValue, hr.GetLabels()[ManagedByLabel])
-	// get_agent reports the pins before the template exists, too.
+	// get_agent reports the pins before the Agent exists, too.
 	got, err := f.svc.Get(ctx, In(""), "sre")
 	require.NoError(t, err)
 	require.Len(t, got.Skills, 3)
 	assert.Equal(t, mainHead, got.Skills[0].Git.Commit)
 	assert.Equal(t, kubectlRef+"@"+kubectlSum, got.Skills[2].OCI)
 
-	// A namespace without a chart source gets one, tracking 1.x.
+	// A namespace without a chart source gets one, tracking 2.x.
 	mustCreate(t, f, mcGVR, modelConfig("tenant", "mc", "Ollama", "qwen3"))
 	res, err = f.svc.Create(ctx, Spec{Location: In("tenant"), Name: "t1", ModelConfig: "mc", Toolset: []string{"preset:none"}})
 	require.NoError(t, err)
@@ -470,7 +496,7 @@ func TestCreateValidatesPinsThenAppliesBothObjects(t *testing.T) {
 	url, _, _ := unstructured.NestedString(repo.Object, "spec", "url")
 	assert.Equal(t, DefaultChartOCIURL, url)
 	semver, _, _ := unstructured.NestedString(repo.Object, "spec", "ref", "semver")
-	assert.Equal(t, "1.x", semver)
+	assert.Equal(t, "2.x", semver)
 }
 
 func TestValidateCreateIsADryRun(t *testing.T) {
@@ -692,11 +718,11 @@ func TestUpdateMergesIntoValuesAndHonorsOwnership(t *testing.T) {
 	_, err = f.svc.Update(ctx, Update{Name: "gitops", DisplayName: str("x"), WriteOptions: WriteOptions{Mode: ModeCommit}})
 	require.ErrorIs(t, err, ErrUnsupported)
 
-	// A bare AgentTemplate has nothing to write to.
-	mustCreate(t, f, tplGVR, agentTemplate("kagent", "bare", "", "", true, true))
+	// A bare Agent has nothing to write to.
+	mustCreate(t, f, agentGVR, agentObject("kagent", "bare", "", "", true, true))
 	_, err = f.svc.Update(ctx, Update{Name: "bare", DisplayName: str("x")})
 	require.ErrorIs(t, err, ErrConflict)
-	assert.Contains(t, err.Error(), "bare template")
+	assert.Contains(t, err.Error(), "bare Agent")
 }
 
 func mustValues(hr *unstructured.Unstructured) map[string]any {
@@ -726,17 +752,17 @@ func TestDeleteRemovesTheReleaseAndTheSourceOnlyWhenUnreferenced(t *testing.T) {
 	assert.Error(t, err, "the last release takes the source with it")
 
 	_, err = f.svc.Delete(ctx, In(""), "verifier", false, WriteOptions{})
-	assert.ErrorIs(t, err, ErrConflict, "the AgentTemplate is still there (the fake has no helm-controller): a bare template now")
+	assert.ErrorIs(t, err, ErrConflict, "the Agent is still there (the fake has no helm-controller): a bare Agent now")
 	_, err = f.svc.Delete(ctx, In(""), "nothing", false, WriteOptions{})
 	assert.ErrorIs(t, err, ErrNotFound)
 
-	// Bare template: force deletes the template itself.
+	// Bare Agent: force deletes the object itself.
 	res, err = f.svc.Delete(ctx, In(""), "verifier", true, WriteOptions{})
 	require.NoError(t, err)
-	assert.True(t, res.AgentTemplateDeleted)
+	assert.True(t, res.AgentDeleted)
 	assert.False(t, res.HelmReleaseDeleted)
-	assert.False(t, res.RemoteMCPServerDeleted, "a bare template's server is not the release's to remove")
-	_, err = f.dyn.Resource(tplGVR).Namespace("kagent").Get(ctx, "verifier", metav1.GetOptions{})
+	assert.False(t, res.RemoteMCPServerDeleted, "a bare Agent's server is not the release's to remove")
+	_, err = f.dyn.Resource(agentGVR).Namespace("kagent").Get(ctx, "verifier", metav1.GetOptions{})
 	assert.Error(t, err)
 
 	// Suspended: refused without force; with force the rendered objects go
@@ -744,28 +770,24 @@ func TestDeleteRemovesTheReleaseAndTheSourceOnlyWhenUnreferenced(t *testing.T) {
 	suspended := helmRelease("kagent", "susp", map[string]any{"agent": map[string]any{"name": "susp"}, "modelConfig": map[string]any{"name": "default-model-config"}}, true, nil)
 	require.NoError(t, unstructured.SetNestedField(suspended.Object, true, "spec", "suspend"))
 	mustCreate(t, f, hrGVR, suspended)
-	mustCreate(t, f, tplGVR, agentTemplate("kagent", "susp", "susp", "kagent", true, true))
+	mustCreate(t, f, agentGVR, agentObject("kagent", "susp", "susp", "kagent", true, true))
 	mustCreate(t, f, serverGVR, remoteMCPServer("kagent", "susp", "preset:none"))
 	_, err = f.svc.Delete(ctx, In(""), "susp", false, WriteOptions{})
 	assert.ErrorIs(t, err, ErrConflict)
 	res, err = f.svc.Delete(ctx, In(""), "susp", true, WriteOptions{})
 	require.NoError(t, err)
 	assert.True(t, res.HelmReleaseDeleted)
-	assert.True(t, res.AgentTemplateDeleted)
+	assert.True(t, res.AgentDeleted)
 	assert.True(t, res.RemoteMCPServerDeleted)
 	_, err = f.dyn.Resource(serverGVR).Namespace("kagent").Get(ctx, "susp", metav1.GetOptions{})
 	assert.Error(t, err)
 }
 
-func TestStatusVerdictsComeFromThePlatformHarness(t *testing.T) {
-	ctx := context.Background()
-	withStatus := func(tpl *unstructured.Unstructured, observed int64, entries ...map[string]any) *unstructured.Unstructured {
-		list := make([]any, 0, len(entries))
-		for _, e := range entries {
-			list = append(list, e)
-		}
-		tpl.Object["status"] = map[string]any{"observedGeneration": observed, "harnesses": list}
-		return tpl
+func TestStatusVerdictsComeFromTheAgentObject(t *testing.T) {
+	ctx := t.Context()
+	withStatus := func(obj *unstructured.Unstructured, st map[string]any) *unstructured.Unstructured {
+		obj.Object["status"] = st
+		return obj
 	}
 	release := func(name string) *unstructured.Unstructured {
 		return helmRelease("kagent", name, map[string]any{"agent": map[string]any{"name": name}, "modelConfig": map[string]any{"name": "default-model-config"}}, true, nil)
@@ -780,41 +802,45 @@ func TestStatusVerdictsComeFromThePlatformHarness(t *testing.T) {
 	assert.Contains(t, st.Summary, "rev-1")
 	require.Len(t, st.HelmRelease.History, 1)
 	assert.Equal(t, "1.0.0", st.HelmRelease.History[0].ChartVersion)
-	require.Len(t, st.Template.Harnesses, 1)
-	assert.True(t, *st.Template.Harnesses[0].Ready)
+	require.NotNil(t, st.Agent)
+	assert.True(t, st.Agent.Exists)
+	assert.Equal(t, "kagent", st.Agent.Harness)
+	assert.True(t, *st.Agent.Ready)
+	assert.True(t, *st.Agent.Accepted)
 	assert.Nil(t, st.Events)
 
 	// Progressing: a new revision compiling (desired != latest successful),
 	// even though Ready still reads True for the previous one.
-	f = newFixture(t, []runtime.Object{release("sre"), withStatus(agentTemplate("kagent", "sre", "sre", "kagent", true, true), 2, harnessEntryObj("kagent", "rev-2", "rev-1", true, ""))})
+	f = newFixture(t, []runtime.Object{release("sre"), withStatus(agentObject("kagent", "sre", "sre", "kagent", true, true), agentStatusObj(2, "rev-2", "rev-1", true, ""))})
 	st, err = f.svc.Status(ctx, In(""), "sre")
 	require.NoError(t, err)
 	assert.Equal(t, VerdictProgressing, st.Verdict, st.Summary)
 	assert.Contains(t, st.Summary, "rev-2")
 	// Progressing: first revision, Ready not yet True.
-	f = newFixture(t, []runtime.Object{release("sre"), withStatus(agentTemplate("kagent", "sre", "sre", "kagent", false, true), 1, harnessEntryObj("kagent", "rev-1", "", false, ""))})
+	f = newFixture(t, []runtime.Object{release("sre"), withStatus(agentObject("kagent", "sre", "sre", "kagent", false, true), agentStatusObj(1, "rev-1", "", false, ""))})
 	st, err = f.svc.Status(ctx, In(""), "sre")
 	require.NoError(t, err)
 	assert.Equal(t, VerdictProgressing, st.Verdict, st.Summary)
 
 	// Failed: Ready=False with a reason other than the pending one is a
 	// failure the controller will not get past (agentlab's terminal rule).
-	snapshotFailed := harnessEntryObj("kagent", "rev-1", "", false, "")
+	snapshotFailed := agentStatusObj(1, "rev-1", "", false, "")
 	for _, c := range snapshotFailed["conditions"].([]any) {
 		if c.(map[string]any)["type"] == "Ready" {
 			c.(map[string]any)["reason"] = "SnapshotFailed"
 			c.(map[string]any)["message"] = "actor exited before the snapshot"
 		}
 	}
-	f = newFixture(t, []runtime.Object{release("sre"), withStatus(agentTemplate("kagent", "sre", "sre", "kagent", false, true), 1, snapshotFailed)})
+	f = newFixture(t, []runtime.Object{release("sre"), withStatus(agentObject("kagent", "sre", "sre", "kagent", false, true), snapshotFailed)})
 	st, err = f.svc.Status(ctx, In(""), "sre")
 	require.NoError(t, err)
 	assert.Equal(t, VerdictFailed, st.Verdict, st.Summary)
 	assert.Contains(t, st.Summary, "SnapshotFailed: actor exited before the snapshot")
 
-	// Failed: Accepted=False / Compatible=False with the condition's message.
+	// Failed: Accepted=False / Compatible=False / ResolvedRefs=False with the
+	// condition's message (a Harness that does not exist is ResolvedRefs).
 	for _, failing := range []string{"Accepted", "Compatible", "ResolvedRefs"} {
-		f = newFixture(t, []runtime.Object{release("sre"), withStatus(agentTemplate("kagent", "sre", "sre", "kagent", false, true), 1, harnessEntryObj("kagent", "rev-1", "", false, failing))})
+		f = newFixture(t, []runtime.Object{release("sre"), withStatus(agentObject("kagent", "sre", "sre", "kagent", false, true), agentStatusObj(1, "rev-1", "", false, failing))})
 		st, err = f.svc.Status(ctx, In(""), "sre")
 		require.NoError(t, err)
 		assert.Equal(t, VerdictFailed, st.Verdict, st.Summary)
@@ -822,28 +848,9 @@ func TestStatusVerdictsComeFromThePlatformHarness(t *testing.T) {
 		assert.Contains(t, st.Summary, failing+" rejected the template")
 	}
 
-	// Not admitted: observedGeneration caught up, harnesses[] empty — with the
-	// Harnesses of the namespace and what they admit.
-	unadmitted := withStatus(agentTemplate("kagent", "sre", "sre", "kagent", false, true), 1)
-	unadmitted.SetLabels(map[string]string{HelmReleaseNameLabel: "sre", HelmReleaseNamespaceLabel: "kagent", "kagent.dev/harness": "kagent"})
-	f = newFixture(t, []runtime.Object{release("sre"), unadmitted, harness("kagent", "kagent", "kagent")})
-	st, err = f.svc.Status(ctx, In(""), "sre")
-	require.NoError(t, err)
-	assert.Equal(t, VerdictFailed, st.Verdict, st.Summary)
-	assert.Contains(t, st.Summary, "no Harness admits the AgentTemplate")
-	assert.Contains(t, st.Summary, "kagent (admits agent-platform.giantswarm.io/harness=kagent)")
-	assert.Contains(t, st.Summary, "kagent.dev/harness=kagent")
-	// Another Harness admits it, the platform one does not.
-	f = newFixture(t, []runtime.Object{release("sre"), withStatus(agentTemplate("kagent", "sre", "sre", "kagent", true, true), 1, harnessEntryObj("claude", "rev-1", "rev-1", true, ""))})
-	st, err = f.svc.Status(ctx, In(""), "sre")
-	require.NoError(t, err)
-	assert.Equal(t, VerdictFailed, st.Verdict, st.Summary)
-	assert.Contains(t, st.Summary, `"kagent" does not admit`)
-	assert.Contains(t, st.Summary, "claude")
-	// A coding agent names its own Harness: its entry decides, not the
-	// platform Harness's.
-	coding := withStatus(agentTemplate("kagent", "coder", "coder", "kagent", true, true), 1, harnessEntryObj("claude", "rev-1", "rev-1", true, ""))
-	coding.SetLabels(map[string]string{HelmReleaseNameLabel: "coder", HelmReleaseNamespaceLabel: "kagent", HarnessLabel: "claude"})
+	// A coding agent names its own Harness: the summary names it, and the
+	// list reads the same conditions.
+	coding := onHarness(withStatus(agentObject("kagent", "coder", "coder", "kagent", true, true), agentStatusObj(1, "rev-1", "rev-1", true, "")), "claude")
 	f = newFixture(t, []runtime.Object{release("coder"), coding})
 	st, err = f.svc.Status(ctx, In(""), "coder")
 	require.NoError(t, err)
@@ -853,12 +860,14 @@ func TestStatusVerdictsComeFromThePlatformHarness(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, listed, 1)
 	require.NotNil(t, listed[0].Ready)
-	assert.True(t, *listed[0].Ready, "the list reads the agent's own Harness entry too")
-	// kagent has not observed the template yet.
-	f = newFixture(t, []runtime.Object{release("sre"), withStatus(agentTemplate("kagent", "sre", "sre", "kagent", false, true), 0)})
+	assert.True(t, *listed[0].Ready, "the list reads the Agent's conditions too")
+	assert.Equal(t, "claude", listed[0].Harness)
+	// kagent has not observed the Agent yet.
+	f = newFixture(t, []runtime.Object{release("sre"), withStatus(agentObject("kagent", "sre", "sre", "kagent", false, true), map[string]any{})})
 	st, err = f.svc.Status(ctx, In(""), "sre")
 	require.NoError(t, err)
 	assert.Equal(t, VerdictProgressing, st.Verdict, st.Summary)
+	assert.Contains(t, st.Summary, "not reported on the Agent yet")
 
 	// Failed: the HelmRelease itself failed (nothing rendered); a Warning
 	// event on the agent is reported.
@@ -869,7 +878,7 @@ func TestStatusVerdictsComeFromThePlatformHarness(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, VerdictFailed, st.Verdict)
 	assert.Contains(t, st.Summary, "InstallFailed")
-	assert.False(t, st.Template.Exists)
+	assert.False(t, st.Agent.Exists)
 	require.Len(t, st.Events, 1)
 	assert.Equal(t, "HelmRelease/broken", st.Events[0].Object)
 
@@ -907,15 +916,16 @@ func TestListModelConfigsAndInfo(t *testing.T) {
 	commit, declared := info.Capabilities["commit"]
 	assert.True(t, declared)
 	assert.False(t, commit, "the commit mode is not implemented")
-	assert.Equal(t, "kagent.dev/v1alpha3", info.APIVersions.AgentTemplate)
-	assert.Equal(t, "kagent.dev/v1alpha3", info.APIVersions.Harness)
-	assert.Equal(t, "kagent.dev/v1alpha3", info.APIVersions.RemoteMCPServer)
-	assert.Equal(t, "kagent.dev/v1alpha3", info.APIVersions.ModelConfig)
+	assert.Equal(t, "api.kagent.dev/v1alpha3", info.APIVersions.Agent)
+	assert.Equal(t, "api.kagent.dev/v1alpha3", info.APIVersions.AgentTemplate)
+	assert.Equal(t, "api.kagent.dev/v1alpha3", info.APIVersions.Harness)
+	assert.Equal(t, "api.kagent.dev/v1alpha3", info.APIVersions.RemoteMCPServer)
+	assert.Equal(t, "api.kagent.dev/v1alpha3", info.APIVersions.ModelConfig)
 	assert.Equal(t, "helm.toolkit.fluxcd.io/v2", info.APIVersions.HelmRelease)
 	assert.Equal(t, "kagent", info.Harness.Name)
 	assert.Equal(t, "http://muster.agent-platform.svc.cluster.local:8090/mcp", info.Muster.URL)
 	assert.Equal(t, DefaultChartOCIURL, info.Chart.OCIURL)
-	assert.Equal(t, "1.x", info.Chart.Semver)
+	assert.Equal(t, "2.x", info.Chart.Semver)
 
 	_, err = f.svc.ListSkills(ctx, "", "", false)
 	assert.ErrorIs(t, err, ErrUnsupported)
@@ -1014,7 +1024,7 @@ func TestUpdateRetriesTheWriteWhenTheReleaseMovedUnderneath(t *testing.T) {
 
 func TestCreateOnTheHarnessTheCallerNames(t *testing.T) {
 	f := seeded(t)
-	mustCreate(t, f, f.svc.harnessGVR(), harness("kagent", "claude", "claude"))
+	mustCreate(t, f, f.svc.harnessGVR(), harness("kagent", "claude", RuntimeClaude))
 	ctx := t.Context()
 	readOnly := []string{"preset:read-only"}
 
@@ -1041,6 +1051,129 @@ func TestCreateOnTheHarnessTheCallerNames(t *testing.T) {
 	plain, err := f.svc.ValidateCreate(ctx, Spec{Name: "plain", ModelConfig: "default-model-config", Toolset: readOnly})
 	require.NoError(t, err)
 	assert.Equal(t, DefaultHarnessName, plain.Manifests.Values["agent"].(map[string]any)["harness"], "no harness is the platform Harness")
+
+	// The platform Harness may be absent (the connectivity chart provisions
+	// it); a named one may not.
+	empty := newFixture(t, []runtime.Object{modelConfig("kagent", "default-model-config", "Anthropic", "claude-sonnet-4-6")})
+	dry, err = empty.svc.ValidateCreate(ctx, Spec{Name: "plain", ModelConfig: "default-model-config", Toolset: readOnly})
+	require.NoError(t, err)
+	assert.True(t, dry.Valid, dry.Errors)
+	dry, err = empty.svc.ValidateCreate(ctx, Spec{Name: "plain", ModelConfig: "default-model-config", Toolset: readOnly, Harness: "claude"})
+	require.NoError(t, err)
+	assert.Contains(t, dry.Errors, `harness "claude" does not exist in namespace kagent (no Harness there)`)
+}
+
+func TestLimitsNeedAClaudeCodeHarness(t *testing.T) {
+	f := seeded(t)
+	mustCreate(t, f, f.svc.harnessGVR(), harness("kagent", "claude", RuntimeClaude))
+	ctx := t.Context()
+	readOnly := []string{"preset:read-only"}
+	limits := &Limits{BudgetUSD: "2.50", MaxTurns: 40}
+
+	// Composed under agent.limits with the chart's key, on the Claude Harness.
+	dry, err := f.svc.ValidateCreate(ctx, Spec{Name: "coder", ModelConfig: "default-model-config", Toolset: readOnly, Harness: "claude", Limits: limits})
+	require.NoError(t, err)
+	require.True(t, dry.Valid, dry.Errors)
+	assert.Equal(t, map[string]any{"budgetUSD": "2.50", "maxTurns": int64(40)}, dry.Manifests.Values["agent"].(map[string]any)["limits"])
+
+	// Refused on the platform Harness (kagent), named or implied.
+	for _, h := range []string{"", "kagent"} {
+		dry, err = f.svc.ValidateCreate(ctx, Spec{Name: "coder", ModelConfig: "default-model-config", Toolset: readOnly, Harness: h, Limits: limits})
+		require.NoError(t, err)
+		assert.False(t, dry.Valid)
+		assert.Contains(t, strings.Join(dry.Errors, "\n"), `Harness "kagent" runs kagent`)
+		_, err = f.svc.Create(ctx, Spec{Name: "coder", ModelConfig: "default-model-config", Toolset: readOnly, Harness: h, Limits: limits})
+		require.ErrorIs(t, err, ErrInvalid)
+	}
+	// Refused when the Harness cannot be read to tell.
+	empty := newFixture(t, []runtime.Object{modelConfig("kagent", "default-model-config", "Anthropic", "claude-sonnet-4-6")})
+	_, err = empty.svc.Create(ctx, Spec{Name: "coder", ModelConfig: "default-model-config", Toolset: readOnly, Limits: limits})
+	require.ErrorIs(t, err, ErrInvalid)
+	assert.Contains(t, err.Error(), "could not be read")
+
+	// The bounds themselves.
+	for name, l := range map[string]*Limits{
+		"empty":      {},
+		"bad budget": {BudgetUSD: "2,50"},
+		"too many":   {MaxTurns: 10001},
+		"negative":   {MaxTurns: -1},
+	} {
+		_, err := f.svc.Create(ctx, Spec{Name: "coder", ModelConfig: "default-model-config", Toolset: readOnly, Harness: "claude", Limits: l})
+		require.ErrorIs(t, err, ErrInvalid, name)
+		assert.Contains(t, err.Error(), "limits", name)
+	}
+
+	// On an existing agent the release's Harness decides: the verifier runs
+	// on kagent, the coder on claude. {} clears.
+	_, err = f.svc.Create(ctx, Spec{Name: "coder", ModelConfig: "default-model-config", Toolset: readOnly, Harness: "claude"})
+	require.NoError(t, err)
+	_, err = f.svc.Update(ctx, Update{Name: "verifier", Limits: limits})
+	require.ErrorIs(t, err, ErrInvalid)
+	assert.Contains(t, err.Error(), `Harness "kagent" runs kagent`)
+	res, err := f.svc.Update(ctx, Update{Name: "coder", Limits: &Limits{MaxTurns: 5}})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"agent.limits.maxTurns"}, res.Changed)
+	assert.Equal(t, &Limits{MaxTurns: 5}, res.Agent.Limits)
+	res, err = f.svc.Update(ctx, Update{Name: "coder", Limits: &Limits{}})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"agent.limits.maxTurns"}, res.Changed)
+	_, hasLimits := res.After["agent"].(map[string]any)["limits"]
+	assert.False(t, hasLimits, "{} clears the limits")
+	assert.Nil(t, res.Agent.Limits)
+}
+
+func TestPluginsComePinnedAndSelectSkills(t *testing.T) {
+	f := seeded(t)
+	f.svc.cfg.Compose.SkillsGitAuthSecretName = "kagent-skills-token"
+	ctx := t.Context()
+	readOnly := []string{"preset:read-only"}
+	pinnedGit := Plugin{Path: "bundles/sre", Git: &GitSkill{URL: skillsRepo, Commit: tagHead}, Skills: []string{"triage", "postmortem"}}
+	pinnedOCI := Plugin{OCI: kubectlRef + "@" + kubectlSum, Skills: []string{"k8s"}}
+
+	dry, err := f.svc.ValidateCreate(ctx, Spec{Name: "sre", ModelConfig: "default-model-config", Toolset: readOnly, Plugins: Plugins{pinnedGit, pinnedOCI}})
+	require.NoError(t, err)
+	require.True(t, dry.Valid, dry.Errors)
+	assert.Equal(t, []any{
+		map[string]any{"git": map[string]any{"url": skillsRepo, "commit": tagHead}, "path": "bundles/sre", "skills": []any{"triage", "postmortem"}},
+		map[string]any{"oci": kubectlRef + "@" + kubectlSum, "skills": []any{"k8s"}},
+	}, dry.Manifests.Values["plugins"], "the chart's plugins list")
+	assert.Equal(t, map[string]any{"name": "kagent-skills-token"}, dry.Manifests.Values[SkillsGitAuthValuesKey], "a git plugin gets the skills credential")
+	assert.Empty(t, f.pinner.calls, "a plugin is never resolved")
+
+	for name, tc := range map[string]struct {
+		plugin Plugin
+		want   string
+	}{
+		"no source":     {Plugin{Skills: []string{"a"}}, "no source"},
+		"both sources":  {Plugin{Git: pinnedGit.Git, OCI: pinnedOCI.OCI, Skills: []string{"a"}}, "both git and oci"},
+		"a ref":         {Plugin{Git: &GitSkill{URL: skillsRepo, Ref: "main"}, Skills: []string{"a"}}, "git.ref is not accepted"},
+		"short sha":     {Plugin{Git: &GitSkill{URL: skillsRepo, Commit: "abc123"}, Skills: []string{"a"}}, "not a full commit id"},
+		"an image tag":  {Plugin{OCI: kubectlRef + ":1.4.0", Skills: []string{"a"}}, "not digest-pinned"},
+		"no skill":      {Plugin{OCI: pinnedOCI.OCI}, "selects no skill"},
+		"twice":         {Plugin{OCI: pinnedOCI.OCI, Skills: []string{"a", "a"}}, `names "a" twice`},
+		"climbing path": {Plugin{OCI: pinnedOCI.OCI, Path: "../x", Skills: []string{"a"}}, `".."`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := f.svc.Create(ctx, Spec{Name: "sre", ModelConfig: "default-model-config", Toolset: readOnly, Plugins: Plugins{tc.plugin}})
+			require.ErrorIs(t, err, ErrInvalid)
+			assert.Contains(t, err.Error(), tc.want)
+			assert.Contains(t, err.Error(), "plugins[0]")
+		})
+	}
+
+	// An update replaces the list; [] clears it and drops the credential
+	// with the last git source.
+	res, err := f.svc.Update(ctx, Update{Name: "verifier", Plugins: &Plugins{pinnedGit}})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"plugins", "skillsGitAuthSecretRef.name"}, res.Changed)
+	assert.Equal(t, []any{map[string]any{"git": map[string]any{"url": skillsRepo, "commit": tagHead}, "path": "bundles/sre", "skills": []any{"triage", "postmortem"}}}, res.After["plugins"])
+	res, err = f.svc.Update(ctx, Update{Name: "verifier", Plugins: &Plugins{}})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"plugins", "skillsGitAuthSecretRef.name"}, res.Changed)
+	_, hasPlugins := res.After["plugins"]
+	assert.False(t, hasPlugins)
+	_, err = f.svc.Update(ctx, Update{Name: "verifier", Plugins: &Plugins{{OCI: kubectlRef + ":1.4.0", Skills: []string{"a"}}}})
+	require.ErrorIs(t, err, ErrInvalid)
 }
 
 func TestUpdateKeepsTheSkillsCredentialInStep(t *testing.T) {

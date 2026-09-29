@@ -337,7 +337,7 @@ func (p *CallerProvider) evictLocked(now time.Time) {
 }
 
 // DiscoverVersion returns the API version of group that serves resource,
-// preferring the server's preferred version. Used for kagent.dev (agents,
+// preferring the server's preferred version. Used for api.kagent.dev (agents,
 // modelconfigs) and the Flux groups (helmreleases, ocirepositories), whose
 // versions differ between installations. Discovery is what every
 // authenticated principal may read, so the ServiceAccount answers it even

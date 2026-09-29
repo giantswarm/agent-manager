@@ -5,16 +5,17 @@ info:
   description: |
     Agent lifecycle for the Giant Swarm Agent Platform on kagent API v2.
 
-    An agent is a Flux `HelmRelease` of the Generic `agent` chart (1.x: one
-    release renders one `kagent.dev/v1alpha3` `AgentTemplate` plus the agent's
-    own muster `RemoteMCPServer`) that renders from the shared per-namespace
-    `OCIRepository` of that chart, tracking it at `1.x`. agent-manager composes
-    those two objects exactly like the portal's create flow, pins every skill
-    to a commit or a digest, validates the values against the chart's
-    `values.schema.json` before anything is applied, and reads an agent back
-    from its AgentTemplate, its RemoteMCPServer and its owning HelmRelease.
-    Readiness is the platform Harness's entry in the template's
-    `status.harnesses[]`; there is no per-agent Deployment or pod.
+    An agent is a Flux `HelmRelease` of the Generic `agent` chart (2.x: one
+    release renders one `api.kagent.dev/v1alpha3` `Agent`, its template inline
+    under `spec.template` and its Harness by name in `spec.harnessRef`, plus
+    the agent's own muster `RemoteMCPServer`) that renders from the shared
+    per-namespace `OCIRepository` of that chart, tracking it at `2.x`.
+    agent-manager composes those two objects exactly like the portal's create
+    flow, pins every skill to a commit or a digest, validates the values
+    against the chart's `values.schema.json` before anything is applied, and
+    reads an agent back from its Agent object, its RemoteMCPServer and its
+    owning HelmRelease. Readiness is the Agent's own `status.conditions`;
+    there is no per-agent Deployment or pod.
 
     Clients MUST call `GET /api/v1/info` first: it reports the managed
     namespaces, the chart version whose schema validates right now, and the
@@ -43,12 +44,19 @@ info:
     the GitHub App user token muster puts on the MCP call; nothing is written
     live. Without that token commit answers `401 auth_required`; where the
     installation offers no commit mode, `501 unsupported` (`GET /info`
-    `capabilities.commit`). A bare AgentTemplate (`managed: none`) has no
-    HelmRelease to write to and is only deleted with `force`; a suspended
-    release is written only with `force`.
+    `capabilities.commit`). A bare Agent (`managed: none`) has no HelmRelease
+    to write to and is only deleted with `force`; a suspended release is
+    written only with `force`.
 
-    Removed with kagent API v2: `runtime` (the platform Harness is the runtime
-    of every agent), refused with the reason. The 0.x `skills.gitAuthSecretName`
+    `harness` names the Harness of the namespace that runs the agent (the
+    platform Harness, the kagent Go ADK, unless another is named, such as
+    `claude` for Claude Code); it must exist there and is fixed at create.
+    `limits` (`budgetUsd`, `maxTurns`) bound every turn and are accepted on a
+    Harness whose runtime is Claude Code only. `plugins` enable skills from
+    Agent Plugins bundles that come pinned (a commit or a digest).
+
+    Removed with kagent API v2: `runtime` (the Harness is the runtime), refused
+    with the reason. The 0.x `skills.gitAuthSecretName`
     is refused naming its replacement, the top-level `gitAuthSecretName`.
     A skill from a private repository the caller's GitHub login cannot read
     is refused with `403 forbidden`.
@@ -114,7 +122,7 @@ paths:
       tags: [agents]
       summary: List the agents of a namespace
       description: |
-        Every AgentTemplate with its RemoteMCPServer and its owning HelmRelease
+        Every Agent with its RemoteMCPServer and its owning HelmRelease
         (found through the Flux provenance labels, possibly in another
         namespace), plus every HelmRelease of the agent chart that has not
         rendered a template yet (`exists: false`). One `AgentSummary` each;
@@ -148,13 +156,13 @@ paths:
       tags: [agents]
       summary: Create an agent
       description: |
-        Composes the OCIRepository (created when missing, tracking `1.x`) and
+        Composes the OCIRepository (created when missing, tracking `2.x`) and
         the HelmRelease, pins every skill (a branch or tag to its head commit,
         an image tag to its digest), validates the values against the chart
         schema and the modelConfig against the namespace, then applies. A
         validation failure writes nothing (`400 invalid_request`, the message
         lists the valid model configs or names the unresolvable skill
-        reference). `409 conflict` when a HelmRelease or AgentTemplate of that
+        reference). `409 conflict` when a HelmRelease or Agent of that
         name exists. `dryRun` and `mode: commit` answer `200` and create
         nothing on the installation; commit reports the pull request in
         `commit`.
@@ -246,7 +254,7 @@ paths:
         in agent-manager's directory of the owning repository with a pull
         request; a release defined elsewhere in the repository is `409
         conflict`). `409 gitops_owned` for a GitOps-owned release in apply
-        mode; `409 conflict` for suspended releases and bare AgentTemplates
+        mode; `409 conflict` for suspended releases and bare Agents
         unless `force`; a write
         that races helm-controller's status update of the release is retried
         on a fresh read, not reported. `400` for a body still carrying the
@@ -278,9 +286,9 @@ paths:
       summary: Delete an agent
       description: |
         Deletes the owning HelmRelease (helm-controller uninstalls the
-        AgentTemplate and the agent's RemoteMCPServer) and the shared
+        Agent and the agent's RemoteMCPServer) and the shared
         OCIRepository when no other HelmRelease references it. Bare
-        AgentTemplates and suspended releases need `force` (a forced delete of
+        Agents and suspended releases need `force` (a forced delete of
         a suspended release removes the rendered objects too); a GitOps-owned
         release is `409 gitops_owned` in apply mode, and `mode: commit`
         removes its files with a pull request.
@@ -315,14 +323,14 @@ paths:
       tags: [agents]
       summary: Compact status verdict
       description: |
-        The AgentTemplate's `status.harnesses[]` entry for the platform Harness
-        (ready: Ready and the desired revision is the latest successful one;
-        progressing: a revision still compiling; failed: Accepted, ResolvedRefs
-        or Compatible False with the condition's message, Ready False for a
-        reason other than the pending one, or no Harness admitting the
-        template), the HelmRelease conditions and history, and the namespace's
-        recent Warning events on the agent's objects, folded into `verdict`
-        (ready | progressing | failed | unknown) and `summary`.
+        The Agent's `status.conditions` (ready: Ready and the desired revision
+        is the latest successful one; progressing: a revision still compiling;
+        failed: Accepted, ResolvedRefs or Compatible False with the condition's
+        message, a Harness that does not exist being ResolvedRefs False, or
+        Ready False for a reason other than the pending one), the HelmRelease
+        conditions and history, and the namespace's recent Warning events on
+        the agent's objects, folded into `verdict` (ready | progressing |
+        failed | unknown) and `summary`.
       operationId: getAgentStatus
       x-mcp-tool: get_agent_status
       responses:
@@ -438,7 +446,7 @@ components:
           type: object
           properties:
             ociUrl: { type: string }
-            semver: { type: string, description: The range the OCIRepository tracks (1.x) }
+            semver: { type: string, description: The range the OCIRepository tracks (2.x) }
             latestVersion: { type: string, description: Newest published version in range ("" when the registry is unreachable) }
             schemaVersion: { type: string, description: Chart version whose values.schema.json validates right now }
             schemaSource: { type: string, enum: [registry, embedded] }
@@ -464,9 +472,10 @@ components:
             service's own identity behind a trusted proxy.
         apiVersions:
           type: object
-          description: The served kagent.dev version (agentTemplate, harness, remoteMcpServer, modelConfig) and the Flux versions composed into every agent
+          description: The served api.kagent.dev version (agent, agentTemplate, harness, remoteMcpServer, modelConfig) and the Flux versions composed into every agent
           properties:
-            agentTemplate: { type: string, example: kagent.dev/v1alpha3 }
+            agent: { type: string, example: api.kagent.dev/v1alpha3 }
+            agentTemplate: { type: string, example: api.kagent.dev/v1alpha3 }
             harness: { type: string }
             remoteMcpServer: { type: string }
             modelConfig: { type: string }
@@ -480,7 +489,7 @@ components:
             serviceAccountName: { type: string }
         harness:
           type: object
-          description: The platform Harness every agent runs on; composed as the chart value agent.harness and the status entry get_agent_status reads
+          description: The platform Harness an agent runs on unless it names another; composed as the chart value agent.harness, the Agent's spec.harnessRef.name
           properties:
             name: { type: string, example: kagent }
         muster:
@@ -535,6 +544,29 @@ components:
         (use `preset:none`). The former `toolNames` never narrowed anything
         against muster (kagent filters muster's meta-tools only) and is refused
         with that explanation.
+    Limits:
+      type: object
+      description: Bounds on every turn (chart agent.limits, the Agent's spec.template.limits); at least one of the two. Accepted on a Harness whose runtime is Claude Code only; any other Harness refuses them
+      properties:
+        budgetUsd: { type: string, description: "The most one turn may spend, in US dollars, as a decimal string with up to four decimals (\"2.50\")" }
+        maxTurns: { type: integer, minimum: 1, maximum: 10000, description: The most model round-trips one turn may take }
+    Plugin:
+      type: object
+      description: An Agent Plugins bundle at an immutable source (written as given, never resolved) and the bundle's skills to enable
+      required: [skills]
+      properties:
+        path: { type: string, description: Directory of the bundle within the artifact; relative without "..", empty for the root }
+        git:
+          type: object
+          required: [url, commit]
+          properties:
+            url: { type: string, description: http(s) URL of the repository }
+            commit: { type: string, description: Full commit id (40 or 64 hex characters); a ref is refused }
+        oci: { type: string, description: "Digest-pinned image reference: <registry>/<repository>@sha256:<digest>" }
+        skills: { type: array, minItems: 1, items: { type: string }, description: Names of the bundle's skills to enable; unique }
+    Plugins:
+      type: array
+      items: { $ref: "#/components/schemas/Plugin" }
     Spec:
       type: object
       required: [name, modelConfig, toolset]
@@ -542,14 +574,17 @@ components:
         namespace: { type: string }
         organization: { type: string, description: "With cluster: the organization owning the workload cluster the agent runs on (namespace org-<organization> on the installation holds the cluster's kubeconfig Secret and the HelmRelease)" }
         cluster: { type: string, description: "With organization: the workload cluster the agent runs on; absent on the installation's own cluster" }
-        name: { type: string, description: DNS-1123 technical name (HelmRelease and AgentTemplate name), max 63 chars }
+        name: { type: string, description: DNS-1123 technical name (HelmRelease and Agent name), max 63 chars }
         displayName: { type: string, maxLength: 63 }
         description: { type: string }
         systemMessage: { type: string }
         modelConfig: { type: string, description: An existing ModelConfig of the namespace }
+        harness: { type: string, description: "Harness of the namespace that runs the agent (chart agent.harness, the Agent's spec.harnessRef.name); omitted, the platform Harness (GET /info harness.name). Must exist in the namespace; fixed at create" }
+        limits: { $ref: "#/components/schemas/Limits" }
         iconUrl: { type: string, description: Avatar URL (chart agent.iconUrl, the ui.giantswarm.io/icon-url annotation) }
         skills: { $ref: "#/components/schemas/Skills" }
-        gitAuthSecretName: { type: string, description: "Secret (key token) in the agent's namespace its git skills are fetched with (chart skillsGitAuthSecretRef.name); omitted, the installation's (GET /info skillsGitAuthSecretName)" }
+        plugins: { $ref: "#/components/schemas/Plugins" }
+        gitAuthSecretName: { type: string, description: "Secret (key token) in the agent's namespace its git skills and plugins are fetched with (chart skillsGitAuthSecretRef.name); omitted, the installation's (GET /info skillsGitAuthSecretName)" }
         toolset: { $ref: "#/components/schemas/Toolset" }
         labels: { type: object, additionalProperties: { type: string } }
         annotations: { type: object, additionalProperties: { type: string } }
@@ -560,14 +595,16 @@ components:
         path: { type: string, description: "mode commit with repository: the directory a Kustomization builds from; files go to its agent-manager/ subdirectory" }
     Update:
       type: object
-      description: Partial change; absent fields stay, "" clears, skills replace the whole list (pinned), toolset replaces the whole list, refreshSkills re-pins every git skill
+      description: Partial change; absent fields stay, "" clears, skills and plugins replace the whole list (skills pinned), limits replace the bounds ({} clears them), toolset replaces the whole list, refreshSkills re-pins every git skill. The Harness is fixed at create
       properties:
         displayName: { type: string }
         description: { type: string }
         systemMessage: { type: string }
         modelConfig: { type: string }
         iconUrl: { type: string }
+        limits: { $ref: "#/components/schemas/Limits" }
         skills: { $ref: "#/components/schemas/Skills" }
+        plugins: { $ref: "#/components/schemas/Plugins" }
         gitAuthSecretName: { type: string, description: "Replaces the skills credential Secret; an empty string goes back to the installation's" }
         refreshSkills: { type: boolean, description: Re-resolve every git skill to the head of its repository's default branch (a skill in skills with a ref goes to that ref's head); nothing else changes }
         toolset: { $ref: "#/components/schemas/Toolset" }
@@ -588,11 +625,14 @@ components:
         message: { type: string }
         lastTransitionTime: { type: string }
         observedGeneration: { type: integer }
-    HarnessStatus:
+    ObjectStatus:
       type: object
-      description: One AgentTemplate.status.harnesses[] entry
+      description: The Agent object's own status, what its Harness reports on it
       properties:
-        harness: { type: string }
+        exists: { type: boolean, description: The Agent exists (false while the HelmRelease has not rendered it) }
+        generation: { type: integer }
+        observedGeneration: { type: integer }
+        harness: { type: string, description: spec.harnessRef.name }
         ready: { type: [boolean, "null"] }
         accepted: { type: [boolean, "null"] }
         resolvedRefs: { type: [boolean, "null"] }
@@ -603,7 +643,7 @@ components:
         warnings: { type: array, items: { type: string } }
     ToolBinding:
       type: object
-      description: One MCP binding of the AgentTemplate (spec.tools[].mcp)
+      description: One MCP binding of the Agent (spec.template.tools[].mcp)
       properties:
         server: { type: string, description: The RemoteMCPServer bound, same namespace }
         tools: { type: array, items: { type: string }, description: The binding narrowed to these tools; empty is every tool }
@@ -619,7 +659,7 @@ components:
         lastAttemptedRevision: { type: string }
         suspended: { type: boolean }
         gitOpsOwned: { type: boolean }
-        deleting: { type: boolean, description: helm-controller is uninstalling the release; the template disappears with it }
+        deleting: { type: boolean, description: helm-controller is uninstalling the release; the Agent disappears with it }
         chartRef:
           type: object
           properties:
@@ -653,18 +693,21 @@ components:
         namespace: { type: string }
         organization: { type: string, description: "With cluster: the organization owning the workload cluster the agent runs on (namespace org-<organization> on the installation holds the cluster's kubeconfig Secret and the HelmRelease)" }
         cluster: { type: string, description: "With organization: the workload cluster the agent runs on; absent on the installation's own cluster" }
-        exists: { type: boolean, description: The AgentTemplate exists (false while the HelmRelease has not rendered it) }
+        exists: { type: boolean, description: The Agent exists (false while the HelmRelease has not rendered it) }
         displayName: { type: string, description: From the ui.giantswarm.io/display-name annotation }
         description: { type: string }
         modelConfig: { type: string }
         iconUrl: { type: string, description: From the ui.giantswarm.io/icon-url annotation }
         systemMessage: { type: string }
-        skills: { $ref: "#/components/schemas/Skills", description: As pinned — git skills by commit, OCI skills by digest }
-        toolset: { $ref: "#/components/schemas/Toolset", description: The declared toolset (the HelmRelease's `toolset` value; for a bare AgentTemplate the X-Muster-Toolset header of the agent's RemoteMCPServer); absent when none is declared }
+        harness: { type: string, description: The Harness that runs the agent (spec.harnessRef.name, else the chart value agent.harness while nothing is rendered) }
+        limits: { $ref: "#/components/schemas/Limits" }
+        skills: { $ref: "#/components/schemas/Skills", description: As pinned, git skills by commit, OCI skills by digest }
+        plugins: { $ref: "#/components/schemas/Plugins" }
+        toolset: { $ref: "#/components/schemas/Toolset", description: The declared toolset (the HelmRelease's `toolset` value; for a bare Agent the X-Muster-Toolset header of the agent's RemoteMCPServer); absent when none is declared }
         implicitFullAccess: { type: boolean, description: True when the agent declares no toolset but binds muster — its meta-tools see every tool the gateway exposes to the caller; such agents predate toolsets and still need one (update_agent) }
         tools: { type: array, items: { $ref: "#/components/schemas/ToolBinding" } }
-        ready: { type: [boolean, "null"], description: The platform Harness's verdict on the template (Ready and the desired revision is the latest successful one); null while unreported }
-        harnesses: { type: array, items: { $ref: "#/components/schemas/HarnessStatus" } }
+        ready: { type: [boolean, "null"], description: The Agent's verdict (Ready and the desired revision is the latest successful one); null while unreported }
+        status: { $ref: "#/components/schemas/ObjectStatus" }
         managed: { type: string, enum: [helmrelease, gitops, none] }
         helmRelease: { $ref: "#/components/schemas/HelmReleaseRef" }
         values: { type: object, description: The HelmRelease's inline values (the chart contract) }
@@ -719,7 +762,7 @@ components:
         organization: { type: string, description: "With cluster: the organization owning the workload cluster the agent runs on (namespace org-<organization> on the installation holds the cluster's kubeconfig Secret and the HelmRelease)" }
         cluster: { type: string, description: "With organization: the workload cluster the agent runs on; absent on the installation's own cluster" }
         helmReleaseDeleted: { type: boolean }
-        agentTemplateDeleted: { type: boolean, description: The AgentTemplate was deleted directly (force, a bare template or a suspended release) }
+        agentDeleted: { type: boolean, description: The Agent was deleted directly (force, a bare Agent or a suspended release) }
         remoteMcpServerDeleted: { type: boolean, description: The agent's RemoteMCPServer was deleted directly (force, a suspended release) }
         ociRepositoryDeleted: { type: boolean }
         ociRepositoryKept: { type: string, description: Why the shared chart source stays }
@@ -758,14 +801,7 @@ components:
         cluster: { type: string, description: "With organization: the workload cluster the agent runs on; absent on the installation's own cluster" }
         verdict: { type: string, enum: [ready, progressing, failed, unknown] }
         summary: { type: string }
-        template:
-          type: object
-          description: The AgentTemplate's status, one entry per admitting Harness
-          properties:
-            exists: { type: boolean }
-            generation: { type: integer }
-            observedGeneration: { type: integer }
-            harnesses: { type: array, items: { $ref: "#/components/schemas/HarnessStatus" } }
+        agent: { $ref: "#/components/schemas/ObjectStatus" }
         helmRelease:
           type: object
           properties:
@@ -787,7 +823,7 @@ components:
             lastAttemptedRevision: { type: string }
         events:
           type: array
-          description: Recent Warning events on the agent's objects (AgentTemplate, RemoteMCPServer, HelmRelease)
+          description: Recent Warning events on the agent's objects (Agent, RemoteMCPServer, HelmRelease)
           items:
             type: object
             properties:

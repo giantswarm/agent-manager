@@ -1,14 +1,14 @@
-# The Role of every managed namespace names the kagent.dev/v1alpha3 resources
-# an agent renders to (AgentTemplate, RemoteMCPServer), the Harnesses and
-# ModelConfigs it reads, and the Flux objects it writes — never the v1alpha2
-# `agents` resource, never a Deployment or pod.
+# The Role of every managed namespace names the api.kagent.dev/v1alpha3
+# resources an agent renders to (Agent, RemoteMCPServer), the Harnesses and
+# ModelConfigs it reads, and the Flux objects it writes, never anything of the
+# kagent.dev group, never a Deployment or pod.
 #
 # Run with: make helm-test (helm unittest helm/agent-manager)
 suite: rbac
 templates:
   - templates/rbac.yaml
 tests:
-  - it: reads the v1alpha3 resources next to the Flux objects it writes
+  - it: reads the api.kagent.dev resources next to the Flux objects it writes
     documentIndex: 0
     asserts:
       - isKind:
@@ -16,14 +16,14 @@ tests:
       - contains:
           path: rules
           content:
-            apiGroups: ["kagent.dev"]
-            resources: ["agenttemplates", "harnesses", "remotemcpservers", "modelconfigs"]
+            apiGroups: ["api.kagent.dev"]
+            resources: ["agents", "harnesses", "remotemcpservers", "modelconfigs"]
             verbs: ["get", "list", "watch"]
       - contains:
           path: rules
           content:
-            apiGroups: ["kagent.dev"]
-            resources: ["agenttemplates", "remotemcpservers"]
+            apiGroups: ["api.kagent.dev"]
+            resources: ["agents", "remotemcpservers"]
             verbs: ["delete"]
       - contains:
           path: rules
@@ -46,8 +46,8 @@ tests:
       - notContains:
           path: rules
           content:
-            apiGroups: ["kagent.dev"]
-            resources: ["agents", "modelconfigs"]
+            apiGroups: ["api.kagent.dev"]
+            resources: ["agenttemplates"]
             verbs: ["get", "list", "watch"]
       - notContains:
           path: rules
@@ -62,12 +62,12 @@ tests:
             resources: ["pods", "events"]
             verbs: ["get", "list", "watch"]
 
-  - it: names nothing of the kagent v1alpha2 API
+  - it: names nothing of the kagent.dev group
     documentIndex: 0
     asserts:
       - notMatchRegex:
-          path: rules[?(@.apiGroups[0] == "kagent.dev")].resources[*]
-          pattern: ^agents$
+          path: rules[*].apiGroups[0]
+          pattern: ^kagent\.dev$
 
   - it: renders one Role per managed namespace
     set:

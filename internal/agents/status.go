@@ -10,9 +10,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/labels"
-	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/client-go/dynamic"
 
 	"github.com/giantswarm/agent-manager/internal/kube"
 )
@@ -20,17 +17,16 @@ import (
 // errorsIs is errors.Is, named so the service file reads without the import.
 func errorsIs(err, target error) bool { return errors.Is(err, target) }
 
-// Readiness on kagent API v2 is the template's: the controller compiles every
-// AgentTemplate for each Harness whose admission selector matches it and
-// reports one status entry per Harness (Accepted, ResolvedRefs, Compatible,
-// then Ready once the golden snapshot exists; a failing stage sets its
+// Readiness is the Agent object's: the controller compiles every Agent for
+// the Harness it references and reports Accepted, ResolvedRefs, Compatible,
+// then Ready once the golden snapshot exists (a failing stage sets its
 // condition False with the reason; desiredRevision moves ahead of
-// latestSuccessfulRevision while a new revision compiles). The platform runs
-// one Harness — the configured one is the verdict's source. Harness.status is
-// never written; there is no per-agent Deployment or pod.
+// latestSuccessfulRevision while a new revision compiles). A Harness that
+// does not exist is ResolvedRefs False. Harness.status is never written;
+// there is no per-agent Deployment or pod.
 
-// The AgentTemplate condition types kagent reports per Harness, and the Ready
-// reason the controller writes while it waits for the golden snapshot.
+// The Agent condition types kagent reports, and the Ready reason the
+// controller writes while it waits for the golden snapshot.
 const (
 	conditionReady        = "Ready"
 	conditionAccepted     = "Accepted"
@@ -64,10 +60,10 @@ func isWaitingReason(reason string) bool {
 	return false
 }
 
-// Status gathers the AgentTemplate's per-Harness status, the owning
-// HelmRelease (conditions, history) and the namespace's recent Warning events
-// for the agent, and folds them into one verdict.
-// For an agent on a workload cluster the template and its events are read
+// Status gathers the Agent object's status, the owning HelmRelease
+// (conditions, history) and the namespace's recent Warning events for the
+// agent, and folds them into one verdict.
+// For an agent on a workload cluster the Agent and its events are read
 // there, the HelmRelease and its events on the installation.
 func (s *Service) Status(ctx context.Context, loc Location, name string) (*Status, error) {
 	if err := ValidateName(name); err != nil {
@@ -82,24 +78,17 @@ func (s *Service) Status(ctx context.Context, loc Location, name string) (*Statu
 
 func (s *Service) status(ctx context.Context, site *site, name string) (*Status, error) {
 	ns := site.ns()
-	tpl, hr, err := s.agentObjects(ctx, site, name)
+	obj, hr, err := s.agentObjects(ctx, site, name)
 	if err != nil {
 		return nil, err
 	}
-	st := &Status{Name: name, Namespace: ns, Target: site.loc.Target, Template: templateStatusOf(tpl), HelmRelease: helmReleaseStatus(hr)}
+	st := &Status{Name: name, Namespace: ns, Target: site.loc.Target, Agent: objectStatusOf(obj), HelmRelease: helmReleaseStatus(hr)}
 	st.Events = s.warningEvents(ctx, site.agentClient, ns, name)
 	if site.loc.IsSet() {
 		st.Events = append(st.Events, s.warningEvents(ctx, site.fluxClient, site.fluxNS, site.releaseName(name))...)
 	}
 	st.sourceFailure = s.sourceFailure(ctx, site, hr)
-	st.Verdict, st.Summary = verdict(st, s.harnessOf(tpl))
-	if st.Verdict == VerdictFailed && tpl != nil && len(st.Template.Harnesses) == 0 {
-		// Nobody admits the template: say which Harnesses exist and what
-		// they admit, so the label mismatch is visible from the answer.
-		if described := s.describeHarnesses(ctx, site.agent, ns, tpl.GetLabels()); described != "" {
-			st.Summary += "; " + described
-		}
-	}
+	st.Verdict, st.Summary = verdict(st)
 	return st, nil
 }
 
@@ -132,71 +121,33 @@ func (s *Service) sourceFailure(ctx context.Context, site *site, hr *unstructure
 	return nil
 }
 
-// harnessOf is the Harness an agent runs on: the one its template names in
-// HarnessLabel, else the platform Harness agent-manager composes by default.
-func (s *Service) harnessOf(tpl *unstructured.Unstructured) string {
-	if tpl != nil {
-		if name := tpl.GetLabels()[HarnessLabel]; name != "" {
-			return name
-		}
+// objectStatusOf reads the Agent object's status.conditions, revisions,
+// warnings and generations; Exists is false when the object is absent.
+func objectStatusOf(obj *unstructured.Unstructured) *ObjectStatus {
+	if obj == nil {
+		return &ObjectStatus{}
 	}
-	return s.cfg.Compose.HarnessName
+	os := &ObjectStatus{Exists: true, Generation: obj.GetGeneration()}
+	os.Harness, _, _ = unstructured.NestedString(obj.Object, "spec", "harnessRef", "name")
+	os.ObservedGeneration, _, _ = unstructured.NestedInt64(obj.Object, "status", "observedGeneration")
+	os.DesiredRevision, _, _ = unstructured.NestedString(obj.Object, "status", "desiredRevision")
+	os.LatestSuccessfulRevision, _, _ = unstructured.NestedString(obj.Object, "status", "latestSuccessfulRevision")
+	os.Conditions = conditionsOfObject(obj)
+	os.Ready = conditionStatus(os.Conditions, conditionReady)
+	os.Accepted = conditionStatus(os.Conditions, conditionAccepted)
+	os.ResolvedRefs = conditionStatus(os.Conditions, conditionResolvedRefs)
+	os.Compatible = conditionStatus(os.Conditions, conditionCompatible)
+	os.Warnings, _, _ = unstructured.NestedStringSlice(obj.Object, "status", "warnings")
+	return os
 }
 
-// templateStatusOf reads status.harnesses[] and the generations; Exists is
-// false when the template is absent.
-func templateStatusOf(tpl *unstructured.Unstructured) *TemplateStatus {
-	if tpl == nil {
-		return &TemplateStatus{Harnesses: []HarnessStatus{}}
-	}
-	ts := &TemplateStatus{Exists: true, Generation: tpl.GetGeneration(), Harnesses: []HarnessStatus{}}
-	ts.ObservedGeneration, _, _ = unstructured.NestedInt64(tpl.Object, "status", "observedGeneration")
-	entries, _, _ := unstructured.NestedSlice(tpl.Object, "status", "harnesses")
-	for _, e := range entries {
-		m, ok := e.(map[string]any)
-		if !ok {
-			continue
-		}
-		hs := HarnessStatus{}
-		hs.Harness, _ = m["harness"].(string)
-		hs.DesiredRevision, _ = m["desiredRevision"].(string)
-		hs.LatestSuccessfulRevision, _ = m["latestSuccessfulRevision"].(string)
-		hs.Conditions = conditionsOf(m["conditions"])
-		hs.Ready = conditionStatus(hs.Conditions, conditionReady)
-		hs.Accepted = conditionStatus(hs.Conditions, conditionAccepted)
-		hs.ResolvedRefs = conditionStatus(hs.Conditions, conditionResolvedRefs)
-		hs.Compatible = conditionStatus(hs.Conditions, conditionCompatible)
-		warnings, _ := m["warnings"].([]any)
-		for _, w := range warnings {
-			if str, ok := w.(string); ok {
-				hs.Warnings = append(hs.Warnings, str)
-			}
-		}
-		ts.Harnesses = append(ts.Harnesses, hs)
-	}
-	sort.Slice(ts.Harnesses, func(i, j int) bool { return ts.Harnesses[i].Harness < ts.Harnesses[j].Harness })
-	return ts
-}
-
-// harnessEntry is the status entry of the named Harness, nil when it has not
-// reported.
-func harnessEntry(harnesses []HarnessStatus, name string) *HarnessStatus {
-	for i := range harnesses {
-		if harnesses[i].Harness == name {
-			return &harnesses[i]
-		}
-	}
-	return nil
-}
-
-// harnessReady is the platform Harness's verdict on a template: Ready and the
-// desired revision is the latest successful one. nil while unreported.
-func harnessReady(harnesses []HarnessStatus, name string) *bool {
-	h := harnessEntry(harnesses, name)
-	if h == nil || h.Ready == nil {
+// objectReady is the Agent object's verdict: Ready and the desired revision
+// is the latest successful one. nil while unreported.
+func objectReady(os *ObjectStatus) *bool {
+	if os == nil || !os.Exists || os.Ready == nil {
 		return nil
 	}
-	return boolPtr(*h.Ready && h.DesiredRevision == h.LatestSuccessfulRevision)
+	return boolPtr(*os.Ready && os.DesiredRevision == os.LatestSuccessfulRevision)
 }
 
 func helmReleaseStatus(hr *unstructured.Unstructured) *HelmReleaseStatus {
@@ -233,7 +184,7 @@ func helmReleaseStatus(hr *unstructured.Unstructured) *HelmReleaseStatus {
 }
 
 // warningEvents lists recent Warning events on the agent's objects (the
-// AgentTemplate, the RemoteMCPServer and the HelmRelease share its name),
+// Agent, the RemoteMCPServer and the HelmRelease share its name),
 // newest first, at most ten. Events are diagnostics: a list failure yields
 // none.
 func (s *Service) warningEvents(ctx context.Context, client kube.Client, ns, name string) []Event {
@@ -269,12 +220,11 @@ func (s *Service) warningEvents(ctx context.Context, client kube.Client, ns, nam
 }
 
 // verdict folds the gathered facts into ready / progressing / failed / unknown
-// and one actionable sentence. harness is the platform Harness whose status
-// entry decides.
-func verdict(st *Status, harness string) (string, string) {
-	hr, ts := st.HelmRelease, st.Template
+// and one actionable sentence.
+func verdict(st *Status) (string, string) {
+	hr, os := st.HelmRelease, st.Agent
 	if hr != nil && hr.Deleting {
-		return VerdictProgressing, "HelmRelease is being uninstalled by helm-controller; the AgentTemplate disappears with it"
+		return VerdictProgressing, "HelmRelease is being uninstalled by helm-controller; the Agent disappears with it"
 	}
 	if hr != nil && hr.Exists {
 		if c := findCondition(hr.Conditions, conditionStalled); c != nil && c.Status == statusTrue {
@@ -291,98 +241,55 @@ func verdict(st *Status, harness string) (string, string) {
 		}
 		return VerdictFailed, "HelmRelease is not ready: " + conditionText(c)
 	}
-	if ts != nil && ts.Exists {
-		if h := harnessEntry(ts.Harnesses, harness); h != nil {
-			return harnessVerdict(h)
-		}
-		switch {
-		case ts.ObservedGeneration == 0:
-			return VerdictProgressing, "kagent has not reported on the AgentTemplate yet"
-		case ts.ObservedGeneration < ts.Generation:
-			return VerdictProgressing, fmt.Sprintf("kagent has not observed generation %d of the AgentTemplate yet (observed %d)", ts.Generation, ts.ObservedGeneration)
-		case len(ts.Harnesses) == 0:
-			return VerdictFailed, "no Harness admits the AgentTemplate: no Harness of the namespace has an allowedAgentTemplates selector matching its labels"
-		}
-		names := make([]string, 0, len(ts.Harnesses))
-		for _, h := range ts.Harnesses {
-			names = append(names, h.Harness)
-		}
-		return VerdictFailed, fmt.Sprintf("the agent's Harness %q does not admit the AgentTemplate; it is admitted by %s only", harness, strings.Join(names, ", "))
+	if os != nil && os.Exists {
+		return objectVerdict(os)
 	}
 	if hr != nil && hr.Exists {
 		if hr.Ready == nil {
 			return VerdictProgressing, "HelmRelease created; Flux has not reconciled it yet"
 		}
-		return VerdictProgressing, "HelmRelease is ready but the AgentTemplate has not been rendered yet"
+		return VerdictProgressing, "HelmRelease is ready but the Agent has not been rendered yet"
 	}
-	return VerdictUnknown, "no AgentTemplate and no HelmRelease reported anything yet"
+	return VerdictUnknown, "no Agent and no HelmRelease reported anything yet"
 }
 
-// harnessVerdict reads one Harness's entry: a False Accepted, ResolvedRefs or
-// Compatible is a failure with the condition's message; Ready on the desired
-// revision is ready; everything else is a revision still compiling.
-func harnessVerdict(h *HarnessStatus) (string, string) {
+// objectVerdict reads the Agent object's conditions: a False Accepted,
+// ResolvedRefs or Compatible is a failure with the condition's message; Ready
+// on the desired revision is ready; everything else is a revision still
+// compiling.
+func objectVerdict(os *ObjectStatus) (string, string) {
 	for _, typ := range []string{conditionAccepted, conditionResolvedRefs, conditionCompatible} {
-		if c := findCondition(h.Conditions, typ); c != nil && c.Status == statusFalse {
-			return VerdictFailed, fmt.Sprintf("Harness %s: %s is False (%s)", h.Harness, typ, conditionText(c))
+		if c := findCondition(os.Conditions, typ); c != nil && c.Status == statusFalse {
+			return VerdictFailed, fmt.Sprintf("Harness %s: %s is False (%s)", os.Harness, typ, conditionText(c))
 		}
 	}
-	if h.Ready != nil && *h.Ready && h.DesiredRevision == h.LatestSuccessfulRevision {
-		summary := fmt.Sprintf("AgentTemplate is Ready on Harness %s (revision %s)", h.Harness, h.LatestSuccessfulRevision)
-		if n := len(h.Warnings); n > 0 {
-			summary += fmt.Sprintf(" with %d warning(s): %s", n, strings.Join(h.Warnings, "; "))
+	if os.Ready != nil && *os.Ready && os.DesiredRevision == os.LatestSuccessfulRevision {
+		summary := fmt.Sprintf("Agent is Ready on Harness %s (revision %s)", os.Harness, os.LatestSuccessfulRevision)
+		if n := len(os.Warnings); n > 0 {
+			summary += fmt.Sprintf(" with %d warning(s): %s", n, strings.Join(os.Warnings, "; "))
 		}
 		return VerdictReady, summary
 	}
-	if h.LatestSuccessfulRevision != "" && h.DesiredRevision != h.LatestSuccessfulRevision {
-		return VerdictProgressing, fmt.Sprintf("Harness %s is compiling revision %s; %s is the latest successful one", h.Harness, h.DesiredRevision, h.LatestSuccessfulRevision)
+	if os.LatestSuccessfulRevision != "" && os.DesiredRevision != os.LatestSuccessfulRevision {
+		return VerdictProgressing, fmt.Sprintf("Harness %s is compiling revision %s; %s is the latest successful one", os.Harness, os.DesiredRevision, os.LatestSuccessfulRevision)
 	}
 	// Ready not yet True without a failed stage: the first revision is still
 	// compiling while the controller waits for the golden snapshot
 	// (readyReasonPending); any other False reason is a failure it will not
 	// get past on its own.
-	if c := findCondition(h.Conditions, conditionReady); c != nil && c.Status != statusTrue {
+	if c := findCondition(os.Conditions, conditionReady); c != nil && c.Status != statusTrue {
 		if c.Status == statusFalse && c.Reason != readyReasonPending {
-			return VerdictFailed, fmt.Sprintf("Harness %s: Ready is False (%s)", h.Harness, conditionText(c))
+			return VerdictFailed, fmt.Sprintf("Harness %s: Ready is False (%s)", os.Harness, conditionText(c))
 		}
-		return VerdictProgressing, fmt.Sprintf("Harness %s is compiling revision %s; Ready is %s (%s)", h.Harness, h.DesiredRevision, c.Status, conditionText(c))
+		return VerdictProgressing, fmt.Sprintf("Harness %s is compiling revision %s; Ready is %s (%s)", os.Harness, os.DesiredRevision, c.Status, conditionText(c))
 	}
-	return VerdictProgressing, fmt.Sprintf("Harness %s is compiling revision %s; Ready not reported yet", h.Harness, h.DesiredRevision)
-}
-
-// describeHarnesses lists the Harnesses of ns with what they admit, for the
-// "no Harness admits the template" answer. Best effort: "" on any failure.
-func (s *Service) describeHarnesses(ctx context.Context, dyn dynamic.Interface, ns string, tplLabels map[string]string) string {
-	list, err := dyn.Resource(s.harnessGVR()).Namespace(ns).List(ctx, metav1.ListOptions{})
-	if err != nil {
-		s.log.Debug("listing harnesses failed", "namespace", ns, "error", err)
-		return ""
+	switch {
+	case os.ObservedGeneration == 0:
+		return VerdictProgressing, "kagent has not reported on the Agent yet"
+	case os.ObservedGeneration < os.Generation:
+		return VerdictProgressing, fmt.Sprintf("kagent has not observed generation %d of the Agent yet (observed %d)", os.Generation, os.ObservedGeneration)
 	}
-	if len(list.Items) == 0 {
-		return fmt.Sprintf("no Harness exists in namespace %s", ns)
-	}
-	described := make([]string, 0, len(list.Items))
-	for i := range list.Items {
-		described = append(described, describeHarness(&list.Items[i]))
-	}
-	sort.Strings(described)
-	return fmt.Sprintf("the template carries %s; Harnesses: %s", labels.Set(tplLabels).String(), strings.Join(described, "; "))
-}
-
-func describeHarness(h *unstructured.Unstructured) string {
-	raw, found, _ := unstructured.NestedMap(h.Object, "spec", "allowedAgentTemplates", "selector")
-	if !found {
-		return h.GetName() + " (admits nothing: no allowedAgentTemplates selector)"
-	}
-	sel := &metav1.LabelSelector{}
-	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(raw, sel); err != nil {
-		return fmt.Sprintf("%s (unreadable selector: %v)", h.GetName(), err)
-	}
-	parsed, err := metav1.LabelSelectorAsSelector(sel)
-	if err != nil {
-		return fmt.Sprintf("%s (invalid selector: %v)", h.GetName(), err)
-	}
-	return fmt.Sprintf("%s (admits %s)", h.GetName(), parsed.String())
+	return VerdictProgressing, fmt.Sprintf("Harness %s is compiling revision %s; Ready not reported yet", os.Harness, os.DesiredRevision)
 }
 
 // conditionsOfObject flattens an object's status.conditions.
