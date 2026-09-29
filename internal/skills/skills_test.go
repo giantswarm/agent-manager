@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -31,14 +32,16 @@ const (
 
 func fakeGitHub(t *testing.T) (*httptest.Server, *int) {
 	hits := 0
+	var mu sync.Mutex
+	count := func() { mu.Lock(); hits++; mu.Unlock() }
 	mux := http.NewServeMux()
 	mux.HandleFunc("/repos/giantswarm/agent-skills", func(w http.ResponseWriter, r *http.Request) {
-		hits++
+		count()
 		assert.Equal(t, "Bearer secret", r.Header.Get("Authorization"))
 		_ = json.NewEncoder(w).Encode(map[string]any{"default_branch": "main"})
 	})
 	mux.HandleFunc("/repos/giantswarm/agent-skills/commits/", func(w http.ResponseWriter, r *http.Request) {
-		hits++
+		count()
 		switch strings.TrimPrefix(r.URL.Path, "/repos/giantswarm/agent-skills/commits/") {
 		case "main":
 			_ = json.NewEncoder(w).Encode(map[string]any{"sha": headCommit})
@@ -51,7 +54,7 @@ func fakeGitHub(t *testing.T) (*httptest.Server, *int) {
 		}
 	})
 	mux.HandleFunc("/repos/giantswarm/agent-skills/git/trees/"+headCommit, func(w http.ResponseWriter, _ *http.Request) {
-		hits++
+		count()
 		_ = json.NewEncoder(w).Encode(map[string]any{"truncated": false, "tree": []map[string]any{
 			{"path": "README.md", "type": "blob"},
 			{"path": "agent-self-awareness/SKILL.md", "type": "blob"},
@@ -61,11 +64,11 @@ func fakeGitHub(t *testing.T) (*httptest.Server, *int) {
 		}})
 	})
 	mux.HandleFunc("/repos/giantswarm/agent-skills/git/trees/"+featureCommit, func(w http.ResponseWriter, _ *http.Request) {
-		hits++
+		count()
 		_ = json.NewEncoder(w).Encode(map[string]any{"truncated": false, "tree": []map[string]any{{"path": "README.md", "type": "blob"}}})
 	})
 	mux.HandleFunc("/repos/giantswarm/agent-skills/contents/", func(w http.ResponseWriter, r *http.Request) {
-		hits++
+		count()
 		assert.Equal(t, "application/vnd.github.raw+json", r.Header.Get("Accept"))
 		assert.Equal(t, headCommit, r.URL.Query().Get("ref"), "files are read at the resolved commit, not the moving branch")
 		switch strings.TrimPrefix(r.URL.Path, "/repos/giantswarm/agent-skills/contents/") {
@@ -81,7 +84,7 @@ func fakeGitHub(t *testing.T) (*httptest.Server, *int) {
 	})
 	// A private repository looks like a missing one to an anonymous caller.
 	mux.HandleFunc("/repos/giantswarm/private-skills", func(w http.ResponseWriter, r *http.Request) {
-		hits++
+		count()
 		if r.Header.Get("Authorization") == "" {
 			http.Error(w, `{"message":"Not Found"}`, http.StatusNotFound)
 			return
@@ -89,7 +92,7 @@ func fakeGitHub(t *testing.T) (*httptest.Server, *int) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"default_branch": "trunk", "private": true})
 	})
 	mux.HandleFunc("/repos/giantswarm/private-skills/collaborators/", func(w http.ResponseWriter, r *http.Request) {
-		hits++
+		count()
 		switch r.URL.Path {
 		case "/repos/giantswarm/private-skills/collaborators/alice/permission":
 			_ = json.NewEncoder(w).Encode(map[string]any{"permission": "read"})
@@ -100,7 +103,7 @@ func fakeGitHub(t *testing.T) (*httptest.Server, *int) {
 		}
 	})
 	mux.HandleFunc("/repos/giantswarm/private-skills/commits/trunk", func(w http.ResponseWriter, _ *http.Request) {
-		hits++
+		count()
 		_ = json.NewEncoder(w).Encode(map[string]any{"sha": tagCommit})
 	})
 	ts := httptest.NewServer(mux)
@@ -300,4 +303,30 @@ func TestAppMintsAndRenewsInstallationTokens(t *testing.T) {
 	require.Error(t, err)
 	_, err = NewApp(ts.URL, "1234", "42", []byte("not a key"), nil)
 	require.Error(t, err)
+}
+
+func TestExpiredEntryOnTheSameCommitIsRenewedWithoutRereading(t *testing.T) {
+	ts, hits := fakeGitHub(t)
+	d := New(Config{Repositories: []string{"https://github.com/giantswarm/agent-skills"}, APIURL: ts.URL, Tokens: StaticToken("secret"), CacheTTL: time.Nanosecond}, nil)
+
+	first, err := d.List(context.Background(), "", "", false)
+	require.NoError(t, err)
+	require.Len(t, first.Skills, 3)
+	before := *hits
+	again, err := d.List(context.Background(), "", "", false)
+	require.NoError(t, err)
+	assert.Equal(t, first.Skills, again.Skills)
+	assert.Equal(t, 2, *hits-before, "an expired entry costs the repository and its head commit, not every SKILL.md")
+}
+
+func TestAReadOutlivesACallerThatGivesUp(t *testing.T) {
+	ts, _ := fakeGitHub(t)
+	d := New(Config{Repositories: []string{"https://github.com/giantswarm/agent-skills"}, APIURL: ts.URL, Tokens: StaticToken("secret"), CacheTTL: time.Minute}, nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	res, err := d.List(ctx, "", "", false)
+	require.NoError(t, err)
+	assert.False(t, res.Repositories[0].Truncated, "a cancelled caller does not truncate the listing")
+	assert.Len(t, res.Skills, 3)
 }

@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `list_skills` answers within muster's 30 s: the SKILL.md files of a repository are read in parallel (eight at a time) and the configured repositories side by side, where a cold read of three repositories took longer than 30 s and every meta agent's first call timed out.
+- A read finishes and is cached even when the caller gives up, so a timed-out call no longer leaves a truncated listing (every remaining SKILL.md "unreadable") in the cache.
+- An expired cache entry whose ref still points at the same commit is renewed with two requests instead of re-reading every SKILL.md.
+
 ### Added
 
 - Private skills. `gitAuthSecretName` on `create_agent`, `update_agent` and `validate_agent` (REST: the same field) names the Secret (key `token`) the agent's git skills are fetched with at boot, composed as the agent chart's `skillsGitAuthSecretRef.name`; omitted, every agent with a git skill gets the installation's (`--skills-git-auth-secret-name`, chart `skills.gitAuthSecretName`, `get_info.skillsGitAuthSecretName`), and an update keeps it in step with the skills. Discovery and pinning read GitHub with a read-only GitHub App's installation tokens (`--skills-github-app-id`, `--skills-github-app-installation-id`, `--skills-github-app-private-key-file`; chart `skills.github.app.secretName`) instead of a static token. A private skill repository is listed to, and usable by, only the callers whose GitHub login (verified by the App pin) can read it; otherwise `403 forbidden`. The embedded fallback schema is the agent chart 1.5.1's. ([#44](https://github.com/giantswarm/agent-manager/issues/44))

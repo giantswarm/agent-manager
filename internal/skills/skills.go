@@ -135,9 +135,18 @@ func (d *Discoverer) List(ctx context.Context, repository, ref string, refresh b
 		}
 		repos = []string{repository}
 	}
+	found := make([]Repository, len(repos))
+	var wg sync.WaitGroup
+	for i, r := range repos {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			found[i] = d.discover(ctx, r, ref, refresh)
+		}()
+	}
+	wg.Wait()
 	res := &Result{Repositories: []Repository{}, Skills: []Skill{}}
-	for _, r := range repos {
-		repo := d.discover(ctx, r, ref, refresh)
+	for _, repo := range found {
 		res.Repositories = append(res.Repositories, repo)
 		res.Skills = append(res.Skills, repo.Skills...)
 	}
@@ -147,13 +156,31 @@ func (d *Discoverer) List(ctx context.Context, repository, ref string, refresh b
 func (d *Discoverer) discover(ctx context.Context, repoURL, ref string, refresh bool) Repository {
 	key := repoURL + "@" + ref
 	d.mu.Lock()
-	if cached, ok := d.cache[key]; ok && !refresh && cached.FetchedAt != nil && time.Since(*cached.FetchedAt) < d.cfg.CacheTTL {
-		d.mu.Unlock()
+	cached, ok := d.cache[key]
+	d.mu.Unlock()
+	if ok && !refresh && cached.FetchedAt != nil && time.Since(*cached.FetchedAt) < d.cfg.CacheTTL {
 		return cached
 	}
-	d.mu.Unlock()
 
-	repo, err := d.read(ctx, repoURL, ref)
+	// The read outlives the caller: a client that gives up (muster answers
+	// after 30 s) must not leave a half-read listing in the cache, and the
+	// next call finds the finished one.
+	readCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), readTimeout)
+	defer cancel()
+	// An expired entry whose ref still points at the same commit is renewed
+	// with two requests instead of re-reading every SKILL.md.
+	if ok && !refresh && cached.Error == "" && !cached.Truncated && cached.Commit != "" {
+		if head, err := d.headOf(readCtx, repoURL, ref); err == nil && head == cached.Commit {
+			now := time.Now()
+			cached.FetchedAt = &now
+			d.mu.Lock()
+			d.cache[key] = cached
+			d.mu.Unlock()
+			return cached
+		}
+	}
+
+	repo, err := d.read(readCtx, repoURL, ref)
 	now := time.Now()
 	repo.FetchedAt = &now
 	if err != nil {
@@ -170,6 +197,30 @@ func (d *Discoverer) discover(ctx context.Context, repoURL, ref string, refresh 
 }
 
 const skillFile = "SKILL.md"
+
+// readTimeout bounds one repository read; readParallelism bounds the SKILL.md
+// requests in flight per repository.
+const (
+	readTimeout     = 2 * time.Minute
+	readParallelism = 8
+)
+
+// headOf resolves ref (the default branch when empty) to its head commit.
+func (d *Discoverer) headOf(ctx context.Context, repoURL, ref string) (string, error) {
+	owner, name, err := parseRepoURL(repoURL)
+	if err != nil {
+		return "", err
+	}
+	branch := ref
+	if branch == "" {
+		meta, err := d.gh.repository(ctx, owner, name)
+		if err != nil {
+			return "", err
+		}
+		branch = meta.DefaultBranch
+	}
+	return d.gh.headCommit(ctx, owner, name, branch)
+}
 
 func isSkillFile(path string) bool {
 	return path == skillFile || strings.HasSuffix(path, "/"+skillFile)
@@ -214,17 +265,34 @@ func (d *Discoverer) read(ctx context.Context, repoURL, ref string) (Repository,
 		return Repository{}, err
 	}
 	repo := Repository{RepoURL: canonical, Ref: branch, Commit: head, Private: meta.Private, Skills: []Skill{}, Truncated: tree.Truncated}
+	var paths []string
 	for _, entry := range tree.Tree {
-		if entry.Type != "blob" || !isSkillFile(entry.Path) {
-			continue
+		if entry.Type == "blob" && isSkillFile(entry.Path) {
+			paths = append(paths, entry.Path)
 		}
-		content, err := d.gh.raw(ctx, owner, name, entry.Path, head)
-		if err != nil {
-			d.log.Warn("skipping unreadable SKILL.md", "repository", canonical, "path", entry.Path, "error", err)
+	}
+	contents := make([]string, len(paths))
+	errs := make([]error, len(paths))
+	sem := make(chan struct{}, readParallelism)
+	var wg sync.WaitGroup
+	for i, path := range paths {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			contents[i], errs[i] = d.gh.raw(ctx, owner, name, path, head)
+		}()
+	}
+	wg.Wait()
+	for i, path := range paths {
+		if errs[i] != nil {
+			d.log.Warn("skipping unreadable SKILL.md", "repository", canonical, "path", path, "error", errs[i])
 			repo.Truncated = true
 			continue
 		}
-		dir := skillDir(entry.Path)
+		content := contents[i]
+		dir := skillDir(path)
 		fm := parseFrontmatter(content)
 		skillName := strings.TrimSpace(fm["name"])
 		if skillName == "" {
