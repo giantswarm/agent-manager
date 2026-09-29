@@ -2,6 +2,7 @@ package chart
 
 import (
 	"context"
+	"regexp"
 	"testing"
 	"time"
 
@@ -40,10 +41,46 @@ func TestLatestFollowsFluxSemverSemantics(t *testing.T) {
 	assert.Error(t, err)
 }
 
+// A tag filter is applied before the range, as Flux applies an
+// OCIRepository's ref.semverFilter: a range that admits pre-releases then
+// selects release candidates and never a branch build.
+func TestLatestFilteredKeepsBranchBuildsOut(t *testing.T) {
+	tags := []string{"1.5.0", "1.5.1-rc.2", "1.5.2-r3d2c6cdct20260925080552h5b17654", "1.4.9-dev.main.2026-09-01.10-00-00.habcdef0"}
+	filter := regexp.MustCompile(`^v?[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$`)
+
+	v, err := Latest(tags, ">=1.5.0-0 <2.0.0-0")
+	require.NoError(t, err)
+	assert.Equal(t, "1.5.2-r3d2c6cdct20260925080552h5b17654", v, "without a filter the range selects the branch build")
+
+	v, err = LatestFiltered(tags, ">=1.5.0-0 <2.0.0-0", filter)
+	require.NoError(t, err)
+	assert.Equal(t, "1.5.1-rc.2", v, "the filter keeps the branch build out and the release candidate in")
+
+	v, err = LatestFiltered(tags, "1.x", filter)
+	require.NoError(t, err)
+	assert.Equal(t, "1.5.0", v, "a stable range still skips the candidate")
+
+	_, err = LatestFiltered([]string{"1.5.2-r3d2c6cdct20260925080552h5b17654"}, ">=1.5.0-0 <2.0.0-0", filter)
+	assert.Error(t, err, "a branch build alone is no version")
+}
+
+func TestWithSemverFilter(t *testing.T) {
+	r, err := NewResolver("oci://gsoci.azurecr.io/charts/giantswarm/agent", ">=1.5.0-0 <2.0.0-0", time.Hour, nil, nil, WithSemverFilter(`^[0-9.]+(-rc\.[0-9]+)?$`))
+	require.NoError(t, err)
+	assert.Equal(t, `^[0-9.]+(-rc\.[0-9]+)?$`, r.info.SemverFilter)
+
+	r, err = NewResolver("oci://gsoci.azurecr.io/charts/giantswarm/agent", "1.x", time.Hour, nil, nil, WithSemverFilter(""))
+	require.NoError(t, err)
+	assert.Nil(t, r.filter, "an empty filter filters nothing")
+
+	_, err = NewResolver("oci://gsoci.azurecr.io/charts/giantswarm/agent", "1.x", time.Hour, nil, nil, WithSemverFilter("("))
+	assert.ErrorContains(t, err, "chart semver filter")
+}
+
 func TestResolverPrefersTheRegistryAndFallsBackToTheEmbeddedSchema(t *testing.T) {
 	f := newFake(t)
 	chartURL := "oci://" + f.Host() + "/" + f.Repo
-	r, err := NewResolver(chartURL, "1.x", time.Hour, oci.NewRegistry(nil), nil)
+	r, err := NewResolver(chartURL, "1.x", time.Hour, oci.NewRegistry(nil), nil, WithSemverFilter(`^[0-9.]+$`))
 	require.NoError(t, err)
 	r.ref.Insecure = true
 
@@ -53,11 +90,12 @@ func TestResolverPrefersTheRegistryAndFallsBackToTheEmbeddedSchema(t *testing.T)
 	info := r.Info(context.Background())
 	assert.Equal(t, "1.2.3", info.LatestVersion)
 	assert.Equal(t, "1.x", info.Semver)
+	assert.Equal(t, `^[0-9.]+$`, info.SemverFilter, "the filter survives a registry read")
 	assert.Empty(t, info.Error)
 
 	// A broken registry on a fresh resolver: the embedded copy validates.
 	f.FailTags = true
-	r2, err := NewResolver(chartURL, "1.x", time.Hour, oci.NewRegistry(nil), nil)
+	r2, err := NewResolver(chartURL, "1.x", time.Hour, oci.NewRegistry(nil), nil, WithSemverFilter(`^[0-9.]+$`))
 	require.NoError(t, err)
 	r2.ref.Insecure = true
 	s2 := r2.Schema(context.Background())
@@ -66,6 +104,7 @@ func TestResolverPrefersTheRegistryAndFallsBackToTheEmbeddedSchema(t *testing.T)
 	info2 := r2.Info(context.Background())
 	assert.NotEmpty(t, info2.Error)
 	assert.Empty(t, info2.LatestVersion)
+	assert.Equal(t, `^[0-9.]+$`, info2.SemverFilter, "the filter survives a failed registry read")
 	props, ok := s2.Document.(map[string]any)["properties"].(map[string]any)
 	require.True(t, ok)
 	assert.Contains(t, props, "modelConfig", "the embedded copy is the real agent chart schema")

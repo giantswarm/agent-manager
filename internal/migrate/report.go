@@ -129,6 +129,9 @@ type ChartInfo struct {
 	OCIURL string `json:"ociUrl"`
 	// TargetSemver is the range every source moves to.
 	TargetSemver string `json:"targetSemver"`
+	// TargetSemverFilter is the tag filter every source moves to; absent
+	// when each source keeps its own.
+	TargetSemverFilter *string `json:"targetSemverFilter,omitempty"`
 	// LatestVersion is the newest published version in that range, "" when
 	// none exists (no source is moved then).
 	LatestVersion string `json:"latestVersion,omitempty"`
@@ -175,8 +178,12 @@ type SourceReport struct {
 	Action    string `json:"action"`
 	From      string `json:"from,omitempty"`
 	To        string `json:"to,omitempty"`
-	Reason    string `json:"reason,omitempty"`
-	Diff      string `json:"diff,omitempty"`
+	// FromSemverFilter and ToSemverFilter are the source's ref.semverFilter
+	// before and after, beside the range.
+	FromSemverFilter string `json:"fromSemverFilter,omitempty"`
+	ToSemverFilter   string `json:"toSemverFilter,omitempty"`
+	Reason           string `json:"reason,omitempty"`
+	Diff             string `json:"diff,omitempty"`
 }
 
 // AgentReport is one kagent.dev/v1alpha2 Agent.

@@ -21,6 +21,24 @@ tests:
           path: spec.template.spec.containers[0].args
           content: --agent-chart-semver=x.x.x
 
+  - it: filters the chart's tags only when a filter is set
+    asserts:
+      - notExists:
+          path: spec.template.spec.containers[0].args[?(@ =~ /^--agent-chart-semver-filter=/)]
+
+  - it: forwards the chart's tag filter
+    set:
+      agentChart:
+        semver: ">=1.5.0-0 <2.0.0-0"
+        semverFilter: '^v?[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$'
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --agent-chart-semver=>=1.5.0-0 <2.0.0-0
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --agent-chart-semver-filter=^v?[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$
+
   - it: composes no muster URL unless one is set
     asserts:
       - notExists:

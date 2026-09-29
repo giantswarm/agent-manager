@@ -755,8 +755,11 @@ func (s *Service) Create(ctx context.Context, spec Spec) (*CreateResult, error) 
 		if url, _, _ := unstructured.NestedString(existing.Object, "spec", "url"); url != s.cfg.Compose.ChartOCIURL {
 			s.log.Warn("reusing an OCIRepository that points elsewhere", "namespace", ns, "name", ociRepo.GetName(), "url", url, "expected", s.cfg.Compose.ChartOCIURL)
 		}
-		if semver, _, _ := unstructured.NestedString(existing.Object, "spec", "ref", "semver"); semver != s.cfg.Compose.ChartSemver {
-			s.log.Warn("reusing an OCIRepository on another range; the migrate command moves it", "namespace", ns, "name", ociRepo.GetName(), "semver", semver, "expected", s.cfg.Compose.ChartSemver)
+		semver, _, _ := unstructured.NestedString(existing.Object, "spec", "ref", "semver")
+		filter, _, _ := unstructured.NestedString(existing.Object, "spec", "ref", "semverFilter")
+		if semver != s.cfg.Compose.ChartSemver || filter != s.cfg.Compose.ChartSemverFilter {
+			s.log.Warn("reusing an OCIRepository on another range; the migrate command moves it", "namespace", ns, "name", ociRepo.GetName(),
+				"semver", semver, "semverFilter", filter, "expected", s.cfg.Compose.ChartSemver, "expectedSemverFilter", s.cfg.Compose.ChartSemverFilter)
 		}
 	}
 

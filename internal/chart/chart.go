@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"sort"
 	"sync"
 	"time"
@@ -47,6 +48,10 @@ type Info struct {
 	OCIURL string `json:"ociUrl"`
 	// Semver is the range the OCIRepository tracks (1.x: every 1.x release).
 	Semver string `json:"semver"`
+	// SemverFilter is the regular expression the tags must match before the
+	// range is evaluated, as the OCIRepository's ref.semverFilter; empty
+	// filters nothing.
+	SemverFilter string `json:"semverFilter,omitempty"`
 	// LatestVersion is the newest published version inside that range, or ""
 	// when the registry could not be read.
 	LatestVersion string `json:"latestVersion,omitempty"`
@@ -73,6 +78,7 @@ type Resolver struct {
 	ref      oci.Reference
 	ociURL   string
 	semver   string
+	filter   *regexp.Regexp
 	refresh  time.Duration
 	registry *oci.Registry
 	log      *slog.Logger
@@ -85,9 +91,31 @@ type Resolver struct {
 	inFlight bool
 }
 
+// ResolverOption configures a Resolver.
+type ResolverOption func(*Resolver) error
+
+// WithSemverFilter makes the resolver consider only the tags the regular
+// expression matches, before the range is evaluated: the OCIRepository's
+// ref.semverFilter, which keeps the branch builds out of a range that admits
+// pre-releases. Empty filters nothing.
+func WithSemverFilter(filter string) ResolverOption {
+	return func(r *Resolver) error {
+		if filter == "" {
+			return nil
+		}
+		re, err := regexp.Compile(filter)
+		if err != nil {
+			return fmt.Errorf("chart semver filter %q: %w", filter, err)
+		}
+		r.filter = re
+		r.info.SemverFilter = filter
+		return nil
+	}
+}
+
 // NewResolver builds a resolver for ociURL tracking semverRange, re-reading the
 // registry every refresh.
-func NewResolver(ociURL, semverRange string, refresh time.Duration, registry *oci.Registry, log *slog.Logger) (*Resolver, error) {
+func NewResolver(ociURL, semverRange string, refresh time.Duration, registry *oci.Registry, log *slog.Logger, opts ...ResolverOption) (*Resolver, error) {
 	ref, err := oci.ParseChartURL(ociURL)
 	if err != nil {
 		return nil, err
@@ -104,10 +132,16 @@ func NewResolver(ociURL, semverRange string, refresh time.Duration, registry *oc
 	if refresh <= 0 {
 		refresh = 10 * time.Minute
 	}
-	return &Resolver{
+	r := &Resolver{
 		ref: ref, ociURL: ociURL, semver: semverRange, refresh: refresh, registry: registry, log: log,
 		info: Info{OCIURL: ociURL, Semver: semverRange, SchemaVersion: EmbeddedSchemaVersion, SchemaSource: SourceEmbedded},
-	}, nil
+	}
+	for _, opt := range opts {
+		if err := opt(r); err != nil {
+			return nil, err
+		}
+	}
+	return r, nil
 }
 
 // OCIURL is the configured chart URL.
@@ -182,7 +216,7 @@ func (r *Resolver) resolve(ctx context.Context) error {
 	if err != nil {
 		return r.fail(err)
 	}
-	latest, err := Latest(tags, r.semver)
+	latest, err := LatestFiltered(tags, r.semver, r.filter)
 	if err != nil {
 		return r.fail(err)
 	}
@@ -215,7 +249,7 @@ func (r *Resolver) resolve(ctx context.Context) error {
 	r.cached = &Schema{Document: doc, Version: latest, Source: SourceRegistry}
 	r.fetched = now
 	r.lastErr = nil
-	r.info = Info{OCIURL: r.ociURL, Semver: r.semver, LatestVersion: latest, SchemaVersion: latest, SchemaSource: SourceRegistry, ResolvedAt: &now}
+	r.info = Info{OCIURL: r.ociURL, Semver: r.semver, SemverFilter: r.info.SemverFilter, LatestVersion: latest, SchemaVersion: latest, SchemaSource: SourceRegistry, ResolvedAt: &now}
 	r.mu.Unlock()
 	r.log.Info("agent chart resolved", "chart", r.ociURL, "version", latest)
 	return nil
@@ -228,7 +262,7 @@ func (r *Resolver) fail(err error) error {
 	// Back off: do not hammer an unreachable registry on every request.
 	r.fetched = time.Now().Add(-r.refresh + time.Minute)
 	if r.cached == nil {
-		r.info = Info{OCIURL: r.ociURL, Semver: r.semver, SchemaVersion: EmbeddedSchemaVersion, SchemaSource: SourceEmbedded, Error: err.Error()}
+		r.info = Info{OCIURL: r.ociURL, Semver: r.semver, SemverFilter: r.info.SemverFilter, SchemaVersion: EmbeddedSchemaVersion, SchemaSource: SourceEmbedded, Error: err.Error()}
 	} else {
 		r.info.Error = err.Error()
 	}
@@ -240,12 +274,22 @@ func (r *Resolver) fail(err error) error {
 // semver; pre-releases are excluded unless the range names one — `1.x` never
 // matches a `1.0.0-dev.…` branch build).
 func Latest(tags []string, constraint string) (string, error) {
+	return LatestFiltered(tags, constraint, nil)
+}
+
+// LatestFiltered is Latest over the tags filter matches, as Flux evaluates an
+// OCIRepository's ref.semverFilter before its range; a nil filter keeps every
+// tag.
+func LatestFiltered(tags []string, constraint string, filter *regexp.Regexp) (string, error) {
 	c, err := semver.NewConstraint(constraint)
 	if err != nil {
 		return "", fmt.Errorf("semver range %q: %w", constraint, err)
 	}
 	var matching []*semver.Version
 	for _, t := range tags {
+		if filter != nil && !filter.MatchString(t) {
+			continue
+		}
 		v, err := semver.StrictNewVersion(t)
 		if err != nil {
 			continue
