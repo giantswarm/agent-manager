@@ -354,6 +354,10 @@
                         }
                     }
                 },
+                "targetUrl": {
+                    "type": "string",
+                    "description": "The muster MCP URL composed into an agent placed on a workload cluster (create_agent with organization and cluster): one those clusters reach, the installation's public muster endpoint. Empty refuses target clusters."
+                },
                 "url": {
                     "type": "string",
                     "description": "The platform's muster MCP URL, composed into every agent as the chart value `muster.url` (the URL of the agent's own RemoteMCPServer). Empty composes nothing and the Generic chart's default applies (`http://muster.agent-platform.svc.cluster.local:8090/mcp`). The `agent-platform` meta chart forwards it from its connectivity helper."

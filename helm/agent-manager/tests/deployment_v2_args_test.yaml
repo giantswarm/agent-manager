@@ -21,6 +21,20 @@ tests:
           path: spec.template.spec.containers[0].args
           content: --agent-chart-semver=x.x.x
 
+  - it: forwards the muster URL for agents on workload clusters only when set
+    set:
+      muster:
+        targetUrl: https://muster.installation.example/mcp
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --target-muster-url=https://muster.installation.example/mcp
+
+  - it: renders no target muster URL by default
+    asserts:
+      - notExists:
+          path: spec.template.spec.containers[0].args[?(@ =~ /^--target-muster-url=/)]
+
   - it: filters the chart's tags only when a filter is set
     asserts:
       - notExists:

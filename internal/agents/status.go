@@ -42,42 +42,35 @@ const (
 // Status gathers the AgentTemplate's per-Harness status, the owning
 // HelmRelease (conditions, history) and the namespace's recent Warning events
 // for the agent, and folds them into one verdict.
-func (s *Service) Status(ctx context.Context, ns, name string) (*Status, error) {
-	ns, err := s.Namespace(ns)
-	if err != nil {
-		return nil, err
-	}
+// For an agent on a workload cluster the template and its events are read
+// there, the HelmRelease and its events on the installation.
+func (s *Service) Status(ctx context.Context, loc Location, name string) (*Status, error) {
 	if err := ValidateName(name); err != nil {
 		return nil, err
 	}
-	dyn, client, err := s.dyn(ctx)
+	st, err := s.site(ctx, loc)
 	if err != nil {
 		return nil, err
 	}
-	tpl, err := s.getTemplate(ctx, dyn, ns, name)
+	return s.status(ctx, st, name)
+}
+
+func (s *Service) status(ctx context.Context, site *site, name string) (*Status, error) {
+	ns := site.ns()
+	tpl, hr, err := s.agentObjects(ctx, site, name)
 	if err != nil {
 		return nil, err
 	}
-	hrName, hrNs := name, ns
-	if tpl != nil {
-		if n, nsFromLabel := ownerOf(tpl); n != "" {
-			hrName, hrNs = n, orDefault(nsFromLabel, ns)
-		}
+	st := &Status{Name: name, Namespace: ns, Target: site.loc.Target, Template: templateStatusOf(tpl), HelmRelease: helmReleaseStatus(hr)}
+	st.Events = s.warningEvents(ctx, site.agentClient, ns, name)
+	if site.loc.IsSet() {
+		st.Events = append(st.Events, s.warningEvents(ctx, site.fluxClient, site.fluxNS, site.releaseName(name))...)
 	}
-	hr, err := s.getHelmRelease(ctx, dyn, hrNs, hrName)
-	if err != nil {
-		return nil, err
-	}
-	if tpl == nil && hr == nil {
-		return nil, notFoundf("agent %s/%s: no AgentTemplate and no HelmRelease of that name", ns, name)
-	}
-	st := &Status{Name: name, Namespace: ns, Template: templateStatusOf(tpl), HelmRelease: helmReleaseStatus(hr)}
-	st.Events = s.warningEvents(ctx, client, ns, name)
 	st.Verdict, st.Summary = verdict(st, s.harnessOf(tpl))
 	if st.Verdict == VerdictFailed && tpl != nil && len(st.Template.Harnesses) == 0 {
 		// Nobody admits the template: say which Harnesses exist and what
 		// they admit, so the label mismatch is visible from the answer.
-		if described := s.describeHarnesses(ctx, dyn, ns, tpl.GetLabels()); described != "" {
+		if described := s.describeHarnesses(ctx, site.agent, ns, tpl.GetLabels()); described != "" {
 			st.Summary += "; " + described
 		}
 	}

@@ -94,7 +94,7 @@ type Options struct {
 // StatusReader is the platform Harness's verdict on a template — the
 // service's get_agent_status (agents.Service).
 type StatusReader interface {
-	Status(ctx context.Context, ns, name string) (*agents.Status, error)
+	Status(ctx context.Context, loc agents.Location, name string) (*agents.Status, error)
 }
 
 // Runner runs the migration.
@@ -719,7 +719,7 @@ func (r *Runner) wait(ctx context.Context, st *nsState) {
 
 func (r *Runner) templateVerdict(ctx context.Context, ns, name string) *TemplateReport {
 	rep := &TemplateReport{Name: name, Exists: true}
-	status, err := r.status.Status(ctx, ns, name)
+	status, err := r.status.Status(ctx, agents.In(ns), name)
 	if err != nil {
 		rep.Verdict, rep.Summary = agents.VerdictUnknown, "status could not be read: "+err.Error()
 		return rep

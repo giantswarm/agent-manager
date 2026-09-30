@@ -122,6 +122,8 @@ paths:
       x-mcp-tool: list_agents
       parameters:
         - $ref: "#/components/parameters/namespaceQuery"
+        - $ref: "#/components/parameters/organizationQuery"
+        - $ref: "#/components/parameters/clusterQuery"
       responses:
         "200":
           description: agents
@@ -207,6 +209,8 @@ paths:
     parameters:
       - $ref: "#/components/parameters/namespacePath"
       - $ref: "#/components/parameters/namePath"
+      - $ref: "#/components/parameters/organizationQuery"
+      - $ref: "#/components/parameters/clusterQuery"
     get:
       tags: [agents]
       summary: Get one agent
@@ -297,6 +301,8 @@ paths:
     parameters:
       - $ref: "#/components/parameters/namespacePath"
       - $ref: "#/components/parameters/namePath"
+      - $ref: "#/components/parameters/organizationQuery"
+      - $ref: "#/components/parameters/clusterQuery"
     get:
       tags: [agents]
       summary: Compact status verdict
@@ -326,6 +332,8 @@ paths:
       x-mcp-tool: list_model_configs
       parameters:
         - $ref: "#/components/parameters/namespaceQuery"
+        - $ref: "#/components/parameters/organizationQuery"
+        - $ref: "#/components/parameters/clusterQuery"
       responses:
         "200":
           description: model configs
@@ -375,6 +383,16 @@ components:
       name: namespace
       in: query
       description: Namespace; default the installation's kagent namespace
+      schema: { type: string }
+    organizationQuery:
+      name: organization
+      in: query
+      description: With cluster, the organization owning the workload cluster the agent runs on; omit both for the installation's own cluster
+      schema: { type: string }
+    clusterQuery:
+      name: cluster
+      in: query
+      description: With organization, the workload cluster the agent runs on (namespace is then the namespace there)
       schema: { type: string }
     namespacePath:
       name: namespace
@@ -513,6 +531,8 @@ components:
       required: [name, modelConfig, toolset]
       properties:
         namespace: { type: string }
+        organization: { type: string, description: "With cluster: the organization owning the workload cluster the agent runs on (namespace org-<organization> on the installation holds the cluster's kubeconfig Secret and the HelmRelease)" }
+        cluster: { type: string, description: "With organization: the workload cluster the agent runs on; absent on the installation's own cluster" }
         name: { type: string, description: DNS-1123 technical name (HelmRelease and AgentTemplate name), max 63 chars }
         displayName: { type: string, maxLength: 63 }
         description: { type: string }
@@ -602,6 +622,8 @@ components:
       properties:
         name: { type: string }
         namespace: { type: string }
+        organization: { type: string, description: "With cluster: the organization owning the workload cluster the agent runs on (namespace org-<organization> on the installation holds the cluster's kubeconfig Secret and the HelmRelease)" }
+        cluster: { type: string, description: "With organization: the workload cluster the agent runs on; absent on the installation's own cluster" }
         exists: { type: boolean, description: The AgentTemplate exists (false while the HelmRelease has not rendered it) }
         displayName: { type: string, description: From the ui.giantswarm.io/display-name annotation }
         description: { type: string }
@@ -664,6 +686,8 @@ components:
       properties:
         name: { type: string }
         namespace: { type: string }
+        organization: { type: string, description: "With cluster: the organization owning the workload cluster the agent runs on (namespace org-<organization> on the installation holds the cluster's kubeconfig Secret and the HelmRelease)" }
+        cluster: { type: string, description: "With organization: the workload cluster the agent runs on; absent on the installation's own cluster" }
         helmReleaseDeleted: { type: boolean }
         agentTemplateDeleted: { type: boolean, description: The AgentTemplate was deleted directly (force, a bare template or a suspended release) }
         remoteMcpServerDeleted: { type: boolean, description: The agent's RemoteMCPServer was deleted directly (force, a suspended release) }
@@ -700,6 +724,8 @@ components:
       properties:
         name: { type: string }
         namespace: { type: string }
+        organization: { type: string, description: "With cluster: the organization owning the workload cluster the agent runs on (namespace org-<organization> on the installation holds the cluster's kubeconfig Secret and the HelmRelease)" }
+        cluster: { type: string, description: "With organization: the workload cluster the agent runs on; absent on the installation's own cluster" }
         verdict: { type: string, enum: [ready, progressing, failed, unknown] }
         summary: { type: string }
         template:

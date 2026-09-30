@@ -176,8 +176,10 @@ func (s *Skills) UnmarshalJSON(b []byte) error {
 // ModelConfig and Toolset is optional; omitted fields keep the chart's
 // defaults.
 type Spec struct {
-	// Namespace the agent lives in; empty selects the default managed namespace.
-	Namespace string `json:"namespace,omitempty"`
+	// Location is the agent's namespace (empty selects the default managed
+	// namespace) and, to run it on a workload cluster, the target cluster.
+	// Fixed at create.
+	Location
 	// Name is the DNS-1123 technical name: the HelmRelease name and the
 	// AgentTemplate name. The caller confirms it; agent-manager never derives
 	// it.
@@ -226,7 +228,7 @@ type Spec struct {
 // chart default). Skills replace the whole list; Toolset replaces the whole
 // list (an empty list is refused: use preset:none).
 type Update struct {
-	Namespace     string  `json:"namespace,omitempty"`
+	Location
 	Name          string  `json:"name"`
 	DisplayName   *string `json:"displayName,omitempty"`
 	Description   *string `json:"description,omitempty"`
@@ -323,6 +325,9 @@ type ToolBinding struct {
 type Agent struct {
 	Name      string `json:"name"`
 	Namespace string `json:"namespace"`
+	// Target is the workload cluster the agent runs on; absent on the
+	// installation's own cluster.
+	Target
 	// Exists is false while the HelmRelease has not rendered the
 	// AgentTemplate yet (or failed to).
 	Exists        bool   `json:"exists"`
@@ -429,9 +434,10 @@ type UpdateResult struct {
 
 // DeleteResult reports what a delete removed.
 type DeleteResult struct {
-	Name               string `json:"name"`
-	Namespace          string `json:"namespace"`
-	HelmReleaseDeleted bool   `json:"helmReleaseDeleted"`
+	Name      string `json:"name"`
+	Namespace string `json:"namespace"`
+	Target
+	HelmReleaseDeleted bool `json:"helmReleaseDeleted"`
 	// AgentTemplateDeleted: the template was deleted directly (a bare one, or
 	// the rendered objects of a suspended release, both with force).
 	AgentTemplateDeleted   bool `json:"agentTemplateDeleted"`
@@ -457,6 +463,7 @@ const (
 type Status struct {
 	Name      string `json:"name"`
 	Namespace string `json:"namespace"`
+	Target
 	// Verdict is ready, progressing, failed or unknown.
 	Verdict string `json:"verdict"`
 	// Summary is one sentence a human or an agent can act on.

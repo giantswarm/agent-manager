@@ -42,6 +42,10 @@ type ComposeConfig struct {
 	// MusterURL is the platform's muster MCP URL, composed as the chart value
 	// muster.url; empty composes nothing and the chart default applies.
 	MusterURL string
+	// TargetMusterURL is the muster MCP URL composed into an agent on a
+	// workload cluster: one those clusters reach (the installation's public
+	// endpoint). Empty: agents are refused a target cluster.
+	TargetMusterURL string
 	// HarnessName is the platform Harness every agent runs on: composed as
 	// the chart value agent.harness (the admission label's value), and the
 	// status.harnesses[] entry that decides an agent's readiness.
