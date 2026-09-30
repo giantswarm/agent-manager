@@ -79,3 +79,38 @@ tests:
       - notMatchRegex:
           path: spec.template.spec.containers[0].args[0]
           pattern: skills-git-auth
+
+  - it: composes the minted skills credential and turns the minter on
+    set:
+      skills:
+        mintGitAuthSecret: true
+        github:
+          app:
+            secretName: skills-github-app
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --skills-git-auth-secret-name=RELEASE-NAME-agent-manager-skills-token
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --skills-git-auth-mint=true
+
+  - it: refuses to mint without the skills GitHub App
+    set:
+      skills:
+        mintGitAuthSecret: true
+    asserts:
+      - failedTemplate:
+          errorPattern: needs skills.github.app.secretName
+
+  - it: refuses a minted and a provisioned skills credential together
+    set:
+      skills:
+        mintGitAuthSecret: true
+        gitAuthSecretName: kagent-skills-token
+        github:
+          app:
+            secretName: skills-github-app
+    asserts:
+      - failedTemplate:
+          errorPattern: mutually exclusive

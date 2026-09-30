@@ -187,3 +187,21 @@ namespace: {{ $namespace | quote }}
 port: {{ $port }}
 {{- end -}}
 {{- end -}}
+
+{{/*
+The installation's skills boot Secret: the minted one, else
+skills.gitAuthSecretName.
+*/}}
+{{- define "agent-manager.skillsGitAuthSecretName" -}}
+{{- if .Values.skills.mintGitAuthSecret -}}
+{{- if .Values.skills.gitAuthSecretName -}}
+{{- fail "skills.mintGitAuthSecret and skills.gitAuthSecretName are mutually exclusive: the minted Secret is the installation's skills credential" -}}
+{{- end -}}
+{{- if not .Values.skills.github.app.secretName -}}
+{{- fail "skills.mintGitAuthSecret needs skills.github.app.secretName: the Secret is filled with the skills GitHub App's installation token" -}}
+{{- end -}}
+{{- printf "%s-skills-token" (include "agent-manager.fullname" .) -}}
+{{- else -}}
+{{- .Values.skills.gitAuthSecretName -}}
+{{- end -}}
+{{- end }}

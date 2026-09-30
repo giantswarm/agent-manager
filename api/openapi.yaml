@@ -462,6 +462,15 @@ components:
             url: { type: string, description: The muster MCP URL composed into every agent as muster.url; empty means the chart default applies }
         skillsRepositories: { type: array, items: { type: string } }
         skillsGitAuthSecretName: { type: string, description: "The installation's skills credential Secret (key token) every agent with a git skill is fetched with unless it names its own; absent: anonymous" }
+        skillsGitAuthMint:
+          type: object
+          description: "Present when agent-manager keeps skillsGitAuthSecretName filled with the skills GitHub App's installation token"
+          properties:
+            secretName: { type: string }
+            namespaces: { type: array, items: { type: string } }
+            refreshedAt: { type: string, format: date-time, description: When the last refresh succeeded }
+            expiresAt: { type: string, format: date-time, description: When the written token expires }
+            error: { type: string, description: "The last refresh's failure; absent after a success" }
     GitSkill:
       type: object
       required: [url]

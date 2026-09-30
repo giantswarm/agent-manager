@@ -54,6 +54,7 @@ type serveOptions struct {
 	skillsAppInstall   string
 	skillsAppKeyFile   string
 	skillsGitAuth      string
+	skillsGitAuthMint  bool
 	skillsCacheTTL     time.Duration
 
 	mcpEnabled bool
@@ -114,6 +115,7 @@ environment variable named next to it; flags win over the environment.`,
 	f.StringVar(&o.skillsAppInstall, "skills-github-app-installation-id", envOr("AGENT_MANAGER_SKILLS_GITHUB_APP_INSTALLATION_ID", ""), "Installation ID of the skills GitHub App (AGENT_MANAGER_SKILLS_GITHUB_APP_INSTALLATION_ID)")
 	f.StringVar(&o.skillsAppKeyFile, "skills-github-app-private-key-file", envOr("AGENT_MANAGER_SKILLS_GITHUB_APP_PRIVATE_KEY_FILE", ""), "PEM private key file of the skills GitHub App (AGENT_MANAGER_SKILLS_GITHUB_APP_PRIVATE_KEY_FILE)")
 	f.StringVar(&o.skillsGitAuth, "skills-git-auth-secret-name", envOr("AGENT_MANAGER_SKILLS_GIT_AUTH_SECRET_NAME", ""), "Secret (key token) in the agent's namespace every agent with a git skill fetches its skills with, unless the agent names its own gitAuthSecretName; composed as the chart value skillsGitAuthSecretRef.name. Empty: such agents fetch anonymously (AGENT_MANAGER_SKILLS_GIT_AUTH_SECRET_NAME)")
+	f.BoolVar(&o.skillsGitAuthMint, "skills-git-auth-mint", envBool("AGENT_MANAGER_SKILLS_GIT_AUTH_MINT", false), "Keep the Secret --skills-git-auth-secret-name names filled with the skills GitHub App's installation token in every managed namespace, refreshed before it expires; the Secret must exist (the chart renders it) and the ServiceAccount may update it. Needs the skills GitHub App (AGENT_MANAGER_SKILLS_GIT_AUTH_MINT)")
 	f.DurationVar(&o.skillsCacheTTL, "skills-cache-ttl", envDuration("AGENT_MANAGER_SKILLS_CACHE_TTL", 5*time.Minute), "How long a repository's discovered skills are reused (AGENT_MANAGER_SKILLS_CACHE_TTL)")
 	f.BoolVar(&o.mcpEnabled, "mcp-enabled", envBool("AGENT_MANAGER_MCP_ENABLED", true), "Serve the MCP streamable-HTTP endpoint (AGENT_MANAGER_MCP_ENABLED)")
 	f.StringVar(&o.mcpPath, "mcp-path", envOr("AGENT_MANAGER_MCP_PATH", "/mcp"), "MCP endpoint path (AGENT_MANAGER_MCP_PATH)")
@@ -141,6 +143,10 @@ func runServe(ctx context.Context, o *serveOptions) error {
 	skillsTokens, err := skillsTokenSource(o)
 	if err != nil {
 		return err
+	}
+	app, _ := skillsTokens.(*skills.App)
+	if o.skillsGitAuthMint && (app == nil || o.skillsGitAuth == "") {
+		return fmt.Errorf("--skills-git-auth-mint needs the skills GitHub App (--skills-github-app-id) and --skills-git-auth-secret-name: the App's installation token is written into that Secret")
 	}
 	if o.githubAuthorizationServer != "" && !o.oauthEnabled {
 		return fmt.Errorf("--github-authorization-server needs --enable-oauth: the forwarded IdP ID token is validated by the OAuth resource server")
@@ -211,6 +217,14 @@ func runServe(ctx context.Context, o *serveOptions) error {
 	// commit through the GitHub API, an image tag to its digest.
 	pinner := skills.NewResolver(o.skillsGitHubAPI, skillsTokens, nil, nil)
 
+	// The one thing agent-manager does without a caller: the boot Secret of
+	// private git skills, written with the ServiceAccount's permission to
+	// update that one Secret.
+	var bootSecret *skills.BootSecret
+	if o.skillsGitAuthMint {
+		bootSecret = skills.NewBootSecret(app, clients.Typed(), o.skillsGitAuth, agents.ManagedNamespaces(o.kagentNamespace, splitList(o.managedNamespaces)), log)
+	}
+
 	svc := agents.New(provider, resolver, discoverer, pinner, agents.Config{
 		DefaultNamespace:  o.kagentNamespace,
 		ManagedNamespaces: splitList(o.managedNamespaces),
@@ -228,6 +242,7 @@ func runServe(ctx context.Context, o *serveOptions) error {
 			HarnessName:             o.harnessName,
 			SkillsGitAuthSecretName: o.skillsGitAuth,
 		},
+		SkillsBootSecret: bootSecret,
 		KagentAPIVersion: kagentVersion,
 		Version:          build.Version,
 		GitHub:           gitHubRemote(o.githubAuthorizationServer, o.githubAPIURL),
@@ -266,6 +281,9 @@ func runServe(ctx context.Context, o *serveOptions) error {
 
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	if bootSecret != nil {
+		go bootSecret.Run(ctx)
+	}
 	return srv.Run(ctx)
 }
 

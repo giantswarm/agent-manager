@@ -66,11 +66,18 @@ func NewApp(apiURL, appID, installationID string, privateKeyPEM []byte, client *
 // Token returns a valid installation token, minting a new one when the
 // current one is about to expire.
 func (a *App) Token(ctx context.Context) (string, error) {
+	token, _, err := a.TokenValidFor(ctx, appTokenRenewal)
+	return token, err
+}
+
+// TokenValidFor returns an installation token that stays valid for at least
+// d, and its expiry, minting a new one when the current one expires sooner.
+func (a *App) TokenValidFor(ctx context.Context, d time.Duration) (string, time.Time, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	now := time.Now()
-	if a.token != "" && now.Add(appTokenRenewal).Before(a.expires) {
-		return a.token, nil
+	if a.token != "" && now.Add(d).Before(a.expires) {
+		return a.token, a.expires, nil
 	}
 	// The App's own JWT: issued a minute in the past against clock drift,
 	// valid for less than GitHub's ten-minute cap.
@@ -80,32 +87,32 @@ func (a *App) Token(ctx context.Context) (string, error) {
 		ExpiresAt: jwt.NewNumericDate(now.Add(9 * time.Minute)),
 	}).SignedString(a.key)
 	if err != nil {
-		return "", fmt.Errorf("github app: sign the App JWT: %w", err)
+		return "", time.Time{}, fmt.Errorf("github app: sign the App JWT: %w", err)
 	}
 	target := a.apiURL + "/app/installations/" + a.installationID + "/access_tokens"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, nil)
 	if err != nil {
-		return "", err
+		return "", time.Time{}, err
 	}
 	req.Header.Set("Authorization", "Bearer "+signed)
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
 	resp, err := a.http.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("github app: POST %s: %w", target, err)
+		return "", time.Time{}, fmt.Errorf("github app: POST %s: %w", target, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if resp.StatusCode != http.StatusCreated {
-		return "", fmt.Errorf("github app: POST %s returned %d: %s", target, resp.StatusCode, firstLine(strings.TrimSpace(string(body))))
+		return "", time.Time{}, fmt.Errorf("github app: POST %s returned %d: %s", target, resp.StatusCode, firstLine(strings.TrimSpace(string(body))))
 	}
 	var out struct {
 		Token     string    `json:"token"`
 		ExpiresAt time.Time `json:"expires_at"`
 	}
 	if err := json.Unmarshal(body, &out); err != nil || out.Token == "" {
-		return "", fmt.Errorf("github app: no token in the answer of POST %s", target)
+		return "", time.Time{}, fmt.Errorf("github app: no token in the answer of POST %s", target)
 	}
 	a.token, a.expires = out.Token, out.ExpiresAt
-	return a.token, nil
+	return a.token, a.expires, nil
 }

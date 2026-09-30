@@ -74,8 +74,11 @@ spec:
             {{- end }}
             - --skills-github-api={{ .Values.skills.github.apiUrl }}
             - --skills-cache-ttl={{ .Values.skills.cacheTTL }}
-            {{- with .Values.skills.gitAuthSecretName }}
+            {{- with include "agent-manager.skillsGitAuthSecretName" . }}
             - --skills-git-auth-secret-name={{ . }}
+            {{- end }}
+            {{- if .Values.skills.mintGitAuthSecret }}
+            - --skills-git-auth-mint=true
             {{- end }}
             {{- if .Values.skills.github.app.secretName }}
             {{- if .Values.skills.github.tokenSecret.name }}
