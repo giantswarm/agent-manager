@@ -80,21 +80,21 @@ func TestApplyDryRunWritesNothing(t *testing.T) {
 	assert.Equal(t, ModeApply, res.Mode)
 	assert.True(t, res.Created.HelmRelease)
 	assert.Contains(t, res.Manifests.HelmRelease, "name: sre")
-	_, err = f.svc.Get(ctx, "", "sre")
+	_, err = f.svc.Get(ctx, In(""), "sre")
 	assert.ErrorIs(t, err, ErrNotFound, "a dry run creates nothing")
 
 	upd, err := f.svc.Update(ctx, Update{Name: "verifier", Description: str("new"), WriteOptions: dry})
 	require.NoError(t, err)
 	assert.Equal(t, []string{"agent.description"}, upd.Changed)
-	got, err := f.svc.Get(ctx, "", "verifier")
+	got, err := f.svc.Get(ctx, In(""), "verifier")
 	require.NoError(t, err)
 	assert.NotEqual(t, "new", got.Values["agent"].(map[string]any)["description"], "a dry run changes nothing")
 
-	del, err := f.svc.Delete(ctx, "", "verifier", false, dry)
+	del, err := f.svc.Delete(ctx, In(""), "verifier", false, dry)
 	require.NoError(t, err)
 	assert.True(t, del.HelmReleaseDeleted)
 	assert.True(t, del.OCIRepositoryDeleted)
-	_, err = f.svc.Get(ctx, "", "verifier")
+	_, err = f.svc.Get(ctx, In(""), "verifier")
 	require.NoError(t, err, "a dry run deletes nothing")
 }
 
@@ -149,7 +149,7 @@ func TestCommitCreateOpensThePullRequestAsThePerson(t *testing.T) {
 	assert.Equal(t, dry.Manifests.HelmRelease, string(head["agents/agent-manager/sre.yaml"]))
 	assert.Contains(t, string(head["agents/agent-manager/kustomization.yaml"]), "sre.yaml")
 	assert.Equal(t, ManagedGitOps, res.Agent.Managed)
-	_, err = f.svc.Get(ctx, "", "sre")
+	_, err = f.svc.Get(ctx, In(""), "sre")
 	assert.ErrorIs(t, err, ErrNotFound, "commit mode writes nothing live")
 }
 
@@ -190,7 +190,7 @@ func TestApplyRefusesAGitOpsOwnedReleaseNamingTheTarget(t *testing.T) {
 	require.ErrorIs(t, err, ErrGitOpsOwned)
 	assert.Contains(t, err.Error(), "mode commit")
 	assert.Contains(t, err.Error(), "giantswarm/fleet, directory agents/agent-manager on main")
-	_, err = f.svc.Delete(ctx, "", "gitops", true, WriteOptions{})
+	_, err = f.svc.Delete(ctx, In(""), "gitops", true, WriteOptions{})
 	assert.ErrorIs(t, err, ErrGitOpsOwned)
 }
 
@@ -221,7 +221,7 @@ func TestCommitUpdateRewritesTheReleaseFile(t *testing.T) {
 
 func TestCommitDeleteOpensTheRemovingPullRequest(t *testing.T) {
 	f, fake, ctx := gitOpsFixture(t, false)
-	res, err := f.svc.Delete(ctx, "", "gitops", false, WriteOptions{Mode: ModeCommit})
+	res, err := f.svc.Delete(ctx, In(""), "gitops", false, WriteOptions{Mode: ModeCommit})
 	require.NoError(t, err)
 	require.Len(t, fake.PullRequests(), 1)
 	assert.Equal(t, "feat(agents): remove agent gitops in kagent", fake.PullRequests()[0].Title)
@@ -235,7 +235,7 @@ func TestCommitDeleteOpensTheRemovingPullRequest(t *testing.T) {
 	assert.False(t, still)
 	require.Len(t, res.Commit.LiveSteps, 1, "a Kustomization that does not prune leaves the release")
 	assert.True(t, strings.Contains(res.Commit.LiveSteps[0], "kubectl delete helmrelease -n kagent gitops"))
-	_, err = f.svc.Get(ctx, "", "gitops")
+	_, err = f.svc.Get(ctx, In(""), "gitops")
 	require.NoError(t, err, "commit mode deletes nothing live")
 }
 

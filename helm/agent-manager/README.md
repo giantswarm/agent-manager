@@ -129,6 +129,7 @@ meta chart (`components.agent-manager.enabled`), which sets `kagent.namespace`,
 | github.authorizationServer.clientCredentialsSecretRef.namespace | string | `""` | Namespace of that Secret; empty is the release namespace. |
 | github.authorizationServer.grantScope | string | `"subject"` | `subject`: the grant belongs to the person, not to one login session. |
 | muster.url | string | `""` | The platform's muster MCP URL, composed into every agent as the chart value `muster.url` (the URL of the agent's own RemoteMCPServer). Empty composes nothing and the Generic chart's default applies (`http://muster.agent-platform.svc.cluster.local:8090/mcp`). The `agent-platform` meta chart forwards it from its connectivity helper. |
+| muster.targetUrl | string | `""` | The muster MCP URL composed into an agent placed on a workload cluster (create_agent with organization and cluster): one those clusters reach, the installation's public muster endpoint. Empty refuses target clusters. |
 | muster.mcpServer.enabled | bool | `false` | Register this server with muster by rendering an `mcpservers.muster.giantswarm.io` CR in the release namespace. Tools then appear as `x_<name>_<tool>`. |
 | muster.mcpServer.name | string | `"agent-manager"` | MCPServer CR name (drives the tool prefix). |
 | muster.mcpServer.autoStart | bool | `true` | Start the server connection when muster initializes. |

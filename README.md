@@ -202,6 +202,50 @@ so).
 It is composition, not authorization: the invoking human's identity and the
 backends' own authorization remain the boundary.
 
+## Agents on a workload cluster
+
+An agent can run on a workload cluster of the installation, managed from the
+installation: `create_agent` (and `POST /api/v1/agents`) take `organization`
+and `cluster`, and every read and write tool takes the same pair (REST: the
+query parameters `organization` and `cluster`). `namespace` is then the
+namespace on the workload cluster. `get_info` reports `capabilities.targetCluster`.
+
+- **The HelmRelease stays on the installation**, in the organization
+  namespace `org-<organization>`, named `<cluster>-<agent>` and labelled
+  `agent-platform.giantswarm.io/cluster: <cluster>`, beside the shared
+  OCIRepository of the agent chart there. It carries
+  `spec.kubeConfig.secretRef` (`<cluster>-kubeconfig`, key `value`),
+  `releaseName: <agent>` and `targetNamespace`/`storageNamespace: <namespace>`,
+  so the installation's helm-controller installs the chart on the workload
+  cluster. It carries no `serviceAccountName`: Flux would impersonate it on
+  the workload cluster, where it does not exist.
+- **The kubeconfig Secret contract** is Cluster API's: the Secret
+  `<cluster>-kubeconfig` in `org-<organization>` with the kubeconfig under the
+  key `value`. agent-manager reads it as the caller and keeps only its server
+  address and CA; the credentials in it are never used when the server acts
+  as the caller (`oauth.downstream`). Running as the ServiceAccount, the
+  kubeconfig is used as it is.
+- **The agent, its ModelConfig and its Harness are on the workload cluster**:
+  the AgentTemplate, its RemoteMCPServer, the ModelConfigs `modelConfig` must
+  name, the Harnesses and the agent's events are read there. The cluster runs
+  the agent runtime slice of the `agent-platform` chart (kagent and its CRDs,
+  Substrate, agentgateway, the platform Harness).
+- **Identity precondition**: the reads on the workload cluster present the
+  caller's token, so the workload cluster's apiserver must trust the
+  installation's identity provider (OIDC issuer and client id set when the
+  cluster is created) and grant the caller read access to the kagent
+  resources and events of the namespace. Otherwise the call answers 401 and
+  names that precondition.
+- **Egress**: the agent reaches muster at `--target-muster-url`
+  (`AGENT_TARGET_MUSTER_URL`, chart `muster.targetUrl`), the installation's
+  public muster endpoint; unset, a target is refused. The installation's
+  skills credential exists on the installation only and is not composed: an
+  agent on a workload cluster with private git skills names its own Secret
+  there (`gitAuthSecretName`).
+
+Without `organization` and `cluster` nothing changes: the objects are the
+ones composed for the installation's own cluster.
+
 ## Status
 
 `get_agent_status` folds three sources into `ready | progressing | failed |
@@ -373,6 +417,8 @@ the server on `agenttemplates` (`--kagent-api-version auto`, fallback
 `v1alpha3`), the Flux API versions on their resources. `--muster-url`
 (`AGENT_MUSTER_URL`) composes the platform's muster MCP URL into every agent as
 `muster.url`; unset, nothing is composed and the chart default applies.
+`--target-muster-url` (`AGENT_TARGET_MUSTER_URL`) is the one agents on
+workload clusters reach (see "Agents on a workload cluster").
 
 ### Tracing
 

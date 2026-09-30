@@ -78,8 +78,15 @@ func (h *REST) getOpenAPI(w http.ResponseWriter, _ *http.Request) {
 	_, _ = w.Write(spec.OpenAPI)
 }
 
+// location is the namespace and the optional target cluster (query
+// parameters organization and cluster) of a request.
+func location(r *http.Request, ns string) agents.Location {
+	q := r.URL.Query()
+	return agents.Location{Namespace: ns, Target: agents.Target{Organization: q.Get("organization"), Cluster: q.Get("cluster")}}
+}
+
 func (h *REST) listAgents(w http.ResponseWriter, r *http.Request) {
-	list, err := h.svc.List(r.Context(), r.URL.Query().Get("namespace"))
+	list, err := h.svc.List(r.Context(), location(r, r.URL.Query().Get("namespace")))
 	if err != nil {
 		h.writeError(w, err)
 		return
@@ -88,7 +95,7 @@ func (h *REST) listAgents(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *REST) getAgent(w http.ResponseWriter, r *http.Request) {
-	a, err := h.svc.Get(r.Context(), r.PathValue("namespace"), r.PathValue("name"))
+	a, err := h.svc.Get(r.Context(), location(r, r.PathValue("namespace")), r.PathValue("name"))
 	if err != nil {
 		h.writeError(w, err)
 		return
@@ -143,7 +150,7 @@ func (h *REST) updateAgent(w http.ResponseWriter, r *http.Request) {
 	if !h.decode(w, r, &upd) {
 		return
 	}
-	upd.Namespace = r.PathValue("namespace")
+	upd.Location = location(r, r.PathValue("namespace"))
 	upd.Name = r.PathValue("name")
 	if strings.EqualFold(r.URL.Query().Get("force"), "true") {
 		upd.Force = true
@@ -163,7 +170,7 @@ func (h *REST) deleteAgent(w http.ResponseWriter, r *http.Request) {
 		Mode: q.Get("mode"), DryRun: strings.EqualFold(q.Get("dryRun"), "true"),
 		Repository: q.Get("repository"), Branch: q.Get("branch"), Path: q.Get("path"),
 	}
-	res, err := h.svc.Delete(r.Context(), r.PathValue("namespace"), r.PathValue("name"), force, opts)
+	res, err := h.svc.Delete(r.Context(), location(r, r.PathValue("namespace")), r.PathValue("name"), force, opts)
 	if err != nil {
 		h.writeError(w, err)
 		return
@@ -172,7 +179,7 @@ func (h *REST) deleteAgent(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *REST) getAgentStatus(w http.ResponseWriter, r *http.Request) {
-	st, err := h.svc.Status(r.Context(), r.PathValue("namespace"), r.PathValue("name"))
+	st, err := h.svc.Status(r.Context(), location(r, r.PathValue("namespace")), r.PathValue("name"))
 	if err != nil {
 		h.writeError(w, err)
 		return
@@ -181,7 +188,7 @@ func (h *REST) getAgentStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *REST) listModelConfigs(w http.ResponseWriter, r *http.Request) {
-	list, err := h.svc.ListModelConfigs(r.Context(), r.URL.Query().Get("namespace"))
+	list, err := h.svc.ListModelConfigs(r.Context(), location(r, r.URL.Query().Get("namespace")))
 	if err != nil {
 		h.writeError(w, err)
 		return
@@ -203,7 +210,7 @@ func (h *REST) listSkills(w http.ResponseWriter, r *http.Request) {
 // becomes a change, empty ones stay untouched. Used by validate (update mode)
 // and by the MCP update tool, whose arguments are flat.
 func SpecToUpdate(s agents.Spec) agents.Update {
-	upd := agents.Update{Namespace: s.Namespace, Name: s.Name}
+	upd := agents.Update{Location: s.Location, Name: s.Name}
 	str := func(v string) *string {
 		if strings.TrimSpace(v) == "" {
 			return nil

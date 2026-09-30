@@ -59,7 +59,16 @@ type Provider interface {
 	// Identity names how calls are authenticated, reported by GET /info:
 	// IdentityServiceAccount or IdentityCaller.
 	Identity() string
+	// Remote returns the client for this request on the cluster a kubeconfig
+	// describes (a workload cluster's, from its Cluster API Secret): the
+	// caller provider presents the caller's token there and nothing of the
+	// kubeconfig but the server address and CA; the ServiceAccount provider
+	// uses the kubeconfig as it is.
+	Remote(ctx context.Context, kubeconfig []byte) (Client, error)
 }
+
+// RemoteFunc builds the client of a remote cluster from its kubeconfig.
+type RemoteFunc func(ctx context.Context, kubeconfig []byte) (Client, error)
 
 // Clients is the concrete client set built from a rest.Config.
 type Clients struct {
@@ -138,6 +147,40 @@ func (c *Clients) ForToken(token string) (*Clients, error) {
 	return fromRESTConfig(cfg)
 }
 
+// remoteRESTConfig reads a kubeconfig's current context into a REST config.
+func remoteRESTConfig(kubeconfig []byte) (*rest.Config, error) {
+	cfg, err := clientcmd.RESTConfigFromKubeConfig(kubeconfig)
+	if err != nil {
+		return nil, fmt.Errorf("parse kubeconfig: %w", err)
+	}
+	cfg.UserAgent = "agent-manager"
+	return cfg, nil
+}
+
+// FromKubeconfig builds the clients of the cluster a kubeconfig describes,
+// with the kubeconfig's own credentials.
+func FromKubeconfig(kubeconfig []byte) (*Clients, error) {
+	cfg, err := remoteRESTConfig(kubeconfig)
+	if err != nil {
+		return nil, err
+	}
+	return fromRESTConfig(cfg)
+}
+
+// FromKubeconfigForToken builds the clients of the cluster a kubeconfig
+// describes that present token: the server address, CA and TLS settings of
+// the kubeconfig are kept, every credential in it is dropped.
+func FromKubeconfigForToken(kubeconfig []byte, token string) (*Clients, error) {
+	if token == "" {
+		return nil, ErrNoCallerToken
+	}
+	cfg, err := remoteRESTConfig(kubeconfig)
+	if err != nil {
+		return nil, err
+	}
+	return (&Clients{restCfg: cfg}).ForToken(token)
+}
+
 func restConfig(cfg Config) (*rest.Config, error) {
 	if cfg.InCluster {
 		c, err := rest.InClusterConfig()
@@ -171,15 +214,30 @@ func restConfig(cfg Config) (*rest.Config, error) {
 // of the server (the agentgateway JWT policy, muster) is the trust boundary.
 type ServiceAccountProvider struct {
 	client Client
+	remote RemoteFunc
 }
 
-// NewServiceAccountProvider wraps c.
+// NewServiceAccountProvider wraps c. Remote clients use the kubeconfig's own
+// credentials.
 func NewServiceAccountProvider(c Client) *ServiceAccountProvider {
-	return &ServiceAccountProvider{client: c}
+	return &ServiceAccountProvider{client: c, remote: func(_ context.Context, kubeconfig []byte) (Client, error) {
+		return FromKubeconfig(kubeconfig)
+	}}
+}
+
+// WithRemote replaces how remote clients are built (tests hand out fakes).
+func (p *ServiceAccountProvider) WithRemote(fn RemoteFunc) *ServiceAccountProvider {
+	p.remote = fn
+	return p
 }
 
 // Client implements Provider.
 func (p *ServiceAccountProvider) Client(context.Context) (Client, error) { return p.client, nil }
+
+// Remote implements Provider.
+func (p *ServiceAccountProvider) Remote(ctx context.Context, kubeconfig []byte) (Client, error) {
+	return p.remote(ctx, kubeconfig)
+}
 
 // Identity implements Provider.
 func (p *ServiceAccountProvider) Identity() string { return IdentityServiceAccount }
@@ -254,6 +312,16 @@ func (p *CallerProvider) Client(ctx context.Context) (Client, error) {
 
 // Identity implements Provider.
 func (p *CallerProvider) Identity() string { return IdentityCaller }
+
+// Remote implements Provider: the caller's token, presented to the cluster
+// the kubeconfig names. Not cached: the kubeconfig is read per request.
+func (p *CallerProvider) Remote(ctx context.Context, kubeconfig []byte) (Client, error) {
+	token, ok := identity.TokenFromContext(ctx)
+	if !ok {
+		return nil, ErrNoCallerToken
+	}
+	return FromKubeconfigForToken(kubeconfig, token)
+}
 
 // evictLocked drops expired entries, and when nothing expired the whole cache
 // (a token flood is not worth an LRU).

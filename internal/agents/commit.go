@@ -173,20 +173,21 @@ func explicitLocation(w WriteOptions) (commitLocation, error) {
 	return commitLocation{Location: loc}, nil
 }
 
-// namespaceLocation is where a new agent of ns goes: the caller's target, else
+// namespaceLocation is where a new agent of the site goes: the caller's target, else
 // the repository that owns the namespace's agents — the shared chart source,
 // then any agent release applied from git, then the Namespace itself.
-func (s *Service) namespaceLocation(ctx context.Context, dyn dynamic.Interface, ns string, w WriteOptions) (commitLocation, error) {
+func (s *Service) namespaceLocation(ctx context.Context, st *site, w WriteOptions) (commitLocation, error) {
 	if w.Repository != "" {
 		return explicitLocation(w)
 	}
+	dyn, ns := st.flux, st.fluxNS
 	var candidates []*unstructured.Unstructured
 	if src, err := s.getObject(ctx, dyn, s.ociRepositoryGVR(), ns, s.cfg.Compose.ChartName, "ocirepository"); err != nil {
 		return commitLocation{}, err
 	} else if src != nil {
 		candidates = append(candidates, src)
 	}
-	hrs, err := s.agentHelmReleases(ctx, dyn, ns)
+	hrs, err := s.agentHelmReleases(ctx, st)
 	if err != nil {
 		return commitLocation{}, err
 	}

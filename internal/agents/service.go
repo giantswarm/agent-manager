@@ -138,6 +138,9 @@ type InfoResponse struct {
 	// agent: URL empty means the chart default applies.
 	Muster struct {
 		URL string `json:"url"`
+		// TargetURL is the muster URL composed into agents on workload
+		// clusters; empty: target clusters are refused.
+		TargetURL string `json:"targetUrl,omitempty"`
 	} `json:"muster"`
 	// SkillsRepositories are the configured skill repositories.
 	SkillsRepositories []string `json:"skillsRepositories"`
@@ -166,6 +169,9 @@ func (s *Service) Info(ctx context.Context) InfoResponse {
 		// mode commit: the manifests land as a pull request, opened as the
 		// person, in the repository that owns the namespace.
 		"commit": s.CommitAvailable(),
+		// targetCluster: create_agent and the reads take organization and
+		// cluster to place an agent on a workload cluster.
+		"targetCluster": s.cfg.Compose.TargetMusterURL != "",
 	}
 	out.Identity = s.kube.Identity()
 	kagentAPI := "kagent.dev/" + s.cfg.KagentAPIVersion
@@ -180,6 +186,7 @@ func (s *Service) Info(ctx context.Context) InfoResponse {
 	out.Flux.ServiceAccountName = s.cfg.Compose.ServiceAccountName
 	out.Harness.Name = s.cfg.Compose.HarnessName
 	out.Muster.URL = s.cfg.Compose.MusterURL
+	out.Muster.TargetURL = s.cfg.Compose.TargetMusterURL
 	if s.skills != nil {
 		out.SkillsRepositories = s.skills.Repositories()
 	} else {
@@ -255,6 +262,10 @@ func wrapKube(err error, what string) error {
 		return nil
 	case apierrors.IsNotFound(err):
 		return fmt.Errorf("%w: %s", ErrNotFound, what)
+	case apierrors.IsUnauthorized(err):
+		// On a workload cluster: its apiserver does not trust the
+		// installation's identity provider.
+		return fmt.Errorf("%w: %s: the API server refused the caller's token (401); a workload cluster's apiserver must trust the installation's identity provider (OIDC issuer and client id set when the cluster is created): %w", ErrUnauthenticated, what, err)
 	case apierrors.IsForbidden(err):
 		return fmt.Errorf("%w: %s: %w", ErrForbidden, what, err)
 	case apierrors.IsAlreadyExists(err), apierrors.IsConflict(err):
@@ -271,20 +282,17 @@ func wrapKube(err error, what string) error {
 // List returns the agents of a namespace: every AgentTemplate (with its
 // RemoteMCPServer and its owning HelmRelease when Flux labels name one) plus
 // every HelmRelease of the agent chart that has not rendered a template yet.
-func (s *Service) List(ctx context.Context, ns string) ([]Agent, error) {
-	ns, err := s.Namespace(ns)
+func (s *Service) List(ctx context.Context, loc Location) ([]Agent, error) {
+	st, err := s.site(ctx, loc)
 	if err != nil {
 		return nil, err
 	}
-	dyn, _, err := s.dyn(ctx)
-	if err != nil {
-		return nil, err
-	}
-	templates, err := dyn.Resource(s.templateGVR()).Namespace(ns).List(ctx, metav1.ListOptions{})
+	ns := st.ns()
+	templates, err := st.agent.Resource(s.templateGVR()).Namespace(ns).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return nil, wrapKube(err, "list agenttemplates in "+ns)
 	}
-	servers, err := dyn.Resource(s.mcpServerGVR()).Namespace(ns).List(ctx, metav1.ListOptions{})
+	servers, err := st.agent.Resource(s.mcpServerGVR()).Namespace(ns).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return nil, wrapKube(err, "list remotemcpservers in "+ns)
 	}
@@ -292,7 +300,7 @@ func (s *Service) List(ctx context.Context, ns string) ([]Agent, error) {
 	for i := range servers.Items {
 		serverByName[servers.Items[i].GetName()] = &servers.Items[i]
 	}
-	hrs, err := s.agentHelmReleases(ctx, dyn, ns)
+	hrs, err := s.agentHelmReleases(ctx, st)
 	if err != nil {
 		return nil, err
 	}
@@ -300,10 +308,11 @@ func (s *Service) List(ctx context.Context, ns string) ([]Agent, error) {
 	for i := range templates.Items {
 		tpl := &templates.Items[i]
 		a := s.agentFromTemplate(tpl, serverByName[tpl.GetName()])
+		a.Target = st.loc.Target
 		if hrName, hrNs := ownerOf(tpl); hrName != "" {
 			hr := hrs[hrName]
-			if hr == nil || hrNs != ns {
-				hr, _ = s.getHelmRelease(ctx, dyn, orDefault(hrNs, ns), hrName)
+			if hr == nil || hrNs != st.fluxNS {
+				hr, _ = s.getHelmRelease(ctx, st.flux, orDefault(hrNs, st.fluxNS), hrName)
 			}
 			if hr != nil {
 				applyHelmRelease(&a, hr)
@@ -313,7 +322,7 @@ func (s *Service) List(ctx context.Context, ns string) ([]Agent, error) {
 		byName[a.Name] = &a
 	}
 	for _, hr := range hrs {
-		a := Agent{Namespace: ns, Managed: ManagedHelmRelease}
+		a := Agent{Namespace: ns, Target: st.loc.Target, Managed: ManagedHelmRelease}
 		applyHelmRelease(&a, hr)
 		if a.Name == "" {
 			a.Name = hr.GetName()
@@ -337,48 +346,56 @@ func (s *Service) List(ctx context.Context, ns string) ([]Agent, error) {
 }
 
 // Get returns one agent by name.
-func (s *Service) Get(ctx context.Context, ns, name string) (*Agent, error) {
-	ns, err := s.Namespace(ns)
+func (s *Service) Get(ctx context.Context, loc Location, name string) (*Agent, error) {
+	st, err := s.site(ctx, loc)
 	if err != nil {
 		return nil, err
 	}
-	dyn, _, err := s.dyn(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return s.get(ctx, dyn, ns, name)
+	return s.get(ctx, st, name)
 }
 
-func (s *Service) get(ctx context.Context, dyn dynamic.Interface, ns, name string) (*Agent, error) {
-	tpl, err := s.getTemplate(ctx, dyn, ns, name)
+func (s *Service) get(ctx context.Context, st *site, name string) (*Agent, error) {
+	tpl, hr, err := s.agentObjects(ctx, st, name)
 	if err != nil {
 		return nil, err
 	}
 	var a Agent
-	hrName, hrNs := name, ns
 	if tpl != nil {
-		server, err := s.getMCPServer(ctx, dyn, ns, name)
+		server, err := s.getMCPServer(ctx, st.agent, st.ns(), name)
 		if err != nil {
 			return nil, err
 		}
 		a = s.agentFromTemplate(tpl, server)
-		if n, nsFromLabel := ownerOf(tpl); n != "" {
-			hrName, hrNs = n, orDefault(nsFromLabel, ns)
-		}
 	} else {
-		a = Agent{Name: name, Namespace: ns, Managed: ManagedNone}
+		a = Agent{Name: name, Namespace: st.ns(), Managed: ManagedNone}
 	}
-	hr, err := s.getHelmRelease(ctx, dyn, hrNs, hrName)
-	if err != nil {
-		return nil, err
-	}
+	a.Target = st.loc.Target
 	if hr != nil {
 		applyHelmRelease(&a, hr)
 	}
-	if tpl == nil && hr == nil {
-		return nil, notFoundf("agent %s/%s: no AgentTemplate and no HelmRelease of that name", ns, name)
-	}
 	return &a, nil
+}
+
+// agentObjects reads an agent's AgentTemplate and its owning HelmRelease
+// (either may be nil, not both): the release its provenance labels name,
+// else the one named after the agent at the site.
+func (s *Service) agentObjects(ctx context.Context, st *site, name string) (tpl, hr *unstructured.Unstructured, err error) {
+	if tpl, err = s.getTemplate(ctx, st.agent, st.ns(), name); err != nil {
+		return nil, nil, err
+	}
+	hrName, hrNs := st.releaseName(name), st.fluxNS
+	if tpl != nil {
+		if n, nsFromLabel := ownerOf(tpl); n != "" {
+			hrName, hrNs = n, orDefault(nsFromLabel, st.fluxNS)
+		}
+	}
+	if hr, err = s.getHelmRelease(ctx, st.flux, hrNs, hrName); err != nil {
+		return nil, nil, err
+	}
+	if tpl == nil && hr == nil {
+		return nil, nil, notFoundf("agent %s: no AgentTemplate and no HelmRelease of that name", st.describe(name))
+	}
+	return tpl, hr, nil
 }
 
 // getTemplate returns nil, nil when the AgentTemplate does not exist.
@@ -425,14 +442,15 @@ func (s *Service) agentChartSources(ctx context.Context, dyn dynamic.Interface, 
 	return names, nil
 }
 
-// agentHelmReleases lists the HelmReleases of ns that render the agent chart,
-// keyed by name.
-func (s *Service) agentHelmReleases(ctx context.Context, dyn dynamic.Interface, ns string) (map[string]*unstructured.Unstructured, error) {
-	sources, err := s.agentChartSources(ctx, dyn, ns)
+// agentHelmReleases lists the HelmReleases of the site that render the agent
+// chart, keyed by name.
+func (s *Service) agentHelmReleases(ctx context.Context, st *site) (map[string]*unstructured.Unstructured, error) {
+	ns := st.fluxNS
+	sources, err := s.agentChartSources(ctx, st.flux, ns)
 	if err != nil {
 		return nil, err
 	}
-	list, err := dyn.Resource(s.helmReleaseGVR()).Namespace(ns).List(ctx, metav1.ListOptions{})
+	list, err := st.flux.Resource(s.helmReleaseGVR()).Namespace(ns).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return nil, wrapKube(err, "list helmreleases in "+ns)
 	}
@@ -446,6 +464,9 @@ func (s *Service) agentHelmReleases(ctx context.Context, dyn dynamic.Interface, 
 		if ref.Namespace != "" && ref.Namespace != ns {
 			continue
 		}
+		if !st.ownsRelease(hr) {
+			continue
+		}
 		out[hr.GetName()] = hr
 	}
 	return out, nil
@@ -453,17 +474,14 @@ func (s *Service) agentHelmReleases(ctx context.Context, dyn dynamic.Interface, 
 
 // ---- model configs ----------------------------------------------------------
 
-// ListModelConfigs lists the kagent ModelConfigs of a namespace.
-func (s *Service) ListModelConfigs(ctx context.Context, ns string) ([]ModelConfig, error) {
-	ns, err := s.Namespace(ns)
+// ListModelConfigs lists the kagent ModelConfigs of a namespace, on the
+// target cluster when one is named.
+func (s *Service) ListModelConfigs(ctx context.Context, loc Location) ([]ModelConfig, error) {
+	st, err := s.site(ctx, loc)
 	if err != nil {
 		return nil, err
 	}
-	dyn, _, err := s.dyn(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return s.listModelConfigs(ctx, dyn, ns)
+	return s.listModelConfigs(ctx, st.agent, st.ns())
 }
 
 func (s *Service) listModelConfigs(ctx context.Context, dyn dynamic.Interface, ns string) ([]ModelConfig, error) {
@@ -581,40 +599,47 @@ func checkSpec(spec Spec) []error {
 	if err := ValidateSystemMessage(spec.SystemMessage); err != nil {
 		errs = append(errs, err)
 	}
+	if err := spec.Validate(); err != nil {
+		errs = append(errs, err)
+	} else if spec.IsSet() {
+		if err := spec.ValidateReleaseName(spec.Name); err != nil {
+			errs = append(errs, err)
+		}
+	}
 	return errs
 }
 
 // ValidateCreate is create_agent without the write.
 func (s *Service) ValidateCreate(ctx context.Context, spec Spec) (*ValidateResult, error) {
-	ns, err := s.Namespace(spec.Namespace)
-	if err != nil {
-		return nil, err
-	}
-	spec.Namespace = ns
 	if err := rejectRemoved(spec.removed()...); err != nil {
 		return nil, err
 	}
-	dyn, _, err := s.dyn(ctx)
+	st, err := s.site(ctx, spec.Location)
 	if err != nil {
 		return nil, err
 	}
+	ns := st.ns()
+	spec.Namespace = ns
 	res := &ValidateResult{Mode: "create"}
 	for _, e := range checkSpec(spec) {
 		res.addError(e)
 	}
-	if err := s.requireModelConfig(ctx, dyn, ns, spec.ModelConfig); err != nil {
+	if err := s.requireTargetMuster(st); err != nil {
+		res.addError(err)
+	}
+	if err := s.requireModelConfig(ctx, st.agent, ns, spec.ModelConfig); err != nil {
 		if !isDomainError(err) {
 			return nil, err
 		}
 		res.addError(err)
 	}
-	if err := s.requireHarness(ctx, dyn, ns, spec.Harness); err != nil {
+	if err := s.requireHarness(ctx, st.agent, ns, spec.Harness); err != nil {
 		if !isDomainError(err) {
 			return nil, err
 		}
 		res.addError(err)
 	}
-	if err := s.requireFreeName(ctx, dyn, ns, spec.Name); err != nil {
+	if err := s.requireFreeName(ctx, st, spec.Name); err != nil {
 		if !isDomainError(err) {
 			return nil, err
 		}
@@ -628,53 +653,59 @@ func (s *Service) ValidateCreate(ctx context.Context, spec Spec) (*ValidateResul
 	} else {
 		spec.Skills = pinned
 	}
-	values := BuildValues(spec, s.cfg.Compose)
+	values := BuildValues(spec, st.compose)
 	sch, violations := ValidateValues(ctx, s.chart, values)
 	res.Errors = append(res.Errors, violations...)
 	res.SchemaVersion, res.SchemaSource = sch.Version, sch.Source
-	res.Manifests = ComposeManifests(spec.Name, ns, values, s.cfg.Compose)
+	res.Manifests = st.manifests(spec.Name, values)
 	res.Valid = len(res.Errors) == 0
 	return res, nil
 }
 
 // requireFreeName fails when a HelmRelease or an AgentTemplate of that name
 // exists.
-func (s *Service) requireFreeName(ctx context.Context, dyn dynamic.Interface, ns, name string) error {
+func (s *Service) requireFreeName(ctx context.Context, st *site, name string) error {
 	if name == "" {
 		return nil
 	}
-	if hr, err := s.getHelmRelease(ctx, dyn, ns, name); err != nil {
+	if hr, err := s.getHelmRelease(ctx, st.flux, st.fluxNS, st.releaseName(name)); err != nil {
 		return err
 	} else if hr != nil {
-		return conflictf("HelmRelease %s/%s already exists; use update_agent to change it", ns, name)
+		return conflictf("HelmRelease %s/%s already exists; use update_agent to change it", st.fluxNS, st.releaseName(name))
 	}
-	if tpl, err := s.getTemplate(ctx, dyn, ns, name); err != nil {
+	if tpl, err := s.getTemplate(ctx, st.agent, st.ns(), name); err != nil {
 		return err
 	} else if tpl != nil {
-		return conflictf("AgentTemplate %s/%s already exists without a HelmRelease (a bare template); delete it first (delete_agent with force) or pick another name", ns, name)
+		return conflictf("AgentTemplate %s already exists without a HelmRelease (a bare template); delete it first (delete_agent with force) or pick another name", st.describe(name))
+	}
+	return nil
+}
+
+// requireTargetMuster refuses an agent on a workload cluster when the
+// installation names no muster URL those clusters reach: the in-cluster one
+// resolves on the installation only.
+func (s *Service) requireTargetMuster(st *site) error {
+	if st.loc.IsSet() && st.compose.MusterURL == "" {
+		return invalidf("this installation has no muster URL for agents on workload clusters (agent-manager's targetMusterURL); an agent on cluster %s could not reach muster", st.loc.Cluster)
 	}
 	return nil
 }
 
 // ValidateUpdate is update_agent without the write.
 func (s *Service) ValidateUpdate(ctx context.Context, upd Update) (*ValidateResult, error) {
-	ns, err := s.Namespace(upd.Namespace)
-	if err != nil {
-		return nil, err
-	}
 	if err := rejectRemoved(upd.removed()...); err != nil {
 		return nil, err
 	}
-	dyn, _, err := s.dyn(ctx)
+	st, err := s.site(ctx, upd.Location)
 	if err != nil {
 		return nil, err
 	}
-	hr, _, err := s.writableHelmRelease(ctx, dyn, ns, upd.Name, upd.Force, upd.Force)
+	hr, _, err := s.writableHelmRelease(ctx, st, upd.Name, upd.Force, upd.Force)
 	if err != nil {
 		return nil, err
 	}
 	res := &ValidateResult{Mode: "update"}
-	values, _, err := s.mergedValues(ctx, dyn, ns, upd, hr)
+	values, _, err := s.mergedValues(ctx, st, upd, hr)
 	if err != nil {
 		if !isDomainError(err) {
 			return nil, err
@@ -684,7 +715,7 @@ func (s *Service) ValidateUpdate(ctx context.Context, upd Update) (*ValidateResu
 	sch, violations := ValidateValues(ctx, s.chart, values)
 	res.Errors = append(res.Errors, violations...)
 	res.SchemaVersion, res.SchemaSource = sch.Version, sch.Source
-	res.Manifests = ComposeManifests(upd.Name, ns, values, s.cfg.Compose)
+	res.Manifests = st.manifests(upd.Name, values)
 	res.Valid = len(res.Errors) == 0
 	return res, nil
 }
@@ -725,17 +756,20 @@ func (s *Service) Create(ctx context.Context, spec Spec) (*CreateResult, error) 
 	if errs := checkSpec(spec); len(errs) > 0 {
 		return nil, errs[0]
 	}
-	dyn, _, err := s.dyn(ctx)
+	st, err := s.site(ctx, spec.Location)
 	if err != nil {
 		return nil, err
 	}
-	if err := s.requireFreeName(ctx, dyn, ns, spec.Name); err != nil {
+	if err := s.requireTargetMuster(st); err != nil {
 		return nil, err
 	}
-	if err := s.requireModelConfig(ctx, dyn, ns, spec.ModelConfig); err != nil {
+	if err := s.requireFreeName(ctx, st, spec.Name); err != nil {
 		return nil, err
 	}
-	if err := s.requireHarness(ctx, dyn, ns, spec.Harness); err != nil {
+	if err := s.requireModelConfig(ctx, st.agent, ns, spec.ModelConfig); err != nil {
+		return nil, err
+	}
+	if err := s.requireHarness(ctx, st.agent, ns, spec.Harness); err != nil {
 		return nil, err
 	}
 	if err := requireReadableSkills(ctx, s.pinner, spec.Skills); err != nil {
@@ -744,62 +778,63 @@ func (s *Service) Create(ctx context.Context, spec Spec) (*CreateResult, error) 
 	if spec.Skills, err = pinSkills(ctx, s.pinner, spec.Skills, false); err != nil {
 		return nil, err
 	}
-	values := BuildValues(spec, s.cfg.Compose)
+	values := BuildValues(spec, st.compose)
 	sch, violations := ValidateValues(ctx, s.chart, values)
 	if len(violations) > 0 {
 		return nil, invalidf("values do not satisfy the agent chart schema %s (%s): %s", sch.Version, sch.Source, strings.Join(violations, "; "))
 	}
 
 	res := &CreateResult{RequestedBy: identity.Caller(ctx), WriteOutcome: WriteOutcome{Mode: mode, DryRun: spec.DryRun}}
-	res.Manifests = ComposeManifests(spec.Name, ns, values, s.cfg.Compose)
+	res.Manifests = st.manifests(spec.Name, values)
 	if mode == ModeCommit {
-		return s.createCommit(ctx, dyn, spec, values, res)
+		return s.createCommit(ctx, st, spec, values, res)
 	}
 
 	// The chart source is shared per namespace: create it once, reuse it after.
-	ociRepo := BuildOCIRepository(ns, s.cfg.Compose)
-	existing, err := dyn.Resource(s.ociRepositoryGVR()).Namespace(ns).Get(ctx, ociRepo.GetName(), metav1.GetOptions{})
+	fluxNS := st.fluxNS
+	ociRepo := BuildOCIRepository(fluxNS, st.compose)
+	existing, err := st.flux.Resource(s.ociRepositoryGVR()).Namespace(fluxNS).Get(ctx, ociRepo.GetName(), metav1.GetOptions{})
 	switch {
 	case apierrors.IsNotFound(err):
 		if !spec.DryRun {
-			if _, err := dyn.Resource(s.ociRepositoryGVR()).Namespace(ns).Create(ctx, ociRepo, metav1.CreateOptions{FieldManager: FieldManager}); err != nil {
-				return nil, wrapKube(err, fmt.Sprintf("create OCIRepository %s/%s", ns, ociRepo.GetName()))
+			if _, err := st.flux.Resource(s.ociRepositoryGVR()).Namespace(fluxNS).Create(ctx, ociRepo, metav1.CreateOptions{FieldManager: FieldManager}); err != nil {
+				return nil, wrapKube(err, fmt.Sprintf("create OCIRepository %s/%s", fluxNS, ociRepo.GetName()))
 			}
 		}
 		res.Created.OCIRepository = true
 	case err != nil:
-		return nil, wrapKube(err, fmt.Sprintf("get OCIRepository %s/%s", ns, ociRepo.GetName()))
+		return nil, wrapKube(err, fmt.Sprintf("get OCIRepository %s/%s", fluxNS, ociRepo.GetName()))
 	default:
 		if url, _, _ := unstructured.NestedString(existing.Object, "spec", "url"); url != s.cfg.Compose.ChartOCIURL {
-			s.log.Warn("reusing an OCIRepository that points elsewhere", "namespace", ns, "name", ociRepo.GetName(), "url", url, "expected", s.cfg.Compose.ChartOCIURL)
+			s.log.Warn("reusing an OCIRepository that points elsewhere", "namespace", fluxNS, "name", ociRepo.GetName(), "url", url, "expected", s.cfg.Compose.ChartOCIURL)
 		}
 		semver, _, _ := unstructured.NestedString(existing.Object, "spec", "ref", "semver")
 		filter, _, _ := unstructured.NestedString(existing.Object, "spec", "ref", "semverFilter")
 		if semver != s.cfg.Compose.ChartSemver || filter != s.cfg.Compose.ChartSemverFilter {
-			s.log.Warn("reusing an OCIRepository on another range; the migrate command moves it", "namespace", ns, "name", ociRepo.GetName(),
+			s.log.Warn("reusing an OCIRepository on another range; the migrate command moves it", "namespace", fluxNS, "name", ociRepo.GetName(),
 				"semver", semver, "semverFilter", filter, "expected", s.cfg.Compose.ChartSemver, "expectedSemverFilter", s.cfg.Compose.ChartSemverFilter)
 		}
 	}
 
-	hr := BuildHelmRelease(spec.Name, ns, values, s.cfg.Compose)
+	hr := st.helmRelease(spec.Name, values)
 	if spec.DryRun {
 		res.Created.HelmRelease = true
-		res.Agent = Agent{Name: spec.Name, Namespace: ns, Managed: ManagedHelmRelease}
+		res.Agent = Agent{Name: spec.Name, Namespace: ns, Target: spec.Target, Managed: ManagedHelmRelease}
 		applyHelmRelease(&res.Agent, hr)
 		return res, nil
 	}
-	created, err := dyn.Resource(s.helmReleaseGVR()).Namespace(ns).Create(ctx, hr, metav1.CreateOptions{FieldManager: FieldManager})
+	created, err := st.flux.Resource(s.helmReleaseGVR()).Namespace(fluxNS).Create(ctx, hr, metav1.CreateOptions{FieldManager: FieldManager})
 	if err != nil {
-		return nil, wrapKube(err, fmt.Sprintf("create HelmRelease %s/%s", ns, spec.Name))
+		return nil, wrapKube(err, fmt.Sprintf("create HelmRelease %s/%s", fluxNS, hr.GetName()))
 	}
 	res.Created.HelmRelease = true
-	agent := Agent{Name: spec.Name, Namespace: ns, Managed: ManagedHelmRelease}
+	agent := Agent{Name: spec.Name, Namespace: ns, Target: spec.Target, Managed: ManagedHelmRelease}
 	applyHelmRelease(&agent, created)
 	res.Agent = agent
-	if st, err := s.Status(ctx, ns, spec.Name); err == nil {
-		res.Status = st
+	if status, err := s.status(ctx, st, spec.Name); err == nil {
+		res.Status = status
 	}
-	s.log.Info("agent created", identity.LogAttr(ctx), "namespace", ns, "name", spec.Name, "modelConfig", spec.ModelConfig, "skills", len(spec.Skills), "ociRepositoryCreated", res.Created.OCIRepository)
+	s.log.Info("agent created", identity.LogAttr(ctx), "namespace", ns, "cluster", spec.Cluster, "name", spec.Name, "modelConfig", spec.ModelConfig, "skills", len(spec.Skills), "ociRepositoryCreated", res.Created.OCIRepository)
 	return res, nil
 }
 
@@ -808,12 +843,12 @@ func (s *Service) Create(ctx context.Context, spec Spec) (*CreateResult, error) 
 // the shared chart source beside it when the namespace has none yet (or the
 // directory carries it already), in one pull request as the caller. Nothing
 // is written live.
-func (s *Service) createCommit(ctx context.Context, dyn dynamic.Interface, spec Spec, values map[string]any, res *CreateResult) (*CreateResult, error) {
-	ns := spec.Namespace
-	if err := s.requireOwnFile(spec.Name); err != nil {
+func (s *Service) createCommit(ctx context.Context, st *site, spec Spec, values map[string]any, res *CreateResult) (*CreateResult, error) {
+	ns, dyn := st.fluxNS, st.flux
+	if err := s.requireOwnFile(st.releaseName(spec.Name)); err != nil {
 		return nil, err
 	}
-	loc, err := s.namespaceLocation(ctx, dyn, ns, spec.WriteOptions)
+	loc, err := s.namespaceLocation(ctx, st, spec.WriteOptions)
 	if err != nil {
 		return nil, err
 	}
@@ -821,7 +856,7 @@ func (s *Service) createCommit(ctx context.Context, dyn dynamic.Interface, spec 
 	if err != nil {
 		return nil, err
 	}
-	write := map[string][]byte{c.file("HelmRelease", spec.Name): []byte(res.Manifests.HelmRelease)}
+	write := map[string][]byte{c.file("HelmRelease", st.releaseName(spec.Name)): []byte(res.Manifests.HelmRelease)}
 	source, err := s.getObject(ctx, dyn, s.ociRepositoryGVR(), ns, s.cfg.Compose.ChartName, "ocirepository")
 	if err != nil {
 		return nil, err
@@ -842,8 +877,8 @@ func (s *Service) createCommit(ctx context.Context, dyn dynamic.Interface, spec 
 	if res.Commit, err = c.open(ctx, write, nil, commitBranch("create", ns, spec.Name), title, body, spec.DryRun); err != nil {
 		return nil, err
 	}
-	res.Agent = Agent{Name: spec.Name, Namespace: ns}
-	applyHelmRelease(&res.Agent, BuildHelmRelease(spec.Name, ns, values, s.cfg.Compose))
+	res.Agent = Agent{Name: spec.Name, Namespace: st.ns(), Target: spec.Target}
+	applyHelmRelease(&res.Agent, st.helmRelease(spec.Name, values))
 	res.Agent.Managed = ManagedGitOps
 	s.log.Info("agent create committed", identity.LogAttr(ctx), "namespace", ns, "name", spec.Name, "repository", res.Commit.Repository, "pullRequest", res.Commit.PullRequest, "dryRun", spec.DryRun)
 	return res, nil
@@ -856,33 +891,23 @@ func (s *Service) createCommit(ctx context.Context, dyn dynamic.Interface, spec 
 // suspended release is refused unless force; a GitOps-owned one is refused
 // with gitops_owned, naming mode commit, unless allowGitOps (commit mode,
 // which changes it in git).
-func (s *Service) writableHelmRelease(ctx context.Context, dyn dynamic.Interface, ns, name string, force, allowGitOps bool) (*unstructured.Unstructured, *unstructured.Unstructured, error) {
-	tpl, err := s.getTemplate(ctx, dyn, ns, name)
-	if err != nil {
-		return nil, nil, err
+func (s *Service) writableHelmRelease(ctx context.Context, st *site, name string, force, allowGitOps bool) (*unstructured.Unstructured, *unstructured.Unstructured, error) {
+	tpl, hr, err := s.agentObjects(ctx, st, name)
+	if errorsIs(err, ErrNotFound) {
+		return nil, nil, notFoundf("agent %s", st.describe(name))
 	}
-	hrName, hrNs := name, ns
-	if tpl != nil {
-		if n, nsFromLabel := ownerOf(tpl); n != "" {
-			hrName, hrNs = n, orDefault(nsFromLabel, ns)
-		}
-	}
-	hr, err := s.getHelmRelease(ctx, dyn, hrNs, hrName)
 	if err != nil {
 		return nil, nil, err
 	}
 	if hr == nil {
-		if tpl == nil {
-			return nil, nil, notFoundf("agent %s/%s", ns, name)
-		}
-		return nil, tpl, conflictf("AgentTemplate %s/%s is a bare template with no HelmRelease behind it; agent-manager only writes HelmRelease values (recreate it with create_agent, or delete it with force)", ns, name)
+		return nil, tpl, conflictf("AgentTemplate %s is a bare template with no HelmRelease behind it; agent-manager only writes HelmRelease values (recreate it with create_agent, or delete it with force)", st.describe(name))
 	}
 	if gitOpsOwnedHR(hr) && !allowGitOps {
-		return nil, tpl, s.gitOpsRefusal(ctx, dyn, hr)
+		return nil, tpl, s.gitOpsRefusal(ctx, st.flux, hr)
 	}
 	if !force {
 		if suspended, _, _ := unstructured.NestedBool(hr.Object, "spec", "suspend"); suspended {
-			return nil, tpl, conflictf("HelmRelease %s/%s is suspended: Flux will not act on a change. Resume it first, or pass force", hrNs, hrName)
+			return nil, tpl, conflictf("HelmRelease %s/%s is suspended: Flux will not act on a change. Resume it first, or pass force", hr.GetNamespace(), hr.GetName())
 		}
 	}
 	return hr, tpl, nil
@@ -897,19 +922,19 @@ func (s *Service) writableHelmRelease(ctx context.Context, dyn dynamic.Interface
 // installation's), otherwise the release's own, otherwise the installation's —
 // so an update of an agent written before the credential existed carries it
 // from then on. Without a git skill the value is dropped.
-func (s *Service) mergeSkillsGitAuth(values map[string]any, own *string) {
+func mergeSkillsGitAuth(values map[string]any, own *string, cfg ComposeConfig) {
 	current, _, _ := unstructured.NestedString(values, SkillsGitAuthValuesKey, "name")
 	if own != nil {
 		current = *own
 	}
-	if name := skillsGitAuth(current, skillsFromValues(values), s.cfg.Compose); name != "" {
+	if name := skillsGitAuth(current, skillsFromValues(values), cfg); name != "" {
 		values[SkillsGitAuthValuesKey] = map[string]any{"name": name}
 	} else {
 		delete(values, SkillsGitAuthValuesKey)
 	}
 }
 
-func (s *Service) mergedValues(ctx context.Context, dyn dynamic.Interface, ns string, upd Update, hr *unstructured.Unstructured) (map[string]any, map[string]any, error) {
+func (s *Service) mergedValues(ctx context.Context, st *site, upd Update, hr *unstructured.Unstructured) (map[string]any, map[string]any, error) {
 	if upd.SystemMessage != nil {
 		if err := ValidateSystemMessage(*upd.SystemMessage); err != nil {
 			return nil, nil, err
@@ -936,7 +961,7 @@ func (s *Service) mergedValues(ctx context.Context, dyn dynamic.Interface, ns st
 
 	var firstErr error
 	if upd.ModelConfig != nil {
-		if err := s.requireModelConfig(ctx, dyn, ns, *upd.ModelConfig); err != nil {
+		if err := s.requireModelConfig(ctx, st.agent, st.ns(), *upd.ModelConfig); err != nil {
 			firstErr = err
 		}
 		after["modelConfig"] = map[string]any{"name": *upd.ModelConfig}
@@ -962,7 +987,7 @@ func (s *Service) mergedValues(ctx context.Context, dyn dynamic.Interface, ns st
 			delete(after, "skills")
 		}
 	}
-	s.mergeSkillsGitAuth(after, upd.GitAuthSecretName)
+	mergeSkillsGitAuth(after, upd.GitAuthSecretName, st.compose)
 	if upd.Toolset != nil {
 		// Replaces the whole list; an empty list is refused (preset:none is
 		// the way to say "no tools"), so a toolset can never be cleared back
@@ -1013,27 +1038,24 @@ func setOrDelete(m map[string]any, key string, v *string) {
 // The refusals of writableHelmRelease are conflicts of the domain, not of the
 // API server, and end the attempts at once.
 func (s *Service) Update(ctx context.Context, upd Update) (*UpdateResult, error) {
-	ns, err := s.Namespace(upd.Namespace)
-	if err != nil {
-		return nil, err
-	}
 	if err := ValidateName(upd.Name); err != nil {
 		return nil, err
 	}
 	if err := rejectRemoved(upd.removed()...); err != nil {
 		return nil, err
 	}
+	var err error
 	if upd.Mode, err = s.checkMode(upd.WriteOptions); err != nil {
 		return nil, err
 	}
-	dyn, _, err := s.dyn(ctx)
+	st, err := s.site(ctx, upd.Location)
 	if err != nil {
 		return nil, err
 	}
 	var res *UpdateResult
 	if err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
 		var err error
-		res, err = s.update(ctx, dyn, ns, upd)
+		res, err = s.update(ctx, st, upd)
 		return err
 	}); err != nil {
 		return nil, err
@@ -1042,12 +1064,13 @@ func (s *Service) Update(ctx context.Context, upd Update) (*UpdateResult, error)
 }
 
 // update is one attempt of Update: read the release, merge, validate, write.
-func (s *Service) update(ctx context.Context, dyn dynamic.Interface, ns string, upd Update) (*UpdateResult, error) {
-	hr, _, err := s.writableHelmRelease(ctx, dyn, ns, upd.Name, upd.Force, upd.Mode == ModeCommit)
+func (s *Service) update(ctx context.Context, st *site, upd Update) (*UpdateResult, error) {
+	ns := st.ns()
+	hr, _, err := s.writableHelmRelease(ctx, st, upd.Name, upd.Force, upd.Mode == ModeCommit)
 	if err != nil {
 		return nil, err
 	}
-	after, before, err := s.mergedValues(ctx, dyn, ns, upd, hr)
+	after, before, err := s.mergedValues(ctx, st, upd, hr)
 	if err != nil {
 		return nil, err
 	}
@@ -1060,12 +1083,12 @@ func (s *Service) update(ctx context.Context, dyn dynamic.Interface, ns string, 
 		changed = []string{}
 	}
 	res := &UpdateResult{Before: before, After: after, Changed: changed, RequestedBy: identity.Caller(ctx), WriteOutcome: WriteOutcome{Mode: upd.Mode, DryRun: upd.DryRun}}
-	res.Manifests = ComposeManifests(upd.Name, ns, after, s.cfg.Compose)
+	res.Manifests = st.manifests(upd.Name, after)
 	if upd.Mode == ModeCommit {
-		return s.updateCommit(ctx, dyn, ns, upd, hr, res)
+		return s.updateCommit(ctx, st, upd, hr, res)
 	}
 	if len(changed) == 0 || upd.DryRun {
-		agent, err := s.get(ctx, dyn, ns, upd.Name)
+		agent, err := s.get(ctx, st, upd.Name)
 		if err != nil {
 			return nil, err
 		}
@@ -1075,16 +1098,16 @@ func (s *Service) update(ctx context.Context, dyn dynamic.Interface, ns string, 
 	if err := unstructured.SetNestedMap(hr.Object, after, "spec", "values"); err != nil {
 		return nil, fmt.Errorf("set values: %w", err)
 	}
-	updated, err := dyn.Resource(s.helmReleaseGVR()).Namespace(hr.GetNamespace()).Update(ctx, hr, metav1.UpdateOptions{FieldManager: FieldManager})
+	updated, err := st.flux.Resource(s.helmReleaseGVR()).Namespace(hr.GetNamespace()).Update(ctx, hr, metav1.UpdateOptions{FieldManager: FieldManager})
 	if err != nil {
 		if apierrors.IsConflict(err) {
 			s.log.Debug("HelmRelease moved between read and write", identity.LogAttr(ctx), "namespace", hr.GetNamespace(), "name", hr.GetName(), "resourceVersion", hr.GetResourceVersion())
 		}
 		return nil, wrapKube(err, fmt.Sprintf("update HelmRelease %s/%s", hr.GetNamespace(), hr.GetName()))
 	}
-	agent, err := s.get(ctx, dyn, ns, upd.Name)
+	agent, err := s.get(ctx, st, upd.Name)
 	if err != nil {
-		agent = &Agent{Name: upd.Name, Namespace: ns, Managed: ManagedHelmRelease}
+		agent = &Agent{Name: upd.Name, Namespace: ns, Target: st.loc.Target, Managed: ManagedHelmRelease}
 		applyHelmRelease(agent, updated)
 	}
 	res.Agent = *agent
@@ -1096,8 +1119,9 @@ func (s *Service) update(ctx context.Context, dyn dynamic.Interface, ns string, 
 // agent-manager's directory rewritten with the merged values, in one pull
 // request as the caller; a release defined elsewhere in the repository is
 // refused. Nothing is written live.
-func (s *Service) updateCommit(ctx context.Context, dyn dynamic.Interface, ns string, upd Update, hr *unstructured.Unstructured, res *UpdateResult) (*UpdateResult, error) {
-	loc, err := s.releaseLocation(ctx, dyn, hr, upd.WriteOptions)
+func (s *Service) updateCommit(ctx context.Context, st *site, upd Update, hr *unstructured.Unstructured, res *UpdateResult) (*UpdateResult, error) {
+	ns := st.ns()
+	loc, err := s.releaseLocation(ctx, st.flux, hr, upd.WriteOptions)
 	if err != nil {
 		return nil, err
 	}
@@ -1114,7 +1138,7 @@ func (s *Service) updateCommit(ctx context.Context, dyn dynamic.Interface, ns st
 	if res.Commit, err = c.open(ctx, map[string][]byte{p: []byte(res.Manifests.HelmRelease)}, nil, commitBranch("update", ns, upd.Name), title, body, upd.DryRun); err != nil {
 		return nil, err
 	}
-	agent, err := s.get(ctx, dyn, ns, upd.Name)
+	agent, err := s.get(ctx, st, upd.Name)
 	if err != nil {
 		return nil, err
 	}
@@ -1165,11 +1189,7 @@ func changedPaths(prefix string, before, after map[string]any) []string {
 // when no other release references it. A bare AgentTemplate is only deleted
 // with force. A dry run reports what would go and deletes nothing; in commit
 // mode the files are removed with a pull request instead.
-func (s *Service) Delete(ctx context.Context, ns, name string, force bool, w WriteOptions) (*DeleteResult, error) {
-	ns, err := s.Namespace(ns)
-	if err != nil {
-		return nil, err
-	}
+func (s *Service) Delete(ctx context.Context, loc Location, name string, force bool, w WriteOptions) (*DeleteResult, error) {
 	if err := ValidateName(name); err != nil {
 		return nil, err
 	}
@@ -1177,16 +1197,17 @@ func (s *Service) Delete(ctx context.Context, ns, name string, force bool, w Wri
 	if err != nil {
 		return nil, err
 	}
-	dyn, _, err := s.dyn(ctx)
+	st, err := s.site(ctx, loc)
 	if err != nil {
 		return nil, err
 	}
-	res := &DeleteResult{Name: name, Namespace: ns, RequestedBy: identity.Caller(ctx), WriteOutcome: WriteOutcome{Mode: mode, DryRun: w.DryRun}}
-	hr, tpl, err := s.writableHelmRelease(ctx, dyn, ns, name, force, mode == ModeCommit)
+	ns, dyn := st.ns(), st.flux
+	res := &DeleteResult{Name: name, Namespace: ns, Target: st.loc.Target, RequestedBy: identity.Caller(ctx), WriteOutcome: WriteOutcome{Mode: mode, DryRun: w.DryRun}}
+	hr, tpl, err := s.writableHelmRelease(ctx, st, name, force, mode == ModeCommit)
 	if err != nil {
 		if mode == ModeApply && hr == nil && tpl != nil && force && errorsIs(err, ErrConflict) {
 			// A bare AgentTemplate, forced: delete the template itself.
-			if err := s.deleteRendered(ctx, dyn, ns, name, res, false, w.DryRun); err != nil {
+			if err := s.deleteRendered(ctx, st.agent, ns, name, res, false, w.DryRun); err != nil {
 				return nil, err
 			}
 			s.log.Info("bare agent template deleted", identity.LogAttr(ctx), "namespace", ns, "name", name, "dryRun", w.DryRun)
@@ -1207,7 +1228,7 @@ func (s *Service) Delete(ctx context.Context, ns, name string, force bool, w Wri
 	if suspended && force && tpl != nil {
 		// Flux drops the finalizer of a suspended release without uninstalling:
 		// the rendered objects would stay behind, so remove them directly.
-		if err := s.deleteRendered(ctx, dyn, ns, name, res, true, w.DryRun); err != nil {
+		if err := s.deleteRendered(ctx, st.agent, ns, name, res, true, w.DryRun); err != nil {
 			return nil, err
 		}
 	}

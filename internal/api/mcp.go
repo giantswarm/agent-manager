@@ -41,6 +41,8 @@ func ToolNames() []string {
 
 const (
 	argNamespace     = "namespace"
+	argOrganization  = "organization"
+	argCluster       = "cluster"
 	argName          = "name"
 	argDisplayName   = "displayName"
 	argDescription   = "description"
@@ -88,7 +90,7 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 		// MCP spans nest under it instead of extracting it a second time.
 		mcpotel.WithServerTracingPropagator(otel.Tracer(tracerName), propagation.NewCompositeTextMapPropagator()),
 		mcpserver.WithToolCapabilities(false),
-		mcpserver.WithInstructions("Manage the agents of the Agent Platform. An agent is a Flux HelmRelease of the Generic agent chart (1.x; one release renders one kagent.dev/v1alpha3 AgentTemplate plus the agent's own muster RemoteMCPServer carrying its toolset) plus the shared per-namespace OCIRepository of that chart. Call get_info first for the managed namespaces, the chart range and version, the platform Harness and the muster URL; list_model_configs before create_agent (the modelConfig must exist in the namespace); list_skills for the skills an agent can mount — it reports each skill's head commit, and every skill is written pinned to a commit or a digest (a branch, tag or image tag is resolved at write time). Names are DNS-1123 labels the caller chooses and confirms — the service never derives a name from a display name. validate_agent is a dry run of create/update. Every agent declares a toolset — create_agent requires it: the selectors (preset:<name>, server:<name>, workflow:<name>, tool:<name>) that bound which of the gateway's tools the agent's meta-tools can see and call; presets shipped on every installation: read-only, none, infrastructure, agent-platform, full. list_agents reports the toolset of each agent, or implicitFullAccess: true for agents created before toolsets existed — assign them one with update_agent. Readiness is the verdict of the agent's own Harness on the AgentTemplate (get_agent_status). An agent runs on the platform Harness (the Go ADK) unless create_agent names another Harness of the namespace, such as claude for a coding agent; there is no runtime argument and no per-source skill credential. Every write tool takes dryRun (return the manifests, write nothing) and mode: apply (default) writes live as the caller and never touches an agent whose HelmRelease is applied from git (managed: gitops; refused with gitops_owned); commit writes the manifests as files into the git repository that owns the namespace and opens a pull request as the caller (get_info capabilities.commit says whether this installation offers it; without the caller's GitHub authorization it answers auth_required)."),
+		mcpserver.WithInstructions("Manage the agents of the Agent Platform. An agent is a Flux HelmRelease of the Generic agent chart (1.x; one release renders one kagent.dev/v1alpha3 AgentTemplate plus the agent's own muster RemoteMCPServer carrying its toolset) plus the shared per-namespace OCIRepository of that chart. Call get_info first for the managed namespaces, the chart range and version, the platform Harness and the muster URL; list_model_configs before create_agent (the modelConfig must exist in the namespace); list_skills for the skills an agent can mount — it reports each skill's head commit, and every skill is written pinned to a commit or a digest (a branch, tag or image tag is resolved at write time). Names are DNS-1123 labels the caller chooses and confirms — the service never derives a name from a display name. validate_agent is a dry run of create/update. Every agent declares a toolset — create_agent requires it: the selectors (preset:<name>, server:<name>, workflow:<name>, tool:<name>) that bound which of the gateway's tools the agent's meta-tools can see and call; presets shipped on every installation: read-only, none, infrastructure, agent-platform, full. list_agents reports the toolset of each agent, or implicitFullAccess: true for agents created before toolsets existed — assign them one with update_agent. Readiness is the verdict of the agent's own Harness on the AgentTemplate (get_agent_status). An agent runs on the platform Harness (the Go ADK) unless create_agent names another Harness of the namespace, such as claude for a coding agent; there is no runtime argument and no per-source skill credential. Every write tool takes dryRun (return the manifests, write nothing) and mode: apply (default) writes live as the caller and never touches an agent whose HelmRelease is applied from git (managed: gitops; refused with gitops_owned); commit writes the manifests as files into the git repository that owns the namespace and opens a pull request as the caller (get_info capabilities.commit says whether this installation offers it; without the caller's GitHub authorization it answers auth_required). organization and cluster (both or neither) place an agent on a workload cluster of the installation and address it in every read and write tool: its HelmRelease stays on the installation in org-<organization>, the agent, its ModelConfig and its Harness are on the cluster (get_info capabilities.targetCluster)."),
 	)
 	t := &tools{svc: svc}
 
@@ -123,6 +125,8 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 	labelsProp := mcp.WithObject(argLabels, mcp.Description("Extra labels on the AgentTemplate (string values)."), mcp.AdditionalProperties(map[string]any{"type": "string"}))
 	annotationsProp := mcp.WithObject(argAnnotations, mcp.Description("Extra annotations on the AgentTemplate (string values)."), mcp.AdditionalProperties(map[string]any{"type": "string"}))
 	nsProp := mcp.WithString(argNamespace, mcp.Description("Namespace of the agent; default: the installation's kagent namespace (get_info reports the managed ones)."))
+	orgProp := mcp.WithString(argOrganization, mcp.Description("With cluster: the organization owning the workload cluster the agent runs on (its namespace org-<organization> holds the cluster's kubeconfig Secret and the agent's HelmRelease). Omit both for the installation's own cluster."))
+	clusterProp := mcp.WithString(argCluster, mcp.Description("With organization: the workload cluster the agent runs on. The HelmRelease stays on the installation and installs on the cluster through its Cluster API kubeconfig Secret <cluster>-kubeconfig; the agent, its ModelConfig and its Harness are read on the cluster, as the caller (the cluster's apiserver must trust the installation's identity provider). namespace is then the namespace on the cluster."))
 	modeProp := mcp.WithString(argMode, mcp.Enum(agents.ModeApply, agents.ModeCommit), mcp.Description("apply (default): write live as the caller; refused with gitops_owned for a HelmRelease a Flux Kustomization applies from git. commit: write the manifests as files into agent-manager's directory of the git repository that owns the namespace (from the Flux Kustomization labels, or repository/branch/path) and open a pull request as the caller; answers auth_required when the call carries no GitHub authorization. get_info capabilities.commit says whether commit is offered."))
 	dryRunProp := mcp.WithBoolean(argDryRun, mcp.Description("Return what the write would do — the manifests and, with mode commit, the repository, directory, files and branch of the pull request — and write nothing (default false)."))
 	repositoryProp := mcp.WithString(argRepository, mcp.Description("mode commit only: the GitHub repository (owner/name) to commit to where no Flux Kustomization owns the namespace yet; overrides the derived target. Needs branch."))
@@ -144,6 +148,8 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 	s.AddTool(mcp.NewTool(ToolListAgents,
 		mcp.WithDescription("Read-only. List the agents of a namespace: display name, description, icon URL, model config, pinned skills, the declared toolset (or implicitFullAccess: true for an agent without one — it sees every tool the gateway exposes and still needs a toolset), the MCP bindings, ready (the platform Harness's verdict on the AgentTemplate) with the per-Harness status, the owning HelmRelease (Ready, chart version) and how each is managed (helmrelease: writable here; gitops: applied from git, read-only without force; none: a bare AgentTemplate). HelmReleases of the agent chart that have not rendered a template yet are listed too (exists: false)."),
 		nsProp,
+		orgProp,
+		clusterProp,
 		mcp.WithReadOnlyHintAnnotation(true),
 		mcp.WithDestructiveHintAnnotation(false),
 		mcp.WithIdempotentHintAnnotation(false),
@@ -154,6 +160,8 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 		mcp.WithDescription("Read-only. Get one agent with its HelmRelease values (the chart contract), its pinned skills, its declared toolset (or implicitFullAccess: true) and the per-Harness status of its AgentTemplate."),
 		mcp.WithString(argName, mcp.Required(), mcp.Description("Agent name")),
 		nsProp,
+		orgProp,
+		clusterProp,
 		mcp.WithReadOnlyHintAnnotation(true),
 		mcp.WithDestructiveHintAnnotation(false),
 		mcp.WithIdempotentHintAnnotation(false),
@@ -175,6 +183,8 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 		labelsProp,
 		annotationsProp,
 		nsProp,
+		orgProp,
+		clusterProp,
 		modeProp, dryRunProp, repositoryProp, branchProp, pathProp,
 		mcp.WithReadOnlyHintAnnotation(false),
 		mcp.WithDestructiveHintAnnotation(false),
@@ -198,6 +208,8 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 		annotationsProp,
 		mcp.WithBoolean(argForce, mcp.Description("Write even when the HelmRelease is suspended (default false). A GitOps-owned release is never written live: use mode commit")),
 		nsProp,
+		orgProp,
+		clusterProp,
 		modeProp, dryRunProp, repositoryProp, branchProp, pathProp,
 		mcp.WithReadOnlyHintAnnotation(false),
 		mcp.WithDestructiveHintAnnotation(true),
@@ -210,6 +222,8 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 		mcp.WithString(argName, mcp.Required(), mcp.Description("Agent name")),
 		mcp.WithBoolean(argForce, mcp.Description("Also delete bare AgentTemplates and suspended releases (default false). A GitOps-owned release is never deleted live: use mode commit")),
 		nsProp,
+		orgProp,
+		clusterProp,
 		modeProp, dryRunProp, repositoryProp, branchProp, pathProp,
 		mcp.WithReadOnlyHintAnnotation(false),
 		mcp.WithDestructiveHintAnnotation(true),
@@ -221,6 +235,8 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 		mcp.WithDescription("Read-only. One verdict (ready | progressing | failed | unknown) with a one-line summary, from the AgentTemplate's status entry for the platform Harness (ready: Ready and the desired revision is the latest successful one; progressing: a revision still compiling; failed: Accepted, ResolvedRefs or Compatible False with the condition's message, or no Harness admitting the template), the HelmRelease conditions and history, and the namespace's recent Warning events for the agent. No Deployment or pod is involved: agents run as Substrate actors."),
 		mcp.WithString(argName, mcp.Required(), mcp.Description("Agent name")),
 		nsProp,
+		orgProp,
+		clusterProp,
 		mcp.WithReadOnlyHintAnnotation(true),
 		mcp.WithDestructiveHintAnnotation(false),
 		mcp.WithIdempotentHintAnnotation(false),
@@ -245,6 +261,8 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 		mcp.WithBoolean(argUpdate, mcp.Description("Validate as an update of the existing agent instead of a create (default false)")),
 		mcp.WithBoolean(argForce, mcp.Description("With update: ignore the GitOps/suspended guards (default false)")),
 		nsProp,
+		orgProp,
+		clusterProp,
 		mcp.WithReadOnlyHintAnnotation(true),
 		mcp.WithDestructiveHintAnnotation(false),
 		mcp.WithIdempotentHintAnnotation(false),
@@ -254,6 +272,8 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 	s.AddTool(mcp.NewTool(ToolListModelConfigs,
 		mcp.WithDescription("Read-only. List the kagent ModelConfigs of a namespace (name, provider, model, Accepted condition, who manages it) — the values create_agent accepts for modelConfig. ModelConfigs are platform-admin owned; agent-manager never writes them."),
 		nsProp,
+		orgProp,
+		clusterProp,
 		mcp.WithReadOnlyHintAnnotation(true),
 		mcp.WithDestructiveHintAnnotation(false),
 		mcp.WithIdempotentHintAnnotation(false),
@@ -288,7 +308,7 @@ func (t *tools) getInfo(ctx context.Context, _ mcp.CallToolRequest) (*mcp.CallTo
 }
 
 func (t *tools) listAgents(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	list, err := t.svc.List(ctx, req.GetString(argNamespace, ""))
+	list, err := t.svc.List(ctx, locationFromArgs(req))
 	if err != nil {
 		return errResult(err), nil
 	}
@@ -300,11 +320,19 @@ func (t *tools) getAgent(ctx context.Context, req mcp.CallToolRequest) (*mcp.Cal
 	if err != nil {
 		return errResult(fmt.Errorf("%w: %v", agents.ErrInvalid, err)), nil
 	}
-	a, err := t.svc.Get(ctx, req.GetString(argNamespace, ""), name)
+	a, err := t.svc.Get(ctx, locationFromArgs(req), name)
 	if err != nil {
 		return errResult(err), nil
 	}
 	return jsonResult(a)
+}
+
+// locationFromArgs reads namespace, organization and cluster.
+func locationFromArgs(req mcp.CallToolRequest) agents.Location {
+	return agents.Location{
+		Namespace: req.GetString(argNamespace, ""),
+		Target:    agents.Target{Organization: req.GetString(argOrganization, ""), Cluster: req.GetString(argCluster, "")},
+	}
 }
 
 // specFromArgs binds the flat tool arguments to a Spec.
@@ -354,7 +382,7 @@ func (t *tools) deleteAgent(ctx context.Context, req mcp.CallToolRequest) (*mcp.
 	if err := req.BindArguments(&w); err != nil {
 		return errResult(fmt.Errorf("%w: %v", agents.ErrInvalid, err)), nil
 	}
-	res, err := t.svc.Delete(ctx, req.GetString(argNamespace, ""), name, req.GetBool(argForce, false), w)
+	res, err := t.svc.Delete(ctx, locationFromArgs(req), name, req.GetBool(argForce, false), w)
 	if err != nil {
 		return errResult(err), nil
 	}
@@ -366,7 +394,7 @@ func (t *tools) getAgentStatus(ctx context.Context, req mcp.CallToolRequest) (*m
 	if err != nil {
 		return errResult(fmt.Errorf("%w: %v", agents.ErrInvalid, err)), nil
 	}
-	st, err := t.svc.Status(ctx, req.GetString(argNamespace, ""), name)
+	st, err := t.svc.Status(ctx, locationFromArgs(req), name)
 	if err != nil {
 		return errResult(err), nil
 	}
@@ -398,7 +426,7 @@ func (t *tools) validateAgent(ctx context.Context, req mcp.CallToolRequest) (*mc
 }
 
 func (t *tools) listModelConfigs(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	list, err := t.svc.ListModelConfigs(ctx, req.GetString(argNamespace, ""))
+	list, err := t.svc.ListModelConfigs(ctx, locationFromArgs(req))
 	if err != nil {
 		return errResult(err), nil
 	}

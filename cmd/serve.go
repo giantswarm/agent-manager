@@ -36,6 +36,7 @@ type serveOptions struct {
 	kagentAPIVersion  string
 	harnessName       string
 	musterURL         string
+	targetMusterURL   string
 	helmReleaseAPI    string
 	ociRepositoryAPI  string
 
@@ -99,6 +100,7 @@ environment variable named next to it; flags win over the environment.`,
 	f.StringVar(&o.kagentAPIVersion, "kagent-api-version", envOr("KAGENT_API_VERSION", "auto"), "kagent.dev API version for AgentTemplates, Harnesses, RemoteMCPServers and ModelConfigs; auto discovers the version serving agenttemplates, default "+agents.DefaultKagentAPIVersion+" (KAGENT_API_VERSION)")
 	f.StringVar(&o.harnessName, "harness-name", envOr("AGENT_HARNESS_NAME", agents.DefaultHarnessName), "Name of the platform Harness every agent runs on: composed as the chart value agent.harness (the admission label's value); its AgentTemplate.status.harnesses[] entry decides get_agent_status (AGENT_HARNESS_NAME)")
 	f.StringVar(&o.musterURL, "muster-url", envOr("AGENT_MUSTER_URL", ""), "The platform's muster MCP URL, composed into every agent as the chart value muster.url; empty composes nothing and the chart default applies (AGENT_MUSTER_URL)")
+	f.StringVar(&o.targetMusterURL, "target-muster-url", envOr("AGENT_TARGET_MUSTER_URL", ""), "The muster MCP URL composed into an agent on a workload cluster: one those clusters reach (the installation's public muster endpoint); empty refuses target clusters (AGENT_TARGET_MUSTER_URL)")
 	f.StringVar(&o.helmReleaseAPI, "flux-helmrelease-api-version", envOr("FLUX_HELMRELEASE_API_VERSION", "auto"), "helm.toolkit.fluxcd.io API version composed into HelmReleases; auto discovers it (FLUX_HELMRELEASE_API_VERSION)")
 	f.StringVar(&o.ociRepositoryAPI, "flux-ocirepository-api-version", envOr("FLUX_OCIREPOSITORY_API_VERSION", "auto"), "source.toolkit.fluxcd.io API version composed into OCIRepositories; auto discovers it (FLUX_OCIREPOSITORY_API_VERSION)")
 	f.StringVar(&o.chartOCIURL, "agent-chart-oci-url", envOr("AGENT_CHART_OCI_URL", agents.DefaultChartOCIURL), "OCI URL of the agent chart every agent renders from (AGENT_CHART_OCI_URL)")
@@ -239,6 +241,7 @@ func runServe(ctx context.Context, o *serveOptions) error {
 			HelmReleaseAPIVersion:   helmReleaseAPI,
 			OCIRepositoryAPIVersion: ociRepositoryAPI,
 			MusterURL:               o.musterURL,
+			TargetMusterURL:         o.targetMusterURL,
 			HarnessName:             o.harnessName,
 			SkillsGitAuthSecretName: o.skillsGitAuth,
 		},

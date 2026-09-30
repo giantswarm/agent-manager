@@ -106,3 +106,45 @@ func jwt(t *testing.T, exp time.Time, salt ...int) string {
 	require.NoError(t, err)
 	return base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"RS256"}`)) + "." + base64.RawURLEncoding.EncodeToString(payload) + ".sig"
 }
+
+// A Cluster API kubeconfig carries the cluster's admin credentials: the
+// caller's clients keep only its server address and TLS settings.
+const capiKubeconfig = `apiVersion: v1
+kind: Config
+clusters:
+- name: wc1
+  cluster:
+    server: https://wc1.example.test:6443
+    insecure-skip-tls-verify: true
+users:
+- name: wc1-admin
+  user:
+    token: wc1-admin-token
+contexts:
+- name: wc1-admin@wc1
+  context: {cluster: wc1, user: wc1-admin}
+current-context: wc1-admin@wc1
+`
+
+func TestFromKubeconfigForTokenPresentsOnlyTheCallerToken(t *testing.T) {
+	c, err := FromKubeconfigForToken([]byte(capiKubeconfig), "user-id-token")
+	require.NoError(t, err)
+	assert.Equal(t, "https://wc1.example.test:6443", c.restCfg.Host)
+	assert.Equal(t, "user-id-token", c.restCfg.BearerToken, "the kubeconfig's admin credential must never be presented")
+	assert.True(t, c.restCfg.Insecure, "the kubeconfig's TLS settings are kept")
+
+	_, err = FromKubeconfigForToken([]byte(capiKubeconfig), "")
+	assert.ErrorIs(t, err, ErrNoCallerToken)
+
+	p := NewCallerProvider(testClients(t), nil)
+	_, err = p.Remote(context.Background(), []byte(capiKubeconfig))
+	assert.ErrorIs(t, err, ErrNoCallerToken)
+}
+
+func TestServiceAccountProviderRemoteUsesTheKubeconfig(t *testing.T) {
+	remote, err := NewServiceAccountProvider(testClients(t)).Remote(context.Background(), []byte(capiKubeconfig))
+	require.NoError(t, err)
+	rc := remote.(*Clients).restCfg
+	assert.Equal(t, "https://wc1.example.test:6443", rc.Host)
+	assert.Equal(t, "wc1-admin-token", rc.BearerToken)
+}
