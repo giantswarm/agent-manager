@@ -48,6 +48,10 @@ type Config struct {
 	// with the GitHub token the App-pinned registration carries. Nil: commit
 	// mode is refused as unsupported.
 	GitHub RemoteFor
+	// SkillsBootSecret keeps the installation's skills credential Secret
+	// filled with the skills GitHub App's token; nil: the Secret is
+	// provisioned by someone else.
+	SkillsBootSecret *skills.BootSecret
 }
 
 // Service is the agent lifecycle.
@@ -77,14 +81,20 @@ func New(k kube.Provider, c ChartSource, s *skills.Discoverer, p SkillPinner, cf
 	cfg.Compose.ChartSemver = orDefault(cfg.Compose.ChartSemver, c.SemverRange())
 	cfg.Compose.HelmReleaseAPIVersion = orDefault(cfg.Compose.HelmReleaseAPIVersion, DefaultHelmReleaseAPIVersion)
 	cfg.Compose.OCIRepositoryAPIVersion = orDefault(cfg.Compose.OCIRepositoryAPIVersion, DefaultOCIRepositoryAPIVersion)
-	managed := []string{cfg.DefaultNamespace}
-	for _, ns := range cfg.ManagedNamespaces {
-		if ns != "" && ns != cfg.DefaultNamespace {
+	cfg.ManagedNamespaces = ManagedNamespaces(cfg.DefaultNamespace, cfg.ManagedNamespaces)
+	return &Service{kube: k, chart: c, skills: s, pinner: p, cfg: cfg, log: log}
+}
+
+// ManagedNamespaces are the default namespace followed by the additional
+// ones, without empty entries or the default repeated.
+func ManagedNamespaces(def string, additional []string) []string {
+	managed := []string{def}
+	for _, ns := range additional {
+		if ns != "" && ns != def {
 			managed = append(managed, ns)
 		}
 	}
-	cfg.ManagedNamespaces = managed
-	return &Service{kube: k, chart: c, skills: s, pinner: p, cfg: cfg, log: log}
+	return managed
 }
 
 // InfoResponse is GET /info: what this installation can do, so the portal and
@@ -135,6 +145,10 @@ type InfoResponse struct {
 	// (key token) an agent with a git skill fetches with unless it names its
 	// own; empty: anonymous fetches.
 	SkillsGitAuthSecretName string `json:"skillsGitAuthSecretName,omitempty"`
+	// SkillsGitAuthMint is the state of that Secret when agent-manager keeps
+	// it filled with the skills GitHub App's token: the last refresh, the
+	// token's expiry and a failed refresh's error.
+	SkillsGitAuthMint *skills.BootSecretStatus `json:"skillsGitAuthMint,omitempty"`
 }
 
 // Info reports the installation's capabilities.
@@ -172,6 +186,10 @@ func (s *Service) Info(ctx context.Context) InfoResponse {
 		out.SkillsRepositories = []string{}
 	}
 	out.SkillsGitAuthSecretName = s.cfg.Compose.SkillsGitAuthSecretName
+	if s.cfg.SkillsBootSecret != nil {
+		st := s.cfg.SkillsBootSecret.Status()
+		out.SkillsGitAuthMint = &st
+	}
 	return out
 }
 

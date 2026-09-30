@@ -1,0 +1,52 @@
+{{- /*
+The skills boot Secret agent-manager keeps filled with the skills GitHub App's
+installation token, one per managed namespace. It is rendered without data:
+agent-manager writes the key `token`, which neither Helm nor Flux drift
+detection then own. Its Role is the ServiceAccount's only permission with
+oauth.downstream (agent-manager's one piece of work without a caller): get and
+update this one Secret by name, never create, list or read another.
+*/}}
+{{- if .Values.skills.mintGitAuthSecret }}
+{{- $name := include "agent-manager.skillsGitAuthSecretName" . }}
+{{- range $ns := (include "agent-manager.managedNamespaces" . | fromJsonArray) }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $name }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "agent-manager.labels" $ | nindent 4 }}
+    ui.giantswarm.io/agent-skills-git-auth: "true"
+type: Opaque
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $name }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "agent-manager.labels" $ | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: [{{ $name | quote }}]
+    verbs: ["get", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $name }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "agent-manager.labels" $ | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $name }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "agent-manager.serviceAccountName" $ }}
+    namespace: {{ $.Release.Namespace }}
+{{- end }}
+{{- end }}

@@ -792,6 +792,10 @@
                         }
                     }
                 },
+                "mintGitAuthSecret": {
+                    "type": "boolean",
+                    "description": "Boot private git skills with the skills GitHub App instead of a provisioned token (needs `github.app.secretName`; replaces `gitAuthSecretName`): the chart renders the Secret `<fullname>-skills-token` without data in `kagent.namespace` and every `kagent.additionalNamespaces` entry, plus a Role that may only get and update that Secret, and composes it as every git-skill agent's `skillsGitAuthSecretRef.name`. agent-manager writes an installation token into it (key `token`, the Basic form of `x-access-token:<token>`) and replaces it well before its one-hour expiry; `get_info` reports the last refresh and a failed one as `skillsGitAuthMint`."
+                },
                 "repositories": {
                     "type": "array",
                     "description": "GitHub repositories whose SKILL.md files list_skills offers (the same list the portal's create flow reads), each with the head commit an agent pins. Empty turns the skills capability off; skills given by URL are still resolved through the GitHub API.",

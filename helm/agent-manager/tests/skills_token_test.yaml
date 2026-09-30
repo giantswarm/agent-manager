@@ -1,0 +1,80 @@
+# The skills boot Secret agent-manager mints into, and the one permission it
+# gets for it.
+#
+# Run with: make helm-test (helm unittest helm/agent-manager)
+suite: skills boot Secret
+templates:
+  - templates/skills-token.yaml
+set:
+  skills:
+    mintGitAuthSecret: true
+    github:
+      app:
+        secretName: skills-github-app
+tests:
+  - it: renders nothing without minting
+    set:
+      skills:
+        mintGitAuthSecret: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders the Secret without data in every managed namespace
+    set:
+      kagent:
+        namespace: kagent
+        additionalNamespaces: [team-a]
+    asserts:
+      - hasDocuments:
+          count: 6
+      - isKind:
+          of: Secret
+        documentIndex: 3
+      - equal:
+          path: metadata.namespace
+          value: team-a
+        documentIndex: 3
+      - equal:
+          path: metadata.name
+          value: RELEASE-NAME-agent-manager-skills-token
+        documentIndex: 0
+      - equal:
+          path: metadata.labels["ui.giantswarm.io/agent-skills-git-auth"]
+          value: "true"
+        documentIndex: 0
+      - notExists:
+          path: data
+        documentIndex: 0
+
+  - it: grants get and update on that one Secret only
+    asserts:
+      - isKind:
+          of: Role
+        documentIndex: 1
+      - equal:
+          path: rules
+          value:
+            - apiGroups: [""]
+              resources: ["secrets"]
+              resourceNames: ["RELEASE-NAME-agent-manager-skills-token"]
+              verbs: ["get", "update"]
+        documentIndex: 1
+
+  - it: binds the Role even when the caller's RBAC governs everything else
+    set:
+      oauth:
+        enabled: true
+        downstream:
+          enabled: true
+        dex:
+          issuerURL: https://dex.example.com
+          clientID: agent-manager
+    asserts:
+      - isKind:
+          of: RoleBinding
+        documentIndex: 2
+      - equal:
+          path: subjects[0].name
+          value: RELEASE-NAME-agent-manager
+        documentIndex: 2
