@@ -218,7 +218,10 @@ namespace on the workload cluster. `get_info` reports `capabilities.targetCluste
   `releaseName: <agent>` and `targetNamespace`/`storageNamespace: <namespace>`,
   so the installation's helm-controller installs the chart on the workload
   cluster. It carries no `serviceAccountName`: Flux would impersonate it on
-  the workload cluster, where it does not exist.
+  the workload cluster, where it does not exist. A helm-controller with the
+  multi-tenancy lockdown (`--default-service-account`) impersonates that
+  default account of `org-<organization>` on the workload cluster instead: it
+  must exist there with the rights to install the agent chart.
 - **The kubeconfig Secret contract** is Cluster API's: the Secret
   `<cluster>-kubeconfig` in `org-<organization>` with the kubeconfig under the
   key `value`. agent-manager reads it as the caller and keeps only its server
