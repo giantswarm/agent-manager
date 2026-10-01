@@ -388,6 +388,9 @@ type ValidateResult struct {
 	Mode string `json:"mode"`
 	// Errors lists every schema violation and precondition failure.
 	Errors []string `json:"errors,omitempty"`
+	// Notes lists the checks the dry run could not make, such as the name
+	// check for a caller who may not read the namespace's releases.
+	Notes []string `json:"notes,omitempty"`
 	// SchemaVersion / SchemaSource say which chart schema judged the values.
 	SchemaVersion string    `json:"schemaVersion"`
 	SchemaSource  string    `json:"schemaSource"`

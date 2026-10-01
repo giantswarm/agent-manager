@@ -521,6 +521,38 @@ func TestValidateCreateIsADryRun(t *testing.T) {
 	assert.Len(t, hrs.Items, 1, "validate writes nothing")
 }
 
+func TestValidateCreateChecksTheName(t *testing.T) {
+	f := seeded(t)
+	ctx := t.Context()
+	spec := Spec{Name: "verifier", ModelConfig: "default-model-config", Toolset: []string{"preset:read-only"}}
+
+	taken, err := f.svc.ValidateCreate(ctx, spec)
+	require.NoError(t, err)
+	assert.False(t, taken.Valid)
+	assert.Contains(t, taken.Errors, "HelmRelease kagent/verifier already exists; use update_agent to change it", "the review page names the clash before Deploy")
+	assert.Empty(t, taken.Notes)
+
+	spec.Name = "fresh"
+	free, err := f.svc.ValidateCreate(ctx, spec)
+	require.NoError(t, err)
+	assert.True(t, free.Valid, free.Errors)
+	assert.Empty(t, free.Notes)
+
+	// A viewer who may not read the namespace's releases still gets the
+	// manifests, with a note that the name went unchecked.
+	f.dyn.PrependReactor("get", "helmreleases", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewForbidden(hrGVR.GroupResource(), "verifier", errors.New("viewer may not get helmreleases"))
+	})
+	spec.Name = "verifier"
+	unchecked, err := f.svc.ValidateCreate(ctx, spec)
+	require.NoError(t, err)
+	assert.True(t, unchecked.Valid, unchecked.Errors)
+	require.Len(t, unchecked.Notes, 1)
+	assert.Contains(t, unchecked.Notes[0], `the name "verifier" could not be checked for a clash`)
+	assert.Contains(t, unchecked.Notes[0], "forbidden")
+	assert.Contains(t, unchecked.Manifests.HelmRelease, "kind: HelmRelease")
+}
+
 func TestCreateAndUpdateRefuseATooLongSystemMessage(t *testing.T) {
 	f := seeded(t)
 	ctx := t.Context()
