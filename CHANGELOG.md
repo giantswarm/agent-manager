@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `validate_agent` of a create no longer fails for a caller who may not read the namespace's HelmReleases: it returns the manifests and the other violations, and `notes` (REST: the same field) says the name could not be checked for a clash. A taken name is still a violation. ([#45](https://github.com/giantswarm/agent-manager/issues/45))
 - `list_skills` answers within muster's 30 s: the SKILL.md files of a repository are read in parallel (eight at a time) and the configured repositories side by side, where a cold read of three repositories took longer than 30 s and every meta agent's first call timed out.
 - A read finishes and is cached even when the caller gives up, so a timed-out call no longer leaves a truncated listing (every remaining SKILL.md "unreadable") in the cache.
 - An expired cache entry whose ref still points at the same commit is renewed with two requests instead of re-reading every SKILL.md.

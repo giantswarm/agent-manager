@@ -651,6 +651,7 @@ components:
         valid: { type: boolean }
         mode: { type: string, enum: [create, update] }
         errors: { type: array, items: { type: string } }
+        notes: { type: array, items: { type: string }, description: Checks the dry run could not make, such as the name check for a caller who may not read the namespace's HelmReleases }
         schemaVersion: { type: string }
         schemaSource: { type: string, enum: [registry, embedded] }
         manifests: { $ref: "#/components/schemas/Manifests" }

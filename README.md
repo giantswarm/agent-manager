@@ -304,7 +304,10 @@ the error. The schema refuses every 0.x key the 1.x contract removed
 `muster.serverRef`, `muster.allowedHeaders`, `muster.stsWellKnownUri`,
 `skills.gitAuthSecretRef`; `muster.toolNames` became `muster.tools`), and
 agent-manager never composes one. `validate_agent` returns the composed
-manifests — skills pinned — and every violation without writing.
+manifests — skills pinned — and every violation without writing, a name that
+is already taken among them. A check it cannot make, such as the name check
+for a caller who may not read the namespace's HelmReleases, is listed in
+`notes` instead of failing the dry run.
 
 ## Write modes: apply and commit
 

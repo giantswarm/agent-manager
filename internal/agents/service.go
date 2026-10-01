@@ -639,11 +639,12 @@ func (s *Service) ValidateCreate(ctx context.Context, spec Spec) (*ValidateResul
 		}
 		res.addError(err)
 	}
-	if err := s.requireFreeName(ctx, st, spec.Name); err != nil {
-		if !isDomainError(err) {
-			return nil, err
-		}
+	if err := s.requireFreeName(ctx, st, spec.Name); errorsIs(err, ErrConflict) {
 		res.addError(err)
+	} else if err != nil {
+		// A read the caller may not make, or a transient one, leaves the
+		// name unchecked; create_agent still refuses a taken name.
+		res.Notes = append(res.Notes, fmt.Sprintf("the name %q could not be checked for a clash: %v", spec.Name, err))
 	}
 	if err := requireReadableSkills(ctx, s.pinner, spec.Skills); err != nil {
 		res.addError(err)
