@@ -5,7 +5,7 @@ go 1.26.0
 require (
 	github.com/Masterminds/semver/v3 v3.5.0
 	github.com/giantswarm/gitops-commit v0.11.0
-	github.com/giantswarm/mcp-oauth v1.7.0-rc.1
+	github.com/giantswarm/mcp-oauth v1.7.0
 	github.com/giantswarm/mcp-toolkit v0.2.15
 	github.com/go-jose/go-jose/v4 v4.1.5
 	github.com/golang-jwt/jwt/v5 v5.3.1
