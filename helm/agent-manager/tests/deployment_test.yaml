@@ -92,3 +92,14 @@ tests:
       - notContains:
           path: spec.template.spec.containers[0].args
           content: --github-api-url=https://api.github.com
+  - it: gives the Dex provider's discovery wait a startup probe longer than its 5 minutes
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe.httpGet.path
+          value: /healthz
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe.failureThreshold
+          value: 33
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe.periodSeconds
+          value: 10
