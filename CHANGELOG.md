@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A pod that starts while Dex is unavailable (its only replica rescheduled, discovery answering 503) waits for it instead of crash-looping: mcp-oauth v1.7.0 retries OIDC discovery for up to 5 minutes, and the chart's startup probe (`/healthz`, up to 5m30s) keeps the liveness probe from restarting the container while it waits. ([giantswarm/giantswarm#38102](https://github.com/giantswarm/giantswarm/issues/38102))
 - `validate_agent` of a create no longer fails for a caller who may not read the namespace's HelmReleases: it returns the manifests and the other violations, and `notes` (REST: the same field) says the name could not be checked for a clash. A taken name is still a violation. ([#45](https://github.com/giantswarm/agent-manager/issues/45))
 - `list_skills` answers within muster's 30 s: the SKILL.md files of a repository are read in parallel (eight at a time) and the configured repositories side by side, where a cold read of three repositories took longer than 30 s and every meta agent's first call timed out.
 - A read finishes and is cached even when the caller gives up, so a timed-out call no longer leaves a truncated listing (every remaining SKILL.md "unreadable") in the cache.
