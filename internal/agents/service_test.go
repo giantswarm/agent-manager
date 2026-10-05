@@ -1102,3 +1102,101 @@ func TestCreateRefusesSkillsFromARepositoryTheCallerCannotRead(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "private-analyst", res.Agent.Name)
 }
+
+func TestStatusVerdictOfAHelmReleaseThatIsNotReady(t *testing.T) {
+	cond := func(typ, status, reason, message string) map[string]any {
+		return map[string]any{"type": typ, "status": status, "reason": reason, "message": message}
+	}
+	release := func(conds ...any) *unstructured.Unstructured {
+		hr := helmRelease("kagent", "fresh", map[string]any{"agent": map[string]any{"name": "fresh"}}, true, nil)
+		require.NoError(t, unstructured.SetNestedSlice(hr.Object, conds, "status", "conditions"))
+		return hr
+	}
+	source := func(conds ...any) *unstructured.Unstructured {
+		src := ociRepository("kagent", "1.x")
+		src.SetName("agent")
+		src.SetNamespace("kagent")
+		if len(conds) > 0 {
+			require.NoError(t, unstructured.SetNestedSlice(src.Object, conds, "status", "conditions"))
+		}
+		return src
+	}
+	waiting := cond("Ready", "False", "SourceNotReady", "OCIRepository 'kagent/agent' is not ready: latest generation of object has not been reconciled")
+
+	tests := []struct {
+		name        string
+		objects     []runtime.Object
+		wantVerdict string
+		wantSummary string
+	}{
+		{
+			name:        "source not reconciled yet, no source status",
+			objects:     []runtime.Object{release(waiting), source()},
+			wantVerdict: VerdictProgressing,
+			wantSummary: "latest generation of object has not been reconciled",
+		},
+		{
+			name:        "source recreated and reconciling",
+			objects:     []runtime.Object{release(waiting), source(cond("Ready", "Unknown", "Progressing", "reconciliation in progress"))},
+			wantVerdict: VerdictProgressing,
+			wantSummary: "SourceNotReady",
+		},
+		{
+			name:        "source deleted and not recreated yet",
+			objects:     []runtime.Object{release(waiting)},
+			wantVerdict: VerdictProgressing,
+			wantSummary: "SourceNotReady",
+		},
+		{
+			name:        "source reports a real failure",
+			objects:     []runtime.Object{release(waiting), source(cond("Ready", "False", "AuthenticationFailed", "unauthorized: authentication required"))},
+			wantVerdict: VerdictFailed,
+			wantSummary: "AuthenticationFailed: unauthorized: authentication required",
+		},
+		{
+			name:        "dependency not ready",
+			objects:     []runtime.Object{release(cond("Ready", "False", "DependencyNotReady", "dependency 'kagent/crds' is not ready"))},
+			wantVerdict: VerdictProgressing,
+			wantSummary: "dependency 'kagent/crds' is not ready",
+		},
+		{
+			name:        "install failed",
+			objects:     []runtime.Object{release(cond("Ready", "False", "InstallFailed", "Helm install failed"))},
+			wantVerdict: VerdictFailed,
+			wantSummary: "InstallFailed",
+		},
+		{
+			name:        "upgrade failed",
+			objects:     []runtime.Object{release(cond("Ready", "False", "UpgradeFailed", "Helm upgrade failed"))},
+			wantVerdict: VerdictFailed,
+			wantSummary: "UpgradeFailed",
+		},
+		{
+			name:        "artifact failed",
+			objects:     []runtime.Object{release(cond("Ready", "False", "ArtifactFailed", "could not load chart"))},
+			wantVerdict: VerdictFailed,
+			wantSummary: "ArtifactFailed",
+		},
+		{
+			name:        "stalled wins over a waiting reason",
+			objects:     []runtime.Object{release(cond("Ready", "False", "SourceNotReady", "waiting"), cond("Stalled", "True", "RetriesExceeded", "Failed to install after 3 attempt(s)"))},
+			wantVerdict: VerdictFailed,
+			wantSummary: "RetriesExceeded",
+		},
+		{
+			name:        "stalled with a failed reason",
+			objects:     []runtime.Object{release(cond("Ready", "False", "InstallFailed", "Helm install failed"), cond("Stalled", "True", "RetriesExceeded", "Failed to install after 3 attempt(s)"))},
+			wantVerdict: VerdictFailed,
+			wantSummary: "RetriesExceeded",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newFixture(t, tt.objects)
+			st, err := f.svc.Status(t.Context(), In(""), "fresh")
+			require.NoError(t, err)
+			require.Equal(t, tt.wantVerdict, st.Verdict, st.Summary)
+			require.Contains(t, st.Summary, tt.wantSummary)
+		})
+	}
+}

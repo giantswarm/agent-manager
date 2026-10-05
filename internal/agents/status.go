@@ -39,6 +39,31 @@ const (
 	readyReasonPending    = "ActorTemplatePending"
 )
 
+const (
+	statusTrue  = string(metav1.ConditionTrue)
+	statusFalse = string(metav1.ConditionFalse)
+)
+
+// The helm-controller condition and Ready reasons verdict tells apart. A
+// release waiting for its chart source or a dependency has Ready=False with
+// one of the waiting reasons and is retried by helm-controller; every other
+// Ready=False reason (InstallFailed, UpgradeFailed, ArtifactFailed, ...) and
+// any Stalled=True is a failure it will not get past without a change.
+const (
+	conditionStalled         = "Stalled"
+	reasonSourceNotReady     = "SourceNotReady"
+	reasonDependencyNotReady = "DependencyNotReady"
+	reasonProgressing        = "Progressing"
+)
+
+func isWaitingReason(reason string) bool {
+	switch reason {
+	case reasonSourceNotReady, reasonDependencyNotReady, reasonProgressing:
+		return true
+	}
+	return false
+}
+
 // Status gathers the AgentTemplate's per-Harness status, the owning
 // HelmRelease (conditions, history) and the namespace's recent Warning events
 // for the agent, and folds them into one verdict.
@@ -66,6 +91,7 @@ func (s *Service) status(ctx context.Context, site *site, name string) (*Status,
 	if site.loc.IsSet() {
 		st.Events = append(st.Events, s.warningEvents(ctx, site.fluxClient, site.fluxNS, site.releaseName(name))...)
 	}
+	st.sourceFailure = s.sourceFailure(ctx, site, hr)
 	st.Verdict, st.Summary = verdict(st, s.harnessOf(tpl))
 	if st.Verdict == VerdictFailed && tpl != nil && len(st.Template.Harnesses) == 0 {
 		// Nobody admits the template: say which Harnesses exist and what
@@ -75,6 +101,35 @@ func (s *Service) status(ctx context.Context, site *site, name string) (*Status,
 		}
 	}
 	return st, nil
+}
+
+// sourceFailure is the chart source's Ready condition when it is False, so a
+// release waiting on a source that cannot fetch the chart (authentication,
+// no matching tag) reads as failed with the source's own reason. nil when the
+// release is not waiting on its source, the source is absent or still
+// reconciling, or it cannot be read.
+func (s *Service) sourceFailure(ctx context.Context, site *site, hr *unstructured.Unstructured) *Condition {
+	if hr == nil {
+		return nil
+	}
+	ready := findCondition(conditionsOfObject(hr), conditionReady)
+	if ready == nil || ready.Status != statusFalse || ready.Reason != reasonSourceNotReady {
+		return nil
+	}
+	kind, _, _ := unstructured.NestedString(hr.Object, "spec", "chartRef", "kind")
+	name, _, _ := unstructured.NestedString(hr.Object, "spec", "chartRef", "name")
+	if kind != kindOCIRepository || name == "" {
+		return nil
+	}
+	ns, _, _ := unstructured.NestedString(hr.Object, "spec", "chartRef", "namespace")
+	src, err := s.getObject(ctx, site.flux, s.ociRepositoryGVR(), orDefault(ns, hr.GetNamespace()), name, "ocirepository")
+	if err != nil || src == nil {
+		return nil
+	}
+	if c := findCondition(conditionsOfObject(src), conditionReady); c != nil && c.Status == statusFalse {
+		return c
+	}
+	return nil
 }
 
 // harnessOf is the Harness an agent runs on: the one its template names in
@@ -221,8 +276,19 @@ func verdict(st *Status, harness string) (string, string) {
 	if hr != nil && hr.Deleting {
 		return VerdictProgressing, "HelmRelease is being uninstalled by helm-controller; the AgentTemplate disappears with it"
 	}
+	if hr != nil && hr.Exists {
+		if c := findCondition(hr.Conditions, conditionStalled); c != nil && c.Status == statusTrue {
+			return VerdictFailed, "HelmRelease is stalled: " + conditionText(c)
+		}
+	}
 	if hr != nil && hr.Exists && hr.Ready != nil && !*hr.Ready {
 		c := findCondition(hr.Conditions, conditionReady)
+		if c != nil && isWaitingReason(c.Reason) {
+			if c.Reason == reasonSourceNotReady && st.sourceFailure != nil {
+				return VerdictFailed, "the chart source is failing: " + conditionText(st.sourceFailure)
+			}
+			return VerdictProgressing, "HelmRelease is waiting: " + conditionText(c)
+		}
 		return VerdictFailed, "HelmRelease is not ready: " + conditionText(c)
 	}
 	if ts != nil && ts.Exists {
@@ -257,7 +323,7 @@ func verdict(st *Status, harness string) (string, string) {
 // revision is ready; everything else is a revision still compiling.
 func harnessVerdict(h *HarnessStatus) (string, string) {
 	for _, typ := range []string{conditionAccepted, conditionResolvedRefs, conditionCompatible} {
-		if c := findCondition(h.Conditions, typ); c != nil && c.Status == "False" {
+		if c := findCondition(h.Conditions, typ); c != nil && c.Status == statusFalse {
 			return VerdictFailed, fmt.Sprintf("Harness %s: %s is False (%s)", h.Harness, typ, conditionText(c))
 		}
 	}
@@ -275,8 +341,8 @@ func harnessVerdict(h *HarnessStatus) (string, string) {
 	// compiling while the controller waits for the golden snapshot
 	// (readyReasonPending); any other False reason is a failure it will not
 	// get past on its own.
-	if c := findCondition(h.Conditions, conditionReady); c != nil && c.Status != "True" {
-		if c.Status == "False" && c.Reason != readyReasonPending {
+	if c := findCondition(h.Conditions, conditionReady); c != nil && c.Status != statusTrue {
+		if c.Status == statusFalse && c.Reason != readyReasonPending {
 			return VerdictFailed, fmt.Sprintf("Harness %s: Ready is False (%s)", h.Harness, conditionText(c))
 		}
 		return VerdictProgressing, fmt.Sprintf("Harness %s is compiling revision %s; Ready is %s (%s)", h.Harness, h.DesiredRevision, c.Status, conditionText(c))
@@ -370,9 +436,9 @@ func conditionStatus(conds []Condition, typ string) *bool {
 		return nil
 	}
 	switch c.Status {
-	case "True":
+	case statusTrue:
 		return boolPtr(true)
-	case "False":
+	case statusFalse:
 		return boolPtr(false)
 	}
 	return nil
