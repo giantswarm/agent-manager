@@ -16,7 +16,7 @@ import (
 // installation's own cluster. Its HelmRelease and the shared OCIRepository
 // stay on the installation, in the organization namespace that holds the
 // cluster, and the release reaches the workload cluster through the Cluster
-// API kubeconfig Secret (spec.kubeConfig.secretRef); the AgentTemplate, its
+// API kubeconfig Secret (spec.kubeConfig.secretRef); the Agent, its
 // RemoteMCPServer, the ModelConfigs and the Harnesses are on the workload
 // cluster, read through a client built from that Secret's server address and
 // CA that presents the caller's token.
@@ -148,7 +148,7 @@ type site struct {
 	// flux reads and writes HelmReleases and OCIRepositories in fluxNS.
 	flux   dynamic.Interface
 	fluxNS string
-	// agent reads the AgentTemplates, RemoteMCPServers, ModelConfigs and
+	// agent reads the Agents, RemoteMCPServers, ModelConfigs and
 	// Harnesses of loc.Namespace; agentClient the events there.
 	agent       dynamic.Interface
 	agentClient kube.Client

@@ -51,8 +51,7 @@ info:
     `harness` names the Harness of the namespace that runs the agent (the
     platform Harness, the kagent Go ADK, unless another is named, such as
     `claude` for Claude Code); it must exist there and is fixed at create.
-    `limits` (`budgetUsd`, `maxTurns`) bound every turn and are accepted on a
-    Harness whose runtime is Claude Code only. `plugins` enable skills from
+    `plugins` enable skills from
     Agent Plugins bundles that come pinned (a commit or a digest).
 
     Removed with kagent API v2: `runtime` (the Harness is the runtime), refused
@@ -544,12 +543,6 @@ components:
         (use `preset:none`). The former `toolNames` never narrowed anything
         against muster (kagent filters muster's meta-tools only) and is refused
         with that explanation.
-    Limits:
-      type: object
-      description: Bounds on every turn (chart agent.limits, the Agent's spec.template.limits); at least one of the two. Accepted on a Harness whose runtime is Claude Code only; any other Harness refuses them
-      properties:
-        budgetUsd: { type: string, description: "The most one turn may spend, in US dollars, as a decimal string with up to four decimals (\"2.50\")" }
-        maxTurns: { type: integer, minimum: 1, maximum: 10000, description: The most model round-trips one turn may take }
     Plugin:
       type: object
       description: An Agent Plugins bundle at an immutable source (written as given, never resolved) and the bundle's skills to enable
@@ -580,7 +573,6 @@ components:
         systemMessage: { type: string }
         modelConfig: { type: string, description: An existing ModelConfig of the namespace }
         harness: { type: string, description: "Harness of the namespace that runs the agent (chart agent.harness, the Agent's spec.harnessRef.name); omitted, the platform Harness (GET /info harness.name). Must exist in the namespace; fixed at create" }
-        limits: { $ref: "#/components/schemas/Limits" }
         iconUrl: { type: string, description: Avatar URL (chart agent.iconUrl, the ui.giantswarm.io/icon-url annotation) }
         skills: { $ref: "#/components/schemas/Skills" }
         plugins: { $ref: "#/components/schemas/Plugins" }
@@ -595,14 +587,13 @@ components:
         path: { type: string, description: "mode commit with repository: the directory a Kustomization builds from; files go to its agent-manager/ subdirectory" }
     Update:
       type: object
-      description: Partial change; absent fields stay, "" clears, skills and plugins replace the whole list (skills pinned), limits replace the bounds ({} clears them), toolset replaces the whole list, refreshSkills re-pins every git skill. The Harness is fixed at create
+      description: Partial change; absent fields stay, "" clears, skills and plugins replace the whole list (skills pinned), toolset replaces the whole list, refreshSkills re-pins every git skill. The Harness is fixed at create
       properties:
         displayName: { type: string }
         description: { type: string }
         systemMessage: { type: string }
         modelConfig: { type: string }
         iconUrl: { type: string }
-        limits: { $ref: "#/components/schemas/Limits" }
         skills: { $ref: "#/components/schemas/Skills" }
         plugins: { $ref: "#/components/schemas/Plugins" }
         gitAuthSecretName: { type: string, description: "Replaces the skills credential Secret; an empty string goes back to the installation's" }
@@ -700,7 +691,6 @@ components:
         iconUrl: { type: string, description: From the ui.giantswarm.io/icon-url annotation }
         systemMessage: { type: string }
         harness: { type: string, description: The Harness that runs the agent (spec.harnessRef.name, else the chart value agent.harness while nothing is rendered) }
-        limits: { $ref: "#/components/schemas/Limits" }
         skills: { $ref: "#/components/schemas/Skills", description: As pinned, git skills by commit, OCI skills by digest }
         plugins: { $ref: "#/components/schemas/Plugins" }
         toolset: { $ref: "#/components/schemas/Toolset", description: The declared toolset (the HelmRelease's `toolset` value; for a bare Agent the X-Muster-Toolset header of the agent's RemoteMCPServer); absent when none is declared }

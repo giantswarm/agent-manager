@@ -166,9 +166,6 @@ func BuildValues(spec Spec, cfg ComposeConfig) map[string]any {
 	// The Harness the caller named, else the platform's: the Agent object's
 	// spec.harnessRef.name.
 	agent["harness"] = orDefault(spec.Harness, orDefault(cfg.HarnessName, DefaultHarnessName))
-	if limits := limitsValues(spec.Limits); limits != nil {
-		agent["limits"] = limits
-	}
 	values := map[string]any{
 		"agent":       agent,
 		"modelConfig": map[string]any{"name": spec.ModelConfig},

@@ -28,8 +28,8 @@ import (
 // values contract. One release renders an api.kagent.dev/v1alpha3 Agent plus
 // the agent's muster RemoteMCPServer; skills and plugins are lists of commit-
 // or digest-pinned sources (bundled $defs/skill.schema.json and
-// $defs/plugin.schema.json); `agent.harness` is the Agent's spec.harnessRef,
-// `agent.limits` the per-turn bounds; `muster.url`, `muster.tools`,
+// $defs/plugin.schema.json); `agent.harness` is the Agent's spec.harnessRef;
+// `muster.url`, `muster.tools`,
 // `muster.discovery`; none of the 0.x runtime keys; `skillsGitAuthSecretRef`,
 // the one read credential of every private git skill and plugin.
 const EmbeddedSchemaVersion = "2.0.0"

@@ -23,9 +23,6 @@ spec:
     modelConfig:
       name: default-model-config
     systemPrompt: Be brief.
-    limits:
-      budgetUSD: "2.50"
-      maxTurns: 40
     skills:
       - name: runbooks
         source:

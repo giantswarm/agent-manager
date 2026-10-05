@@ -200,7 +200,7 @@ func seeded(t *testing.T, typedObjs ...runtime.Object) *fixture {
 	return newFixture(t, []runtime.Object{
 		modelConfig("kagent", "default-model-config", "Anthropic", "claude-sonnet-4-6"),
 		modelConfig("kagent", "qwen3-8-27b", "OpenAI", "qwen3-8-27b"),
-		harness("kagent", "kagent", RuntimeKagent),
+		harness("kagent", "kagent", "kagent"),
 		ociRepository("kagent", "2.x"),
 		helmRelease("kagent", "verifier", verifierValues, true, nil),
 		agentObject("kagent", "verifier", "verifier", "kagent", true, true),
@@ -232,7 +232,6 @@ func TestReadModelFromTheRenderedObjects(t *testing.T) {
 	assert.Equal(t, "default-model-config", a.ModelConfig)
 	assert.Equal(t, "Be brief.", a.SystemMessage)
 	assert.Equal(t, "claude", a.Harness, "the Harness is spec.harnessRef.name")
-	assert.Equal(t, &Limits{BudgetUSD: "2.50", MaxTurns: 40}, a.Limits)
 	assert.Equal(t, Skills{
 		{Name: "runbooks", Path: "nested/runbooks", Git: &GitSkill{URL: skillsRepo, Commit: mainHead}},
 		{Name: "kubectl", OCI: kubectlRef + "@" + kubectlSum},
@@ -274,7 +273,7 @@ func TestListMergesTemplatesAndHelmReleases(t *testing.T) {
 	ctx := context.Background()
 	// A HelmRelease that has not rendered its Agent yet (GitOps-owned), a
 	// bare Agent with a toolset on its carrier, and a scoped agent.
-	pending := map[string]any{"agent": map[string]any{"name": "pending", "displayName": "Pending", "harness": "claude", "limits": map[string]any{"maxTurns": int64(12)}}, "modelConfig": map[string]any{"name": "qwen3-8-27b"},
+	pending := map[string]any{"agent": map[string]any{"name": "pending", "displayName": "Pending", "harness": "claude"}, "modelConfig": map[string]any{"name": "qwen3-8-27b"},
 		"skills":  []any{map[string]any{"name": "runbooks", "git": map[string]any{"url": skillsRepo, "commit": tagHead}}},
 		"plugins": []any{map[string]any{"oci": kubectlRef + "@" + kubectlSum, "skills": []any{"k8s"}}}}
 	mustCreate(t, f, hrGVR, helmRelease("kagent", "pending", pending, false, map[string]any{KustomizationNameLabel: "flux-system"}))
@@ -319,7 +318,6 @@ func TestListMergesTemplatesAndHelmReleases(t *testing.T) {
 	assert.Equal(t, Skills{{Name: "runbooks", Git: &GitSkill{URL: skillsRepo, Commit: tagHead}}}, p.Skills, "skills from the values while nothing is rendered")
 	assert.Equal(t, Plugins{{OCI: kubectlRef + "@" + kubectlSum, Skills: []string{"k8s"}}}, p.Plugins, "plugins from the values too")
 	assert.Equal(t, "claude", p.Harness)
-	assert.Equal(t, &Limits{MaxTurns: 12}, p.Limits)
 
 	b := byName["bare"]
 	assert.Equal(t, ManagedNone, b.Managed)
@@ -1024,7 +1022,7 @@ func TestUpdateRetriesTheWriteWhenTheReleaseMovedUnderneath(t *testing.T) {
 
 func TestCreateOnTheHarnessTheCallerNames(t *testing.T) {
 	f := seeded(t)
-	mustCreate(t, f, f.svc.harnessGVR(), harness("kagent", "claude", RuntimeClaude))
+	mustCreate(t, f, f.svc.harnessGVR(), harness("kagent", "claude", "claude"))
 	ctx := t.Context()
 	readOnly := []string{"preset:read-only"}
 
@@ -1061,65 +1059,6 @@ func TestCreateOnTheHarnessTheCallerNames(t *testing.T) {
 	dry, err = empty.svc.ValidateCreate(ctx, Spec{Name: "plain", ModelConfig: "default-model-config", Toolset: readOnly, Harness: "claude"})
 	require.NoError(t, err)
 	assert.Contains(t, dry.Errors, `harness "claude" does not exist in namespace kagent (no Harness there)`)
-}
-
-func TestLimitsNeedAClaudeCodeHarness(t *testing.T) {
-	f := seeded(t)
-	mustCreate(t, f, f.svc.harnessGVR(), harness("kagent", "claude", RuntimeClaude))
-	ctx := t.Context()
-	readOnly := []string{"preset:read-only"}
-	limits := &Limits{BudgetUSD: "2.50", MaxTurns: 40}
-
-	// Composed under agent.limits with the chart's key, on the Claude Harness.
-	dry, err := f.svc.ValidateCreate(ctx, Spec{Name: "coder", ModelConfig: "default-model-config", Toolset: readOnly, Harness: "claude", Limits: limits})
-	require.NoError(t, err)
-	require.True(t, dry.Valid, dry.Errors)
-	assert.Equal(t, map[string]any{"budgetUSD": "2.50", "maxTurns": int64(40)}, dry.Manifests.Values["agent"].(map[string]any)["limits"])
-
-	// Refused on the platform Harness (kagent), named or implied.
-	for _, h := range []string{"", "kagent"} {
-		dry, err = f.svc.ValidateCreate(ctx, Spec{Name: "coder", ModelConfig: "default-model-config", Toolset: readOnly, Harness: h, Limits: limits})
-		require.NoError(t, err)
-		assert.False(t, dry.Valid)
-		assert.Contains(t, strings.Join(dry.Errors, "\n"), `Harness "kagent" runs kagent`)
-		_, err = f.svc.Create(ctx, Spec{Name: "coder", ModelConfig: "default-model-config", Toolset: readOnly, Harness: h, Limits: limits})
-		require.ErrorIs(t, err, ErrInvalid)
-	}
-	// Refused when the Harness cannot be read to tell.
-	empty := newFixture(t, []runtime.Object{modelConfig("kagent", "default-model-config", "Anthropic", "claude-sonnet-4-6")})
-	_, err = empty.svc.Create(ctx, Spec{Name: "coder", ModelConfig: "default-model-config", Toolset: readOnly, Limits: limits})
-	require.ErrorIs(t, err, ErrInvalid)
-	assert.Contains(t, err.Error(), "could not be read")
-
-	// The bounds themselves.
-	for name, l := range map[string]*Limits{
-		"empty":      {},
-		"bad budget": {BudgetUSD: "2,50"},
-		"too many":   {MaxTurns: 10001},
-		"negative":   {MaxTurns: -1},
-	} {
-		_, err := f.svc.Create(ctx, Spec{Name: "coder", ModelConfig: "default-model-config", Toolset: readOnly, Harness: "claude", Limits: l})
-		require.ErrorIs(t, err, ErrInvalid, name)
-		assert.Contains(t, err.Error(), "limits", name)
-	}
-
-	// On an existing agent the release's Harness decides: the verifier runs
-	// on kagent, the coder on claude. {} clears.
-	_, err = f.svc.Create(ctx, Spec{Name: "coder", ModelConfig: "default-model-config", Toolset: readOnly, Harness: "claude"})
-	require.NoError(t, err)
-	_, err = f.svc.Update(ctx, Update{Name: "verifier", Limits: limits})
-	require.ErrorIs(t, err, ErrInvalid)
-	assert.Contains(t, err.Error(), `Harness "kagent" runs kagent`)
-	res, err := f.svc.Update(ctx, Update{Name: "coder", Limits: &Limits{MaxTurns: 5}})
-	require.NoError(t, err)
-	assert.Equal(t, []string{"agent.limits.maxTurns"}, res.Changed)
-	assert.Equal(t, &Limits{MaxTurns: 5}, res.Agent.Limits)
-	res, err = f.svc.Update(ctx, Update{Name: "coder", Limits: &Limits{}})
-	require.NoError(t, err)
-	assert.Equal(t, []string{"agent.limits.maxTurns"}, res.Changed)
-	_, hasLimits := res.After["agent"].(map[string]any)["limits"]
-	assert.False(t, hasLimits, "{} clears the limits")
-	assert.Nil(t, res.Agent.Limits)
 }
 
 func TestPluginsComePinnedAndSelectSkills(t *testing.T) {

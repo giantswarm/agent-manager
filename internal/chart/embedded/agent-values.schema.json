@@ -176,27 +176,6 @@
                     "type": "string",
                     "description": "Fully qualified URL of the agent's avatar icon. Rendered as the ui.giantswarm.io/icon-url annotation on the Agent (the template has no icon field); the Dev Portal reads it. Populated by the agent-creation flows with the canonical avatar URL."
                 },
-                "limits": {
-                    "type": "object",
-                    "description": "Bounds on every turn, rendered into the Agent's spec.template.limits only when at least one is set. Enforced by a Harness runtime that knows them (Claude Code, through its budget and turn caps); a turn that reaches a limit ends completed, with the reason and the usage on the task, and a follow-up continues the conversation. A runtime that cannot enforce limits rejects a template that carries them, so leave both unset (the default) on the `kagent` Harness.",
-                    "additionalProperties": false,
-                    "properties": {
-                        "budgetUSD": {
-                            "type": "string",
-                            "description": "The most one turn may spend, in US dollars, as a decimal string such as \"2.50\" (up to four decimals). Empty (the default) renders nothing.",
-                            "pattern": "^$|^(0|[1-9][0-9]{0,5})(\\.[0-9]{1,4})?$"
-                        },
-                        "maxTurns": {
-                            "type": [
-                                "integer",
-                                "null"
-                            ],
-                            "description": "The most model round-trips one turn may take. Unset (the default) renders nothing.",
-                            "maximum": 10000,
-                            "minimum": 1
-                        }
-                    }
-                },
                 "name": {
                     "type": "string",
                     "description": "Technical resource name (DNS-1123) of the Agent and of its RemoteMCPServer. Defaults to the Helm release name.",

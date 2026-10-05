@@ -169,20 +169,6 @@ func (s *Skills) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-// Limits bounds every turn of the agent (chart agent.limits, rendered as
-// spec.template.limits). Only a Harness whose runtime is Claude Code enforces
-// them; a write refuses limits on any other Harness. At least one bound is set.
-type Limits struct {
-	// BudgetUSD is the most one turn may spend, in US dollars, as a decimal
-	// string such as "2.50" (up to four decimals).
-	BudgetUSD string `json:"budgetUsd,omitempty"`
-	// MaxTurns is the most model round-trips one turn may take (1 to 10000).
-	MaxTurns int `json:"maxTurns,omitempty"`
-}
-
-// IsZero is true when no bound is set.
-func (l Limits) IsZero() bool { return l.BudgetUSD == "" && l.MaxTurns == 0 }
-
 // Plugin is one plugins[] entry of the Generic chart values: an Agent Plugins
 // bundle at an immutable source plus the names of the bundle's skills to
 // enable. Unlike a skill, a plugin's source is written as given: a git
@@ -226,8 +212,6 @@ type Spec struct {
 	// agent.harness, the Agent object's spec.harnessRef.name); empty selects
 	// the platform Harness. Fixed at create.
 	Harness string `json:"harness,omitempty"`
-	// Limits bounds every turn; only on a Harness whose runtime is Claude Code.
-	Limits *Limits `json:"limits,omitempty"`
 	// IconURL is the avatar URL (chart agent.iconUrl, rendered as the
 	// ui.giantswarm.io/icon-url annotation).
 	IconURL string `json:"iconUrl,omitempty"`
@@ -263,16 +247,14 @@ type Spec struct {
 // empty toolset is refused: use preset:none).
 type Update struct {
 	Location
-	Name          string  `json:"name"`
-	DisplayName   *string `json:"displayName,omitempty"`
-	Description   *string `json:"description,omitempty"`
-	SystemMessage *string `json:"systemMessage,omitempty"`
-	ModelConfig   *string `json:"modelConfig,omitempty"`
-	IconURL       *string `json:"iconUrl,omitempty"`
-	// Limits replaces the bounds; a pointer to empty limits clears them.
-	Limits  *Limits  `json:"limits,omitempty"`
-	Skills  *Skills  `json:"skills,omitempty"`
-	Plugins *Plugins `json:"plugins,omitempty"`
+	Name          string   `json:"name"`
+	DisplayName   *string  `json:"displayName,omitempty"`
+	Description   *string  `json:"description,omitempty"`
+	SystemMessage *string  `json:"systemMessage,omitempty"`
+	ModelConfig   *string  `json:"modelConfig,omitempty"`
+	IconURL       *string  `json:"iconUrl,omitempty"`
+	Skills        *Skills  `json:"skills,omitempty"`
+	Plugins       *Plugins `json:"plugins,omitempty"`
 	// GitAuthSecretName replaces the skills credential Secret; empty clears it
 	// back to the installation's.
 	GitAuthSecretName *string            `json:"gitAuthSecretName,omitempty"`
@@ -382,8 +364,6 @@ type Agent struct {
 	// Harness is the Harness that runs the agent (spec.harnessRef.name, else
 	// the chart value agent.harness while nothing is rendered).
 	Harness string `json:"harness,omitempty"`
-	// Limits are the agent's per-turn bounds, when set.
-	Limits *Limits `json:"limits,omitempty"`
 	// Skills as pinned: git skills by commit, OCI skills by digest.
 	Skills Skills `json:"skills,omitempty"`
 	// Plugins as pinned.

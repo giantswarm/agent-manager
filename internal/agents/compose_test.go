@@ -101,7 +101,6 @@ func TestBuildValuesIsTheChartContract(t *testing.T) {
 	full := BuildValues(Spec{
 		Name: "sre", DisplayName: "SRE Assistant", Description: "helps", SystemMessage: "Be brief.", ModelConfig: "mc",
 		IconURL: "https://avatars.example/v1/sre.png",
-		Limits:  &Limits{BudgetUSD: "2.50", MaxTurns: 40},
 		Skills:  pinned,
 		Plugins: plugins,
 		Toolset: []string{"preset:read-only", "workflow:incident-triage"},
@@ -111,7 +110,6 @@ func TestBuildValuesIsTheChartContract(t *testing.T) {
 		"agent": map[string]any{
 			"name": "sre", "displayName": "SRE Assistant", "description": "helps", "systemMessage": "Be brief.",
 			"iconUrl": "https://avatars.example/v1/sre.png", "harness": "claude",
-			"limits": map[string]any{"budgetUSD": "2.50", "maxTurns": int64(40)},
 		},
 		"modelConfig": map[string]any{"name": "mc"},
 		"skills": []any{
@@ -129,11 +127,10 @@ func TestBuildValuesIsTheChartContract(t *testing.T) {
 	_, violations := ValidateValues(context.Background(), embeddedChart{}, full)
 	assert.Empty(t, violations, "the composed values satisfy the Generic chart 2.x schema")
 	// The chart refuses what a write refuses: a mutable plugin source, an
-	// empty skill selection, a budget that is not a decimal.
-	broken := BuildValues(Spec{Name: "sre", ModelConfig: "mc", Limits: &Limits{BudgetUSD: "2,50"}, Plugins: Plugins{{Git: &GitSkill{URL: skillsRepo, Commit: "main"}}}}, cfg)
+	// empty skill selection.
+	broken := BuildValues(Spec{Name: "sre", ModelConfig: "mc", Plugins: Plugins{{Git: &GitSkill{URL: skillsRepo, Commit: "main"}}}}, cfg)
 	_, violations = ValidateValues(context.Background(), embeddedChart{}, broken)
 	joined := strings.Join(violations, "\n")
-	assert.Contains(t, joined, "/agent/limits/budgetUSD")
 	assert.Contains(t, joined, "/plugins/0/git/commit")
 	assert.Contains(t, joined, "/plugins/0")
 
@@ -149,7 +146,6 @@ func TestBuildValuesIsTheChartContract(t *testing.T) {
 	// The read model reads its skills and plugins back from the values it wrote.
 	assert.Equal(t, pinned, skillsFromValues(full))
 	assert.Equal(t, plugins, pluginsFromValues(full))
-	assert.Equal(t, &Limits{BudgetUSD: "2.50", MaxTurns: 40}, limitsFrom(full["agent"].(map[string]any)["limits"]))
 }
 
 func assertNoPath(t *testing.T, values map[string]any, dotted string) {

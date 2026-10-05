@@ -407,7 +407,7 @@ func (s *Service) agentObjects(ctx context.Context, st *site, name string) (obj,
 	return obj, hr, nil
 }
 
-// getTemplate returns nil, nil when the AgentTemplate does not exist.
+// getAgentObject returns nil, nil when the Agent object does not exist.
 func (s *Service) getAgentObject(ctx context.Context, dyn dynamic.Interface, ns, name string) (*unstructured.Unstructured, error) {
 	return s.getObject(ctx, dyn, s.agentGVR(), ns, name, "agent")
 }
@@ -541,45 +541,29 @@ func (s *Service) requireModelConfig(ctx context.Context, dyn dynamic.Interface,
 // harnessFor resolves the Harness an agent runs on: name, else the platform
 // Harness. A named Harness must exist in ns (the refusal lists the ones that
 // do); the platform Harness may be absent (the connectivity chart provisions
-// it, and the Agent reports ResolvedRefs False until then). The runtime is
-// the Harness spec's discriminator (kagent, claude, codex, byo), empty when
-// the Harness could not be read.
-func (s *Service) harnessFor(ctx context.Context, dyn dynamic.Interface, ns, name string) (harness, runtime string, err error) {
-	harness = orDefault(name, s.cfg.Compose.HarnessName)
+// it, and the Agent reports ResolvedRefs False until then).
+func (s *Service) harnessFor(ctx context.Context, dyn dynamic.Interface, ns, name string) (string, error) {
+	harness := orDefault(name, s.cfg.Compose.HarnessName)
 	h, err := s.getObject(ctx, dyn, s.harnessGVR(), ns, harness, "harness")
 	if err != nil {
-		return harness, "", err
+		return harness, err
 	}
-	if h != nil {
-		return harness, harnessRuntime(h), nil
-	}
-	if name == "" {
-		return harness, "", nil
+	if h != nil || name == "" {
+		return harness, nil
 	}
 	list, err := dyn.Resource(s.harnessGVR()).Namespace(ns).List(ctx, metav1.ListOptions{})
 	if err != nil {
-		return harness, "", wrapKube(err, "list harnesses in "+ns)
+		return harness, wrapKube(err, "list harnesses in "+ns)
 	}
 	names := make([]string, 0, len(list.Items))
 	for i := range list.Items {
 		names = append(names, list.Items[i].GetName())
 	}
 	if len(names) == 0 {
-		return harness, "", invalidf("harness %q does not exist in namespace %s (no Harness there)", name, ns)
+		return harness, invalidf("harness %q does not exist in namespace %s (no Harness there)", name, ns)
 	}
 	slices.Sort(names)
-	return harness, "", invalidf("harness %q does not exist in namespace %s; valid: %s", name, ns, strings.Join(names, ", "))
-}
-
-// harnessRuntime reads the Harness spec's runtime discriminator.
-func harnessRuntime(h *unstructured.Unstructured) string {
-	spec, _, _ := unstructured.NestedMap(h.Object, "spec")
-	for _, runtime := range []string{RuntimeKagent, RuntimeClaude, RuntimeCodex, RuntimeBYO} {
-		if _, ok := spec[runtime]; ok {
-			return runtime
-		}
-	}
-	return ""
+	return harness, invalidf("harness %q does not exist in namespace %s; valid: %s", name, ns, strings.Join(names, ", "))
 }
 
 // ---- skills -------------------------------------------------------------------
@@ -623,9 +607,6 @@ func checkSpec(spec Spec) []error {
 	if err := ValidatePlugins(spec.Plugins); err != nil {
 		errs = append(errs, err)
 	}
-	if err := ValidateLimits(spec.Limits); err != nil {
-		errs = append(errs, err)
-	}
 	if err := ValidateSystemMessage(spec.SystemMessage); err != nil {
 		errs = append(errs, err)
 	}
@@ -639,14 +620,10 @@ func checkSpec(spec Spec) []error {
 	return errs
 }
 
-// requireHarness checks the Harness a create names and, with limits, that its
-// runtime enforces them.
+// requireHarness checks the Harness a create names.
 func (s *Service) requireHarness(ctx context.Context, dyn dynamic.Interface, ns string, spec Spec) error {
-	harness, runtime, err := s.harnessFor(ctx, dyn, ns, spec.Harness)
-	if err != nil {
-		return err
-	}
-	return RequireLimitsRuntime(spec.Limits, harness, runtime)
+	_, err := s.harnessFor(ctx, dyn, ns, spec.Harness)
+	return err
 }
 
 // ValidateCreate is create_agent without the write.
@@ -998,29 +975,7 @@ func (s *Service) mergedValues(ctx context.Context, st *site, upd Update, hr *un
 	setOrDelete(agentBlock, "description", upd.Description)
 	setOrDelete(agentBlock, "systemMessage", upd.SystemMessage)
 	setOrDelete(agentBlock, "iconUrl", upd.IconURL)
-	if upd.Limits != nil {
-		if err := ValidateLimits(nonZeroLimits(upd.Limits)); err != nil {
-			return nil, nil, err
-		}
-		if limits := limitsValues(upd.Limits); limits != nil {
-			agentBlock["limits"] = limits
-		} else {
-			delete(agentBlock, "limits")
-		}
-	}
 	after["agent"] = agentBlock
-	if upd.Limits != nil && !upd.Limits.IsZero() {
-		// Limits need the Harness the release runs on to enforce them; the
-		// Harness is fixed at create, so the release's value names it.
-		named, _ := agentBlock["harness"].(string)
-		harness, runtime, err := s.harnessFor(ctx, st.agent, st.ns(), named)
-		if err != nil {
-			return nil, nil, err
-		}
-		if err := RequireLimitsRuntime(upd.Limits, harness, runtime); err != nil {
-			return nil, nil, err
-		}
-	}
 
 	var firstErr error
 	if upd.ModelConfig != nil {
@@ -1085,14 +1040,6 @@ func (s *Service) mergedValues(ctx context.Context, st *site, upd Update, hr *un
 		}
 	}
 	return after, before, firstErr
-}
-
-// nonZeroLimits is l unless it is the empty value an update clears with.
-func nonZeroLimits(l *Limits) *Limits {
-	if l == nil || l.IsZero() {
-		return nil
-	}
-	return l
 }
 
 func setOrDelete(m map[string]any, key string, v *string) {
@@ -1483,8 +1430,6 @@ func agentFromObject(obj, server *unstructured.Unstructured) Agent {
 	a.Description, _, _ = unstructured.NestedString(obj.Object, "spec", "template", "description")
 	a.ModelConfig, _, _ = unstructured.NestedString(obj.Object, "spec", "template", "modelConfig", "name")
 	a.SystemMessage, _, _ = unstructured.NestedString(obj.Object, "spec", "template", "systemPrompt")
-	limits, _, _ := unstructured.NestedMap(obj.Object, "spec", "template", "limits")
-	a.Limits = limitsFrom(limits)
 	a.Skills = skillsFromObject(obj)
 	a.Plugins = pluginsFromObject(obj)
 	a.Tools = toolBindingsOf(obj)
@@ -1604,7 +1549,6 @@ func applyHelmRelease(a *Agent, hr *unstructured.Unstructured) {
 		a.IconURL, _ = agentBlock["iconUrl"].(string)
 		a.SystemMessage, _ = agentBlock["systemMessage"].(string)
 		a.Harness, _ = agentBlock["harness"].(string)
-		a.Limits = limitsFrom(agentBlock["limits"])
 	}
 	if a.Name == "" {
 		a.Name = hr.GetName()

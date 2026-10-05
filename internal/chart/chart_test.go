@@ -118,7 +118,7 @@ func TestResolverPrefersTheRegistryAndFallsBackToTheEmbeddedSchema(t *testing.T)
 
 // TestEmbeddedSchemaIsTheChartContract pins the shape of the fallback schema
 // to the Generic chart 2.x values contract: the 0.x runtime keys are gone,
-// skills and plugins are lists of pinned sources, agent.limits bounds a turn,
+// skills and plugins are lists of pinned sources,
 // muster has url and tools.
 func TestEmbeddedSchemaIsTheChartContract(t *testing.T) {
 	doc := EmbeddedSchema().Document.(map[string]any)
@@ -148,10 +148,7 @@ func TestEmbeddedSchemaIsTheChartContract(t *testing.T) {
 		assert.Contains(t, skill, kept)
 	}
 	assert.Contains(t, agent, "harness", "the Agent's spec.harnessRef.name")
-	limits := agent["limits"].(map[string]any)["properties"].(map[string]any)
-	for _, kept := range []string{"budgetUSD", "maxTurns"} {
-		assert.Contains(t, limits, kept)
-	}
+	assert.NotContains(t, agent, "limits", "per-turn bounds live on the Harness (spec.claude.limits), not on the agent")
 	plugins := props["plugins"].(map[string]any)
 	assert.Equal(t, "#/$defs/plugin.schema.json", plugins["items"].(map[string]any)["$ref"], "the chart bundles its plugin schema")
 	plugin := doc["$defs"].(map[string]any)["plugin.schema.json"].(map[string]any)

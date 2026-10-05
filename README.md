@@ -43,7 +43,7 @@ MCP-server-writer half.
 |---|---|---|---|
 | Version, chart (OCI URL, `2.x` range, latest version, schema in use), managed namespaces, capabilities, API versions, platform Harness, muster URL, identity | `GET /api/v1/info` | `get_info` | no |
 | Agents of a namespace (Agent objects + HelmReleases of the chart not rendered yet), one summary each: display name, description, model config, Harness, toolset, readiness, management mode, and a suspended, deleting or failing release; `details` reports each in full | `GET /api/v1/agents?namespace=[&details=true]` | `list_agents` | no |
-| One agent with its HelmRelease values, Harness, limits, pinned skills and plugins, toolset and the Agent's status | `GET /api/v1/agents/{ns}/{name}` | `get_agent` | no |
+| One agent with its HelmRelease values, Harness, pinned skills and plugins, toolset and the Agent's status | `GET /api/v1/agents/{ns}/{name}` | `get_agent` | no |
 | Create: OCIRepository (when missing) + HelmRelease, after skill pinning, schema, ModelConfig and Harness validation | `POST /api/v1/agents` | `create_agent` | HelmRelease, OCIRepository |
 | Update: merge into the HelmRelease values (`refreshSkills` re-pins git skills), validate, update | `PATCH /api/v1/agents/{ns}/{name}[?force=true]` | `update_agent` | HelmRelease |
 | Delete: the HelmRelease; the OCIRepository only when nothing else references it | `DELETE /api/v1/agents/{ns}/{name}[?force=true&mode=&dryRun=]` | `delete_agent` | HelmRelease, OCIRepository, (bare Agent with force) |
@@ -69,7 +69,7 @@ Agent", the cases `force` overrides where documented;
 chose and confirmed — the service never derives one from a display name, per
 the creating-agents PRD), the **modelConfig** (must exist in the namespace;
 the error lists the valid ones), the **toolset** (required, see below), and
-optionally `harness`, `limits`, `displayName`, `description`, `systemMessage`,
+optionally `harness`, `displayName`, `description`, `systemMessage`,
 `iconUrl`, `skills` and `plugins` (see below), `labels`, `annotations`,
 `namespace`. It emits only what was set so the chart's defaults apply to
 everything else (the portal's rule) plus the platform's own two values, the
@@ -94,7 +94,6 @@ spec:
       displayName: Coder
       systemMessage: …
       harness: claude
-      limits: {budgetUSD: "2.50", maxTurns: 40}
     modelConfig: {name: default-model-config}
     skills:
       - {name: runbooks, path: runbooks, git: {url: https://github.com/giantswarm/agent-skills, commit: 0123456789abcdef0123456789abcdef01234567}}
@@ -106,7 +105,7 @@ spec:
 ```
 
 The chart renders the `Agent` (`spec.harnessRef.name: <agent.harness>`; under
-`spec.template` the `description`, `systemPrompt`, `modelConfig`, `limits`,
+`spec.template` the `description`, `systemPrompt`, `modelConfig`,
 `skills[]`, `plugins[]` and the muster binding; the annotations
 `ui.giantswarm.io/display-name` and `ui.giantswarm.io/icon-url`) and the
 agent's own `RemoteMCPServer` (named after the agent, pointing at muster,
@@ -114,22 +113,17 @@ carrying the toolset header). No admission label is involved: the Agent
 selects its Harness by name. ModelConfigs, their Secrets and the Harnesses are
 platform-admin owned: agent-manager only reads them.
 
-## The Harness, limits and plugins
+## The Harness and plugins
 
 An agent runs on the platform Harness (`kagent`, the Go ADK) unless
 `create_agent` names another Harness of the namespace in `harness`; the name
 must be a Harness that exists there (the refusal lists the ones that do) and
 it is fixed at create. `claude` is a Harness whose runtime is Claude Code: the
-agent then runs as a Claude Code session, its skills and plugins are Claude
-Code skills and plugins, and it is the only runtime that enforces **limits**.
-agent-manager reads the runtime from the Harness spec (`spec.kagent`,
-`spec.claude`, `spec.codex`, `spec.byo`).
+agent then runs as a Claude Code session and its skills and plugins are
+Claude Code skills and plugins. Per-turn bounds (a budget, a turn cap) are the
+Harness's (`Harness.spec.claude.limits`, platform-admin owned), not the
+agent's.
 
-- `limits: {budgetUsd, maxTurns}` bounds every turn (chart `agent.limits`,
-  `spec.template.limits`): a decimal budget in US dollars with up to four
-  decimals, 1 to 10000 model round-trips, at least one of the two. A create or
-  update that gives limits for an agent on any other Harness is refused with
-  the Harness and its runtime; `update_agent` with `limits: {}` clears them.
 - `plugins` is a list of Agent Plugins bundles, `{git: {url, commit}, path,
   skills}` or `{oci: <ref>@sha256:<digest>, path, skills}` (chart `plugins[]`,
   `spec.template.plugins[]`). A plugin is written as given and must come
@@ -260,7 +254,7 @@ namespace on the workload cluster. `get_info` reports `capabilities.targetCluste
   as the caller (`oauth.downstream`). Running as the ServiceAccount, the
   kubeconfig is used as it is.
 - **The agent, its ModelConfig and its Harness are on the workload cluster**:
-  the AgentTemplate, its RemoteMCPServer, the ModelConfigs `modelConfig` must
+  the Agent, its RemoteMCPServer, the ModelConfigs `modelConfig` must
   name, the Harnesses and the agent's events are read there. The cluster runs
   the agent runtime slice of the `agent-platform` chart (kagent and its CRDs,
   Substrate, agentgateway, the platform Harness).
