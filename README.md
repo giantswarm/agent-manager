@@ -70,7 +70,10 @@ chose and confirmed — the service never derives one from a display name, per
 the creating-agents PRD), the **modelConfig** (must exist in the namespace;
 the error lists the valid ones), the **toolset** (required, see below), and
 optionally `harness`, `displayName`, `description`, `systemMessage`,
-`iconUrl`, `skills` and `plugins` (see below), `labels`, `annotations`,
+`iconUrl`, `skills` and `plugins` (see below), `egress` (the HTTP(S) origins
+the agent may reach besides what its revision compiles, such as
+`https://github.com:443` or `https://*.githubusercontent.com`; chart
+`agent.egress`, the Agent's `spec.egress`), `labels`, `annotations`,
 `namespace`. It emits only what was set so the chart's defaults apply to
 everything else (the portal's rule) plus the platform's own two values, the
 Harness (`agent.harness`) and, when configured, the muster URL (`muster.url`),
@@ -94,6 +97,7 @@ spec:
       displayName: Coder
       systemMessage: …
       harness: claude
+      egress: [https://github.com:443, "https://*.githubusercontent.com"]
     modelConfig: {name: default-model-config}
     skills:
       - {name: runbooks, path: runbooks, git: {url: https://github.com/giantswarm/agent-skills, commit: 0123456789abcdef0123456789abcdef01234567}}
@@ -104,7 +108,8 @@ spec:
     muster: {url: http://muster.agent-platform.svc.cluster.local:8090/mcp}
 ```
 
-The chart renders the `Agent` (`spec.harnessRef.name: <agent.harness>`; under
+The chart renders the `Agent` (`spec.harnessRef.name: <agent.harness>`,
+`spec.egress: <agent.egress>`; under
 `spec.template` the `description`, `systemPrompt`, `modelConfig`,
 `skills[]`, `plugins[]` and the muster binding; the annotations
 `ui.giantswarm.io/display-name` and `ui.giantswarm.io/icon-url`) and the

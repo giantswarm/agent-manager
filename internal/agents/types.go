@@ -219,6 +219,10 @@ type Spec struct {
 	Skills Skills `json:"skills,omitempty"`
 	// Plugins the agent enables skills from; every entry comes pinned.
 	Plugins Plugins `json:"plugins,omitempty"`
+	// Egress lists the HTTP(S) origins the agent may reach besides what its
+	// revision compiles (chart value agent.egress, the Agent's spec.egress),
+	// such as https://github.com:443 or https://*.githubusercontent.com.
+	Egress []string `json:"egress,omitempty"`
 	// GitAuthSecretName names the Secret in the agent's namespace whose key
 	// `token` reads the agent's private git skills and plugins (chart value
 	// skillsGitAuthSecretRef.name, fanned out to every git source). Empty
@@ -243,7 +247,7 @@ type Spec struct {
 
 // Update is a partial change to an existing agent: nil pointers leave the
 // current value; a pointer to an empty value clears it (falls back to the
-// chart default). Skills, Plugins and Toolset replace the whole list (an
+// chart default). Skills, Plugins, Egress and Toolset replace the whole list (an
 // empty toolset is refused: use preset:none).
 type Update struct {
 	Location
@@ -255,6 +259,8 @@ type Update struct {
 	IconURL       *string  `json:"iconUrl,omitempty"`
 	Skills        *Skills  `json:"skills,omitempty"`
 	Plugins       *Plugins `json:"plugins,omitempty"`
+	// Egress replaces the agent's whole egress list; empty clears it.
+	Egress *[]string `json:"egress,omitempty"`
 	// GitAuthSecretName replaces the skills credential Secret; empty clears it
 	// back to the installation's.
 	GitAuthSecretName *string            `json:"gitAuthSecretName,omitempty"`
@@ -368,6 +374,9 @@ type Agent struct {
 	Skills Skills `json:"skills,omitempty"`
 	// Plugins as pinned.
 	Plugins Plugins `json:"plugins,omitempty"`
+	// Egress is the Agent's spec.egress (the chart value agent.egress while
+	// nothing is rendered).
+	Egress []string `json:"egress,omitempty"`
 	// Toolset is the toolset the agent declares: the owning HelmRelease's
 	// `toolset` value, or, for a bare Agent object, the X-Muster-Toolset
 	// header of the agent's RemoteMCPServer. Absent when none is declared.

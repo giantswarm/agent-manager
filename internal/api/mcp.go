@@ -52,6 +52,7 @@ const (
 	argIconURL       = "iconUrl"
 	argSkills        = "skills"
 	argPlugins       = "plugins"
+	argEgress        = "egress"
 	argGitAuthSecret = "gitAuthSecretName" // #nosec G101 -- an argument name, not a credential
 	argRefreshSkills = "refreshSkills"
 	argToolset       = "toolset"
@@ -146,6 +147,9 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 	}
 	pluginsProp := mcp.WithArray(argPlugins, mcp.Description(pluginDesc), mcp.Items(pluginEntry))
 	pluginsReplaceProp := mcp.WithArray(argPlugins, mcp.Description("Replaces the agent's whole plugin list ([] clears it). "+pluginDesc), mcp.Items(pluginEntry))
+	egressDesc := "HTTP(S) origins the agent may reach besides what its revision compiles (the model, its MCP servers, its skill and plugin sources, telemetry): <scheme>://<host>[:<port>], such as https://github.com:443, https://proxy.golang.org or https://*.githubusercontent.com (a wildcard replaces the leftmost label and needs two labels under it); at most 64, none twice. Chart value agent.egress, the Agent's spec.egress; nothing allows every host."
+	egressProp := mcp.WithArray(argEgress, mcp.Description(egressDesc), mcp.Items(stringSchema))
+	egressReplaceProp := mcp.WithArray(argEgress, mcp.Description("Replaces the agent's whole egress list ([] clears it). "+egressDesc), mcp.Items(stringSchema))
 	harnessDesc := "Harness of the namespace that runs the agent (chart agent.harness, the Agent's spec.harnessRef.name); omit for the platform Harness (get_info harness.name, the kagent Go ADK). A Harness whose runtime is Claude Code (claude on the platform) runs the agent as a Claude Code session: skills and plugins are Claude Code skills and plugins there. Fixed at create: a name no Harness of the namespace carries is refused with the ones that exist."
 	nsProp := mcp.WithString(argNamespace, mcp.Description("Namespace of the agent; default: the installation's kagent namespace (get_info reports the managed ones)."))
 	orgProp := mcp.WithString(argOrganization, mcp.Description("With cluster: the organization owning the workload cluster the agent runs on (its namespace org-<organization> holds the cluster's kubeconfig Secret and the agent's HelmRelease). Omit both for the installation's own cluster."))
@@ -204,6 +208,7 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 		toolsetRequiredProp,
 		skillsProp,
 		pluginsProp,
+		egressProp,
 		gitAuthProp,
 		labelsProp,
 		annotationsProp,
@@ -227,6 +232,7 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 		mcp.WithString(argIconURL, mcp.Description("New avatar URL; \"\" clears it")),
 		skillsReplaceProp,
 		pluginsReplaceProp,
+		egressReplaceProp,
 		gitAuthReplaceProp,
 		refreshSkillsProp,
 		toolsetReplaceProp,
@@ -281,6 +287,7 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 		toolsetProp,
 		skillsProp,
 		pluginsProp,
+		egressProp,
 		gitAuthProp,
 		refreshSkillsProp,
 		labelsProp,
@@ -326,6 +333,9 @@ type tools struct {
 }
 
 // schemaProp is a JSON-schema leaf with a description.
+// stringSchema is the JSON Schema of one string item.
+var stringSchema = map[string]any{"type": "string"}
+
 func schemaProp(typ, desc string) map[string]any {
 	return map[string]any{"type": typ, argDescription: desc}
 }

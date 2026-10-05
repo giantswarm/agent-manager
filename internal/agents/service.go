@@ -607,6 +607,9 @@ func checkSpec(spec Spec) []error {
 	if err := ValidatePlugins(spec.Plugins); err != nil {
 		errs = append(errs, err)
 	}
+	if err := ValidateEgress(spec.Egress); err != nil {
+		errs = append(errs, err)
+	}
 	if err := ValidateSystemMessage(spec.SystemMessage); err != nil {
 		errs = append(errs, err)
 	}
@@ -975,6 +978,16 @@ func (s *Service) mergedValues(ctx context.Context, st *site, upd Update, hr *un
 	setOrDelete(agentBlock, "description", upd.Description)
 	setOrDelete(agentBlock, "systemMessage", upd.SystemMessage)
 	setOrDelete(agentBlock, "iconUrl", upd.IconURL)
+	if upd.Egress != nil {
+		if err := ValidateEgress(*upd.Egress); err != nil {
+			return after, before, err
+		}
+		if len(*upd.Egress) > 0 {
+			agentBlock["egress"] = toAnySlice(*upd.Egress)
+		} else {
+			delete(agentBlock, "egress")
+		}
+	}
 	after["agent"] = agentBlock
 
 	var firstErr error
@@ -1432,6 +1445,7 @@ func agentFromObject(obj, server *unstructured.Unstructured) Agent {
 	a.SystemMessage, _, _ = unstructured.NestedString(obj.Object, "spec", "template", "systemPrompt")
 	a.Skills = skillsFromObject(obj)
 	a.Plugins = pluginsFromObject(obj)
+	a.Egress = egressFromObject(obj)
 	a.Tools = toolBindingsOf(obj)
 	a.Toolset, a.ImplicitFullAccess = toolsetOf(obj, server)
 	a.Status = objectStatusOf(obj)
@@ -1558,4 +1572,5 @@ func applyHelmRelease(a *Agent, hr *unstructured.Unstructured) {
 	}
 	a.Skills = skillsFromValues(values)
 	a.Plugins = pluginsFromValues(values)
+	a.Egress = egressFromValues(values)
 }

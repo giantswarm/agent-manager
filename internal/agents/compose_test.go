@@ -103,6 +103,7 @@ func TestBuildValuesIsTheChartContract(t *testing.T) {
 		IconURL: "https://avatars.example/v1/sre.png",
 		Skills:  pinned,
 		Plugins: plugins,
+		Egress:  []string{"https://github.com:443", "https://*.githubusercontent.com"},
 		Toolset: []string{"preset:read-only", "workflow:incident-triage"},
 		Labels:  map[string]string{"tenant": "sre"},
 	}, ComposeConfig{MusterURL: "http://muster.agent-platform.svc.cluster.local:8090/mcp", HarnessName: "claude"})
@@ -110,6 +111,7 @@ func TestBuildValuesIsTheChartContract(t *testing.T) {
 		"agent": map[string]any{
 			"name": "sre", "displayName": "SRE Assistant", "description": "helps", "systemMessage": "Be brief.",
 			"iconUrl": "https://avatars.example/v1/sre.png", "harness": "claude",
+			"egress": []any{"https://github.com:443", "https://*.githubusercontent.com"},
 		},
 		"modelConfig": map[string]any{"name": "mc"},
 		"skills": []any{
@@ -146,6 +148,7 @@ func TestBuildValuesIsTheChartContract(t *testing.T) {
 	// The read model reads its skills and plugins back from the values it wrote.
 	assert.Equal(t, pinned, skillsFromValues(full))
 	assert.Equal(t, plugins, pluginsFromValues(full))
+	assert.Equal(t, []string{"https://github.com:443", "https://*.githubusercontent.com"}, egressFromValues(full))
 }
 
 func assertNoPath(t *testing.T, values map[string]any, dotted string) {
