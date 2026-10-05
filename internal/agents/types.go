@@ -474,6 +474,10 @@ type Status struct {
 	Template    *TemplateStatus    `json:"template,omitempty"`
 	HelmRelease *HelmReleaseStatus `json:"helmRelease,omitempty"`
 	Events      []Event            `json:"events,omitempty"`
+
+	// sourceFailure is the Ready condition of a chart source that reports a
+	// failure while the HelmRelease waits for it.
+	sourceFailure *Condition
 }
 
 // TemplateStatus is the AgentTemplate's status: one entry per admitting
