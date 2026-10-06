@@ -1,24 +1,37 @@
 // Package migrate is the `agent-manager migrate` command: the expand–contract
-// migration of an installation's agents from Generic chart 0.x releases
-// (kagent.dev/v1alpha2 Agent) to Generic chart 1.x releases
-// (kagent.dev/v1alpha3 AgentTemplate). It runs once per installation as a
-// Job of the connectivity chart and by hand with a kubeconfig; every phase is
+// migration of an installation's agents from one Generic chart major to the
+// next. Two hops exist, and the target range (Options.TargetSemver) picks
+// one, because a cluster serves one kagent line at a time and a namespace's
+// releases share one chart source:
+//
+//   - 0.x -> 1.x: kagent.dev/v1alpha2 Agent to kagent.dev/v1alpha3
+//     AgentTemplate; removed keys dropped, muster.toolNames renamed, skills
+//     pinned to commits and digests; the five kagent.dev CRDs the 1.x line
+//     no longer ships are deleted last.
+//   - 1.x -> 2.x: kagent.dev/v1alpha3 AgentTemplate to api.kagent.dev/v1alpha3
+//     Agent; sub-agent bindings (extraTools[], extraAgentSpec.tools[]) move
+//     from `agent` to `subAgent`, the 1.x Harness admission label becomes
+//     agent.harness. The old kagent.dev CRDs are the platform's to remove.
+//
+// A release deployed from a chart older than the hop's source major is
+// reported, never rewritten. The command runs once per installation as a Job
+// of the connectivity chart and by hand with a kubeconfig; every phase is
 // idempotent and gated on the previous one, so re-running is always safe:
 //
 //   - expand: every Generic-chart release rendering into a managed namespace
-//     gets 1.x values (removed keys dropped, muster.toolNames renamed, skills
-//     pinned to commits and digests, validated against the 1.x schema before
-//     anything is written); a GitOps-owned or external release is never
-//     written — its rewrite is emitted as a diff for a pull request; the
-//     namespace's agent-chart OCIRepository moves to the target range last,
-//     only when every release it serves is on 1.x values and the registry has
-//     a version in that range.
+//     gets the target major's values, validated against the target chart's
+//     schema; the releases of a chart source are written only when every one
+//     of them validates. A GitOps-owned or external release is never written
+//     — its rewrite is emitted as a diff for a pull request. The namespace's
+//     agent-chart OCIRepository moves to the target range last, only when
+//     every release it serves is on target values and the registry has a
+//     version in that range.
 //   - wait: the contract runs only when every release is deployed from a
-//     1.x chart, every AgentTemplate of the namespace is Ready on the
-//     platform Harness and no v1alpha2 Agent is still rendered by a release
+//     chart in the target range, every object the target chart renders is
+//     Ready and no object of the old line is still rendered by a release
 //     Flux has yet to upgrade; until then the report names what is pending.
-//   - contract: the leftover v1alpha2 Agent objects of the managed namespaces
-//     are deleted, then the five CRDs the v2 chart no longer ships.
+//   - contract: the leftover agent objects of the old line in the managed
+//     namespaces are deleted, then (0.x -> 1.x only) the removed CRDs.
 //
 // Every run records a report per managed namespace (ConfigMap
 // agent-manager-migrate-report); --dry-run prints it and writes nothing.
@@ -31,6 +44,7 @@ import (
 	"log/slog"
 	"reflect"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -50,7 +64,8 @@ import (
 )
 
 // RemovedCRDs are the kagent.dev CRDs the API v2 chart no longer ships and
-// Helm never deletes (helm.sh/resource-policy: keep); the contract phase does.
+// Helm never deletes (helm.sh/resource-policy: keep); the contract phase of
+// the 0.x -> 1.x hop does.
 var RemovedCRDs = []string{"agents.kagent.dev", "sandboxagents.kagent.dev", "agentharnesses.kagent.dev", "memories.kagent.dev", "toolservers.kagent.dev"}
 
 // The API of the objects the 0.x chart rendered.
@@ -67,12 +82,11 @@ type Options struct {
 	// GitOpsNamespaces are searched for Generic-chart HelmReleases with a
 	// targetNamespace in Namespaces, next to what the provenance labels name.
 	GitOpsNamespaces []string
-	// HarnessName is the platform Harness whose status entry decides a
-	// template's readiness; composed as agent.harness when it is not the
-	// chart default.
+	// HarnessName is the platform Harness every agent runs on; composed as
+	// agent.harness when it is not the chart default.
 	HarnessName string
 	// ChartOCIURL identifies the agent chart's sources; TargetSemver is the
-	// range they move to (1.x).
+	// range they move to, and its major picks the hop (1.x or 2.x).
 	ChartOCIURL  string
 	TargetSemver string
 	// TargetSemverFilter is the ref.semverFilter the sources move to with
@@ -82,7 +96,8 @@ type Options struct {
 	ReportConfigMap string
 	// DryRun prints the report and writes nothing.
 	DryRun bool
-	// KagentAPIVersion serves agenttemplates (v1alpha3).
+	// KagentAPIVersion is the served version of the kagent API the target
+	// chart renders into: kagent.dev for 1.x, api.kagent.dev for 2.x.
 	KagentAPIVersion string
 	// HelmReleaseAPIVersion / OCIRepositoryAPIVersion are the served Flux APIs.
 	HelmReleaseAPIVersion   string
@@ -91,8 +106,9 @@ type Options struct {
 	Version string
 }
 
-// StatusReader is the platform Harness's verdict on a template — the
-// service's get_agent_status (agents.Service).
+// StatusReader is the verdict on the object a release on the target chart
+// renders: the service's get_agent_status for an api.kagent.dev Agent, the
+// TemplateStatus for a kagent.dev AgentTemplate.
 type StatusReader interface {
 	Status(ctx context.Context, loc agents.Location, name string) (*agents.Status, error)
 }
@@ -104,13 +120,15 @@ type Runner struct {
 	pinner agents.SkillPinner
 	status StatusReader
 	opts   Options
+	hop    *hop
 	filter *regexp.Regexp
 	log    *slog.Logger
 	now    func() time.Time
 }
 
-// New builds a runner.
-func New(client kube.Client, c agents.ChartSource, p agents.SkillPinner, st StatusReader, opts Options, log *slog.Logger) *Runner {
+// New builds a runner; the target range must admit exactly one major with a
+// migration path to it.
+func New(client kube.Client, c agents.ChartSource, p agents.SkillPinner, st StatusReader, opts Options, log *slog.Logger) (*Runner, error) {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -121,6 +139,14 @@ func New(client kube.Client, c agents.ChartSource, p agents.SkillPinner, st Stat
 	opts.KagentAPIVersion = orDefault(opts.KagentAPIVersion, agents.DefaultKagentAPIVersion)
 	opts.HelmReleaseAPIVersion = orDefault(opts.HelmReleaseAPIVersion, agents.DefaultHelmReleaseAPIVersion)
 	opts.OCIRepositoryAPIVersion = orDefault(opts.OCIRepositoryAPIVersion, agents.DefaultOCIRepositoryAPIVersion)
+	major, err := TargetMajor(opts.TargetSemver)
+	if err != nil {
+		return nil, err
+	}
+	h, err := hopFor(major, opts.KagentAPIVersion)
+	if err != nil {
+		return nil, err
+	}
 	var filter *regexp.Regexp
 	if f := opts.TargetSemverFilter; f != nil && *f != "" {
 		re, err := regexp.Compile(*f)
@@ -131,7 +157,7 @@ func New(client kube.Client, c agents.ChartSource, p agents.SkillPinner, st Stat
 		}
 		filter = re
 	}
-	return &Runner{client: client, chart: c, pinner: p, status: st, opts: opts, filter: filter, log: log, now: time.Now}
+	return &Runner{client: client, chart: c, pinner: p, status: st, opts: opts, hop: h, filter: filter, log: log, now: time.Now}, nil
 }
 
 // Result is one run: a report per managed namespace.
@@ -145,7 +171,7 @@ type Result struct {
 func (r *Runner) Run(ctx context.Context) (*Result, error) {
 	info := r.chart.Info(ctx)
 	sch := r.chart.Schema(ctx)
-	run := RunInfo{At: r.now().UTC().Format(time.RFC3339), DryRun: r.opts.DryRun, Version: r.opts.Version, Harness: r.opts.HarnessName,
+	run := RunInfo{At: r.now().UTC().Format(time.RFC3339), DryRun: r.opts.DryRun, Version: r.opts.Version, Harness: r.opts.HarnessName, Path: r.hop.String(),
 		Chart: ChartInfo{OCIURL: r.opts.ChartOCIURL, TargetSemver: r.opts.TargetSemver, TargetSemverFilter: r.opts.TargetSemverFilter, LatestVersion: info.LatestVersion, SchemaVersion: sch.Version, SchemaSource: sch.Source}}
 	chartAvailable := info.LatestVersion != ""
 	if !chartAvailable {
@@ -170,7 +196,7 @@ func (r *Runner) Run(ctx context.Context) (*Result, error) {
 
 	res := &Result{}
 	for _, st := range states {
-		st.finish()
+		st.finish(r.hop)
 		res.Reports = append(res.Reports, st.report)
 		errs = append(errs, st.errs...)
 		if r.opts.DryRun {
@@ -190,14 +216,20 @@ type nsState struct {
 	report    *Report
 	sources   []*source
 	releases  []*release
-	agents    []*legacyAgent
-	templates []*unstructured.Unstructured
-	// expandDone: every release rendering into ns is on 1.x values and every
-	// writable source on the target range.
+	leftovers []*leftover
+	// rendered are the objects of the target line in ns; renderedServed is
+	// false while the cluster does not serve their resource.
+	rendered       []*unstructured.Unstructured
+	renderedServed bool
+	// templates are the names a sub-agent templateRef resolves to in ns;
+	// nil when the hop has none or they cannot be listed.
+	templates map[string]bool
+	// expandDone: every release rendering into ns is on target values and
+	// every writable source on the target range.
 	expandDone bool
 	// gatePassed: expandDone and Flux and kagent have caught up.
 	gatePassed bool
-	// crdsPresent: any of RemovedCRDs existed when the run looked.
+	// crdsPresent: any of the hop's CRDs existed when the run looked.
 	crdsPresent bool
 	errs        []error
 }
@@ -217,11 +249,16 @@ type release struct {
 	source           *source
 	gitops, external bool
 	report           *ReleaseReport
-	// onTarget: the values are 1.x after this run.
+	// values are spec.values as read, rewritten what they become; write is
+	// true while the rewrite is planned for a write this run.
+	values, rewritten map[string]any
+	write             bool
+	// onTarget: the values are the target major's after this run.
 	onTarget bool
 }
 
-type legacyAgent struct {
+// leftover is an agent object of the old line.
+type leftover struct {
 	obj    *unstructured.Unstructured
 	report *AgentReport
 	// owner is the Generic-chart release rendering it, nil when none does.
@@ -230,9 +267,9 @@ type legacyAgent struct {
 
 func (st *nsState) fail(err error) { st.errs = append(st.errs, err) }
 
-// templateName is the AgentTemplate a release renders: agent.name, else the
-// Helm release name, else the object's name.
-func (rel *release) templateName() string {
+// renderedName is the object a release renders: agent.name, else the Helm
+// release name, else the object's name.
+func (rel *release) renderedName() string {
 	values, _, _ := unstructured.NestedMap(rel.obj.Object, "spec", "values")
 	if agent, _ := values["agent"].(map[string]any); agent != nil {
 		if name, _ := agent["name"].(string); name != "" {
@@ -257,6 +294,12 @@ func (rel *release) ownership() string {
 
 func (rel *release) id() string { return rel.ns + "/" + rel.name }
 
+// renderNamespace is where the release renders.
+func (rel *release) renderNamespace() string {
+	target, _, _ := unstructured.NestedString(rel.obj.Object, "spec", "targetNamespace")
+	return orDefault(target, rel.ns)
+}
+
 // ---- discovery ----------------------------------------------------------------
 
 func (r *Runner) helmReleaseGVR() schema.GroupVersionResource {
@@ -267,10 +310,6 @@ func (r *Runner) ociRepositoryGVR() schema.GroupVersionResource {
 	return gvrFor(r.opts.OCIRepositoryAPIVersion, "ocirepositories")
 }
 
-func (r *Runner) templateGVR() schema.GroupVersionResource {
-	return schema.GroupVersionResource{Group: "kagent.dev", Version: r.opts.KagentAPIVersion, Resource: "agenttemplates"}
-}
-
 func gvrFor(apiVersion, resource string) schema.GroupVersionResource {
 	gv, err := schema.ParseGroupVersion(apiVersion)
 	if err != nil {
@@ -279,19 +318,15 @@ func gvrFor(apiVersion, resource string) schema.GroupVersionResource {
 	return gv.WithResource(resource)
 }
 
-func (r *Runner) managed(ns string) bool {
-	for _, m := range r.opts.Namespaces {
-		if m == ns {
-			return true
-		}
-	}
-	return false
-}
+func (r *Runner) managed(ns string) bool { return slices.Contains(r.opts.Namespaces, ns) }
 
 // discover reads everything the phases decide on: the agent-chart sources
-// and the Generic-chart releases of the namespace, the v1alpha2 Agents and
-// v1alpha3 AgentTemplates in it, and the releases outside it that render
-// into it (reached through provenance labels and the GitOps namespaces).
+// and the Generic-chart releases of the namespace, the old line's agent
+// objects and the target line's rendered objects in it, and the releases
+// outside it that render into it (reached through provenance labels and the
+// GitOps namespaces). A resource the cluster does not serve (the old line's
+// after its CRDs are gone, the target line's before the kagent upgrade) is
+// read as empty.
 func (r *Runner) discover(ctx context.Context, ns string) (*nsState, error) {
 	dyn := r.client.Dynamic()
 	st := &nsState{ns: ns, report: &Report{Namespace: ns, Releases: []ReleaseReport{}, Sources: []SourceReport{}, Agents: []AgentReport{}}}
@@ -324,34 +359,39 @@ func (r *Runner) discover(ctx context.Context, ns string) (*nsState, error) {
 		st.addRelease(hr, src, false)
 	}
 
-	agentList, err := dyn.Resource(legacyAgentGVR).Namespace(ns).List(ctx, metav1.ListOptions{})
-	switch {
-	case apierrors.IsNotFound(err):
-		// The v1alpha2 CRD is gone: nothing left of the old world here.
-	case err != nil:
-		return nil, fmt.Errorf("list kagent.dev/v1alpha2 agents in %s: %w", ns, err)
-	default:
-		for i := range agentList.Items {
-			st.agents = append(st.agents, &legacyAgent{obj: &agentList.Items[i]})
-		}
-	}
-	tplList, err := dyn.Resource(r.templateGVR()).Namespace(ns).List(ctx, metav1.ListOptions{})
+	leftovers, _, err := listServed(ctx, dyn, r.hop.leftover, ns)
 	if err != nil {
-		return nil, fmt.Errorf("list agenttemplates in %s: %w", ns, err)
+		return nil, err
 	}
-	for i := range tplList.Items {
-		st.templates = append(st.templates, &tplList.Items[i])
+	for _, obj := range leftovers {
+		st.leftovers = append(st.leftovers, &leftover{obj: obj})
+	}
+	st.rendered, st.renderedServed, err = listServed(ctx, dyn, r.hop.rendered, ns)
+	if err != nil {
+		return nil, err
+	}
+	if r.hop.templates != nil {
+		templates, served, err := listServed(ctx, dyn, *r.hop.templates, ns)
+		if err != nil {
+			return nil, err
+		}
+		if served {
+			st.templates = map[string]bool{}
+			for _, tpl := range templates {
+				st.templates[tpl.GetName()] = true
+			}
+		}
 	}
 
 	// Releases outside the namespace that render into it.
 	owners := map[string]bool{}
-	for _, a := range st.agents {
-		if name, hrNs := ownerOf(a.obj); name != "" {
+	for _, l := range st.leftovers {
+		if name, hrNs := ownerOf(l.obj); name != "" {
 			owners[orDefault(hrNs, ns)+"/"+name] = true
 		}
 	}
-	for _, tpl := range st.templates {
-		if name, hrNs := ownerOf(tpl); name != "" {
+	for _, obj := range st.rendered {
+		if name, hrNs := ownerOf(obj); name != "" {
 			owners[orDefault(hrNs, ns)+"/"+name] = true
 		}
 	}
@@ -384,8 +424,25 @@ func (r *Runner) discover(ctx context.Context, ns string) (*nsState, error) {
 	sort.Slice(st.sources, func(i, j int) bool {
 		return st.sources[i].ns+"/"+st.sources[i].name < st.sources[j].ns+"/"+st.sources[j].name
 	})
-	r.classifyAgents(st)
+	r.classifyLeftovers(st)
 	return st, nil
+}
+
+// listServed lists gvr in ns; served is false (and the list empty) when the
+// cluster does not serve the resource.
+func listServed(ctx context.Context, dyn dynamic.Interface, gvr schema.GroupVersionResource, ns string) ([]*unstructured.Unstructured, bool, error) {
+	list, err := dyn.Resource(gvr).Namespace(ns).List(ctx, metav1.ListOptions{})
+	if apierrors.IsNotFound(err) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("list %s in %s: %w", gvr.GroupResource(), ns, err)
+	}
+	out := make([]*unstructured.Unstructured, 0, len(list.Items))
+	for i := range list.Items {
+		out = append(out, &list.Items[i])
+	}
+	return out, true, nil
 }
 
 // sourceOf reads an OCIRepository of the agent chart; nil for another chart.
@@ -410,7 +467,7 @@ func (st *nsState) addRelease(hr *unstructured.Unstructured, src *source, extern
 // discoverExternal reads a release outside the managed namespaces and its
 // source; a release of another chart (a bundled example agent's kagent
 // release) or one that cannot be read is not a Generic-chart release and is
-// left to the Agent classification.
+// left to the leftover classification.
 func (r *Runner) discoverExternal(ctx context.Context, st *nsState, hrNs, hrName string, sources map[string]*source) error {
 	dyn := r.client.Dynamic()
 	hr, err := dyn.Resource(r.helmReleaseGVR()).Namespace(hrNs).Get(ctx, hrName, metav1.GetOptions{})
@@ -445,57 +502,72 @@ func (r *Runner) discoverExternal(ctx context.Context, st *nsState, hrNs, hrName
 	return nil
 }
 
-// classifyAgents says, for every v1alpha2 Agent, whether a Generic-chart
-// release renders it (Helm removes it when the release upgrades) or whether
-// only the contract phase can remove it.
-func (r *Runner) classifyAgents(st *nsState) {
+// classifyLeftovers says, for every agent object of the old line, whether a
+// Generic-chart release renders it (Helm removes it when the release
+// upgrades) or whether only the contract phase can remove it.
+func (r *Runner) classifyLeftovers(st *nsState) {
 	byID := map[string]*release{}
 	for _, rel := range st.releases {
 		byID[rel.id()] = rel
 	}
-	sort.Slice(st.agents, func(i, j int) bool { return st.agents[i].obj.GetName() < st.agents[j].obj.GetName() })
-	for _, a := range st.agents {
-		rep := &AgentReport{Name: a.obj.GetName(), Namespace: st.ns}
-		name, hrNs := ownerOf(a.obj)
+	sort.Slice(st.leftovers, func(i, j int) bool { return st.leftovers[i].obj.GetName() < st.leftovers[j].obj.GetName() })
+	for _, l := range st.leftovers {
+		rep := &AgentReport{Name: l.obj.GetName(), Namespace: st.ns, Kind: r.hop.leftoverKind}
+		name, hrNs := ownerOf(l.obj)
 		if name == "" {
 			rep.Action, rep.Reason = AgentNotMigratable, "no Flux provenance labels: not rendered by a HelmRelease; only the contract phase removes it"
-			a.report = rep
+			l.report = rep
 			continue
 		}
 		rep.Owner = orDefault(hrNs, st.ns) + "/" + name
 		if owner, ok := byID[rep.Owner]; ok {
-			a.owner = owner
-			rep.Action, rep.Reason = AgentAwaitingUpgrade, fmt.Sprintf("rendered by Generic-chart release %s: Helm replaces it with the AgentTemplate when the release upgrades to chart %s; the contract phase sweeps what is left", rep.Owner, r.opts.TargetSemver)
+			l.owner = owner
+			rep.Action, rep.Reason = AgentAwaitingUpgrade, fmt.Sprintf("rendered by Generic-chart release %s: Helm replaces it with the %s when the release upgrades to chart %s; the contract phase sweeps what is left", rep.Owner, r.hop.renderedKind, r.opts.TargetSemver)
 		} else {
 			rep.Action, rep.Reason = AgentNotMigratable, fmt.Sprintf("rendered by HelmRelease %s, which is not a Generic-chart release (a bundled example agent of the kagent chart, or a chart this command does not know): nothing to rewrite; only the contract phase removes it", rep.Owner)
 		}
-		a.report = rep
+		l.report = rep
 	}
 }
 
 // ---- expand -------------------------------------------------------------------
 
-// expand rewrites every release's values (writing the writable ones when the
-// target chart exists), then moves the writable sources whose releases are
-// all on 1.x values.
+// expand plans every release's rewrite and validates it, holds the writable
+// releases of a source any of whose releases cannot move, writes the rest
+// (when the target chart exists), then moves the writable sources whose
+// releases are all on target values.
 func (r *Runner) expand(ctx context.Context, st *nsState, chartAvailable bool) {
 	dyn := r.client.Dynamic()
 	for _, rel := range st.releases {
-		rel.report = r.rewriteRelease(ctx, st, dyn, rel, chartAvailable)
+		rel.report = r.planRelease(ctx, st, rel, chartAvailable)
+	}
+	holdSiblings(st)
+	for _, rel := range st.releases {
+		if rel.write {
+			r.writeRelease(ctx, st, dyn, rel)
+		}
 	}
 	for _, src := range st.sources {
 		src.report = r.moveSource(ctx, st, dyn, src, chartAvailable)
 	}
 }
 
-func (r *Runner) rewriteRelease(ctx context.Context, st *nsState, dyn dynamic.Interface, rel *release, chartAvailable bool) *ReleaseReport {
+// planRelease rewrites and validates one release's values without writing
+// anything; a writable release to be written comes back as rewritten with
+// rel.write set.
+func (r *Runner) planRelease(ctx context.Context, st *nsState, rel *release, chartAvailable bool) *ReleaseReport {
+	to := r.hop.to
 	rep := &ReleaseReport{Name: rel.name, Namespace: rel.ns, Ownership: rel.ownership(), ChartVersion: deployedChartVersion(rel.obj)}
 	if target, _, _ := unstructured.NestedString(rel.obj.Object, "spec", "targetNamespace"); target != "" && target != rel.ns {
 		rep.TargetNamespace = target
 	}
+	if major, ok := chartMajor(rep.ChartVersion); ok && major < r.hop.from {
+		rep.Action, rep.Reason = ActionFailed, fmt.Sprintf("deployed from chart %s, older than the %d.x line this migration (%s) starts from: migrate it to %d.x first", rep.ChartVersion, r.hop.from, r.hop, major+1)
+		return rep
+	}
 	values, _, _ := unstructured.NestedMap(rel.obj.Object, "spec", "values")
 	values = orEmpty(values)
-	rewritten, changes, err := rewriteValues(ctx, values, r.opts.HarnessName, r.pinner)
+	rewritten, changes, err := r.hop.rewrite(ctx, values, r.opts.HarnessName, r.pinner)
 	if err != nil {
 		rep.Action, rep.Reason = ActionFailed, err.Error()
 		if errors.Is(err, skills.ErrUnresolvable) {
@@ -503,20 +575,25 @@ func (r *Runner) rewriteRelease(ctx context.Context, st *nsState, dyn dynamic.In
 		}
 		return rep
 	}
+	rel.values, rel.rewritten = values, rewritten
 	rewrittenHR := &unstructured.Unstructured{Object: runtime.DeepCopyJSON(rel.obj.Object)}
 	_ = unstructured.SetNestedMap(rewrittenHR.Object, rewritten, "spec", "values")
-	changes.DriftIgnoreRemoved = removeDriftIgnore(rewrittenHR)
+	if to == 1 {
+		changes.DriftIgnoreRemoved = removeDriftIgnore(rewrittenHR)
+	}
+	sch, violations := agents.ValidateValues(ctx, r.chart, rewritten)
+	if len(violations) > 0 {
+		rep.Changes = nilIfEmpty(changes)
+		rep.Action, rep.Reason = ActionFailed, fmt.Sprintf("the %d.x values do not satisfy the agent chart schema %s (%s): %s; the release is left as it is", to, sch.Version, sch.Source, strings.Join(violations, "; "))
+		return rep
+	}
+	rep.Warnings = r.subAgentWarnings(st, rel, rewritten)
 	if changes.Empty() && reflect.DeepEqual(values, rewritten) {
-		rep.Action, rep.Reason = ActionUnchanged, "already on the 1.x values"
+		rep.Action, rep.Reason = ActionUnchanged, fmt.Sprintf("already on the %d.x values", to)
 		rel.onTarget = true
 		return rep
 	}
 	rep.Changes = changes
-	sch, violations := agents.ValidateValues(ctx, r.chart, rewritten)
-	if len(violations) > 0 {
-		rep.Action, rep.Reason = ActionFailed, fmt.Sprintf("the rewritten values do not satisfy the agent chart schema %s (%s): %s; the release is left as it is", sch.Version, sch.Source, strings.Join(violations, "; "))
-		return rep
-	}
 	if rel.gitops || rel.external {
 		rep.Action = ActionDiff
 		rep.Diff = manifestDiff(rel.obj, rewrittenHR)
@@ -527,35 +604,99 @@ func (r *Runner) rewriteRelease(ctx context.Context, st *nsState, dyn dynamic.In
 		return rep
 	}
 	if !chartAvailable {
-		rep.Action, rep.Reason = ActionPending, fmt.Sprintf("the registry has no version of the chart in %s yet; the values are rewritten once it exists (1.x values under a 0.x chart would fail the render)", r.opts.TargetSemver)
+		rep.Action, rep.Reason = ActionPending, fmt.Sprintf("the registry has no version of the chart in %s yet; the values are rewritten once it exists (%d.x values under a %d.x chart would fail the render)", r.opts.TargetSemver, to, r.hop.from)
 		return rep
 	}
 	rep.Action = ActionRewritten
-	rel.onTarget = true
+	rel.onTarget, rel.write = true, true
+	return rep
+}
+
+// subAgentWarnings names the sub-agent bindings of a release on 2.x values
+// whose templateRef resolves to no api.kagent.dev AgentTemplate of the
+// namespace. Chart 2.x renders an Agent with its template inline and never
+// an AgentTemplate, so a binding to another Generic-chart agent dangles
+// after the move; the write goes ahead (the 1.x binding resolves to nothing
+// on the api.kagent.dev line either) and the parent Agent reports
+// ResolvedRefs False until such an AgentTemplate exists.
+func (r *Runner) subAgentWarnings(st *nsState, rel *release, values map[string]any) []string {
+	if r.hop.templates == nil || rel.renderNamespace() != st.ns {
+		return nil
+	}
+	var out []string
+	for _, name := range subAgentTemplates(values) {
+		switch {
+		case st.templates == nil:
+			out = append(out, fmt.Sprintf("sub-agent templateRef %q not checked: the cluster does not serve %s yet", name, r.hop.templates.GroupResource()))
+		case !st.templates[name]:
+			out = append(out, fmt.Sprintf("sub-agent templateRef %q names no %s in namespace %s; chart 2.x renders the agent %q as an Agent with its template inline, not as an AgentTemplate, so the parent Agent reports ResolvedRefs False until an AgentTemplate of that name exists", name, r.hop.templates.GroupResource(), st.ns, name))
+		}
+	}
+	return out
+}
+
+// holdSiblings keeps the releases of a source together: when one release of
+// a source is failed or pending, none of its writable siblings is written,
+// since the source cannot move and target values under the source's current
+// chart would fail their render.
+func holdSiblings(st *nsState) {
+	for _, src := range st.sources {
+		var blockers []string
+		for _, rel := range src.releases {
+			if a := rel.report.Action; a == ActionFailed || a == ActionPending {
+				blockers = append(blockers, fmt.Sprintf("%s (%s)", rel.id(), a))
+			}
+		}
+		if len(blockers) == 0 {
+			continue
+		}
+		for _, rel := range src.releases {
+			if !rel.write {
+				continue
+			}
+			rel.write, rel.onTarget = false, false
+			rel.report.Action = ActionPending
+			rel.report.Reason = fmt.Sprintf("held: chart source %s/%s also serves %s, and its releases move together; nothing of it is written until every one of them can", src.ns, src.name, join(blockers))
+		}
+	}
+}
+
+// writeRelease writes a planned rewrite; a dry run only says it would.
+func (r *Runner) writeRelease(ctx context.Context, st *nsState, dyn dynamic.Interface, rel *release) {
+	rep := rel.report
 	if r.opts.DryRun {
 		rep.Reason = "dry run: would be written"
-		return rep
+		return
 	}
+	to := r.hop.to
 	if err := updateOnConflict(ctx, dyn.Resource(r.helmReleaseGVR()).Namespace(rel.ns), rel.name, func(hr *unstructured.Unstructured) error {
-		if current, _, _ := unstructured.NestedMap(hr.Object, "spec", "values"); !reflect.DeepEqual(orEmpty(current), values) {
+		if current, _, _ := unstructured.NestedMap(hr.Object, "spec", "values"); !reflect.DeepEqual(orEmpty(current), rel.values) {
 			return errors.New("spec.values changed since they were read; the next run rewrites the current values")
 		}
-		removeDriftIgnore(hr)
-		return unstructured.SetNestedMap(hr.Object, rewritten, "spec", "values")
+		if to == 1 {
+			removeDriftIgnore(hr)
+		}
+		return unstructured.SetNestedMap(hr.Object, rel.rewritten, "spec", "values")
 	}); err != nil {
 		rel.onTarget = false
 		rep.Action, rep.Reason = ActionFailed, fmt.Sprintf("update refused: %v", err)
 		st.fail(fmt.Errorf("update HelmRelease %s: %w", rel.id(), err))
-		return rep
+		return
 	}
 	st.report.Changed = true
-	r.log.Info("release rewritten to 1.x values", "release", rel.id(), "removed", changes.Removed, "renamed", changes.Renamed, "skills", len(changes.Skills))
-	return rep
+	r.log.Info("release rewritten", "release", rel.id(), "path", r.hop.String(), "removed", rep.Changes.Removed, "renamed", rep.Changes.Renamed, "skills", len(rep.Changes.Skills))
+}
+
+func nilIfEmpty(c *ValueChanges) *ValueChanges {
+	if c.Empty() {
+		return nil
+	}
+	return c
 }
 
 // moveSource moves one agent-chart OCIRepository to the target range: last,
-// only when every release it serves is on 1.x values and the registry has a
-// version in the range; a GitOps-owned or external source gets the diff.
+// only when every release it serves is on target values and the registry has
+// a version in the range; a GitOps-owned or external source gets the diff.
 func (r *Runner) moveSource(ctx context.Context, st *nsState, dyn dynamic.Interface, src *source, chartAvailable bool) *SourceReport {
 	rep := &SourceReport{Name: src.name, Namespace: src.ns, From: src.semver, To: r.opts.TargetSemver,
 		FromSemverFilter: src.semverFilter, ToSemverFilter: r.targetFilter(src)}
@@ -593,7 +734,7 @@ func (r *Runner) moveSource(ctx context.Context, st *nsState, dyn dynamic.Interf
 		}
 	}
 	if len(blockers) > 0 {
-		rep.Action, rep.Reason = SourceNotMoved, "releases not on 1.x values yet: "+join(blockers)
+		rep.Action, rep.Reason = SourceNotMoved, fmt.Sprintf("releases not on %d.x values yet: %s", r.hop.to, join(blockers))
 		return rep
 	}
 	rep.Action = SourceMoved
@@ -685,39 +826,43 @@ func (r *Runner) wait(ctx context.Context, st *nsState) {
 		st.report.Pending = pending
 		return
 	}
+	if !st.renderedServed {
+		st.report.Pending = []string{fmt.Sprintf("the cluster does not serve %s yet: the kagent upgrade to the line chart %d.x renders for comes first", r.hop.rendered.GroupResource(), r.hop.to)}
+		return
+	}
 	// Expand is done: is the platform caught up?
 	for _, rel := range st.releases {
 		if !r.releaseUpgraded(rel) {
 			pending = append(pending, fmt.Sprintf("release %s is deployed from chart %q; waiting for Flux to upgrade it to %s%s", rel.id(), rel.report.ChartVersion, r.opts.TargetSemver, suspendedNote(rel.obj)))
 			continue
 		}
-		tplName := rel.templateName()
-		rel.report.Template = &TemplateReport{Name: tplName}
-		if !hasTemplate(st.templates, tplName) {
-			pending = append(pending, fmt.Sprintf("release %s is on chart %s but has not rendered AgentTemplate %s/%s yet", rel.id(), rel.report.ChartVersion, st.ns, tplName))
+		name := rel.renderedName()
+		rel.report.Template = &TemplateReport{Name: name}
+		if !hasObject(st.rendered, name) {
+			pending = append(pending, fmt.Sprintf("release %s is on chart %s but has not rendered %s %s/%s yet", rel.id(), rel.report.ChartVersion, r.hop.renderedKind, st.ns, name))
 		}
 	}
-	for _, tpl := range st.templates {
-		rep := r.templateVerdict(ctx, st.ns, tpl.GetName())
+	for _, obj := range st.rendered {
+		rep := r.renderedVerdict(ctx, st.ns, obj.GetName())
 		for _, rel := range st.releases {
-			if rel.report.Template != nil && rel.report.Template.Name == tpl.GetName() {
+			if rel.report.Template != nil && rel.report.Template.Name == obj.GetName() {
 				rel.report.Template = rep
 			}
 		}
 		if rep.Verdict != agents.VerdictReady {
-			pending = append(pending, fmt.Sprintf("AgentTemplate %s/%s is %s: %s", st.ns, tpl.GetName(), rep.Verdict, rep.Summary))
+			pending = append(pending, fmt.Sprintf("%s %s/%s is %s: %s", r.hop.renderedKind, st.ns, obj.GetName(), rep.Verdict, rep.Summary))
 		}
 	}
-	for _, a := range st.agents {
-		if a.owner != nil {
-			pending = append(pending, fmt.Sprintf("kagent.dev/v1alpha2 Agent %s/%s is still rendered by release %s; Helm removes it when the release upgrades to chart %s", st.ns, a.obj.GetName(), a.owner.id(), r.opts.TargetSemver))
+	for _, l := range st.leftovers {
+		if l.owner != nil {
+			pending = append(pending, fmt.Sprintf("%s %s/%s is still rendered by release %s; Helm removes it when the release upgrades to chart %s", r.hop.leftoverKind, st.ns, l.obj.GetName(), l.owner.id(), r.opts.TargetSemver))
 		}
 	}
 	st.report.Pending = pending
 	st.gatePassed = len(pending) == 0
 }
 
-func (r *Runner) templateVerdict(ctx context.Context, ns, name string) *TemplateReport {
+func (r *Runner) renderedVerdict(ctx context.Context, ns, name string) *TemplateReport {
 	rep := &TemplateReport{Name: name, Exists: true}
 	status, err := r.status.Status(ctx, agents.In(ns), name)
 	if err != nil {
@@ -779,9 +924,9 @@ func suspendedNote(hr *unstructured.Unstructured) string {
 	return ""
 }
 
-func hasTemplate(templates []*unstructured.Unstructured, name string) bool {
-	for _, tpl := range templates {
-		if tpl.GetName() == name {
+func hasObject(objs []*unstructured.Unstructured, name string) bool {
+	for _, obj := range objs {
+		if obj.GetName() == name {
 			return true
 		}
 	}
@@ -790,9 +935,9 @@ func hasTemplate(templates []*unstructured.Unstructured, name string) bool {
 
 // ---- contract -----------------------------------------------------------------
 
-// contract deletes the leftover v1alpha2 Agents of every namespace whose gate
-// passed and, once every namespace passed, the removed CRDs. Without a
-// passed gate it only records whether the CRDs still exist.
+// contract deletes the leftover agent objects of the old line in every
+// namespace whose gate passed and, once every namespace passed, the hop's
+// CRDs. Without a passed gate it only records whether the CRDs still exist.
 func (r *Runner) contract(ctx context.Context, states []*nsState) {
 	dyn := r.client.Dynamic()
 	allPassed := true
@@ -808,20 +953,20 @@ func (r *Runner) contract(ctx context.Context, states []*nsState) {
 			continue
 		}
 		rep := &ContractReport{AgentsDeleted: []string{}, CRDs: crds}
-		for _, a := range st.agents {
-			name := a.obj.GetName()
+		for _, l := range st.leftovers {
+			name := l.obj.GetName()
 			if !r.opts.DryRun {
-				if err := dyn.Resource(legacyAgentGVR).Namespace(st.ns).Delete(ctx, name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
-					a.report.Reason = "delete refused: " + err.Error()
-					st.fail(fmt.Errorf("delete kagent.dev/v1alpha2 Agent %s/%s: %w", st.ns, name, err))
+				if err := dyn.Resource(r.hop.leftover).Namespace(st.ns).Delete(ctx, name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+					l.report.Reason = "delete refused: " + err.Error()
+					st.fail(fmt.Errorf("delete %s %s/%s: %w", r.hop.leftoverKind, st.ns, name, err))
 					continue
 				}
 				st.report.Changed = true
 			}
-			a.report.Action = AgentDeleted
-			a.report.Reason = "leftover of the 0.x chart, deleted by the contract phase"
+			l.report.Action = AgentDeleted
+			l.report.Reason = fmt.Sprintf("leftover of the %d.x chart, deleted by the contract phase", r.hop.from)
 			if r.opts.DryRun {
-				a.report.Reason += " (dry run: would be deleted)"
+				l.report.Reason += " (dry run: would be deleted)"
 			}
 			rep.AgentsDeleted = append(rep.AgentsDeleted, name)
 		}
@@ -829,19 +974,22 @@ func (r *Runner) contract(ctx context.Context, states []*nsState) {
 	}
 }
 
-// contractCRDs deletes the removed CRDs when allPassed (and no v1alpha2 Agent
-// is left in a namespace this run does not manage), else reports their state.
+// contractCRDs deletes the hop's CRDs when allPassed (and none of the old
+// line's agent objects is left in a namespace this run does not manage),
+// else reports their state.
 func (r *Runner) contractCRDs(ctx context.Context, dyn dynamic.Interface, states []*nsState, allPassed bool) []CRDReport {
 	var (
-		out    []CRDReport
-		keep   string
-		wrote  bool
-		before = map[string]bool{}
+		out   []CRDReport
+		keep  string
+		wrote bool
 	)
-	if allPassed {
-		keep = r.foreignAgents(ctx, dyn)
+	if len(r.hop.crds) == 0 {
+		return nil
 	}
-	for _, name := range RemovedCRDs {
+	if allPassed {
+		keep = r.foreignLeftovers(ctx, dyn)
+	}
+	for _, name := range r.hop.crds {
 		rep := CRDReport{Name: name}
 		_, err := dyn.Resource(crdGVR).Get(ctx, name, metav1.GetOptions{})
 		switch {
@@ -854,20 +1002,16 @@ func (r *Runner) contractCRDs(ctx context.Context, dyn dynamic.Interface, states
 			}
 		case !allPassed:
 			rep.Action, rep.Reason = CRDKept, "a managed namespace has not passed the wait gate yet"
-			before[name] = true
 		case keep != "":
 			rep.Action, rep.Reason = CRDKept, keep
-			before[name] = true
 		case r.opts.DryRun:
 			rep.Action, rep.Reason = CRDDeleted, "dry run: would be deleted"
-			before[name] = true
 		default:
 			if err := dyn.Resource(crdGVR).Delete(ctx, name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
 				rep.Action, rep.Reason = CRDKept, "delete refused: "+err.Error()
 				for _, st := range states {
 					st.fail(fmt.Errorf("delete CustomResourceDefinition %s: %w", name, err))
 				}
-				before[name] = true
 				break
 			}
 			rep.Action, rep.Reason = CRDDeleted, "removed from the cluster; the objects of that kind went with it"
@@ -884,14 +1028,15 @@ func (r *Runner) contractCRDs(ctx context.Context, dyn dynamic.Interface, states
 	return out
 }
 
-// foreignAgents names the v1alpha2 Agents outside the managed namespaces —
-// deleting the CRD would take them along — or "" when there are none or the
-// cluster-wide read is not permitted (then the managed namespaces decide).
-func (r *Runner) foreignAgents(ctx context.Context, dyn dynamic.Interface) string {
-	list, err := dyn.Resource(legacyAgentGVR).Namespace(metav1.NamespaceAll).List(ctx, metav1.ListOptions{})
+// foreignLeftovers names the old line's agent objects outside the managed
+// namespaces — deleting the CRD would take them along — or "" when there are
+// none or the cluster-wide read is not permitted (then the managed
+// namespaces decide).
+func (r *Runner) foreignLeftovers(ctx context.Context, dyn dynamic.Interface) string {
+	list, err := dyn.Resource(r.hop.leftover).Namespace(metav1.NamespaceAll).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		if !apierrors.IsNotFound(err) {
-			r.log.Warn("cluster-wide check for kagent.dev/v1alpha2 Agents not possible; the managed namespaces decide", "error", err)
+			r.log.Warn("cluster-wide check for the old line's agent objects not possible; the managed namespaces decide", "resource", r.hop.leftover.GroupResource(), "error", err)
 		}
 		return ""
 	}
@@ -905,7 +1050,7 @@ func (r *Runner) foreignAgents(ctx context.Context, dyn dynamic.Interface) strin
 		return ""
 	}
 	sort.Strings(foreign)
-	return fmt.Sprintf("kagent.dev/v1alpha2 Agent objects exist outside the managed namespaces and would vanish with the CRD: %s — manage those namespaces too, or remove the objects first", join(foreign))
+	return fmt.Sprintf("%s objects exist outside the managed namespaces and would vanish with the CRD: %s — manage those namespaces too, or remove the objects first", r.hop.leftoverKind, join(foreign))
 }
 
 // crdsPresent is true when a removed CRD still exists after this run.
@@ -921,33 +1066,36 @@ func crdsPresent(crds []CRDReport) bool {
 // ---- report -------------------------------------------------------------------
 
 // finish folds the state into the report: rows, phase and summary.
-func (st *nsState) finish() {
+func (st *nsState) finish(h *hop) {
 	for _, rel := range st.releases {
 		st.report.Releases = append(st.report.Releases, *rel.report)
 	}
 	for _, src := range st.sources {
 		st.report.Sources = append(st.report.Sources, *src.report)
 	}
-	for _, a := range st.agents {
-		st.report.Agents = append(st.report.Agents, *a.report)
+	for _, l := range st.leftovers {
+		st.report.Agents = append(st.report.Agents, *l.report)
 	}
-	st.report.Phase, st.report.Summary = st.phase()
+	st.report.Phase, st.report.Summary = st.phase(h)
 }
 
-func (st *nsState) phase() (string, string) {
+func (st *nsState) phase(h *hop) (string, string) {
 	counts := map[string]int{}
 	for _, rel := range st.releases {
 		counts[rel.report.Action]++
 	}
 	if !st.expandDone {
-		return PhaseExpand, fmt.Sprintf("expand phase: %d release(s) rewritten, %d unchanged, %d with a diff for the owning repository, %d pending, %d failed; %d item(s) gate the next phase",
-			counts[ActionRewritten], counts[ActionUnchanged], counts[ActionDiff], counts[ActionPending], counts[ActionFailed], len(st.report.Pending))
+		return PhaseExpand, fmt.Sprintf("expand phase (%s): %d release(s) rewritten, %d unchanged, %d with a diff for the owning repository, %d pending, %d failed; %d item(s) gate the next phase",
+			h, counts[ActionRewritten], counts[ActionUnchanged], counts[ActionDiff], counts[ActionPending], counts[ActionFailed], len(st.report.Pending))
 	}
 	contracted := st.report.Contract != nil && len(st.report.Contract.AgentsDeleted) > 0
-	if len(st.agents) == 0 && !contracted && !st.crdsPresent && !crdsDeletedThisRun(st.report.Contract) {
-		// Nothing of the 0.x world is left: readiness gates nothing any more,
+	if len(st.leftovers) == 0 && !contracted && !st.crdsPresent && !crdsDeletedThisRun(st.report.Contract) && st.renderedServed {
+		// Nothing of the old line is left: readiness gates nothing any more,
 		// what the wait phase found is informational.
-		summary := fmt.Sprintf("nothing left to migrate: %d Generic-chart release(s) on 1.x values, no kagent.dev/v1alpha2 Agent objects, none of the removed CRDs", len(st.releases))
+		summary := fmt.Sprintf("nothing left to migrate (%s): %d Generic-chart release(s) on %d.x values, no %s objects", h, len(st.releases), h.to, h.leftoverKind)
+		if len(h.crds) > 0 {
+			summary += ", none of the removed CRDs"
+		}
 		if len(st.report.Pending) > 0 {
 			summary += fmt.Sprintf("; %d item(s) not Ready yet (see warnings)", len(st.report.Pending))
 		}
@@ -955,7 +1103,7 @@ func (st *nsState) phase() (string, string) {
 		return PhaseComplete, summary
 	}
 	if !st.gatePassed {
-		return PhaseWait, fmt.Sprintf("expand done (%d release(s) on 1.x values); waiting for Flux and kagent: %d item(s) pending before the contract phase", len(st.releases), len(st.report.Pending))
+		return PhaseWait, fmt.Sprintf("expand done (%d release(s) on %d.x values); waiting for Flux and kagent: %d item(s) pending before the contract phase", len(st.releases), h.to, len(st.report.Pending))
 	}
 	deleted := 0
 	if st.report.Contract != nil {
@@ -965,7 +1113,11 @@ func (st *nsState) phase() (string, string) {
 			}
 		}
 	}
-	return PhaseContract, fmt.Sprintf("contract phase: %d kagent.dev/v1alpha2 Agent object(s) deleted in the namespace, %d of %d removed CRDs deleted", len(st.report.Contract.AgentsDeleted), deleted, len(RemovedCRDs))
+	summary := fmt.Sprintf("contract phase: %d %s object(s) deleted in the namespace", len(st.report.Contract.AgentsDeleted), h.leftoverKind)
+	if len(h.crds) > 0 {
+		summary += fmt.Sprintf(", %d of %d removed CRDs deleted", deleted, len(h.crds))
+	}
+	return PhaseContract, summary
 }
 
 func crdsDeletedThisRun(c *ContractReport) bool {

@@ -37,18 +37,20 @@ const (
 
 // The phases a namespace can be in.
 const (
-	// PhaseExpand: a Generic-chart release still carries 0.x values (pending,
-	// failed, or GitOps-owned with its diff not merged), or a chart source is
-	// not on the target range yet.
+	// PhaseExpand: a Generic-chart release still carries the old major's
+	// values (pending, failed, or GitOps-owned with its diff not merged), or a
+	// chart source is not on the target range yet.
 	PhaseExpand = "expand"
-	// PhaseWait: every value is 1.x and every writable source on the target
-	// range; Flux and kagent have not finished (a release still on a 0.x
-	// chart, a template not Ready).
+	// PhaseWait: every release is on the target major's values and every
+	// writable source on the target range; Flux and kagent have not finished
+	// (a release still on the old chart, a rendered object not Ready, the
+	// target line's resource not served yet).
 	PhaseWait = "wait"
-	// PhaseContract: the gate passed; the leftover v1alpha2 objects of the
-	// namespace were deleted (the CRDs too when every namespace passed).
+	// PhaseContract: the gate passed; the old line's leftover agent objects
+	// of the namespace were deleted (0.x -> 1.x: the CRDs too when every
+	// namespace passed).
 	PhaseContract = "contract"
-	// PhaseComplete: nothing of the 0.x world is left that this command
+	// PhaseComplete: nothing of the old line is left that this command
 	// handles.
 	PhaseComplete = "complete"
 )
@@ -68,7 +70,7 @@ const (
 	SourceNotMoved = "not-moved"
 )
 
-// Actions on a v1alpha2 Agent.
+// Actions on an agent object of the old line.
 const (
 	AgentAwaitingUpgrade = "awaiting-upgrade"
 	AgentNotMigratable   = "not-migratable"
@@ -103,12 +105,14 @@ type Report struct {
 	Releases []ReleaseReport `json:"releases"`
 	// Sources are the OCIRepositories of the agent chart those releases use.
 	Sources []SourceReport `json:"sources"`
-	// Agents are the kagent.dev/v1alpha2 Agent objects found in the namespace.
+	// Agents are the old line's agent objects found in the namespace:
+	// kagent.dev/v1alpha2 Agents (0.x -> 1.x) or kagent.dev/v1alpha3
+	// AgentTemplates (1.x -> 2.x).
 	Agents []AgentReport `json:"agents"`
 	// Pending names what gates the next phase.
 	Pending []string `json:"pending,omitempty"`
 	// Warnings are what the wait phase found when nothing gates on it any
-	// more (a template not Ready in a namespace that has nothing left to
+	// more (an object not Ready in a namespace that has nothing left to
 	// contract).
 	Warnings []string `json:"warnings,omitempty"`
 	// Contract is what the contract phase did, when it ran.
@@ -117,11 +121,13 @@ type Report struct {
 
 // RunInfo says which run wrote the report.
 type RunInfo struct {
-	At      string    `json:"at"`
-	DryRun  bool      `json:"dryRun"`
-	Version string    `json:"version"`
-	Harness string    `json:"harness"`
-	Chart   ChartInfo `json:"chart"`
+	At      string `json:"at"`
+	DryRun  bool   `json:"dryRun"`
+	Version string `json:"version"`
+	Harness string `json:"harness"`
+	// Path is the hop the target range picks: "0.x -> 1.x" or "1.x -> 2.x".
+	Path  string    `json:"path"`
+	Chart ChartInfo `json:"chart"`
 }
 
 // ChartInfo is the target chart as the run saw it.
@@ -157,12 +163,16 @@ type ReleaseReport struct {
 	// Diff is the rewrite as a unified diff of the manifest (GitOps-owned and
 	// external releases; never written).
 	Diff string `json:"diff,omitempty"`
-	// Template is the AgentTemplate the release renders, as the wait phase
-	// saw it.
+	// Warnings are what the rewrite cannot settle and the write does not
+	// wait for (a sub-agent binding to a template that does not exist).
+	Warnings []string `json:"warnings,omitempty"`
+	// Template is the object the release renders on the target line (a
+	// kagent.dev AgentTemplate on 1.x, an api.kagent.dev Agent on 2.x), as
+	// the wait phase saw it.
 	Template *TemplateReport `json:"template,omitempty"`
 }
 
-// TemplateReport is the platform Harness's verdict on a template.
+// TemplateReport is the verdict on the object a release renders.
 type TemplateReport struct {
 	Name    string `json:"name"`
 	Exists  bool   `json:"exists"`
@@ -186,10 +196,12 @@ type SourceReport struct {
 	Diff             string `json:"diff,omitempty"`
 }
 
-// AgentReport is one kagent.dev/v1alpha2 Agent.
+// AgentReport is one agent object of the old line.
 type AgentReport struct {
 	Name      string `json:"name"`
 	Namespace string `json:"namespace"`
+	// Kind is the object's API and kind, such as kagent.dev/v1alpha2 Agent.
+	Kind string `json:"kind"`
 	// Owner is the HelmRelease the provenance labels name (namespace/name).
 	Owner  string `json:"owner,omitempty"`
 	Action string `json:"action"`
@@ -198,11 +210,13 @@ type AgentReport struct {
 
 // ContractReport is what the contract phase did.
 type ContractReport struct {
-	// AgentsDeleted are the v1alpha2 Agents removed from the namespace.
+	// AgentsDeleted are the old line's agent objects removed from the
+	// namespace.
 	AgentsDeleted []string `json:"agentsDeleted"`
-	// CRDs is the fate of the five removed CRDs (cluster-scoped, so the same
-	// in every namespace's report).
-	CRDs []CRDReport `json:"crds"`
+	// CRDs is the fate of the five CRDs the 0.x -> 1.x hop removes
+	// (cluster-scoped, so the same in every namespace's report); absent on
+	// 1.x -> 2.x, where the platform removes the kagent.dev CRDs.
+	CRDs []CRDReport `json:"crds,omitempty"`
 }
 
 // CRDReport is one removed CRD.
