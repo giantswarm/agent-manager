@@ -26,7 +26,8 @@ The same operations are exposed twice from one process:
   [`api/openapi.yaml`](api/openapi.yaml), also served at `/api/v1/openapi.yaml`.
 - **MCP** (streamable HTTP, `/mcp`) for muster — tools `get_info`,
   `list_agents`, `get_agent`, `create_agent`, `update_agent`, `delete_agent`,
-  `get_agent_status`, `validate_agent`, `list_model_configs`, `list_skills`
+  `get_agent_status`, `validate_agent`, `list_model_configs`, `list_skills`,
+  `list_sessions`, `get_session`, `start_session`
   (through muster: `x_agent-manager_<tool>`). Every tool description says
   whether it writes and what it writes, and every tool sets all four
   annotations: read-only, destructive, idempotent and open-world (true for the
@@ -51,6 +52,9 @@ MCP-server-writer half.
 | Dry run of create/update: pinned skills, composed manifests + every violation | `POST /api/v1/agents/validate` | `validate_agent` | no |
 | kagent ModelConfigs of a namespace | `GET /api/v1/modelconfigs?namespace=` | `list_model_configs` | no |
 | Skills (`SKILL.md`) of the configured GitHub repositories, grouped by repository with its head commit | `GET /api/v1/skills[?repository=&ref=&refresh=]` | `list_skills` | no |
+| Sessions of an agent, as the caller (`SessionService/ListSessions`; `allCreators` when the controller grants it) | `GET /api/v1/agents/{ns}/{name}/sessions[?allCreators=true]` | `list_sessions` | no |
+| Start a session: create it, send the first message, answer once the turn is accepted | `POST /api/v1/agents/{ns}/{name}/sessions` | `start_session` | a kagent Session |
+| One session and its conversation (the A2A tasks of its context, oldest first) | `GET /api/v1/sessions/{id}` | `get_session` | no |
 | Health | `GET /healthz`, `GET /readyz` | — | no |
 
 The three writes take `dryRun` and `mode` (`apply` | `commit`, see
@@ -433,6 +437,39 @@ OCIRepositories read/write; Agents, RemoteMCPServers, Harnesses,
 ModelConfigs and events read; Agents and RemoteMCPServers delete for
 the forced cases) — only for a server nothing but a trusted proxy (the
 agentgateway JWT policy, muster) can reach.
+
+## Sessions
+
+`list_sessions`, `get_session` and `start_session` let a caller, a meta agent
+working through muster for instance, talk to an agent and read what it did. A
+conversation is a kagent `Session` of the `Agent` (kagent 1.3, `SessionService`),
+held in the controller's database. agent-manager calls the controller's gRPC
+API through agentgateway at `--kagent-target` (`AGENT_MANAGER_KAGENT_TARGET`,
+chart `kagent.controllerTarget`, default the in-cluster
+`grpc://agentgateway.agent-platform.svc.cluster.local:8080`) with the caller's
+IdP token as the bearer and no other identity: agentgateway validates the token
+on the controller route and sets the identity the controller reads from it. The
+calls never run as the ServiceAccount, so the target needs `--enable-oauth`,
+and without the caller's token a session operation is `401 unauthenticated`.
+
+- `start_session` is `SessionService/CreateSession` for the Agent (`409
+  conflict` while the Agent has no ready revision), then the first message
+  over `A2AService/SendStreamingMessage` with the Agent as `tenant`
+  (`<namespace>/<name>`) and the session as `message.contextId`. It answers
+  once the agent has accepted the turn; the turn keeps running when the stream
+  closes, and `get_session` shows it finish. `requestId` makes a retry
+  idempotent.
+- `get_session` is `SessionService/GetSession` plus `A2AService/ListTasks`
+  addressed to the session's Agent and filtered by its context.
+- `list_sessions` is `SessionService/ListSessions` for one Agent.
+
+Session and task bodies are kagent's proto3 JSON, passed through: session
+`state` is `RUNTIME_STATE_*`, task `status.state` is `TASK_STATE_*`. The
+`x-kagent-agent-instance-id` header is the gateway's to the runtime and is
+never sent. The stubs are generated from `giantswarm/kagent-upstream`
+(`hack/kagent-proto/`, `make generate-kagent`); the A2A stubs are the ones
+`github.com/a2aproject/a2a-go/v2` ships, as in kagent. `get_info` reports
+`capabilities.sessions`.
 
 ## Running
 

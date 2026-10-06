@@ -52,6 +52,9 @@ type Config struct {
 	// filled with the skills GitHub App's token; nil: the Secret is
 	// provisioned by someone else.
 	SkillsBootSecret *skills.BootSecret
+	// Sessions is the kagent controller the session operations call through
+	// agentgateway as the caller. Nil: they are refused as unsupported.
+	Sessions SessionClient
 }
 
 // Service is the agent lifecycle.
@@ -180,6 +183,9 @@ func (s *Service) Info(ctx context.Context) InfoResponse {
 		// targetCluster: create_agent and the reads take organization and
 		// cluster to place an agent on a workload cluster.
 		"targetCluster": s.cfg.Compose.TargetMusterURL != "",
+		// sessions: list_sessions, get_session and start_session reach the
+		// kagent controller.
+		"sessions": s.SessionsAvailable(),
 	}
 	out.Identity = s.kube.Identity()
 	kagentAPI := KagentAPIGroup + "/" + s.cfg.KagentAPIVersion

@@ -48,6 +48,9 @@ func (h *REST) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET "+Prefix+"/agents/{namespace}/{name}/status", h.getAgentStatus)
 	mux.HandleFunc("GET "+Prefix+"/modelconfigs", h.listModelConfigs)
 	mux.HandleFunc("GET "+Prefix+"/skills", h.listSkills)
+	mux.HandleFunc("GET "+Prefix+"/agents/{namespace}/{name}/sessions", h.listSessions)
+	mux.HandleFunc("POST "+Prefix+"/agents/{namespace}/{name}/sessions", h.startSession)
+	mux.HandleFunc("GET "+Prefix+"/sessions/{id}", h.getSession)
 }
 
 type errorBody struct {
@@ -204,6 +207,47 @@ func (h *REST) listModelConfigs(w http.ResponseWriter, r *http.Request) {
 func (h *REST) listSkills(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	res, err := h.svc.ListSkills(r.Context(), q.Get("repository"), q.Get("ref"), strings.EqualFold(q.Get("refresh"), "true"))
+	if err != nil {
+		h.writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
+func (h *REST) listSessions(w http.ResponseWriter, r *http.Request) {
+	res, err := h.svc.ListSessions(r.Context(), r.PathValue("namespace"), r.PathValue("name"), strings.EqualFold(r.URL.Query().Get("allCreators"), "true"))
+	if err != nil {
+		h.writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
+// startSessionRequest is the body of POST /agents/{namespace}/{name}/sessions.
+type startSessionRequest struct {
+	Message     string `json:"message"`
+	RequestID   string `json:"requestId,omitempty"`
+	SessionName string `json:"sessionName,omitempty"`
+}
+
+func (h *REST) startSession(w http.ResponseWriter, r *http.Request) {
+	var req startSessionRequest
+	if !h.decode(w, r, &req) {
+		return
+	}
+	res, err := h.svc.StartSession(r.Context(), agents.StartSession{
+		Namespace: r.PathValue("namespace"), Name: r.PathValue("name"),
+		Message: req.Message, RequestID: req.RequestID, SessionName: req.SessionName,
+	})
+	if err != nil {
+		h.writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, res)
+}
+
+func (h *REST) getSession(w http.ResponseWriter, r *http.Request) {
+	res, err := h.svc.GetSession(r.Context(), r.PathValue("id"))
 	if err != nil {
 		h.writeError(w, err)
 		return

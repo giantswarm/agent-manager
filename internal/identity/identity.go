@@ -91,8 +91,9 @@ func LogAttr(ctx context.Context) slog.Attr {
 	return slog.String("caller", "service-account")
 }
 
-// ContextWithToken returns ctx carrying the caller's IdP token for downstream
-// Kubernetes API calls. Only set when the server runs with downstream OAuth on.
+// ContextWithToken returns ctx carrying the caller's IdP token: what the
+// session operations present to agentgateway and, with downstream OAuth, what
+// every Kubernetes API call presents. Set whenever OAuth resolved one.
 func ContextWithToken(ctx context.Context, token string) context.Context {
 	if token == "" {
 		return ctx

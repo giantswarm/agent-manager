@@ -19,6 +19,7 @@ import (
 	"github.com/giantswarm/agent-manager/internal/agents"
 	"github.com/giantswarm/agent-manager/internal/api"
 	"github.com/giantswarm/agent-manager/internal/chart"
+	"github.com/giantswarm/agent-manager/internal/kagent"
 	"github.com/giantswarm/agent-manager/internal/kube"
 	"github.com/giantswarm/agent-manager/internal/server"
 	"github.com/giantswarm/agent-manager/internal/skills"
@@ -57,6 +58,8 @@ type serveOptions struct {
 	skillsGitAuth      string
 	skillsGitAuthMint  bool
 	skillsCacheTTL     time.Duration
+
+	kagentTarget string
 
 	mcpEnabled bool
 	mcpPath    string
@@ -119,6 +122,7 @@ environment variable named next to it; flags win over the environment.`,
 	f.StringVar(&o.skillsGitAuth, "skills-git-auth-secret-name", envOr("AGENT_MANAGER_SKILLS_GIT_AUTH_SECRET_NAME", ""), "Secret (key token) in the agent's namespace every agent with a git skill fetches its skills with, unless the agent names its own gitAuthSecretName; composed as the chart value skillsGitAuthSecretRef.name. Empty: such agents fetch anonymously (AGENT_MANAGER_SKILLS_GIT_AUTH_SECRET_NAME)")
 	f.BoolVar(&o.skillsGitAuthMint, "skills-git-auth-mint", envBool("AGENT_MANAGER_SKILLS_GIT_AUTH_MINT", false), "Keep the Secret --skills-git-auth-secret-name names filled with the skills GitHub App's installation token in every managed namespace, refreshed before it expires; the Secret must exist (the chart renders it) and the ServiceAccount may update it. Needs the skills GitHub App (AGENT_MANAGER_SKILLS_GIT_AUTH_MINT)")
 	f.DurationVar(&o.skillsCacheTTL, "skills-cache-ttl", envDuration("AGENT_MANAGER_SKILLS_CACHE_TTL", 5*time.Minute), "How long a repository's discovered skills are reused (AGENT_MANAGER_SKILLS_CACHE_TTL)")
+	f.StringVar(&o.kagentTarget, "kagent-target", envOr("AGENT_MANAGER_KAGENT_TARGET", ""), "The kagent controller's gRPC target through agentgateway, which list_sessions, get_session and start_session call as the caller: grpc://host:port (h2c, the in-cluster agentgateway Service) or grpcs://host[:port] (TLS). Empty: the session tools answer unsupported. Needs --enable-oauth for a caller token (AGENT_MANAGER_KAGENT_TARGET)")
 	f.BoolVar(&o.mcpEnabled, "mcp-enabled", envBool("AGENT_MANAGER_MCP_ENABLED", true), "Serve the MCP streamable-HTTP endpoint (AGENT_MANAGER_MCP_ENABLED)")
 	f.StringVar(&o.mcpPath, "mcp-path", envOr("AGENT_MANAGER_MCP_PATH", "/mcp"), "MCP endpoint path (AGENT_MANAGER_MCP_PATH)")
 	f.BoolVar(&o.oauthEnabled, "enable-oauth", envBool("AGENT_MANAGER_OAUTH_ENABLED", false), "Require an OAuth 2.1 bearer token on the MCP endpoint and the REST API, validated against the platform IdP (mcp-oauth); the caller's identity travels with every request (AGENT_MANAGER_OAUTH_ENABLED)")
@@ -152,6 +156,9 @@ func runServe(ctx context.Context, o *serveOptions) error {
 	}
 	if o.githubAuthorizationServer != "" && !o.oauthEnabled {
 		return fmt.Errorf("--github-authorization-server needs --enable-oauth: the forwarded IdP ID token is validated by the OAuth resource server")
+	}
+	if o.kagentTarget != "" && !o.oauthEnabled {
+		return fmt.Errorf("--kagent-target needs --enable-oauth: the session tools call kagent as the caller, with the caller's IdP token, and never as the ServiceAccount")
 	}
 	if o.downstreamOAuth && !o.oauthEnabled {
 		return fmt.Errorf("--downstream-oauth needs --enable-oauth: without OAuth there is no caller token to present to the Kubernetes API")
@@ -227,6 +234,16 @@ func runServe(ctx context.Context, o *serveOptions) error {
 		bootSecret = skills.NewBootSecret(app, clients.Typed(), o.skillsGitAuth, agents.ManagedNamespaces(o.kagentNamespace, splitList(o.managedNamespaces)), log)
 	}
 
+	var sessions agents.SessionClient
+	if o.kagentTarget != "" {
+		client, err := kagent.Dial(o.kagentTarget)
+		if err != nil {
+			return fmt.Errorf("--kagent-target: %w", err)
+		}
+		defer func() { _ = client.Close() }()
+		sessions = client
+	}
+
 	svc := agents.New(provider, resolver, discoverer, pinner, agents.Config{
 		DefaultNamespace:  o.kagentNamespace,
 		ManagedNamespaces: splitList(o.managedNamespaces),
@@ -249,6 +266,7 @@ func runServe(ctx context.Context, o *serveOptions) error {
 		KagentAPIVersion: kagentVersion,
 		Version:          build.Version,
 		GitHub:           gitHubRemote(o.githubAuthorizationServer, o.githubAPIURL),
+		Sessions:         sessions,
 	}, log)
 
 	srvCfg := server.Config{Addr: o.listen, MCPEnabled: o.mcpEnabled, MCPPath: o.mcpPath}
@@ -280,7 +298,7 @@ func runServe(ctx context.Context, o *serveOptions) error {
 	log.Info("agent-manager starting", "version", build.Version, "commit", build.Commit, "listen", o.listen, "rest", api.Prefix, "mcp", o.mcpPath, "mcpEnabled", o.mcpEnabled,
 		"oauth", o.oauthEnabled, "downstreamOAuth", o.downstreamOAuth, "commit", info.Capabilities["commit"], "identity", info.Identity,
 		"namespaces", info.Namespaces.Managed, "chart", o.chartOCIURL, "chartSemver", o.chartSemver, "chartVersion", info.Chart.LatestVersion, "schemaSource", info.Chart.SchemaSource,
-		"kagentAPI", kagentVersion, "harness", info.Harness.Name, "musterURL", info.Muster.URL, "helmReleaseAPI", helmReleaseAPI, "ociRepositoryAPI", ociRepositoryAPI, "skillsRepositories", info.SkillsRepositories, "skillsGitHubApp", o.skillsAppID, "skillsGitAuthSecretName", o.skillsGitAuth)
+		"kagentAPI", kagentVersion, "harness", info.Harness.Name, "musterURL", info.Muster.URL, "helmReleaseAPI", helmReleaseAPI, "ociRepositoryAPI", ociRepositoryAPI, "skillsRepositories", info.SkillsRepositories, "skillsGitHubApp", o.skillsAppID, "skillsGitAuthSecretName", o.skillsGitAuth, "kagentTarget", o.kagentTarget)
 
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()

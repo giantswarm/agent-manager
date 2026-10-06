@@ -235,25 +235,29 @@ func TestForwardedIDTokenBecomesTheCaller(t *testing.T) {
 	assert.Equal(t, http.StatusUnauthorized, call("not-a-token").Code)
 }
 
-func TestDownstreamOffKeepsTheServiceAccount(t *testing.T) {
+// TestDownstreamOffStillCarriesTheCallerToken: without downstream OAuth the
+// Kubernetes calls run as the ServiceAccount (the provider never reads the
+// token), but the caller's token still travels with the request for the
+// session operations, which act as the caller towards agentgateway.
+func TestDownstreamOffStillCarriesTheCallerToken(t *testing.T) {
 	idp := newFakeIdP(t)
 	o, err := newOAuth(idp.config(false), "/mcp", quiet())
 	require.NoError(t, err)
 	t.Cleanup(func() { o.shutdown(context.Background()) })
 
-	var caller string
-	var hasToken bool
+	var caller, token string
 	h := o.protect(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		caller = identity.Caller(r.Context())
-		_, hasToken = identity.TokenFromContext(r.Context())
+		token, _ = identity.TokenFromContext(r.Context())
 	}))
+	forwarded := idp.idToken(t, []string{"agent-platform"}, time.Now().Add(time.Minute))
 	req := httptest.NewRequest(http.MethodGet, "/mcp", nil)
-	req.Header.Set("Authorization", "Bearer "+idp.idToken(t, []string{"agent-platform"}, time.Now().Add(time.Minute)))
+	req.Header.Set("Authorization", "Bearer "+forwarded)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code)
 	assert.Equal(t, "admin@lab.local", caller, "the caller is known and attributed")
-	assert.False(t, hasToken, "but nothing is presented to the Kubernetes API")
+	assert.Equal(t, forwarded, token, "the forwarded id_token is what agentgateway will see")
 }
 
 // TestUntrustedAudienceIsNamedInTheRefusal: a portal session forwards the
