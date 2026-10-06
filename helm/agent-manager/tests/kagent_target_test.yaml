@@ -1,0 +1,79 @@
+# The kagent controller target of the session tools: rendered with OAuth only
+# (the calls are made as the caller), and the egress rule to it.
+#
+# Run with: make helm-test (helm unittest helm/agent-manager)
+suite: kagent controller target
+templates:
+  - templates/deployment.yaml
+  - templates/networkpolicy.yaml
+set:
+  oauth:
+    enabled: true
+    existingSecret: platform-oauth
+  global:
+    domain: example.com
+    identity:
+      issuerUrl: https://dex.example.com
+      clientId: platform-client
+tests:
+  - it: calls the in-cluster agentgateway Service by default
+    template: templates/deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --kagent-target=grpc://agentgateway.agent-platform.svc.cluster.local:8080
+
+  - it: renders no target without OAuth, since the calls never run as the ServiceAccount
+    template: templates/deployment.yaml
+    set:
+      oauth.enabled: false
+    asserts:
+      - notExists:
+          path: spec.template.spec.containers[0].args[?(@ =~ /^--kagent-target=/)]
+
+  - it: turns the session tools off with an empty target
+    template: templates/deployment.yaml
+    set:
+      kagent.controllerTarget: ""
+    asserts:
+      - notExists:
+          path: spec.template.spec.containers[0].args[?(@ =~ /^--kagent-target=/)]
+
+  - it: opens egress to the agentgateway Service's namespace on its port
+    template: templates/networkpolicy.yaml
+    set:
+      networkPolicy.enabled: true
+    asserts:
+      - contains:
+          path: spec.egress
+          content:
+            to:
+              - namespaceSelector:
+                  matchLabels:
+                    kubernetes.io/metadata.name: agent-platform
+            ports:
+              - {protocol: TCP, port: 8080}
+
+  - it: opens egress to every address on 443 for a public TLS target
+    template: templates/networkpolicy.yaml
+    set:
+      networkPolicy.enabled: true
+      kagent.controllerTarget: grpcs://agentgateway.example.com
+    asserts:
+      - contains:
+          path: spec.egress
+          content:
+            to:
+              - ipBlock:
+                  cidr: 0.0.0.0/0
+            ports:
+              - {protocol: TCP, port: 443}
+
+  - it: refuses a target that is not a gRPC one
+    template: templates/networkpolicy.yaml
+    set:
+      networkPolicy.enabled: true
+      kagent.controllerTarget: https://agentgateway.example.com
+    asserts:
+      - failedTemplate:
+          errorPattern: must be grpc://host:port or grpcs://host\[:port\]

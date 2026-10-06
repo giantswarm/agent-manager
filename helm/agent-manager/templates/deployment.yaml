@@ -107,6 +107,9 @@ spec:
             {{- if .Values.oauth.downstream.enabled }}
             - --downstream-oauth=true
             {{- end }}
+            {{- with .Values.kagent.controllerTarget }}
+            - --kagent-target={{ . }}
+            {{- end }}
             {{- if .Values.github.enabled }}
             - --github-authorization-server={{ .Values.github.authorizationServer.issuer }}
             - --github-api-url={{ .Values.github.apiURL }}
