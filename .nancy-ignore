@@ -1,3 +1,4 @@
 CVE-2026-56855 until=2026-10-04 # golang.org/x/crypto@v0.55.0
-CVE-2026-84445 until=2026-11-05 # google.golang.org/grpc@v1.84.0: advisory fixed in 1.82.2/1.83.2, 1.84.0 flagged by the index range; https://github.com/giantswarm/agent-manager/issues/84
+# CVE-2026-84445 (GHSA-2v4p-qf9q-27wj): OSS Index lists grpc v1.84.0 as affected, the advisory lists it as patched; no newer grpc exists. Tracked in https://github.com/giantswarm/gitops-commit/issues/17
+CVE-2026-84445 until=2026-10-29 # google.golang.org/grpc@v1.84.0
 CVE-2026-5160 until=2026-10-30 # github.com/yuin/goldmark@v1.4.13
