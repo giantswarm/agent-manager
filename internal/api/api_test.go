@@ -351,9 +351,10 @@ func TestMCPToolsMirrorREST(t *testing.T) {
 
 	text, isErr := callTool(t, srv, ToolGetInfo, nil)
 	require.False(t, isErr, text)
-	assert.Contains(t, text, `"identity": "serviceAccount"`)
-	assert.Contains(t, text, `"agentTemplate": "kagent.dev/v1alpha3"`)
-	assert.Contains(t, text, `"semver": "1.x"`)
+	assert.NotContains(t, text, "\n", "tool results are compact JSON")
+	assert.Contains(t, text, `"identity":"serviceAccount"`)
+	assert.Contains(t, text, `"agentTemplate":"kagent.dev/v1alpha3"`)
+	assert.Contains(t, text, `"semver":"1.x"`)
 
 	text, isErr = callTool(t, srv, ToolCreateAgent, map[string]any{"name": "sre", "modelConfig": "nope", "toolset": []string{"preset:read-only"}})
 	assert.True(t, isErr)
@@ -376,7 +377,7 @@ func TestMCPToolsMirrorREST(t *testing.T) {
 	assert.Contains(t, text, "skills is a list now")
 	text, isErr = callTool(t, srv, ToolValidateAgent, map[string]any{"name": "sre", "modelConfig": "default-model-config", "toolset": []string{"toolset:shared"}})
 	require.False(t, isErr, text)
-	assert.Contains(t, text, `"valid": false`)
+	assert.Contains(t, text, `"valid":false`)
 	assert.Contains(t, text, "reserved")
 
 	text, isErr = callTool(t, srv, ToolCreateAgent, map[string]any{
@@ -407,9 +408,7 @@ func TestMCPToolsMirrorREST(t *testing.T) {
 	// update replaces the toolset as a whole; [] and the removed arguments are refused.
 	text, isErr = callTool(t, srv, ToolUpdateAgent, map[string]any{"name": "sre", "toolset": []string{"preset:none"}})
 	require.False(t, isErr, text)
-	assert.Contains(t, text, `"changed": [
-    "toolset"
-  ]`)
+	assert.Contains(t, text, `"changed":["toolset"]`)
 	text, isErr = callTool(t, srv, ToolUpdateAgent, map[string]any{"name": "sre", "toolset": []string{}})
 	assert.True(t, isErr)
 	assert.Contains(t, text, "preset:none")
@@ -418,13 +417,11 @@ func TestMCPToolsMirrorREST(t *testing.T) {
 	assert.Contains(t, text, "toolNames never narrowed")
 	text, isErr = callTool(t, srv, ToolUpdateAgent, map[string]any{"name": "sre", "refreshSkills": true})
 	require.False(t, isErr, text)
-	assert.Contains(t, text, `"changed": []`, "already at the head: nothing changes")
+	assert.Contains(t, text, `"changed":[]`, "already at the head: nothing changes")
 	text, isErr = callTool(t, srv, ToolGetAgent, map[string]any{"name": "sre"})
 	require.False(t, isErr, text)
-	assert.Contains(t, text, `"toolset": [
-    "preset:none"
-  ]`)
-	assert.Contains(t, text, `"commit": "`+mainHead+`"`)
+	assert.Contains(t, text, `"toolset":["preset:none"]`)
+	assert.Contains(t, text, `"commit":"`+mainHead+`"`)
 
 	text, isErr = callTool(t, srv, ToolValidateAgent, map[string]any{"name": "sre", "update": true, "runtime": "rust"})
 	assert.True(t, isErr)
@@ -432,15 +429,15 @@ func TestMCPToolsMirrorREST(t *testing.T) {
 
 	text, isErr = callTool(t, srv, ToolGetAgentStatus, map[string]any{"name": "sre"})
 	require.False(t, isErr, text)
-	assert.Contains(t, text, `"verdict": "progressing"`)
+	assert.Contains(t, text, `"verdict":"progressing"`)
 
 	text, isErr = callTool(t, srv, ToolListAgents, nil)
 	require.False(t, isErr, text)
-	assert.Contains(t, text, `"name": "sre"`)
+	assert.Contains(t, text, `"name":"sre"`)
 
 	text, isErr = callTool(t, srv, ToolDeleteAgent, map[string]any{"name": "sre"})
 	require.False(t, isErr, text)
-	assert.Contains(t, text, `"ociRepositoryDeleted": true`)
+	assert.Contains(t, text, `"ociRepositoryDeleted":true`)
 
 	text, isErr = callTool(t, srv, ToolGetAgent, map[string]any{"name": "sre"})
 	assert.True(t, isErr)

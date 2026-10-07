@@ -569,7 +569,7 @@ func (s *Service) ListSkills(ctx context.Context, repository, ref string, refres
 		return nil, fmt.Errorf("%w: %v", ErrInvalid, err)
 	}
 	// A private repository is listed only to a caller who can read it.
-	out := &skills.Result{Repositories: []skills.Repository{}, Skills: []skills.Skill{}}
+	out := &skills.Result{Repositories: []skills.Repository{}}
 	for _, repo := range res.Repositories {
 		if repo.Private {
 			if err := s.pinner.RequireReadable(ctx, repo.RepoURL, gitHubLogin(ctx)); err != nil {
@@ -577,7 +577,6 @@ func (s *Service) ListSkills(ctx context.Context, repository, ref string, refres
 			}
 		}
 		out.Repositories = append(out.Repositories, repo)
-		out.Skills = append(out.Skills, repo.Skills...)
 	}
 	return out, nil
 }

@@ -351,8 +351,9 @@ paths:
       summary: Discover skills in the configured repositories
       description: |
         Every `SKILL.md` of a GitHub repository is one skill (frontmatter
-        `name`/`description`), with the ref it was read from and the head
-        commit that ref resolved to — the commit a `skills` entry pins. Cached
+        `name`/`description`), listed once under its repository; the
+        repository carries the ref it was read from and the head commit that
+        ref resolved to — the commit a `skills` entry pins. Cached
         briefly; `refresh=true` re-reads GitHub. `501 unsupported` when no
         repositories are configured.
       operationId: listSkills
@@ -780,14 +781,11 @@ components:
         managedBy: { type: string }
     DiscoveredSkill:
       type: object
-      description: A SKILL.md found in a repository, with the commit an agent pins it at
+      description: A SKILL.md found in a repository; the repository carries the commit an agent pins it at
       properties:
         name: { type: string }
         description: { type: string }
-        repoUrl: { type: string }
-        path: { type: string }
-        ref: { type: string, description: The ref read (the default branch unless ref was given) }
-        commit: { type: string, description: The head commit of that ref when it was read — the pin for a skills entry }
+        path: { type: string, description: The skill directory; empty at the repository root }
     SkillsResult:
       type: object
       properties:
@@ -797,10 +795,10 @@ components:
             type: object
             properties:
               repoUrl: { type: string }
-              ref: { type: string }
-              commit: { type: string, description: What ref resolved to when the repository was read }
+              ref: { type: string, description: The ref read (the default branch unless ref was given) }
+              commit: { type: string, description: What ref resolved to when the repository was read — the pin for a skills entry }
               skills: { type: array, items: { $ref: "#/components/schemas/DiscoveredSkill" } }
+              private: { type: boolean, description: Only its collaborators can read it; listed only to a caller who can }
               truncated: { type: boolean }
               error: { type: string }
               fetchedAt: { type: string, format: date-time }
-        skills: { type: array, items: { $ref: "#/components/schemas/DiscoveredSkill" } }

@@ -30,8 +30,8 @@ make helm-docs          # regenerate helm/agent-manager/README.md
   `values.schema.json`, and the embedded copy of the chart 1.x schema as the
   offline fallback.
 - `internal/skills` — SKILL.md discovery in GitHub repositories (the portal
-  backend's `/agent-skills` semantics, each skill with the head commit it was
-  read at) and the `Resolver` that pins a branch or tag to its head commit and
+  backend's `/agent-skills` semantics, each repository with the head commit it
+  was read at) and the `Resolver` that pins a branch or tag to its head commit and
   an image tag to its digest.
 - `internal/agents` — the domain: `compose.go` mirrors the portal's
   `composeManifests.ts` (chart 1.x values, HelmRelease, OCIRepository),
