@@ -115,9 +115,9 @@ func TestAnAgentOnATargetClusterIsReadThere(t *testing.T) {
 	f := newTargetFixture(t, targetMuster)
 	_, err := f.svc.Create(ctx, targetSpec("planner"))
 	require.NoError(t, err)
-	// helm-controller renders the template on the workload cluster with the
+	// helm-controller renders the Agent on the workload cluster with the
 	// provenance labels of the installation's release.
-	_, err = f.wc.Resource(tplGVR).Namespace("kagent").Create(ctx, agentTemplate("kagent", "planner", "wc1-planner", "org-acme", true, true), metav1.CreateOptions{})
+	_, err = f.wc.Resource(agentGVR).Namespace("kagent").Create(ctx, agentObject("kagent", "planner", "wc1-planner", "org-acme", true, true), metav1.CreateOptions{})
 	require.NoError(t, err)
 	at := Location{Namespace: "kagent", Target: wc1}
 

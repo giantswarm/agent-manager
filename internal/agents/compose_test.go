@@ -80,7 +80,7 @@ func (p *fakePinner) OCIDigest(_ context.Context, ref string) (string, error) {
 	return "", fmt.Errorf("%w: OCI skill %s could not be resolved to a digest", skills.ErrUnresolvable, ref)
 }
 
-func TestBuildValuesIsTheChart1xContract(t *testing.T) {
+func TestBuildValuesIsTheChartContract(t *testing.T) {
 	cfg := ComposeConfig{ChartSemver: DefaultChartSemver}
 	// The portal emits only what the user set: the chart's defaults cover the
 	// rest, and an empty prompt means "the chart's default prompt".
@@ -94,10 +94,16 @@ func TestBuildValuesIsTheChart1xContract(t *testing.T) {
 		{Name: "runbooks", Path: "nested/runbooks", Git: &GitSkill{URL: skillsRepo, Commit: mainHead}},
 		{Name: "kubectl", OCI: kubectlRef + "@" + kubectlSum},
 	}
+	plugins := Plugins{
+		{Path: "bundles/sre", Git: &GitSkill{URL: skillsRepo, Commit: tagHead}, Skills: []string{"triage", "postmortem"}},
+		{OCI: kubectlRef + "@" + kubectlSum, Skills: []string{"k8s"}},
+	}
 	full := BuildValues(Spec{
 		Name: "sre", DisplayName: "SRE Assistant", Description: "helps", SystemMessage: "Be brief.", ModelConfig: "mc",
 		IconURL: "https://avatars.example/v1/sre.png",
 		Skills:  pinned,
+		Plugins: plugins,
+		Egress:  []string{"https://github.com:443", "https://*.githubusercontent.com"},
 		Toolset: []string{"preset:read-only", "workflow:incident-triage"},
 		Labels:  map[string]string{"tenant": "sre"},
 	}, ComposeConfig{MusterURL: "http://muster.agent-platform.svc.cluster.local:8090/mcp", HarnessName: "claude"})
@@ -105,20 +111,32 @@ func TestBuildValuesIsTheChart1xContract(t *testing.T) {
 		"agent": map[string]any{
 			"name": "sre", "displayName": "SRE Assistant", "description": "helps", "systemMessage": "Be brief.",
 			"iconUrl": "https://avatars.example/v1/sre.png", "harness": "claude",
+			"egress": []any{"https://github.com:443", "https://*.githubusercontent.com"},
 		},
 		"modelConfig": map[string]any{"name": "mc"},
 		"skills": []any{
 			map[string]any{"name": "runbooks", "path": "nested/runbooks", "git": map[string]any{"url": skillsRepo, "commit": mainHead}},
 			map[string]any{"name": "kubectl", "oci": kubectlRef + "@" + kubectlSum},
 		},
+		"plugins": []any{
+			map[string]any{"git": map[string]any{"url": skillsRepo, "commit": tagHead}, "path": "bundles/sre", "skills": []any{"triage", "postmortem"}},
+			map[string]any{"oci": kubectlRef + "@" + kubectlSum, "skills": []any{"k8s"}},
+		},
 		"toolset": []any{"preset:read-only", "workflow:incident-triage"},
 		"muster":  map[string]any{"url": "http://muster.agent-platform.svc.cluster.local:8090/mcp"},
 		"labels":  map[string]any{"tenant": "sre"},
 	}, full)
 	_, violations := ValidateValues(context.Background(), embeddedChart{}, full)
-	assert.Empty(t, violations, "the composed values satisfy the Generic chart 1.x schema")
+	assert.Empty(t, violations, "the composed values satisfy the Generic chart 2.x schema")
+	// The chart refuses what a write refuses: a mutable plugin source, an
+	// empty skill selection.
+	broken := BuildValues(Spec{Name: "sre", ModelConfig: "mc", Plugins: Plugins{{Git: &GitSkill{URL: skillsRepo, Commit: "main"}}}}, cfg)
+	_, violations = ValidateValues(context.Background(), embeddedChart{}, broken)
+	joined := strings.Join(violations, "\n")
+	assert.Contains(t, joined, "/plugins/0/git/commit")
+	assert.Contains(t, joined, "/plugins/0")
 
-	// Nothing the 1.x contract removed is ever emitted.
+	// Nothing the contract removed is ever emitted.
 	for _, values := range []map[string]any{minimal, full} {
 		for _, p := range RemovedValuePaths {
 			assertNoPath(t, values, p)
@@ -127,8 +145,10 @@ func TestBuildValuesIsTheChart1xContract(t *testing.T) {
 			assertNoPath(t, values, from)
 		}
 	}
-	// The read model reads its skills back from the values it wrote.
+	// The read model reads its skills and plugins back from the values it wrote.
 	assert.Equal(t, pinned, skillsFromValues(full))
+	assert.Equal(t, plugins, pluginsFromValues(full))
+	assert.Equal(t, []string{"https://github.com:443", "https://*.githubusercontent.com"}, egressFromValues(full))
 }
 
 func assertNoPath(t *testing.T, values map[string]any, dotted string) {
@@ -173,8 +193,8 @@ func TestBuildHelmReleaseAndOCIRepositoryTrackTheChartRange(t *testing.T) {
 	assert.Equal(t, "source.toolkit.fluxcd.io/v1", got["apiVersion"])
 	assert.Equal(t, "OCIRepository", got["kind"])
 	assert.Equal(t, map[string]any{"name": "agent", "namespace": "kagent", "labels": map[string]any{ManagedByLabel: ManagedByValue}}, got["metadata"])
-	assert.Equal(t, map[string]any{"interval": "30m", "url": DefaultChartOCIURL, "ref": map[string]any{"semver": "1.x"}}, got["spec"], "the range is 1.x, never x.x.x")
-	assert.Equal(t, "1.x", DefaultChartSemver)
+	assert.Equal(t, map[string]any{"interval": "30m", "url": DefaultChartOCIURL, "ref": map[string]any{"semver": "2.x"}}, got["spec"], "the range is 2.x, never x.x.x")
+	assert.Equal(t, "2.x", DefaultChartSemver)
 
 	cfg.ChartSemver, cfg.ChartSemverFilter = ">=1.5.0-0 <2.0.0-0", `^v?[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$`
 	repo = BuildOCIRepository("kagent", cfg)
@@ -354,6 +374,7 @@ func TestBuildValuesComposesTheSkillsCredential(t *testing.T) {
 		{"the agent's own wins", Spec{Name: "a", Skills: git, GitAuthSecretName: "team-token"}, installation, "team-token"},
 		{"the agent's own without an installation one", Spec{Name: "a", Skills: git, GitAuthSecretName: "team-token"}, ComposeConfig{}, "team-token"},
 		{"none without a git skill", Spec{Name: "a", Skills: oci, GitAuthSecretName: "team-token"}, installation, ""},
+		{"installation credential on a git plugin", Spec{Name: "a", Plugins: Plugins{{Git: &GitSkill{URL: "https://github.com/o/private", Commit: strings.Repeat("a", 40)}, Skills: []string{"x"}}}}, installation, "kagent-skills-token"},
 		{"none without any credential", Spec{Name: "a", Skills: git}, ComposeConfig{}, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

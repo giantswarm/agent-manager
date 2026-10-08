@@ -40,7 +40,7 @@ type Config struct {
 	ManagedNamespaces []string
 	// Compose is the platform side of the manifests.
 	Compose ComposeConfig
-	// KagentAPIVersion is the served kagent.dev version (v1alpha3).
+	// KagentAPIVersion is the served api.kagent.dev version (v1alpha3).
 	KagentAPIVersion string
 	// Version is the service version reported by GET /info.
 	Version string
@@ -64,8 +64,13 @@ type Service struct {
 	log    *slog.Logger
 }
 
-// DefaultKagentAPIVersion is composed when discovery cannot answer.
-const DefaultKagentAPIVersion = "v1alpha3"
+// KagentAPIGroup is the API group of the Agent, Harness, RemoteMCPServer and
+// ModelConfig kinds; DefaultKagentAPIVersion is composed when discovery
+// cannot answer.
+const (
+	KagentAPIGroup          = "api.kagent.dev"
+	DefaultKagentAPIVersion = "v1alpha3"
+)
 
 // New builds the service. skills may be nil (list_skills then reports
 // unsupported); pinner may be nil (skills must then come pinned).
@@ -116,7 +121,10 @@ type InfoResponse struct {
 	// `serviceAccount` (the service's own identity behind a trusted proxy).
 	Identity string `json:"identity"`
 	// APIVersions are the served CRD versions the service composes and reads.
+	// Agent is the object a release renders; AgentTemplate is the same group
+	// and version (the template is inline in the Agent).
 	APIVersions struct {
+		Agent           string `json:"agent"`
 		AgentTemplate   string `json:"agentTemplate"`
 		Harness         string `json:"harness"`
 		RemoteMCPServer string `json:"remoteMcpServer"`
@@ -130,7 +138,7 @@ type InfoResponse struct {
 		OCIRepositoryInterval string `json:"ociRepositoryInterval"`
 		ServiceAccountName    string `json:"serviceAccountName,omitempty"`
 	} `json:"flux"`
-	// Harness is the platform Harness every agent runs on.
+	// Harness is the platform Harness an agent runs on unless it names another.
 	Harness struct {
 		Name string `json:"name"`
 	} `json:"harness"`
@@ -174,7 +182,8 @@ func (s *Service) Info(ctx context.Context) InfoResponse {
 		"targetCluster": s.cfg.Compose.TargetMusterURL != "",
 	}
 	out.Identity = s.kube.Identity()
-	kagentAPI := "kagent.dev/" + s.cfg.KagentAPIVersion
+	kagentAPI := KagentAPIGroup + "/" + s.cfg.KagentAPIVersion
+	out.APIVersions.Agent = kagentAPI
 	out.APIVersions.AgentTemplate = kagentAPI
 	out.APIVersions.Harness = kagentAPI
 	out.APIVersions.RemoteMCPServer = kagentAPI
@@ -219,10 +228,10 @@ func (s *Service) ociRepositoryGVR() schema.GroupVersionResource {
 }
 
 func (s *Service) kagentGVR(resource string) schema.GroupVersionResource {
-	return schema.GroupVersionResource{Group: "kagent.dev", Version: s.cfg.KagentAPIVersion, Resource: resource}
+	return schema.GroupVersionResource{Group: KagentAPIGroup, Version: s.cfg.KagentAPIVersion, Resource: resource}
 }
 
-func (s *Service) templateGVR() schema.GroupVersionResource    { return s.kagentGVR("agenttemplates") }
+func (s *Service) agentGVR() schema.GroupVersionResource       { return s.kagentGVR("agents") }
 func (s *Service) mcpServerGVR() schema.GroupVersionResource   { return s.kagentGVR("remotemcpservers") }
 func (s *Service) harnessGVR() schema.GroupVersionResource     { return s.kagentGVR("harnesses") }
 func (s *Service) modelConfigGVR() schema.GroupVersionResource { return s.kagentGVR("modelconfigs") }
@@ -279,18 +288,18 @@ func wrapKube(err error, what string) error {
 
 // ---- reads ------------------------------------------------------------------
 
-// List returns the agents of a namespace: every AgentTemplate (with its
+// List returns the agents of a namespace: every Agent object (with its
 // RemoteMCPServer and its owning HelmRelease when Flux labels name one) plus
-// every HelmRelease of the agent chart that has not rendered a template yet.
+// every HelmRelease of the agent chart that has not rendered one yet.
 func (s *Service) List(ctx context.Context, loc Location) ([]Agent, error) {
 	st, err := s.site(ctx, loc)
 	if err != nil {
 		return nil, err
 	}
 	ns := st.ns()
-	templates, err := st.agent.Resource(s.templateGVR()).Namespace(ns).List(ctx, metav1.ListOptions{})
+	objects, err := st.agent.Resource(s.agentGVR()).Namespace(ns).List(ctx, metav1.ListOptions{})
 	if err != nil {
-		return nil, wrapKube(err, "list agenttemplates in "+ns)
+		return nil, wrapKube(err, "list agents in "+ns)
 	}
 	servers, err := st.agent.Resource(s.mcpServerGVR()).Namespace(ns).List(ctx, metav1.ListOptions{})
 	if err != nil {
@@ -305,11 +314,11 @@ func (s *Service) List(ctx context.Context, loc Location) ([]Agent, error) {
 		return nil, err
 	}
 	byName := map[string]*Agent{}
-	for i := range templates.Items {
-		tpl := &templates.Items[i]
-		a := s.agentFromTemplate(tpl, serverByName[tpl.GetName()])
+	for i := range objects.Items {
+		obj := &objects.Items[i]
+		a := agentFromObject(obj, serverByName[obj.GetName()])
 		a.Target = st.loc.Target
-		if hrName, hrNs := ownerOf(tpl); hrName != "" {
+		if hrName, hrNs := ownerOf(obj); hrName != "" {
 			hr := hrs[hrName]
 			if hr == nil || hrNs != st.fluxNS {
 				hr, _ = s.getHelmRelease(ctx, st.flux, orDefault(hrNs, st.fluxNS), hrName)
@@ -328,7 +337,7 @@ func (s *Service) List(ctx context.Context, loc Location) ([]Agent, error) {
 			a.Name = hr.GetName()
 		}
 		if existing, ok := byName[a.Name]; ok {
-			// A HelmRelease whose template carries no provenance labels (an
+			// A HelmRelease whose Agent carries no provenance labels (an
 			// older helm-controller): attach by name.
 			if existing.HelmRelease == nil {
 				applyHelmRelease(existing, hr)
@@ -355,17 +364,17 @@ func (s *Service) Get(ctx context.Context, loc Location, name string) (*Agent, e
 }
 
 func (s *Service) get(ctx context.Context, st *site, name string) (*Agent, error) {
-	tpl, hr, err := s.agentObjects(ctx, st, name)
+	obj, hr, err := s.agentObjects(ctx, st, name)
 	if err != nil {
 		return nil, err
 	}
 	var a Agent
-	if tpl != nil {
+	if obj != nil {
 		server, err := s.getMCPServer(ctx, st.agent, st.ns(), name)
 		if err != nil {
 			return nil, err
 		}
-		a = s.agentFromTemplate(tpl, server)
+		a = agentFromObject(obj, server)
 	} else {
 		a = Agent{Name: name, Namespace: st.ns(), Managed: ManagedNone}
 	}
@@ -376,31 +385,31 @@ func (s *Service) get(ctx context.Context, st *site, name string) (*Agent, error
 	return &a, nil
 }
 
-// agentObjects reads an agent's AgentTemplate and its owning HelmRelease
+// agentObjects reads an agent's Agent object and its owning HelmRelease
 // (either may be nil, not both): the release its provenance labels name,
 // else the one named after the agent at the site.
-func (s *Service) agentObjects(ctx context.Context, st *site, name string) (tpl, hr *unstructured.Unstructured, err error) {
-	if tpl, err = s.getTemplate(ctx, st.agent, st.ns(), name); err != nil {
+func (s *Service) agentObjects(ctx context.Context, st *site, name string) (obj, hr *unstructured.Unstructured, err error) {
+	if obj, err = s.getAgentObject(ctx, st.agent, st.ns(), name); err != nil {
 		return nil, nil, err
 	}
 	hrName, hrNs := st.releaseName(name), st.fluxNS
-	if tpl != nil {
-		if n, nsFromLabel := ownerOf(tpl); n != "" {
+	if obj != nil {
+		if n, nsFromLabel := ownerOf(obj); n != "" {
 			hrName, hrNs = n, orDefault(nsFromLabel, st.fluxNS)
 		}
 	}
 	if hr, err = s.getHelmRelease(ctx, st.flux, hrNs, hrName); err != nil {
 		return nil, nil, err
 	}
-	if tpl == nil && hr == nil {
-		return nil, nil, notFoundf("agent %s: no AgentTemplate and no HelmRelease of that name", st.describe(name))
+	if obj == nil && hr == nil {
+		return nil, nil, notFoundf("agent %s: no Agent and no HelmRelease of that name", st.describe(name))
 	}
-	return tpl, hr, nil
+	return obj, hr, nil
 }
 
-// getTemplate returns nil, nil when the AgentTemplate does not exist.
-func (s *Service) getTemplate(ctx context.Context, dyn dynamic.Interface, ns, name string) (*unstructured.Unstructured, error) {
-	return s.getObject(ctx, dyn, s.templateGVR(), ns, name, "agenttemplate")
+// getAgentObject returns nil, nil when the Agent object does not exist.
+func (s *Service) getAgentObject(ctx context.Context, dyn dynamic.Interface, ns, name string) (*unstructured.Unstructured, error) {
+	return s.getObject(ctx, dyn, s.agentGVR(), ns, name, "agent")
 }
 
 // getMCPServer returns the agent's own RemoteMCPServer, nil, nil when absent.
@@ -529,32 +538,32 @@ func (s *Service) requireModelConfig(ctx context.Context, dyn dynamic.Interface,
 	return invalidf("modelConfig %q does not exist in namespace %s; valid: %s", name, ns, strings.Join(names, ", "))
 }
 
-// requireHarness fails, naming the Harnesses that admit agents by
-// HarnessLabel, when name is not one of them. Empty is the platform Harness.
-func (s *Service) requireHarness(ctx context.Context, dyn dynamic.Interface, ns, name string) error {
-	if name == "" {
-		return nil
+// harnessFor resolves the Harness an agent runs on: name, else the platform
+// Harness. A named Harness must exist in ns (the refusal lists the ones that
+// do); the platform Harness may be absent (the connectivity chart provisions
+// it, and the Agent reports ResolvedRefs False until then).
+func (s *Service) harnessFor(ctx context.Context, dyn dynamic.Interface, ns, name string) (string, error) {
+	harness := orDefault(name, s.cfg.Compose.HarnessName)
+	h, err := s.getObject(ctx, dyn, s.harnessGVR(), ns, harness, "harness")
+	if err != nil {
+		return harness, err
+	}
+	if h != nil || name == "" {
+		return harness, nil
 	}
 	list, err := dyn.Resource(s.harnessGVR()).Namespace(ns).List(ctx, metav1.ListOptions{})
 	if err != nil {
-		return fmt.Errorf("list Harnesses in %s: %w", ns, err)
+		return harness, wrapKube(err, "list harnesses in "+ns)
 	}
-	var names []string
-	for _, h := range list.Items {
-		admits, _, _ := unstructured.NestedString(h.Object, "spec", "allowedAgentTemplates", "selector", "matchLabels", HarnessLabel)
-		if admits == "" {
-			continue
-		}
-		if admits == name {
-			return nil
-		}
-		names = append(names, admits)
+	names := make([]string, 0, len(list.Items))
+	for i := range list.Items {
+		names = append(names, list.Items[i].GetName())
 	}
 	if len(names) == 0 {
-		return invalidf("harness %q does not exist in namespace %s (no Harness there admits agents by %s)", name, ns, HarnessLabel)
+		return harness, invalidf("harness %q does not exist in namespace %s (no Harness there)", name, ns)
 	}
 	slices.Sort(names)
-	return invalidf("harness %q does not exist in namespace %s; valid: %s", name, ns, strings.Join(names, ", "))
+	return harness, invalidf("harness %q does not exist in namespace %s; valid: %s", name, ns, strings.Join(names, ", "))
 }
 
 // ---- skills -------------------------------------------------------------------
@@ -595,6 +604,12 @@ func checkSpec(spec Spec) []error {
 	if err := ValidateSkills(spec.Skills); err != nil {
 		errs = append(errs, err)
 	}
+	if err := ValidatePlugins(spec.Plugins); err != nil {
+		errs = append(errs, err)
+	}
+	if err := ValidateEgress(spec.Egress); err != nil {
+		errs = append(errs, err)
+	}
 	if err := ValidateSystemMessage(spec.SystemMessage); err != nil {
 		errs = append(errs, err)
 	}
@@ -606,6 +621,12 @@ func checkSpec(spec Spec) []error {
 		}
 	}
 	return errs
+}
+
+// requireHarness checks the Harness a create names.
+func (s *Service) requireHarness(ctx context.Context, dyn dynamic.Interface, ns string, spec Spec) error {
+	_, err := s.harnessFor(ctx, dyn, ns, spec.Harness)
+	return err
 }
 
 // ValidateCreate is create_agent without the write.
@@ -632,7 +653,7 @@ func (s *Service) ValidateCreate(ctx context.Context, spec Spec) (*ValidateResul
 		}
 		res.addError(err)
 	}
-	if err := s.requireHarness(ctx, st.agent, ns, spec.Harness); err != nil {
+	if err := s.requireHarness(ctx, st.agent, ns, spec); err != nil {
 		if !isDomainError(err) {
 			return nil, err
 		}
@@ -662,7 +683,7 @@ func (s *Service) ValidateCreate(ctx context.Context, spec Spec) (*ValidateResul
 	return res, nil
 }
 
-// requireFreeName fails when a HelmRelease or an AgentTemplate of that name
+// requireFreeName fails when a HelmRelease or an Agent object of that name
 // exists.
 func (s *Service) requireFreeName(ctx context.Context, st *site, name string) error {
 	if name == "" {
@@ -673,10 +694,10 @@ func (s *Service) requireFreeName(ctx context.Context, st *site, name string) er
 	} else if hr != nil {
 		return conflictf("HelmRelease %s/%s already exists; use update_agent to change it", st.fluxNS, st.releaseName(name))
 	}
-	if tpl, err := s.getTemplate(ctx, st.agent, st.ns(), name); err != nil {
+	if obj, err := s.getAgentObject(ctx, st.agent, st.ns(), name); err != nil {
 		return err
-	} else if tpl != nil {
-		return conflictf("AgentTemplate %s already exists without a HelmRelease (a bare template); delete it first (delete_agent with force) or pick another name", st.describe(name))
+	} else if obj != nil {
+		return conflictf("Agent %s already exists without a HelmRelease (a bare Agent); delete it first (delete_agent with force) or pick another name", st.describe(name))
 	}
 	return nil
 }
@@ -769,7 +790,7 @@ func (s *Service) Create(ctx context.Context, spec Spec) (*CreateResult, error) 
 	if err := s.requireModelConfig(ctx, st.agent, ns, spec.ModelConfig); err != nil {
 		return nil, err
 	}
-	if err := s.requireHarness(ctx, st.agent, ns, spec.Harness); err != nil {
+	if err := s.requireHarness(ctx, st.agent, ns, spec); err != nil {
 		return nil, err
 	}
 	if err := requireReadableSkills(ctx, s.pinner, spec.Skills); err != nil {
@@ -887,12 +908,12 @@ func (s *Service) createCommit(ctx context.Context, st *site, spec Spec, values 
 // ---- update --------------------------------------------------------------------
 
 // writableHelmRelease fetches the HelmRelease an update or delete targets and
-// applies the ownership rules: a bare AgentTemplate has nothing to write to; a
+// applies the ownership rules: a bare Agent object has nothing to write to; a
 // suspended release is refused unless force; a GitOps-owned one is refused
 // with gitops_owned, naming mode commit, unless allowGitOps (commit mode,
 // which changes it in git).
 func (s *Service) writableHelmRelease(ctx context.Context, st *site, name string, force, allowGitOps bool) (*unstructured.Unstructured, *unstructured.Unstructured, error) {
-	tpl, hr, err := s.agentObjects(ctx, st, name)
+	obj, hr, err := s.agentObjects(ctx, st, name)
 	if errorsIs(err, ErrNotFound) {
 		return nil, nil, notFoundf("agent %s", st.describe(name))
 	}
@@ -900,40 +921,40 @@ func (s *Service) writableHelmRelease(ctx context.Context, st *site, name string
 		return nil, nil, err
 	}
 	if hr == nil {
-		return nil, tpl, conflictf("AgentTemplate %s is a bare template with no HelmRelease behind it; agent-manager only writes HelmRelease values (recreate it with create_agent, or delete it with force)", st.describe(name))
+		return nil, obj, conflictf("Agent %s is a bare Agent with no HelmRelease behind it; agent-manager only writes HelmRelease values (recreate it with create_agent, or delete it with force)", st.describe(name))
 	}
 	if gitOpsOwnedHR(hr) && !allowGitOps {
-		return nil, tpl, s.gitOpsRefusal(ctx, st.flux, hr)
+		return nil, obj, s.gitOpsRefusal(ctx, st.flux, hr)
 	}
 	if !force {
 		if suspended, _, _ := unstructured.NestedBool(hr.Object, "spec", "suspend"); suspended {
-			return nil, tpl, conflictf("HelmRelease %s/%s is suspended: Flux will not act on a change. Resume it first, or pass force", hr.GetNamespace(), hr.GetName())
+			return nil, obj, conflictf("HelmRelease %s/%s is suspended: Flux will not act on a change. Resume it first, or pass force", hr.GetNamespace(), hr.GetName())
 		}
 	}
-	return hr, tpl, nil
+	return hr, obj, nil
 }
 
-// mergedValues applies an Update to the release's current values and returns
-// (after, before). Skills given replace the list and are pinned; refreshSkills
-// re-pins every git skill to the head of its ref (the default branch unless
-// the request names one).
 // mergeSkillsGitAuth keeps the skills credential in step with the merged
-// skills: the caller's Secret when it names one (empty: back to the
-// installation's), otherwise the release's own, otherwise the installation's —
-// so an update of an agent written before the credential existed carries it
-// from then on. Without a git skill the value is dropped.
+// skills and plugins: the caller's Secret when it names one (empty: back to
+// the installation's), otherwise the release's own, otherwise the
+// installation's, so an update of an agent written before the credential
+// existed carries it from then on. Without a git source the value is dropped.
 func mergeSkillsGitAuth(values map[string]any, own *string, cfg ComposeConfig) {
 	current, _, _ := unstructured.NestedString(values, SkillsGitAuthValuesKey, "name")
 	if own != nil {
 		current = *own
 	}
-	if name := skillsGitAuth(current, skillsFromValues(values), cfg); name != "" {
+	if name := skillsGitAuth(current, skillsFromValues(values), pluginsFromValues(values), cfg); name != "" {
 		values[SkillsGitAuthValuesKey] = map[string]any{"name": name}
 	} else {
 		delete(values, SkillsGitAuthValuesKey)
 	}
 }
 
+// mergedValues applies an Update to the release's current values and returns
+// (after, before). Skills given replace the list and are pinned; refreshSkills
+// re-pins every git skill to the head of its ref (the default branch unless
+// the request names one).
 func (s *Service) mergedValues(ctx context.Context, st *site, upd Update, hr *unstructured.Unstructured) (map[string]any, map[string]any, error) {
 	if upd.SystemMessage != nil {
 		if err := ValidateSystemMessage(*upd.SystemMessage); err != nil {
@@ -957,6 +978,16 @@ func (s *Service) mergedValues(ctx context.Context, st *site, upd Update, hr *un
 	setOrDelete(agentBlock, "description", upd.Description)
 	setOrDelete(agentBlock, "systemMessage", upd.SystemMessage)
 	setOrDelete(agentBlock, "iconUrl", upd.IconURL)
+	if upd.Egress != nil {
+		if err := ValidateEgress(*upd.Egress); err != nil {
+			return after, before, err
+		}
+		if len(*upd.Egress) > 0 {
+			agentBlock["egress"] = toAnySlice(*upd.Egress)
+		} else {
+			delete(agentBlock, "egress")
+		}
+	}
 	after["agent"] = agentBlock
 
 	var firstErr error
@@ -985,6 +1016,16 @@ func (s *Service) mergedValues(ctx context.Context, st *site, upd Update, hr *un
 			after["skills"] = sk
 		} else {
 			delete(after, "skills")
+		}
+	}
+	if upd.Plugins != nil {
+		if err := ValidatePlugins(*upd.Plugins); err != nil {
+			return after, before, err
+		}
+		if pl := pluginsValues(*upd.Plugins); pl != nil {
+			after["plugins"] = pl
+		} else {
+			delete(after, "plugins")
 		}
 	}
 	mergeSkillsGitAuth(after, upd.GitAuthSecretName, st.compose)
@@ -1185,9 +1226,9 @@ func changedPaths(prefix string, before, after map[string]any) []string {
 // ---- delete --------------------------------------------------------------------
 
 // Delete removes the agent's HelmRelease (helm-controller uninstalls the
-// rendered AgentTemplate and RemoteMCPServer) and the shared OCIRepository
-// when no other release references it. A bare AgentTemplate is only deleted
-// with force. A dry run reports what would go and deletes nothing; in commit
+// rendered Agent and RemoteMCPServer) and the shared OCIRepository when no
+// other release references it. A bare Agent object is only deleted with
+// force. A dry run reports what would go and deletes nothing; in commit
 // mode the files are removed with a pull request instead.
 func (s *Service) Delete(ctx context.Context, loc Location, name string, force bool, w WriteOptions) (*DeleteResult, error) {
 	if err := ValidateName(name); err != nil {
@@ -1203,14 +1244,14 @@ func (s *Service) Delete(ctx context.Context, loc Location, name string, force b
 	}
 	ns, dyn := st.ns(), st.flux
 	res := &DeleteResult{Name: name, Namespace: ns, Target: st.loc.Target, RequestedBy: identity.Caller(ctx), WriteOutcome: WriteOutcome{Mode: mode, DryRun: w.DryRun}}
-	hr, tpl, err := s.writableHelmRelease(ctx, st, name, force, mode == ModeCommit)
+	hr, obj, err := s.writableHelmRelease(ctx, st, name, force, mode == ModeCommit)
 	if err != nil {
-		if mode == ModeApply && hr == nil && tpl != nil && force && errorsIs(err, ErrConflict) {
-			// A bare AgentTemplate, forced: delete the template itself.
+		if mode == ModeApply && hr == nil && obj != nil && force && errorsIs(err, ErrConflict) {
+			// A bare Agent, forced: delete the object itself.
 			if err := s.deleteRendered(ctx, st.agent, ns, name, res, false, w.DryRun); err != nil {
 				return nil, err
 			}
-			s.log.Info("bare agent template deleted", identity.LogAttr(ctx), "namespace", ns, "name", name, "dryRun", w.DryRun)
+			s.log.Info("bare agent deleted", identity.LogAttr(ctx), "namespace", ns, "name", name, "dryRun", w.DryRun)
 			return res, nil
 		}
 		return nil, err
@@ -1225,7 +1266,7 @@ func (s *Service) Delete(ctx context.Context, loc Location, name string, force b
 		}
 	}
 	res.HelmReleaseDeleted = true
-	if suspended && force && tpl != nil {
+	if suspended && force && obj != nil {
 		// Flux drops the finalizer of a suspended release without uninstalling:
 		// the rendered objects would stay behind, so remove them directly.
 		if err := s.deleteRendered(ctx, st.agent, ns, name, res, true, w.DryRun); err != nil {
@@ -1303,7 +1344,7 @@ func (s *Service) deleteCommit(ctx context.Context, dyn dynamic.Interface, hr *u
 	}
 	ns, name := hr.GetNamespace(), hr.GetName()
 	title := fmt.Sprintf("feat(agents): remove agent %s in %s", name, ns)
-	body := fmt.Sprintf("Removes the agent `%s` from namespace `%s`: its HelmRelease, and with it the AgentTemplate and the RemoteMCPServer it renders.", name, ns)
+	body := fmt.Sprintf("Removes the agent `%s` from namespace `%s`: its HelmRelease, and with it the Agent and the RemoteMCPServer it renders.", name, ns)
 	if res.Commit, err = c.open(ctx, nil, remove, commitBranch("delete", ns, name), title, body, w.DryRun); err != nil {
 		return nil, err
 	}
@@ -1314,16 +1355,16 @@ func (s *Service) deleteCommit(ctx context.Context, dyn dynamic.Interface, hr *u
 	return res, nil
 }
 
-// deleteRendered deletes the AgentTemplate named after the agent and, when
+// deleteRendered deletes the Agent object named after the agent and, when
 // withServer, the RemoteMCPServer of the same name that the same release
 // rendered (its provenance labels name the release).
 func (s *Service) deleteRendered(ctx context.Context, dyn dynamic.Interface, ns, name string, res *DeleteResult, withServer, dryRun bool) error {
 	if !dryRun {
-		if err := dyn.Resource(s.templateGVR()).Namespace(ns).Delete(ctx, name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
-			return wrapKube(err, fmt.Sprintf("delete AgentTemplate %s/%s", ns, name))
+		if err := dyn.Resource(s.agentGVR()).Namespace(ns).Delete(ctx, name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+			return wrapKube(err, fmt.Sprintf("delete Agent %s/%s", ns, name))
 		}
 	}
-	res.AgentTemplateDeleted = true
+	res.AgentDeleted = true
 	if !withServer {
 		return nil
 	}
@@ -1391,27 +1432,30 @@ func chartRefOf(hr *unstructured.Unstructured) *ChartRef {
 	return out
 }
 
-// agentFromTemplate reads the AgentTemplate and the agent's RemoteMCPServer
-// (nil when absent) into the view.
-func (s *Service) agentFromTemplate(tpl, server *unstructured.Unstructured) Agent {
-	a := Agent{Name: tpl.GetName(), Namespace: tpl.GetNamespace(), Exists: true, Managed: ManagedNone}
-	a.DisplayName = tpl.GetAnnotations()[DisplayNameAnnotation]
-	a.IconURL = tpl.GetAnnotations()[IconURLAnnotation]
-	a.Description, _, _ = unstructured.NestedString(tpl.Object, "spec", "description")
-	a.ModelConfig, _, _ = unstructured.NestedString(tpl.Object, "spec", "modelConfig", "name")
-	a.SystemMessage, _, _ = unstructured.NestedString(tpl.Object, "spec", "systemPrompt")
-	a.Skills = skillsFromTemplate(tpl)
-	a.Tools = toolBindingsOf(tpl)
-	a.Toolset, a.ImplicitFullAccess = toolsetOf(tpl, server)
-	ts := templateStatusOf(tpl)
-	a.Harnesses = ts.Harnesses
-	a.Ready = harnessReady(ts.Harnesses, s.harnessOf(tpl))
+// agentFromObject reads the Agent object (its inline template, its Harness
+// reference and its status) and the agent's RemoteMCPServer (nil when absent)
+// into the view.
+func agentFromObject(obj, server *unstructured.Unstructured) Agent {
+	a := Agent{Name: obj.GetName(), Namespace: obj.GetNamespace(), Exists: true, Managed: ManagedNone}
+	a.DisplayName = obj.GetAnnotations()[DisplayNameAnnotation]
+	a.IconURL = obj.GetAnnotations()[IconURLAnnotation]
+	a.Harness, _, _ = unstructured.NestedString(obj.Object, "spec", "harnessRef", "name")
+	a.Description, _, _ = unstructured.NestedString(obj.Object, "spec", "template", "description")
+	a.ModelConfig, _, _ = unstructured.NestedString(obj.Object, "spec", "template", "modelConfig", "name")
+	a.SystemMessage, _, _ = unstructured.NestedString(obj.Object, "spec", "template", "systemPrompt")
+	a.Skills = skillsFromObject(obj)
+	a.Plugins = pluginsFromObject(obj)
+	a.Egress = egressFromObject(obj)
+	a.Tools = toolBindingsOf(obj)
+	a.Toolset, a.ImplicitFullAccess = toolsetOf(obj, server)
+	a.Status = objectStatusOf(obj)
+	a.Ready = objectReady(a.Status)
 	return a
 }
 
-// toolBindingsOf reads spec.tools[].mcp.
-func toolBindingsOf(tpl *unstructured.Unstructured) []ToolBinding {
-	tools, _, _ := unstructured.NestedSlice(tpl.Object, "spec", "tools")
+// toolBindingsOf reads spec.template.tools[].mcp.
+func toolBindingsOf(obj *unstructured.Unstructured) []ToolBinding {
+	tools, _, _ := unstructured.NestedSlice(obj.Object, "spec", "template", "tools")
 	var out []ToolBinding
 	for _, t := range tools {
 		m, _ := t.(map[string]any)
@@ -1427,14 +1471,14 @@ func toolBindingsOf(tpl *unstructured.Unstructured) []ToolBinding {
 	return out
 }
 
-// toolsetOf reads the toolset a template carries through its own
+// toolsetOf reads the toolset an Agent carries through its own
 // RemoteMCPServer: the X-Muster-Toolset header (spec.headersFrom[]). A bound
 // server without the header means implicit full access; no binding to the
 // agent's own server means neither (a preset:none agent binds nothing).
-func toolsetOf(tpl, server *unstructured.Unstructured) (toolset []string, implicitFullAccess bool) {
+func toolsetOf(obj, server *unstructured.Unstructured) (toolset []string, implicitFullAccess bool) {
 	bound := false
-	for _, b := range toolBindingsOf(tpl) {
-		if b.Server == tpl.GetName() {
+	for _, b := range toolBindingsOf(obj) {
+		if b.Server == obj.GetName() {
 			bound = true
 		}
 	}
@@ -1466,7 +1510,7 @@ func headerOf(server *unstructured.Unstructured, name string) string {
 }
 
 // applyHelmRelease folds the owning release into the view and, when the
-// template is absent, reads the identity fields from the values.
+// Agent object is absent, reads the identity fields from the values.
 func applyHelmRelease(a *Agent, hr *unstructured.Unstructured) {
 	ref := &HelmReleaseRef{Name: hr.GetName(), Namespace: hr.GetNamespace()}
 	conds := conditionsOfObject(hr)
@@ -1497,7 +1541,7 @@ func applyHelmRelease(a *Agent, hr *unstructured.Unstructured) {
 	a.Values = values
 	// The HelmRelease values are the declaration: a declared toolset is
 	// reported as such, a release without one is implicit full access — even
-	// while the template has not been rendered yet.
+	// while the Agent has not been rendered yet.
 	if values != nil {
 		if toolset := stringSlice(values[ToolsetValuesKey]); toolset != nil {
 			a.Toolset, a.ImplicitFullAccess = toolset, false
@@ -1508,7 +1552,7 @@ func applyHelmRelease(a *Agent, hr *unstructured.Unstructured) {
 	if a.Exists || values == nil {
 		return
 	}
-	// No template yet: the values are what the agent will be.
+	// No Agent yet: the values are what the agent will be.
 	agentBlock, _ := values["agent"].(map[string]any)
 	if agentBlock != nil {
 		if name, _ := agentBlock["name"].(string); name != "" {
@@ -1518,6 +1562,7 @@ func applyHelmRelease(a *Agent, hr *unstructured.Unstructured) {
 		a.Description, _ = agentBlock["description"].(string)
 		a.IconURL, _ = agentBlock["iconUrl"].(string)
 		a.SystemMessage, _ = agentBlock["systemMessage"].(string)
+		a.Harness, _ = agentBlock["harness"].(string)
 	}
 	if a.Name == "" {
 		a.Name = hr.GetName()
@@ -1526,4 +1571,6 @@ func applyHelmRelease(a *Agent, hr *unstructured.Unstructured) {
 		a.ModelConfig, _ = mc["name"].(string)
 	}
 	a.Skills = skillsFromValues(values)
+	a.Plugins = pluginsFromValues(values)
+	a.Egress = egressFromValues(values)
 }

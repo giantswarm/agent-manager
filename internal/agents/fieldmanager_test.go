@@ -39,7 +39,7 @@ func TestWritesNameAgentManagerAsTheFieldManager(t *testing.T) {
 	_, err := f.svc.Create(ctx, Spec{Name: "fm", ModelConfig: "default-model-config", Toolset: []string{"preset:read-only"}})
 	require.NoError(t, err)
 	// The chart's rendered objects, as the controller would leave them.
-	require.NoError(t, f.dyn.Tracker().Add(agentTemplate("kagent", "fm", "fm", "kagent", true, true)))
+	require.NoError(t, f.dyn.Tracker().Add(agentObject("kagent", "fm", "fm", "kagent", true, true)))
 	require.NoError(t, f.dyn.Tracker().Add(remoteMCPServer("kagent", "fm")))
 	desc := "renamed"
 	_, err = f.svc.Update(ctx, Update{Name: "fm", Description: &desc})

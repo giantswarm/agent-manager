@@ -97,14 +97,14 @@ environment variable named next to it; flags win over the environment.`,
 	f.BoolVar(&o.inCluster, "in-cluster", envBool("KUBERNETES_IN_CLUSTER", false), "Force in-cluster Kubernetes auth (KUBERNETES_IN_CLUSTER)")
 	f.StringVar(&o.kagentNamespace, "kagent-namespace", envOr("KAGENT_NAMESPACE", "kagent"), "Default namespace agents are created in and listed from (KAGENT_NAMESPACE)")
 	f.StringVar(&o.managedNamespaces, "managed-namespaces", envOr("AGENT_MANAGER_MANAGED_NAMESPACES", ""), "Comma-separated additional namespaces agents may live in; RBAC must exist there (AGENT_MANAGER_MANAGED_NAMESPACES)")
-	f.StringVar(&o.kagentAPIVersion, "kagent-api-version", envOr("KAGENT_API_VERSION", "auto"), "kagent.dev API version for AgentTemplates, Harnesses, RemoteMCPServers and ModelConfigs; auto discovers the version serving agenttemplates, default "+agents.DefaultKagentAPIVersion+" (KAGENT_API_VERSION)")
-	f.StringVar(&o.harnessName, "harness-name", envOr("AGENT_HARNESS_NAME", agents.DefaultHarnessName), "Name of the platform Harness every agent runs on: composed as the chart value agent.harness (the admission label's value); its AgentTemplate.status.harnesses[] entry decides get_agent_status (AGENT_HARNESS_NAME)")
+	f.StringVar(&o.kagentAPIVersion, "kagent-api-version", envOr("KAGENT_API_VERSION", "auto"), "api.kagent.dev API version for Agents, Harnesses, RemoteMCPServers and ModelConfigs; auto discovers the version serving agents, default "+agents.DefaultKagentAPIVersion+" (KAGENT_API_VERSION)")
+	f.StringVar(&o.harnessName, "harness-name", envOr("AGENT_HARNESS_NAME", agents.DefaultHarnessName), "Name of the platform Harness an agent runs on unless create_agent names another: composed as the chart value agent.harness, the Agent's spec.harnessRef.name (AGENT_HARNESS_NAME)")
 	f.StringVar(&o.musterURL, "muster-url", envOr("AGENT_MUSTER_URL", ""), "The platform's muster MCP URL, composed into every agent as the chart value muster.url; empty composes nothing and the chart default applies (AGENT_MUSTER_URL)")
 	f.StringVar(&o.targetMusterURL, "target-muster-url", envOr("AGENT_TARGET_MUSTER_URL", ""), "The muster MCP URL composed into an agent on a workload cluster: one those clusters reach (the installation's public muster endpoint); empty refuses target clusters (AGENT_TARGET_MUSTER_URL)")
 	f.StringVar(&o.helmReleaseAPI, "flux-helmrelease-api-version", envOr("FLUX_HELMRELEASE_API_VERSION", "auto"), "helm.toolkit.fluxcd.io API version composed into HelmReleases; auto discovers it (FLUX_HELMRELEASE_API_VERSION)")
 	f.StringVar(&o.ociRepositoryAPI, "flux-ocirepository-api-version", envOr("FLUX_OCIREPOSITORY_API_VERSION", "auto"), "source.toolkit.fluxcd.io API version composed into OCIRepositories; auto discovers it (FLUX_OCIREPOSITORY_API_VERSION)")
 	f.StringVar(&o.chartOCIURL, "agent-chart-oci-url", envOr("AGENT_CHART_OCI_URL", agents.DefaultChartOCIURL), "OCI URL of the agent chart every agent renders from (AGENT_CHART_OCI_URL)")
-	f.StringVar(&o.chartSemver, "agent-chart-semver", envOr("AGENT_CHART_SEMVER", agents.DefaultChartSemver), "Semver range the OCIRepository tracks; 1.x follows every 1.x release of the Generic chart and never a pre-release (AGENT_CHART_SEMVER)")
+	f.StringVar(&o.chartSemver, "agent-chart-semver", envOr("AGENT_CHART_SEMVER", agents.DefaultChartSemver), "Semver range the OCIRepository tracks; 2.x follows every 2.x release of the Generic chart and never a pre-release (AGENT_CHART_SEMVER)")
 	f.StringVar(&o.chartSemverFilter, "agent-chart-semver-filter", envOr("AGENT_CHART_SEMVER_FILTER", ""), "Regular expression the agent chart's tags must match before the range is evaluated, as the OCIRepository's ref.semverFilter; empty filters nothing (AGENT_CHART_SEMVER_FILTER)")
 	f.DurationVar(&o.chartRefresh, "agent-chart-refresh", envDuration("AGENT_CHART_REFRESH", 10*time.Minute), "How often the chart registry is re-read for the latest version and its values schema (AGENT_CHART_REFRESH)")
 	f.StringVar(&o.helmReleaseInterval, "helmrelease-interval", envOr("HELMRELEASE_INTERVAL", agents.DefaultHelmReleaseInterval), "HelmRelease.spec.interval of composed agents (HELMRELEASE_INTERVAL)")
@@ -195,9 +195,9 @@ func runServe(ctx context.Context, o *serveOptions) error {
 		provider = kube.NewCallerProvider(clients, log)
 	}
 
-	kagentVersion := strings.TrimPrefix(o.kagentAPIVersion, "kagent.dev/")
+	kagentVersion := strings.TrimPrefix(o.kagentAPIVersion, agents.KagentAPIGroup+"/")
 	if kagentVersion == "" || kagentVersion == "auto" {
-		kagentVersion, err = kube.DiscoverVersion(clients.Discovery(), "kagent.dev", "agenttemplates")
+		kagentVersion, err = kube.DiscoverVersion(clients.Discovery(), agents.KagentAPIGroup, "agents")
 		if err != nil {
 			log.Warn("kagent API discovery failed, using default", "default", agents.DefaultKagentAPIVersion, "error", err)
 			kagentVersion = agents.DefaultKagentAPIVersion

@@ -36,4 +36,5 @@ func TestAgentSummaryReportsTheReleaseState(t *testing.T) {
 	healthy := Agent{Name: "a", HelmRelease: &HelmReleaseRef{Ready: &yes, Reason: "UpgradeSucceeded", Message: "ok"}}
 	assert.Equal(t, AgentSummary{Name: "a"}, healthy.Summary(), "a Ready release adds nothing")
 	assert.Equal(t, AgentSummary{Name: "a"}, Agent{Name: "a"}.Summary())
+	assert.Equal(t, "claude", Agent{Name: "a", Harness: "claude"}.Summary().Harness)
 }

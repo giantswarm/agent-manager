@@ -59,20 +59,20 @@ func (pinner) OCIDigest(_ context.Context, ref string) (string, error) {
 var (
 	hrGVR     = schema.GroupVersionResource{Group: "helm.toolkit.fluxcd.io", Version: "v2", Resource: "helmreleases"}
 	ociGVR    = schema.GroupVersionResource{Group: "source.toolkit.fluxcd.io", Version: "v1", Resource: "ocirepositories"}
-	tplGVR    = schema.GroupVersionResource{Group: "kagent.dev", Version: "v1alpha3", Resource: "agenttemplates"}
-	serverGVR = schema.GroupVersionResource{Group: "kagent.dev", Version: "v1alpha3", Resource: "remotemcpservers"}
-	mcGVR     = schema.GroupVersionResource{Group: "kagent.dev", Version: "v1alpha3", Resource: "modelconfigs"}
+	agentGVR  = schema.GroupVersionResource{Group: "api.kagent.dev", Version: "v1alpha3", Resource: "agents"}
+	serverGVR = schema.GroupVersionResource{Group: "api.kagent.dev", Version: "v1alpha3", Resource: "remotemcpservers"}
+	mcGVR     = schema.GroupVersionResource{Group: "api.kagent.dev", Version: "v1alpha3", Resource: "modelconfigs"}
 )
 
 func newService(t *testing.T) (*agents.Service, *dynamicfake.FakeDynamicClient) {
 	t.Helper()
 	mc := &unstructured.Unstructured{Object: map[string]any{
-		"apiVersion": "kagent.dev/v1alpha3", "kind": "ModelConfig",
+		"apiVersion": "api.kagent.dev/v1alpha3", "kind": "ModelConfig",
 		"metadata": map[string]any{"name": "default-model-config", "namespace": "kagent"},
 		"spec":     map[string]any{"provider": "Anthropic", "model": "claude-sonnet-4-6"},
 	}}
 	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{
-		hrGVR: "HelmReleaseList", ociGVR: "OCIRepositoryList", tplGVR: "AgentTemplateList", serverGVR: "RemoteMCPServerList", mcGVR: "ModelConfigList",
+		hrGVR: "HelmReleaseList", ociGVR: "OCIRepositoryList", agentGVR: "AgentList", serverGVR: "RemoteMCPServerList", mcGVR: "ModelConfigList",
 	}, mc)
 	typed := kubefake.NewClientset()
 	client := kube.FromInterfaces(dyn, typed, typed.Discovery())
@@ -109,7 +109,8 @@ func TestRESTLifecycle(t *testing.T) {
 	code, info := do(t, mux, http.MethodGet, Prefix+"/info", nil)
 	assert.Equal(t, http.StatusOK, code)
 	assert.Equal(t, "test", info["version"])
-	assert.Equal(t, "kagent.dev/v1alpha3", info["apiVersions"].(map[string]any)["agentTemplate"])
+	assert.Equal(t, "api.kagent.dev/v1alpha3", info["apiVersions"].(map[string]any)["agent"])
+	assert.Equal(t, "api.kagent.dev/v1alpha3", info["apiVersions"].(map[string]any)["agentTemplate"])
 	assert.Equal(t, "kagent", info["harness"].(map[string]any)["name"])
 	assert.Equal(t, false, info["capabilities"].(map[string]any)["commit"])
 
@@ -329,7 +330,7 @@ func TestMCPToolsMirrorREST(t *testing.T) {
 			assert.Contains(t, tool.InputSchema.Required, "toolset")
 			assert.Contains(t, tool.InputSchema.Properties["toolset"].(map[string]any)["description"], "preset:none")
 			skills := tool.InputSchema.Properties["skills"].(map[string]any)
-			assert.Equal(t, "array", skills["type"], "skills is the 1.x list")
+			assert.Equal(t, "array", skills["type"], "skills is a list")
 			assert.NotContains(t, tool.InputSchema.Properties, "refreshSkills")
 		case ToolUpdateAgent:
 			assert.Contains(t, tool.InputSchema.Properties, "toolset")
@@ -362,8 +363,8 @@ func TestMCPToolsMirrorREST(t *testing.T) {
 	require.False(t, isErr, text)
 	assert.NotContains(t, text, "\n", "tool results are compact JSON")
 	assert.Contains(t, text, `"identity":"serviceAccount"`)
-	assert.Contains(t, text, `"agentTemplate":"kagent.dev/v1alpha3"`)
-	assert.Contains(t, text, `"semver":"1.x"`)
+	assert.Contains(t, text, `"agent":"api.kagent.dev/v1alpha3"`)
+	assert.Contains(t, text, `"semver":"2.x"`)
 
 	text, isErr = callTool(t, srv, ToolCreateAgent, map[string]any{"name": "sre", "modelConfig": "nope", "toolset": []string{"preset:read-only"}})
 	assert.True(t, isErr)
@@ -403,7 +404,7 @@ func TestMCPToolsMirrorREST(t *testing.T) {
 	hr, err := dyn.Resource(hrGVR).Namespace("kagent").Get(context.Background(), "sre", metav1.GetOptions{})
 	require.NoError(t, err)
 	values, _, _ := unstructured.NestedMap(hr.Object, "spec", "values")
-	assert.Equal(t, []any{map[string]any{"name": "runbooks", "path": "runbooks", "git": map[string]any{"url": skillsRepo, "commit": mainHead}}}, values["skills"], "the 1.x skills list, pinned")
+	assert.Equal(t, []any{map[string]any{"name": "runbooks", "path": "runbooks", "git": map[string]any{"url": skillsRepo, "commit": mainHead}}}, values["skills"], "the chart's skills list, pinned")
 	assert.Equal(t, []any{"preset:read-only", "workflow:incident-triage"}, values["toolset"])
 	_, hasMuster := values["muster"]
 	assert.False(t, hasMuster, "no muster.url configured: nothing composed, the chart default applies")

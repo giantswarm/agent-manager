@@ -71,7 +71,7 @@ func TestRejectRemovedExplainsEveryRemovedArgument(t *testing.T) {
 		require.ErrorIs(t, err, ErrInvalid)
 		assert.Contains(t, err.Error(), "runtime is gone")
 		assert.Contains(t, err.Error(), "Harness")
-		assert.Contains(t, err.Error(), "no Python runtime")
+		assert.Contains(t, err.Error(), "harness names another")
 	}
 }
 

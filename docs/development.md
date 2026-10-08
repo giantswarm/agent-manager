@@ -26,26 +26,32 @@ make helm-docs          # regenerate helm/agent-manager/README.md
   challenge, tag list, one file out of a chart archive, the digest a tag
   resolves to) with a fake registry for tests in `ocitest`.
 - `internal/chart` — the agent chart: the resolver that tracks the latest
-  in-range version (`1.x`, Masterminds semantics like Flux) and its
-  `values.schema.json`, and the embedded copy of the chart 1.x schema as the
+  in-range version (`2.x`, Masterminds semantics like Flux) and its
+  `values.schema.json`, and the embedded copy of the chart 2.x schema as the
   offline fallback.
 - `internal/skills` — SKILL.md discovery in GitHub repositories (the portal
   backend's `/agent-skills` semantics, each repository with the head commit it
   was read at) and the `Resolver` that pins a branch or tag to its head commit and
   an image tag to its digest.
 - `internal/agents` — the domain: `compose.go` mirrors the portal's
-  `composeManifests.ts` (chart 1.x values, HelmRelease, OCIRepository),
-  `skills.go` validates and pins skill entries, `validate.go` runs the chart
-  schema, `service.go` is list/get/create/update/delete plus model configs —
-  the read model comes from the AgentTemplate, the agent's RemoteMCPServer and
-  the owning HelmRelease — and `status.go` folds the agent's Harness entry
-  on the template, the HelmRelease and the Warning events into one verdict.
-  `testdata/` holds what Generic chart 1.x renders.
-- `internal/migrate` — the `migrate` command: `values.go` rewrites 0.x
-  values into the 1.x contract through the composer's own lists and skill
-  pinning, `diff.go` renders a GitOps-owned release's rewrite as a unified
+  `composeManifests.ts` (chart 2.x values, HelmRelease, OCIRepository),
+  `skills.go` validates and pins skill entries, `plugins.go` validates plugin
+  entries, `validate.go`
+  runs the chart schema, `service.go` is list/get/create/update/delete plus
+  model configs (the read model comes from the Agent object, the agent's
+  RemoteMCPServer and the owning HelmRelease) and `status.go` folds the
+  Agent's conditions, the HelmRelease and the Warning events into one verdict.
+  `testdata/` holds what Generic chart 2.x renders.
+- `internal/migrate` — the `migrate` command: `hop.go` picks the path (0.x
+  to 1.x or 1.x to 2.x) from the target range's major and says what each
+  side renders, `values.go` rewrites 0.x values into the 1.x contract through
+  the composer's own lists and skill pinning, `values_v2.go` rewrites 1.x
+  values into 2.x (sub-agent bindings, the Harness admission label),
+  `status.go` reads a kagent.dev AgentTemplate's readiness for the 1.x wait
+  phase, `diff.go` renders a GitOps-owned release's rewrite as a unified
   diff, `report.go` is the per-namespace report ConfigMap, `migrate.go` the
-  expand / wait / contract phases. `testdata/` holds the four fleet shapes.
+  expand / wait / contract phases. `testdata/` holds the four 0.x fleet
+  shapes.
 - `internal/api` — REST handlers and MCP tools over the service.
 - `internal/server` — the HTTP listener; `oauth.go` is the mcp-oauth resource
   server (Dex or Google provider, forwarded-id_token validation through
@@ -57,10 +63,11 @@ make helm-docs          # regenerate helm/agent-manager/README.md
 - `api/openapi.yaml` — the REST contract; served at `/api/v1/openapi.yaml`.
 - `helm/agent-manager` — the chart.
 - `.ats/main.yaml` — the ATS smoke: the chart installs on a kind cluster with
-  the Flux and kagent.dev/v1alpha3 CRDs applied (pinned to the kagent line's
-  commit), so the startup discovery path is covered.
+  the Flux CRDs applied; the api.kagent.dev/v1alpha3 CRDs are added once the
+  kagent line's release tag carries them, so the startup discovery path is
+  covered again.
 
-## Local loop against a kind cluster with kagent API v2
+## Local loop against a kind cluster serving api.kagent.dev
 
 ```sh
 go build -o agent-manager .

@@ -29,6 +29,9 @@ func TestLatestFollowsFluxSemverSemantics(t *testing.T) {
 	v, err = Latest(tags, "1.x")
 	require.NoError(t, err)
 	assert.Equal(t, "1.2.3", v, "1.x stays inside the major and skips pre-releases")
+	v, err = Latest(append(tags, "2.1.0-rc.1"), "2.x")
+	require.NoError(t, err)
+	assert.Equal(t, "2.0.0", v, "2.x, the range every agent tracks, never a pre-release")
 	v, err = Latest(tags, "0.x")
 	require.NoError(t, err)
 	assert.Equal(t, "0.6.1", v)
@@ -113,10 +116,11 @@ func TestResolverPrefersTheRegistryAndFallsBackToTheEmbeddedSchema(t *testing.T)
 	assert.Error(t, err)
 }
 
-// TestEmbeddedSchemaIsTheChart1xContract pins the shape of the fallback schema
-// to the Generic chart 1.x values contract: the 0.x runtime keys are gone,
-// skills are a list of pinned sources, muster has url and tools.
-func TestEmbeddedSchemaIsTheChart1xContract(t *testing.T) {
+// TestEmbeddedSchemaIsTheChartContract pins the shape of the fallback schema
+// to the Generic chart 2.x values contract: the 0.x runtime keys are gone,
+// skills and plugins are lists of pinned sources,
+// muster has url and tools.
+func TestEmbeddedSchemaIsTheChartContract(t *testing.T) {
 	doc := EmbeddedSchema().Document.(map[string]any)
 	assert.Equal(t, false, doc["additionalProperties"], "a stale composer sending a removed key fails, never silently loses a field")
 	props := doc["properties"].(map[string]any)
@@ -143,7 +147,12 @@ func TestEmbeddedSchemaIsTheChart1xContract(t *testing.T) {
 	for _, kept := range []string{"name", "git", "oci", "path"} {
 		assert.Contains(t, skill, kept)
 	}
-	assert.Contains(t, agent, "harness", "the Harness admission label's value")
+	assert.Contains(t, agent, "harness", "the Agent's spec.harnessRef.name")
+	assert.NotContains(t, agent, "limits", "per-turn bounds live on the Harness (spec.claude.limits), not on the agent")
+	plugins := props["plugins"].(map[string]any)
+	assert.Equal(t, "#/$defs/plugin.schema.json", plugins["items"].(map[string]any)["$ref"], "the chart bundles its plugin schema")
+	plugin := doc["$defs"].(map[string]any)["plugin.schema.json"].(map[string]any)
+	assert.Equal(t, []any{"skills"}, plugin["required"])
 	for _, kept := range []string{"toolset", "extraTools", "extraAgentSpec", "labels", "annotations", "modelConfig"} {
 		assert.Contains(t, props, kept)
 	}

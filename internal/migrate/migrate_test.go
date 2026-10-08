@@ -56,6 +56,7 @@ var (
 	listKinds  = map[schema.GroupVersionResource]string{
 		hrGVR: "HelmReleaseList", ociGVR: "OCIRepositoryList", tplGVR: "AgentTemplateList", serverGVR: "RemoteMCPServerList",
 		harnessGVR: "HarnessList", mcGVR: "ModelConfigList", legacyAgentGVR: "AgentList", crdGVR: "CustomResourceDefinitionList",
+		agentGVR: "AgentList", apiTemplateGVR: "AgentTemplateList", apiServerGVR: "RemoteMCPServerList", apiHarnessGVR: "HarnessList", apiModelConfigGVR: "ModelConfigList",
 	}
 )
 
@@ -146,17 +147,17 @@ func newCluster(objs ...runtime.Object) *cluster {
 	return &cluster{dyn: dyn, typed: typed, client: kube.FromInterfaces(dyn, typed, typed.Discovery())}
 }
 
-// runner builds the command's wiring over the fake cluster: the fake chart,
-// the pinner, and the service as the status reader.
+// runner builds the 0.x -> 1.x wiring over the fake cluster: the fake chart,
+// the pinner, and the kagent.dev/v1alpha3 AgentTemplate status reader the
+// command uses on that path.
 func (c *cluster) runner(t *testing.T, opts Options, latest, token string) *Runner {
 	t.Helper()
 	ch := fakeChart{latest: latest}
 	p := pinner{git: skills.NewResolver(fakeGitHub(t).URL, skills.StaticToken(token), nil, nil)}
-	svc := agents.New(kube.NewServiceAccountProvider(c.client), ch, nil, p, agents.Config{
-		DefaultNamespace: opts.Namespaces[0], ManagedNamespaces: opts.Namespaces, Compose: agents.ComposeConfig{HarnessName: "kagent"}, KagentAPIVersion: "v1alpha3",
-	}, nil)
 	opts.Version = "test"
-	return New(c.client, ch, p, svc, opts, nil)
+	r, err := New(c.client, ch, p, TemplateStatus{Client: c.dyn, APIVersion: "v1alpha3", Harness: "kagent"}, opts, nil)
+	require.NoError(t, err)
+	return r
 }
 
 func (c *cluster) get(t *testing.T, gvr schema.GroupVersionResource, ns, name string) *unstructured.Unstructured {
@@ -581,7 +582,10 @@ func TestPrivateSkillRepositoryWithoutTokenIsPendingNotACrash(t *testing.T) {
 	assert.Contains(t, pend.Reason, "GITHUB_TOKEN")
 	assert.Contains(t, pend.Reason, privateRepo)
 	assert.Equal(t, private, c.values(t, "kagent", "private"), "left as it is")
-	assert.Equal(t, ActionRewritten, byRelease(rep)["kagent/sre"].Action, "the public one is migrated")
+	held := byRelease(rep)["kagent/sre"]
+	assert.Equal(t, ActionPending, held.Action, "the public one waits for its sibling on the same source")
+	assert.Contains(t, held.Reason, "held: chart source kagent/agent also serves kagent/private (pending)")
+	assert.Equal(t, portalValues(), c.values(t, "kagent", "sre"), "1.x values under the 0.x chart would fail its render")
 	src := bySource(rep)["kagent/agent"]
 	assert.Equal(t, SourceNotMoved, src.Action)
 	assert.Contains(t, src.Reason, "kagent/private (pending)")
@@ -596,6 +600,8 @@ func TestPrivateSkillRepositoryWithoutTokenIsPendingNotACrash(t *testing.T) {
 	done := byRelease(rep)["kagent/private"]
 	assert.Equal(t, ActionRewritten, done.Action)
 	assert.Equal(t, []SkillPin{{Name: "secret-runbooks", Source: privateRepo + "@trunk path=secret-runbooks", Pinned: trunkHead}}, done.Changes.Skills)
+	assert.Equal(t, ActionRewritten, byRelease(rep)["kagent/sre"].Action)
+	assert.Equal(t, portalRewritten(), c.values(t, "kagent", "sre"))
 	assert.Equal(t, SourceMoved, bySource(rep)["kagent/agent"].Action)
 	assert.Equal(t, target, c.semver(t, "kagent", "agent"))
 }

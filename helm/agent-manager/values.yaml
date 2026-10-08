@@ -39,34 +39,34 @@ kagent:
   # -- Namespace agents are created in and listed from by default — the
   # namespace the kagent controller watches, the platform admin provisions
   # ModelConfigs into and the connectivity chart renders the platform Harness
-  # into. The Role for HelmReleases, OCIRepositories, AgentTemplates,
+  # into. The Role for HelmReleases, OCIRepositories, Agents,
   # RemoteMCPServers, Harnesses, ModelConfigs and events is created here.
   namespace: kagent
   # -- Additional namespaces agents may live in (multi-tenant installs). Each
   # gets the same Role; requests naming any other namespace are refused.
   additionalNamespaces: []
-  # -- kagent.dev API version for AgentTemplates, Harnesses, RemoteMCPServers
-  # and ModelConfigs; `auto` discovers the version serving `agenttemplates`
+  # -- api.kagent.dev API version for Agents, Harnesses, RemoteMCPServers
+  # and ModelConfigs; `auto` discovers the version serving `agents`
   # (default v1alpha3).
   apiVersion: auto
 
 harness:
-  # -- Name of the platform Harness every agent runs on (the connectivity
-  # chart renders it): the `status.harnesses[]` entry of that name on the
-  # AgentTemplate is what `get_agent_status` reports.
+  # -- Name of the platform Harness an agent runs on unless `create_agent`
+  # names another (the connectivity chart renders it): composed as the chart
+  # value `agent.harness`, the Agent's `spec.harnessRef.name`.
   name: kagent
 
 agentChart:
-  # -- OCI URL of the Generic `agent` chart every agent renders from (1.x:
-  # one release renders one kagent.dev/v1alpha3 AgentTemplate plus the agent's
+  # -- OCI URL of the Generic `agent` chart every agent renders from (2.x:
+  # one release renders one api.kagent.dev/v1alpha3 Agent plus the agent's
   # muster RemoteMCPServer). Written into the shared per-namespace
   # OCIRepository, and read at run time for the chart's values.schema.json that
   # validates every create/update before it is applied (the pod needs egress
   # to this registry; the embedded copy of the schema is the offline fallback).
   ociUrl: oci://gsoci.azurecr.io/charts/giantswarm/agent
-  # -- Semver range the OCIRepository tracks. `1.x` follows every 1.x release
+  # -- Semver range the OCIRepository tracks. `2.x` follows every 2.x release
   # of the Generic chart and never a pre-release build or a next major.
-  semver: 1.x
+  semver: 2.x
   # -- Regular expression the chart's tags must match before `semver` is
   # evaluated (the OCIRepository's ref.semverFilter, and the version the
   # values schema is read from). Set it beside a range that admits
@@ -207,7 +207,7 @@ oauth:
   allowPublicClientRegistration: false
   downstream:
     # -- Call the Kubernetes API as the caller: everything a request does
-    # (HelmReleases and OCIRepositories, the AgentTemplates, RemoteMCPServers,
+    # (HelmReleases and OCIRepositories, the Agents, RemoteMCPServers,
     # Harnesses, ModelConfigs and events it reads) presents the caller's IdP
     # token,
     # so the caller's RBAC governs — the apiserver must trust the IdP and the
@@ -350,8 +350,8 @@ serviceAccount:
 rbac:
   # -- Create the Role/RoleBinding in `kagent.namespace` (and every
   # `kagent.additionalNamespaces` entry): HelmReleases and OCIRepositories
-  # read/write; AgentTemplates, RemoteMCPServers, Harnesses, ModelConfigs and
-  # events read (AgentTemplates and RemoteMCPServers also delete, for the
+  # read/write; Agents, RemoteMCPServers, Harnesses, ModelConfigs and
+  # events read (Agents and RemoteMCPServers also delete, for the
   # forced removal of what a suspended or bare release leaves behind) — the
   # ServiceAccount's own permissions. Ignored with `oauth.downstream.enabled`:
   # the ServiceAccount then gets no RBAC at all, the caller's RBAC governs.

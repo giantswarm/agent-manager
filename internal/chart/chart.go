@@ -24,14 +24,15 @@ import (
 )
 
 // EmbeddedSchemaVersion is the agent chart version whose values.schema.json is
-// compiled into the binary (internal/chart/embedded/): the Generic chart 1.x
-// values contract — one release renders a kagent.dev/v1alpha3 AgentTemplate
-// plus the agent's muster RemoteMCPServer; skills are a list of commit- or
-// digest-pinned sources (bundled $defs/skill.schema.json); `agent.harness`,
-// `muster.url`, `muster.tools`, `muster.discovery`; none of the 0.x runtime
-// keys; `skillsGitAuthSecretRef`, the one read credential of every private
-// git skill. The copy is the values.schema.json of the released chart 1.5.1.
-const EmbeddedSchemaVersion = "1.5.1"
+// compiled into the binary (internal/chart/embedded/): the Generic chart 2.x
+// values contract. One release renders an api.kagent.dev/v1alpha3 Agent plus
+// the agent's muster RemoteMCPServer; skills and plugins are lists of commit-
+// or digest-pinned sources (bundled $defs/skill.schema.json and
+// $defs/plugin.schema.json); `agent.harness` is the Agent's spec.harnessRef;
+// `muster.url`, `muster.tools`,
+// `muster.discovery`; none of the 0.x runtime keys; `skillsGitAuthSecretRef`,
+// the one read credential of every private git skill and plugin.
+const EmbeddedSchemaVersion = "2.0.0"
 
 //go:embed embedded/agent-values.schema.json
 var embeddedSchema []byte
@@ -46,7 +47,7 @@ const (
 type Info struct {
 	// OCIURL is the chart's OCI URL as the OCIRepository carries it.
 	OCIURL string `json:"ociUrl"`
-	// Semver is the range the OCIRepository tracks (1.x: every 1.x release).
+	// Semver is the range the OCIRepository tracks (2.x: every 2.x release).
 	Semver string `json:"semver"`
 	// SemverFilter is the regular expression the tags must match before the
 	// range is evaluated, as the OCIRepository's ref.semverFilter; empty

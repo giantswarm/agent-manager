@@ -14,7 +14,7 @@ import (
 	"github.com/giantswarm/agent-manager/internal/skills"
 )
 
-// A skill on kagent API v2 is an immutable source: a git repository at a full
+// A skill is an immutable source: a git repository at a full
 // commit id, or an OCI image by digest. Callers may still say "this branch",
 // "this tag" or "this image tag" — agent-manager resolves the reference at
 // write time and writes the pin. refreshSkills is the way to move every git
@@ -63,7 +63,7 @@ func requireReadableSkills(ctx context.Context, pinner SkillPinner, list Skills)
 // What the removed arguments are told.
 const (
 	toolNamesRemoved   = `toolNames never narrowed anything against muster (kagent filters muster's meta-tools only); declare a toolset instead, e.g. toolset: ["preset:read-only"]`
-	runtimeRemoved     = `runtime is gone: on kagent API v2 the platform Harness (the Go ADK) is the runtime of every agent — there is no per-agent runtime and no Python runtime; drop the argument`
+	runtimeRemoved     = `runtime is gone: the Harness an agent references is its runtime (the platform Harness, the Go ADK, unless harness names another of the namespace, such as claude for Claude Code); drop the argument`
 	gitAuthRefRemoved  = `skills.gitAuthSecretName moved: the skills credential is the top-level gitAuthSecretName now (a Secret in the agent's namespace with the key token; omitted, the installation's), and skills is a list of {name, git: {url, ref | commit}, path} or {name, oci: <reference>}`
 	skillsShapeChanged = `skills is a list now — [{name, git: {url, ref | commit}, path} | {name, oci: <registry>/<repository>:<tag>|@sha256:<digest>}] — not the 0.x object {refs, gitRefs}; every entry is pinned to a commit or a digest before it is written (list_skills reports the commits)`
 )
@@ -252,10 +252,10 @@ func skillsFromValues(values map[string]any) Skills {
 	return out
 }
 
-// skillsFromTemplate reads the AgentTemplate's spec.skills[] ({name, source:
-// {git: {url, commit}, path} | {oci}}).
-func skillsFromTemplate(tpl *unstructured.Unstructured) Skills {
-	raw, _, _ := unstructured.NestedSlice(tpl.Object, "spec", "skills")
+// skillsFromObject reads the Agent object's spec.template.skills[] ({name,
+// source: {git: {url, commit}, path} | {oci}}).
+func skillsFromObject(obj *unstructured.Unstructured) Skills {
+	raw, _, _ := unstructured.NestedSlice(obj.Object, "spec", "template", "skills")
 	var out Skills
 	for _, item := range raw {
 		m, ok := item.(map[string]any)
@@ -286,6 +286,6 @@ func PinSkills(ctx context.Context, p SkillPinner, list Skills) (Skills, error) 
 	return pinSkills(ctx, p, list, false)
 }
 
-// SkillsValues renders a pinned skills list as the chart 1.x `skills` value;
+// SkillsValues renders a pinned skills list as the chart's `skills` value;
 // nil when the list is empty.
 func SkillsValues(list Skills) []any { return skillsValues(list) }
