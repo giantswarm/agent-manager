@@ -49,6 +49,16 @@ kagent:
   # and ModelConfigs; `auto` discovers the version serving `agents`
   # (default v1alpha3).
   apiVersion: auto
+  # -- The kagent controller's gRPC API through agentgateway, which
+  # `list_sessions`, `get_session` and `start_session` call as the caller
+  # (SessionService and the A2A service, the caller's IdP token as the
+  # bearer): `grpc://host:port` (h2c, the in-cluster agentgateway Service) or
+  # `grpcs://host[:port]` (TLS). Rendered only with `oauth.enabled`, since
+  # the calls never run as the ServiceAccount; empty turns the session tools
+  # off (`get_info` capabilities.sessions). With `networkPolicy.enabled` the
+  # policy opens egress to it: the Service's namespace for an in-cluster host,
+  # every address otherwise.
+  controllerTarget: grpc://agentgateway.agent-platform.svc.cluster.local:8080
 
 harness:
   # -- Name of the platform Harness an agent runs on unless `create_agent`
@@ -287,7 +297,7 @@ muster:
     # -- Start the server connection when muster initializes.
     autoStart: true
     # -- Human-readable description shown by muster.
-    description: Agent lifecycle (create, update, delete, status, skills, model configs) for the Agent Platform
+    description: Agent lifecycle (create, update, delete, status, skills, model configs) and conversations (sessions) for the Agent Platform
     # -- Extra labels on the MCPServer CR.
     labels: {}  # @schema additionalProperties: true
     # -- How muster authenticates to this server; rendered only with

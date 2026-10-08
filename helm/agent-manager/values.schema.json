@@ -280,6 +280,10 @@
                     "type": "string",
                     "description": "api.kagent.dev API version for Agents, Harnesses, RemoteMCPServers and ModelConfigs; `auto` discovers the version serving `agents` (default v1alpha3)."
                 },
+                "controllerTarget": {
+                    "type": "string",
+                    "description": "The kagent controller's gRPC API through agentgateway, which `list_sessions`, `get_session` and `start_session` call as the caller (SessionService and the A2A service, the caller's IdP token as the bearer): `grpc://host:port` (h2c, the in-cluster agentgateway Service) or `grpcs://host[:port]` (TLS). Rendered only with `oauth.enabled`, since the calls never run as the ServiceAccount; empty turns the session tools off (`get_info` capabilities.sessions). With `networkPolicy.enabled` the policy opens egress to it: the Service's namespace for an in-cluster host, every address otherwise."
+                },
                 "namespace": {
                     "type": "string",
                     "description": "Namespace agents are created in and listed from by default — the namespace the kagent controller watches, the platform admin provisions ModelConfigs into and the connectivity chart renders the platform Harness into. The Role for HelmReleases, OCIRepositories, Agents, RemoteMCPServers, Harnesses, ModelConfigs and events is created here."

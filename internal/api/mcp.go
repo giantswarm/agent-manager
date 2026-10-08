@@ -29,6 +29,9 @@ const (
 	ToolValidateAgent    = "validate_agent"
 	ToolListModelConfigs = "list_model_configs"
 	ToolListSkills       = "list_skills"
+	ToolListSessions     = "list_sessions"
+	ToolGetSession       = "get_session"
+	ToolStartSession     = "start_session"
 )
 
 // ToolNames lists every tool the MCP server registers.
@@ -36,6 +39,7 @@ func ToolNames() []string {
 	return []string{
 		ToolGetInfo, ToolListAgents, ToolGetAgent, ToolCreateAgent, ToolUpdateAgent,
 		ToolDeleteAgent, ToolGetAgentStatus, ToolValidateAgent, ToolListModelConfigs, ToolListSkills,
+		ToolListSessions, ToolGetSession, ToolStartSession,
 	}
 }
 
@@ -68,6 +72,11 @@ const (
 	argDryRun        = "dryRun"
 	argBranch        = "branch"
 	argPath          = "path"
+	argAllCreators   = "allCreators"
+	argSessionID     = "sessionId"
+	argMessage       = "message"
+	argRequestID     = "requestId"
+	argSessionName   = "sessionName"
 )
 
 var systemMessageLimit = fmt.Sprintf("At most %d characters; put long reference material in a skill.", agents.MaxSystemMessageLength)
@@ -93,7 +102,7 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 		// MCP spans nest under it instead of extracting it a second time.
 		mcpotel.WithServerTracingPropagator(otel.Tracer(tracerName), propagation.NewCompositeTextMapPropagator()),
 		mcpserver.WithToolCapabilities(false),
-		mcpserver.WithInstructions("Manage the agents of the Agent Platform. An agent is a Flux HelmRelease of the Generic agent chart (2.x; one release renders one api.kagent.dev/v1alpha3 Agent, its template inline and its Harness by name, plus the agent's own muster RemoteMCPServer carrying its toolset) plus the shared per-namespace OCIRepository of that chart. Call get_info first for the managed namespaces, the chart range and version, the platform Harness and the muster URL; list_model_configs before create_agent (the modelConfig must exist in the namespace); list_skills for the skills an agent can mount: it reports each repository's head commit, and every skill is written pinned to a commit or a digest (a branch, tag or image tag is resolved at write time). Names are DNS-1123 labels the caller chooses and confirms; the service never derives a name from a display name. validate_agent is a dry run of create/update. Every agent declares a toolset and create_agent requires it: the selectors (preset:<name>, server:<name>, workflow:<name>, tool:<name>) that bound which of the gateway's tools the agent's meta-tools can see and call; presets shipped on every installation: read-only, none, infrastructure, agent-platform, full. list_agents reports the toolset of each agent, or implicitFullAccess: true for agents created before toolsets existed; assign them one with update_agent. Readiness is the Agent object's own conditions (get_agent_status). An agent runs on the platform Harness (kagent, the Go ADK) unless create_agent names another Harness of the namespace in harness, such as claude for a Claude Code coding agent: that Harness must exist in the namespace. plugins enable skills from pinned Agent Plugins bundles. There is no runtime argument and no per-source skill credential. Every write tool takes dryRun (return the manifests, write nothing) and mode: apply (default) writes live as the caller and never touches an agent whose HelmRelease is applied from git (managed: gitops; refused with gitops_owned); commit writes the manifests as files into the git repository that owns the namespace and opens a pull request as the caller (get_info capabilities.commit says whether this installation offers it; without the caller's GitHub authorization it answers auth_required). organization and cluster (both or neither) place an agent on a workload cluster of the installation and address it in every read and write tool: its HelmRelease stays on the installation in org-<organization>, the agent, its ModelConfig and its Harness are on the cluster (get_info capabilities.targetCluster)."),
+		mcpserver.WithInstructions("Manage the agents of the Agent Platform. An agent is a Flux HelmRelease of the Generic agent chart (2.x; one release renders one api.kagent.dev/v1alpha3 Agent, its template inline and its Harness by name, plus the agent's own muster RemoteMCPServer carrying its toolset) plus the shared per-namespace OCIRepository of that chart. Call get_info first for the managed namespaces, the chart range and version, the platform Harness and the muster URL; list_model_configs before create_agent (the modelConfig must exist in the namespace); list_skills for the skills an agent can mount: it reports each repository's head commit, and every skill is written pinned to a commit or a digest (a branch, tag or image tag is resolved at write time). Names are DNS-1123 labels the caller chooses and confirms; the service never derives a name from a display name. validate_agent is a dry run of create/update. Every agent declares a toolset and create_agent requires it: the selectors (preset:<name>, server:<name>, workflow:<name>, tool:<name>) that bound which of the gateway's tools the agent's meta-tools can see and call; presets shipped on every installation: read-only, none, infrastructure, agent-platform, full. list_agents reports the toolset of each agent, or implicitFullAccess: true for agents created before toolsets existed; assign them one with update_agent. Readiness is the Agent object's own conditions (get_agent_status). An agent runs on the platform Harness (kagent, the Go ADK) unless create_agent names another Harness of the namespace in harness, such as claude for a Claude Code coding agent: that Harness must exist in the namespace. plugins enable skills from pinned Agent Plugins bundles. There is no runtime argument and no per-source skill credential. Every write tool takes dryRun (return the manifests, write nothing) and mode: apply (default) writes live as the caller and never touches an agent whose HelmRelease is applied from git (managed: gitops; refused with gitops_owned); commit writes the manifests as files into the git repository that owns the namespace and opens a pull request as the caller (get_info capabilities.commit says whether this installation offers it; without the caller's GitHub authorization it answers auth_required). organization and cluster (both or neither) place an agent on a workload cluster of the installation and address it in every read and write tool: its HelmRelease stays on the installation in org-<organization>, the agent, its ModelConfig and its Harness are on the cluster (get_info capabilities.targetCluster) To talk to an agent: start_session creates a conversation with it and sends the first message, get_session reads the conversation back (poll it until the last task is completed), list_sessions lists an agent's conversations; they reach the kagent controller through agentgateway as the caller (get_info capabilities.sessions says whether this installation offers them)."),
 	)
 	t := &tools{svc: svc}
 
@@ -325,6 +334,39 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 		mcp.WithOpenWorldHintAnnotation(true),
 	), t.listSkills)
 
+	s.AddTool(mcp.NewTool(ToolListSessions,
+		mcp.WithDescription("Read-only. List the conversations (kagent Sessions) of one agent, as the caller: SessionService/ListSessions through agentgateway. Each session reports its id, creator, agent, name, state (RUNTIME_STATE_CREATING | READY | SUSPENDED | FAILED | DELETING | DELETED), failure and timestamps. Only the caller's own sessions unless allCreators is true, which the controller grants only to a caller authorized for it."),
+		mcp.WithString(argName, mcp.Required(), mcp.Description("Agent name")),
+		nsProp,
+		mcp.WithBoolean(argAllCreators, mcp.Description("Include every person's sessions of the agent, when the controller authorizes the caller for it (default false)")),
+		mcp.WithReadOnlyHintAnnotation(true),
+		mcp.WithDestructiveHintAnnotation(false),
+		mcp.WithIdempotentHintAnnotation(false),
+		mcp.WithOpenWorldHintAnnotation(false),
+	), t.listSessions)
+
+	s.AddTool(mcp.NewTool(ToolGetSession,
+		mcp.WithDescription("Read-only. One conversation, as the caller: the session (SessionService/GetSession; state as RUNTIME_STATE_*) and its tasks oldest first (A2AService/ListTasks addressed to the session's agent, filtered by the session's context), each with its status (TASK_STATE_*; the agent's reply is the status message of a completed task), its message history and its artifacts. A turn is finished when its task is TASK_STATE_COMPLETED, FAILED, CANCELED, REJECTED or INPUT_REQUIRED; poll until then."),
+		mcp.WithString(argSessionID, mcp.Required(), mcp.Description("Session id (a UUID, from start_session or list_sessions)")),
+		mcp.WithReadOnlyHintAnnotation(true),
+		mcp.WithDestructiveHintAnnotation(false),
+		mcp.WithIdempotentHintAnnotation(false),
+		mcp.WithOpenWorldHintAnnotation(false),
+	), t.getSession)
+
+	s.AddTool(mcp.NewTool(ToolStartSession,
+		mcp.WithDescription("WRITES: starts a conversation with an agent as the caller: SessionService/CreateSession for the agent (refused with conflict while the agent has no ready revision: get_agent_status first), then the first message over A2AService/SendStreamingMessage, addressed to the agent (tenant <namespace>/<name>) and the new session (message.contextId). Answers once the agent has accepted the turn: the session and the turn's first event (usually its task in TASK_STATE_SUBMITTED or WORKING). The agent keeps working; read its answer with get_session. The agent runs its tools as the caller. requestId makes a retry idempotent: the same requestId answers the session the first attempt created."),
+		mcp.WithString(argName, mcp.Required(), mcp.Description("Agent name")),
+		nsProp,
+		mcp.WithString(argMessage, mcp.Required(), mcp.Description(fmt.Sprintf("The first user message of the conversation (at most %d characters)", agents.MaxSessionMessageLength))),
+		mcp.WithString(argRequestID, mcp.Description("Idempotency key of this start (at most 128 characters); reuse it on a retry. Default: a new one per call")),
+		mcp.WithString(argSessionName, mcp.Description("Display name of the conversation (at most 200 characters); default: unnamed")),
+		mcp.WithReadOnlyHintAnnotation(false),
+		mcp.WithDestructiveHintAnnotation(false),
+		mcp.WithIdempotentHintAnnotation(false),
+		mcp.WithOpenWorldHintAnnotation(true),
+	), t.startSession)
+
 	return s
 }
 
@@ -475,6 +517,42 @@ func (t *tools) listModelConfigs(ctx context.Context, req mcp.CallToolRequest) (
 
 func (t *tools) listSkills(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	res, err := t.svc.ListSkills(ctx, req.GetString(argRepository, ""), req.GetString(argRef, ""), req.GetBool(argRefresh, false))
+	if err != nil {
+		return errResult(err), nil
+	}
+	return jsonResult(res)
+}
+
+func (t *tools) listSessions(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	name, err := req.RequireString(argName)
+	if err != nil {
+		return errResult(fmt.Errorf("%w: %v", agents.ErrInvalid, err)), nil
+	}
+	res, err := t.svc.ListSessions(ctx, req.GetString(argNamespace, ""), name, req.GetBool(argAllCreators, false))
+	if err != nil {
+		return errResult(err), nil
+	}
+	return jsonResult(res)
+}
+
+func (t *tools) getSession(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	id, err := req.RequireString(argSessionID)
+	if err != nil {
+		return errResult(fmt.Errorf("%w: %v", agents.ErrInvalid, err)), nil
+	}
+	res, err := t.svc.GetSession(ctx, id)
+	if err != nil {
+		return errResult(err), nil
+	}
+	return jsonResult(res)
+}
+
+func (t *tools) startSession(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	var in agents.StartSession
+	if err := req.BindArguments(&in); err != nil {
+		return errResult(fmt.Errorf("%w: %v", agents.ErrInvalid, err)), nil
+	}
+	res, err := t.svc.StartSession(ctx, in)
 	if err != nil {
 		return errResult(err), nil
 	}

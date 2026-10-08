@@ -230,14 +230,21 @@ func TestRESTLifecycle(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, code)
 }
 
-func callTool(t *testing.T, srv interface {
+type mcpHandler interface {
 	HandleMessage(ctx context.Context, message json.RawMessage) mcp.JSONRPCMessage
-}, name string, args map[string]any) (string, bool) {
+}
+
+func callTool(t *testing.T, srv mcpHandler, name string, args map[string]any) (string, bool) {
+	t.Helper()
+	return callToolCtx(t, context.Background(), srv, name, args)
+}
+
+func callToolCtx(t *testing.T, ctx context.Context, srv mcpHandler, name string, args map[string]any) (string, bool) {
 	t.Helper()
 	req := map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": map[string]any{"name": name, "arguments": args}}
 	raw, err := json.Marshal(req)
 	require.NoError(t, err)
-	out, err := json.Marshal(srv.HandleMessage(context.Background(), raw))
+	out, err := json.Marshal(srv.HandleMessage(ctx, raw))
 	require.NoError(t, err)
 	var parsed struct {
 		Result struct {
@@ -296,6 +303,10 @@ var wantHints = map[string]hints{
 	ToolCreateAgent:      annotations(writes, additive, notIdempotent, openWorld),
 	ToolUpdateAgent:      annotations(writes, destructive, notIdempotent, openWorld),
 	ToolDeleteAgent:      annotations(writes, destructive, notIdempotent, closedWorld),
+	ToolListSessions:     annotations(readOnly, additive, notIdempotent, closedWorld),
+	ToolGetSession:       annotations(readOnly, additive, notIdempotent, closedWorld),
+	// start_session messages an agent, which acts on the world with its tools.
+	ToolStartSession: annotations(writes, additive, notIdempotent, openWorld),
 }
 
 func TestMCPToolsMirrorREST(t *testing.T) {
@@ -347,6 +358,9 @@ func TestMCPToolsMirrorREST(t *testing.T) {
 				assert.Contains(t, tool.InputSchema.Properties, arg, "%s takes %s", tool.Name, arg)
 			}
 			assert.Equal(t, []any{agents.ModeApply, agents.ModeCommit}, tool.InputSchema.Properties["mode"].(map[string]any)["enum"])
+		case ToolStartSession:
+			assert.Contains(t, tool.Description, "WRITES", tool.Name)
+			assert.ElementsMatch(t, []string{"name", "message"}, tool.InputSchema.Required)
 		default:
 			assert.Contains(t, tool.Description, "Read-only", tool.Name)
 		}

@@ -74,9 +74,9 @@ type OAuthConfig struct {
 	// AllowPublicClientRegistration lets MCP clients register over DCR
 	// without a token (labs only).
 	AllowPublicClientRegistration bool
-	// DownstreamOAuth puts the caller's IdP token on the request so every
-	// Kubernetes API call is made as the caller instead of the ServiceAccount
-	// (the apiserver must trust the IdP and the token's audience). The
+	// DownstreamOAuth presents the caller's IdP token to the Kubernetes API so
+	// every call is made as the caller instead of the ServiceAccount (the
+	// apiserver must trust the IdP and the token's audience). The
 	// ServiceAccount then holds no permissions, so a request whose caller has
 	// no IdP token to present is refused (401) rather than run as nobody.
 	DownstreamOAuth bool
@@ -250,10 +250,11 @@ func (o *oauthRuntime) protectMCP(next http.Handler) http.Handler {
 }
 
 // attachIdentity translates the validated mcp-oauth user into the request's
-// identity and, with DownstreamOAuth, resolves the IdP token to present to
-// the Kubernetes API: a forwarded id_token is the bearer itself; for a token
-// this server issued, the provider's id_token is looked up in the store. With
-// DownstreamOAuth a request that yields no IdP token is refused — the
+// identity and resolves the caller's IdP token: a forwarded id_token is the
+// bearer itself; for a token this server issued, the provider's id_token is
+// looked up in the store. The token is what the session operations present to
+// agentgateway and, with DownstreamOAuth, what every Kubernetes call presents.
+// With DownstreamOAuth a request that yields no IdP token is refused: the
 // ServiceAccount holds no permissions, so there is nothing else to run it as.
 func (o *oauthRuntime) attachIdentity(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -269,14 +270,12 @@ func (o *oauthRuntime) attachIdentity(next http.Handler) http.Handler {
 			id.Source = identity.SourceSSO
 		}
 		ctx = identity.ContextWith(ctx, id)
-		if o.cfg.DownstreamOAuth {
-			tok := o.downstreamToken(ctx, r, info)
-			if tok == "" {
-				o.refuse(w, r, id)
-				return
-			}
-			ctx = identity.ContextWithToken(ctx, tok)
+		tok := o.downstreamToken(ctx, r, info)
+		if tok == "" && o.cfg.DownstreamOAuth {
+			o.refuse(w, r, id)
+			return
 		}
+		ctx = identity.ContextWithToken(ctx, tok)
 		o.log.Debug("authenticated request", "caller", id.String(), "source", id.Source, "path", r.URL.Path)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})

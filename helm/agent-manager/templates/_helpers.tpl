@@ -189,6 +189,34 @@ port: {{ $port }}
 {{- end -}}
 
 {{/*
+The kagent controller target's egress, when the session tools are on:
+namespace (empty unless the host is <service>.<namespace>.svc...) and port.
+*/}}
+{{- define "agent-manager.kagentEgress" -}}
+{{- if and .Values.oauth.enabled .Values.kagent.controllerTarget -}}
+{{- $url := urlParse .Values.kagent.controllerTarget -}}
+{{- if not (has $url.scheme (list "grpc" "grpcs")) -}}
+{{- fail (printf "kagent.controllerTarget %q must be grpc://host:port or grpcs://host[:port]" .Values.kagent.controllerTarget) -}}
+{{- end -}}
+{{- $hostPort := splitList ":" $url.host -}}
+{{- $port := ternary (last $hostPort) "" (gt (len $hostPort) 1) -}}
+{{- if not $port -}}
+{{- if eq $url.scheme "grpc" -}}
+{{- fail (printf "kagent.controllerTarget %q must name a port" .Values.kagent.controllerTarget) -}}
+{{- end -}}
+{{- $port = "443" -}}
+{{- end -}}
+{{- $labels := splitList "." (first $hostPort) -}}
+{{- $namespace := "" -}}
+{{- if and (ge (len $labels) 3) (eq (index $labels 2) "svc") -}}
+{{- $namespace = index $labels 1 -}}
+{{- end -}}
+namespace: {{ $namespace | quote }}
+port: {{ $port }}
+{{- end -}}
+{{- end -}}
+
+{{/*
 The installation's skills boot Secret: the minted one, else
 skills.gitAuthSecretName.
 */}}

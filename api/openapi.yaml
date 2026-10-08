@@ -59,6 +59,16 @@ info:
     is refused naming its replacement, the top-level `gitAuthSecretName`.
     A skill from a private repository the caller's GitHub login cannot read
     is refused with `403 forbidden`.
+
+    Sessions: a conversation with an agent is a kagent `Session` of its
+    `Agent` (kagent 1.3, `SessionService`). The session operations call the
+    kagent controller's gRPC API through agentgateway as the caller, with the
+    caller's IdP token as the bearer and no other identity, and never as the
+    ServiceAccount; they need OAuth and a controller target
+    (`capabilities.sessions`). A2A calls name the Agent as `tenant`
+    (`<namespace>/<name>`) and the session as `message.contextId`. Session
+    and task bodies are kagent's proto3 JSON, passed through: session `state`
+    is `RUNTIME_STATE_*`, task `status.state` is `TASK_STATE_*`.
 servers:
   - url: /
 tags:
@@ -66,6 +76,7 @@ tags:
   - name: agents
   - name: modelconfigs
   - name: skills
+  - name: sessions
   - name: health
 paths:
   /healthz:
@@ -393,6 +404,97 @@ paths:
               schema: { $ref: "#/components/schemas/SkillsResult" }
         "400": { $ref: "#/components/responses/Error" }
         "501": { $ref: "#/components/responses/Error" }
+  /api/v1/agents/{namespace}/{name}/sessions:
+    parameters:
+      - $ref: "#/components/parameters/namespacePath"
+      - $ref: "#/components/parameters/namePath"
+    get:
+      tags: [sessions]
+      summary: List an agent's sessions
+      description: |
+        `SessionService/ListSessions` for the Agent, as the caller, walked to
+        the end. The caller's own sessions unless `allCreators=true`, which the
+        controller grants only to a caller authorized for it.
+      operationId: listSessions
+      x-mcp-tool: list_sessions
+      parameters:
+        - name: allCreators
+          in: query
+          description: Include every person's sessions of the agent
+          schema: { type: boolean }
+      responses:
+        "200":
+          description: the sessions
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SessionList" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "501": { $ref: "#/components/responses/Error" }
+        "502": { $ref: "#/components/responses/Error" }
+    post:
+      tags: [sessions]
+      summary: Start a session with an agent
+      description: |
+        `SessionService/CreateSession` for the Agent, then the first message
+        over `A2AService/SendStreamingMessage` (the Agent as `tenant`, the new
+        session as `message.contextId`), as the caller. Answers once the agent
+        has accepted the turn, with the turn's first event; the turn keeps
+        running and its answer is read with `GET /api/v1/sessions/{id}`. An
+        Agent without a ready revision is `409 conflict`. `requestId` makes a
+        retry idempotent: the controller answers the session the first
+        attempt created.
+      operationId: startSession
+      x-mcp-tool: start_session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/StartSessionRequest" }
+      responses:
+        "201":
+          description: the session and the first event of its first turn
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SessionStart" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "501": { $ref: "#/components/responses/Error" }
+        "502": { $ref: "#/components/responses/Error" }
+  /api/v1/sessions/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: Session id (a UUID)
+        schema: { type: string }
+    get:
+      tags: [sessions]
+      summary: Read a session and its conversation
+      description: |
+        `SessionService/GetSession`, then `A2AService/ListTasks` addressed to
+        the session's Agent and filtered by its context, as the caller: the
+        session and its tasks oldest first, each with its status (the agent's
+        reply is the status message of a completed task), history and
+        artifacts. A session of somebody else is `404`, as one that does not
+        exist.
+      operationId: getSession
+      x-mcp-tool: get_session
+      responses:
+        "200":
+          description: the session and its tasks
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SessionDetail" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "501": { $ref: "#/components/responses/Error" }
+        "502": { $ref: "#/components/responses/Error" }
 components:
   parameters:
     namespaceQuery:
@@ -459,7 +561,7 @@ components:
         capabilities:
           type: object
           additionalProperties: { type: boolean }
-          description: "list, get, create, update, delete, status, validate, modelConfigs, skills, writesAsCaller (true when identity is caller), commit (false: the write tools apply live, there is no pull-request mode)"
+          description: "list, get, create, update, delete, status, validate, modelConfigs, skills, writesAsCaller (true when identity is caller), commit (false: the write tools apply live, there is no pull-request mode), targetCluster, sessions (false: the session operations answer 501)"
         identity:
           type: string
           enum: [caller, serviceAccount]
@@ -865,3 +967,62 @@ components:
               truncated: { type: boolean }
               error: { type: string }
               fetchedAt: { type: string, format: date-time }
+    Session:
+      type: object
+      description: A kagent.api.v1alpha1.Session in proto3 JSON, as the controller answers it
+      additionalProperties: true
+      properties:
+        id: { type: string }
+        contextId: { type: string, description: The session's A2A context, equal to its id }
+        creator: { type: string }
+        name: { type: string }
+        agent:
+          type: object
+          properties:
+            namespace: { type: string }
+            name: { type: string }
+        state:
+          type: string
+          enum: [RUNTIME_STATE_UNSPECIFIED, RUNTIME_STATE_CREATING, RUNTIME_STATE_READY, RUNTIME_STATE_SUSPENDED, RUNTIME_STATE_FAILED, RUNTIME_STATE_DELETING, RUNTIME_STATE_DELETED]
+        failure:
+          type: object
+          properties:
+            reason: { type: string }
+            message: { type: string }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    Task:
+      type: object
+      description: An lf.a2a.v1.Task in proto3 JSON (id, contextId, status with state TASK_STATE_* and message, history, artifacts)
+      additionalProperties: true
+    StreamResponse:
+      type: object
+      description: An lf.a2a.v1.StreamResponse in proto3 JSON, one of task, message, statusUpdate, artifactUpdate
+      additionalProperties: true
+    SessionList:
+      type: object
+      properties:
+        agent:
+          type: object
+          properties:
+            namespace: { type: string }
+            name: { type: string }
+        sessions: { type: array, items: { $ref: "#/components/schemas/Session" } }
+    SessionDetail:
+      type: object
+      properties:
+        session: { $ref: "#/components/schemas/Session" }
+        tasks: { type: array, items: { $ref: "#/components/schemas/Task" }, description: Oldest first }
+    StartSessionRequest:
+      type: object
+      required: [message]
+      additionalProperties: false
+      properties:
+        message: { type: string, maxLength: 32000, description: The first user message }
+        requestId: { type: string, maxLength: 128, description: Idempotency key; reuse it on a retry. Default a new one per call }
+        sessionName: { type: string, maxLength: 200, description: Display name of the conversation; default unnamed }
+    SessionStart:
+      type: object
+      properties:
+        session: { $ref: "#/components/schemas/Session" }
+        turn: { $ref: "#/components/schemas/StreamResponse" }
