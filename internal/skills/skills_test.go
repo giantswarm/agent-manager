@@ -298,7 +298,7 @@ func TestAppMintsAndRenewsInstallationTokens(t *testing.T) {
 		assert.Equal(t, "ghs_1", tok)
 	}
 	expiry = time.Now().Add(2 * time.Hour)
-	app.expires = time.Now().Add(time.Minute) // about to expire
+	app.tokens[""] = appToken{token: "ghs_1", expires: time.Now().Add(time.Minute)} // about to expire
 	tok, err := app.Token(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, "ghs_2", tok)
@@ -307,6 +307,63 @@ func TestAppMintsAndRenewsInstallationTokens(t *testing.T) {
 	require.Error(t, err)
 	_, err = NewApp(ts.URL, "1234", "42", []byte("not a key"), nil)
 	require.Error(t, err)
+}
+
+func TestAppScopesTokensToRepositoriesWithContentsRead(t *testing.T) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+	pemKey := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})
+	var bodies []map[string]any
+	accountReads := 0
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/app/installations/42":
+			accountReads++
+			_ = json.NewEncoder(w).Encode(map[string]any{"account": map[string]any{"login": "giantswarm"}})
+		case "/app/installations/42/access_tokens":
+			var body map[string]any
+			require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+			bodies = append(bodies, body)
+			w.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(w).Encode(map[string]any{"token": fmt.Sprintf("ghs_%d", len(bodies)), "expires_at": time.Now().Add(time.Hour)})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer ts.Close()
+	app, err := NewApp(ts.URL, "1234", "42", pemKey, nil)
+	require.NoError(t, err)
+	ctx := t.Context()
+
+	tok, _, err := app.ScopedTokenValidFor(ctx, []string{"claude-code", "agent-skills", "claude-code"}, time.Minute)
+	require.NoError(t, err)
+	assert.Equal(t, "ghs_1", tok)
+	require.Len(t, bodies, 1)
+	assert.Equal(t, map[string]any{"repositories": []any{"agent-skills", "claude-code"}, "permissions": map[string]any{"contents": "read"}}, bodies[0])
+
+	tok, _, err = app.ScopedTokenValidFor(ctx, []string{"agent-skills", "claude-code"}, time.Minute)
+	require.NoError(t, err)
+	assert.Equal(t, "ghs_1", tok, "the same repository set shares one token")
+	tok, _, err = app.ScopedTokenValidFor(ctx, []string{"agent-skills"}, time.Minute)
+	require.NoError(t, err)
+	assert.Equal(t, "ghs_2", tok, "another set gets its own")
+
+	_, _, err = app.ScopedTokenValidFor(ctx, nil, time.Minute)
+	require.Error(t, err, "an empty set would be the whole installation")
+	many := make([]string, MaxScopedRepositories+1)
+	for i := range many {
+		many[i] = fmt.Sprintf("repo-%d", i)
+	}
+	_, _, err = app.ScopedTokenValidFor(ctx, many, time.Minute)
+	require.ErrorContains(t, err, "exceed")
+	assert.Len(t, bodies, 2)
+
+	for range 2 {
+		account, err := app.Account(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, "giantswarm", account)
+	}
+	assert.Equal(t, 1, accountReads)
 }
 
 func TestExpiredEntryOnTheSameCommitIsRenewedWithoutRereading(t *testing.T) {
