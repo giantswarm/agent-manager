@@ -635,9 +635,14 @@ func (s *Service) requireHarness(ctx context.Context, dyn dynamic.Interface, ns 
 	return err
 }
 
-// ValidateCreate is create_agent without the write.
+// ValidateCreate is create_agent without the write. It takes the write's mode
+// and checks it the same way, so a dry run for mode commit answers as the
+// commit would.
 func (s *Service) ValidateCreate(ctx context.Context, spec Spec) (*ValidateResult, error) {
 	if err := rejectRemoved(spec.removed()...); err != nil {
+		return nil, err
+	}
+	if _, err := s.checkMode(spec.WriteOptions); err != nil {
 		return nil, err
 	}
 	st, err := s.site(ctx, spec.Location)
@@ -718,16 +723,23 @@ func (s *Service) requireTargetMuster(st *site) error {
 	return nil
 }
 
-// ValidateUpdate is update_agent without the write.
+// ValidateUpdate is update_agent without the write, under the write's
+// ownership rule: a GitOps-owned release is refused in mode apply and
+// validated in mode commit, the mode whose pull request writes it. The commit
+// target itself (the repository, the release's file) is the write's check.
 func (s *Service) ValidateUpdate(ctx context.Context, upd Update) (*ValidateResult, error) {
 	if err := rejectRemoved(upd.removed()...); err != nil {
+		return nil, err
+	}
+	var err error
+	if upd.Mode, err = s.checkMode(upd.WriteOptions); err != nil {
 		return nil, err
 	}
 	st, err := s.site(ctx, upd.Location)
 	if err != nil {
 		return nil, err
 	}
-	hr, _, err := s.writableHelmRelease(ctx, st, upd.Name, upd.Force, upd.Force)
+	hr, _, err := s.writableHelmRelease(ctx, st, upd.Name, upd.Force, upd.Mode == ModeCommit)
 	if err != nil {
 		return nil, err
 	}

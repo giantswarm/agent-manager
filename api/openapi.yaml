@@ -207,7 +207,10 @@ paths:
         Composes and validates without writing; the manifests carry the skills
         as they would be pinned. With `update: true` the non-empty fields of
         the body are validated as a change to the existing agent's values
-        (`refreshSkills` applies the same way).
+        (`refreshSkills` applies the same way). `mode` answers as the write
+        would: an update of a release applied from git is `409 gitops_owned`
+        in apply mode and validated with `mode: commit`, the change its pull
+        request carries.
       operationId: validateAgent
       x-mcp-tool: validate_agent
       requestBody:
@@ -220,7 +223,7 @@ paths:
                 - type: object
                   properties:
                     update: { type: boolean, description: Validate as an update of the existing agent }
-                    force: { type: boolean, description: With update, ignore the GitOps/suspended guards }
+                    force: { type: boolean, description: With update, validate a change to a suspended release anyway; a GitOps-owned one is never written live }
                     refreshSkills: { type: boolean, description: With update, re-pin every git skill to its default-branch head }
       responses:
         "200":

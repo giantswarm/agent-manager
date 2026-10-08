@@ -64,6 +64,7 @@ type errorDetail struct {
 
 // validateRequest is the body of POST /agents/validate: a create spec, or an
 // update when `update` is true (the spec's non-empty fields become the change).
+// The spec's write options carry `mode`, checked as the write checks it.
 type validateRequest struct {
 	agents.Spec
 	Update        bool `json:"update,omitempty"`
@@ -142,6 +143,7 @@ func (h *REST) validateAgent(w http.ResponseWriter, r *http.Request) {
 		upd := SpecToUpdate(req.Spec)
 		upd.Force = req.Force
 		upd.RefreshSkills = req.RefreshSkills
+		upd.WriteOptions = req.WriteOptions
 		res, err = h.svc.ValidateUpdate(r.Context(), upd)
 	} else {
 		res, err = h.svc.ValidateCreate(r.Context(), req.Spec)
