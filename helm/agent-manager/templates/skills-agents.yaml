@@ -1,0 +1,40 @@
+{{- /*
+Per-agent skills Secrets: agent-manager watches the Agents of every managed
+namespace to read the repositories each Agent's own Secret has to cover. This
+read-only Role is granted under oauth.downstream too, since the watch runs
+without a caller. The Secrets themselves are granted by each agent release
+(the agent chart's skillsGitAuthMint): get and update on that one Secret.
+*/}}
+{{- if .Values.skills.mintGitAuthSecretPerAgent }}
+{{- $name := printf "%s-skills-agents" (include "agent-manager.fullname" .) }}
+{{- range $ns := (include "agent-manager.managedNamespaces" . | fromJsonArray) }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $name }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "agent-manager.labels" $ | nindent 4 }}
+rules:
+  - apiGroups: ["api.kagent.dev"]
+    resources: ["agents"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $name }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "agent-manager.labels" $ | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $name }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "agent-manager.serviceAccountName" $ }}
+    namespace: {{ $.Release.Namespace }}
+{{- end }}
+{{- end }}

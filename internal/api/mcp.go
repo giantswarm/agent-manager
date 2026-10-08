@@ -124,7 +124,7 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 			"oci": schemaProp("string", "OCI reference: <registry>/<repository>:<tag> (resolved to its digest) or <registry>/<repository>@sha256:<digest>"),
 		},
 	}
-	gitAuthDesc := "Secret in the agent's namespace whose key token reads the agent's private git skills and git plugins (a GitHub token; chart value skillsGitAuthSecretRef.name, offered to every git source's https host). Omit it: the installation's skills credential (get_info skillsGitAuthSecretName) is used for every agent with a git skill or plugin"
+	gitAuthDesc := "Secret in the agent's namespace whose key token reads the agent's private git skills and git plugins (a GitHub token; chart value skillsGitAuthSecretRef.name, offered to every git source's https host). Omit it: the agent gets a Secret of its own whose token reads only its own repositories when agent-manager mints per agent (get_info skillsGitAuthAgents), else the installation's skills credential (get_info skillsGitAuthSecretName) is used for every agent with a git skill or plugin"
 	gitAuthProp := mcp.WithString(argGitAuthSecret, mcp.Description(gitAuthDesc))
 	gitAuthReplaceProp := mcp.WithString(argGitAuthSecret, mcp.Description(gitAuthDesc+"; \"\" goes back to the installation's"))
 	skillsProp := mcp.WithArray(argSkills, mcp.Description(skillDesc), mcp.Items(skillEntry))
@@ -136,7 +136,7 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 	toolsetReplaceProp := mcp.WithArray(argToolset, mcp.Description("Replaces the agent's whole toolset with this list (an empty list is refused: use [\"preset:none\"] for no tools). "+toolsetDesc), mcp.WithStringItems())
 	labelsProp := mcp.WithObject(argLabels, mcp.Description("Extra labels on the Agent object (string values)."), mcp.AdditionalProperties(map[string]any{"type": "string"}))
 	annotationsProp := mcp.WithObject(argAnnotations, mcp.Description("Extra annotations on the Agent object (string values)."), mcp.AdditionalProperties(map[string]any{"type": "string"}))
-	pluginDesc := "Agent Plugins bundles the agent enables skills from, a list of {git: {url, commit}, path, skills: [...]} or {oci: <registry>/<repository>@sha256:<digest>, path, skills: [...]} entries (chart plugins[], the Agent's spec.template.plugins[]). A plugin is written as given and must come pinned: a full commit id or a digest, never a branch, tag or image tag. skills names the bundle's skills to enable (at least one, unique); nothing else of the bundle reaches the agent. path is the bundle's directory within the artifact. A private git plugin reads with the same credential as a private git skill (gitAuthSecretName)."
+	pluginDesc := "Agent Plugins bundles the agent enables skills from, a list of {git: {url, commit}, path, skills: [...]} or {oci: <registry>/<repository>@sha256:<digest>, path, skills: [...]} entries (chart plugins[], the Agent's spec.template.plugins[]). A plugin is written as given and must come pinned: a full commit id or a digest, never a branch, tag or image tag. skills names the bundle's skills to enable (at least one, unique); nothing else of the bundle reaches the agent. path is the bundle's directory within the artifact. A private git plugin reads with the same credential as a private git skill (gitAuthSecretName), and like a skill it is refused when the caller cannot read its repository."
 	pluginEntry := map[string]any{
 		"type":     "object",
 		"required": []string{"skills"},

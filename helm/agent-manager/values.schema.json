@@ -804,6 +804,10 @@
                     "type": "boolean",
                     "description": "Boot private git skills with the skills GitHub App instead of a provisioned token (needs `github.app.secretName`; replaces `gitAuthSecretName`): the chart renders the Secret `<fullname>-skills-token` without data in `kagent.namespace` and every `kagent.additionalNamespaces` entry, plus a Role that may only get and update that Secret, and composes it as every git-skill agent's `skillsGitAuthSecretRef.name`. agent-manager writes an installation token into it (key `token`, the Basic form of `x-access-token:<token>`) and replaces it well before its one-hour expiry; `get_info` reports the last refresh and a failed one as `skillsGitAuthMint`."
                 },
+                "mintGitAuthSecretPerAgent": {
+                    "type": "boolean",
+                    "description": "Give every agent with a git skill or plugin a Secret of its own whose skills GitHub App token reads only that agent's repositories (`contents: read`), instead of one installation-wide token (needs `github.app.secretName`). agent-manager composes the agent chart value `skillsGitAuthMint.serviceAccount` (this release's ServiceAccount) for every agent that names no Secret of its own, and moves an agent off the installation's Secret on its next update; the agent chart renders the agent's Secret and a Role that lets this ServiceAccount get and update it by name. A GitOps agent opts in with the same value. The chart grants the ServiceAccount read access to the Agents of every managed namespace, under `oauth.downstream` too: agent-manager watches them to know each Secret's repositories. `get_info` reports every agent's Secret as `skillsGitAuthAgents`, `get_agent_status` the agent's own as `skillsCredential`."
+                },
                 "repositories": {
                     "type": "array",
                     "description": "GitHub repositories whose SKILL.md files list_skills offers (the same list the portal's create flow reads), each with the head commit an agent pins. Empty turns the skills capability off; skills given by URL are still resolved through the GitHub API.",

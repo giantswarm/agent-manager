@@ -611,6 +611,21 @@ components:
             refreshedAt: { type: string, format: date-time, description: When the last refresh succeeded }
             expiresAt: { type: string, format: date-time, description: When the written token expires }
             error: { type: string, description: "The last refresh's failure; absent after a success" }
+        skillsGitAuthAgents:
+          type: array
+          description: "Present when agent-manager mints a skills Secret per agent: the state of every agent's own"
+          items: { $ref: "#/components/schemas/SkillsCredential" }
+    SkillsCredential:
+          type: object
+          properties:
+            namespace: { type: string }
+            agent: { type: string }
+            secretName: { type: string, description: The agent's own skills Secret }
+            repositories: { type: array, items: { type: string }, description: "owner/name of every repository the token reads (contents: read)" }
+            skipped: { type: array, items: { type: string }, description: Git sources of another owner than the skills GitHub App installation's account; the token cannot name them }
+            refreshedAt: { type: string, format: date-time, description: When the last refresh succeeded }
+            expiresAt: { type: string, format: date-time, description: When the written token expires }
+            error: { type: string, description: "The last refresh's failure; absent after a success" }
     GitSkill:
       type: object
       required: [url]
@@ -906,6 +921,7 @@ components:
         verdict: { type: string, enum: [ready, progressing, failed, unknown] }
         summary: { type: string }
         agent: { $ref: "#/components/schemas/ObjectStatus" }
+        skillsCredential: { $ref: "#/components/schemas/SkillsCredential" }
         helmRelease:
           type: object
           properties:

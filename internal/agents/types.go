@@ -16,6 +16,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+
+	"github.com/giantswarm/agent-manager/internal/skills"
 )
 
 // Sentinel errors the API layers map to HTTP statuses and MCP error codes.
@@ -573,6 +575,10 @@ type Status struct {
 	Agent       *ObjectStatus      `json:"agent,omitempty"`
 	HelmRelease *HelmReleaseStatus `json:"helmRelease,omitempty"`
 	Events      []Event            `json:"events,omitempty"`
+	// SkillsCredential is the state of the agent's own skills Secret when
+	// agent-manager mints it: the repositories its token reads, its expiry
+	// and a failed refresh.
+	SkillsCredential *skills.AgentSecretStatus `json:"skillsCredential,omitempty"`
 
 	// sourceFailure is the Ready condition of a chart source that reports a
 	// failure while the HelmRelease waits for it.

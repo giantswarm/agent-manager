@@ -1152,6 +1152,37 @@ func TestUpdateKeepsTheSkillsCredentialInStep(t *testing.T) {
 	assert.Nil(t, credential(res))
 }
 
+func TestMergeSkillsGitAuthMovesAnAgentOffTheSharedSecret(t *testing.T) {
+	cfg := ComposeConfig{SkillsGitAuthSecretName: "kagent-skills-token", SkillsGitAuthMint: &ServiceAccountRef{Name: "agent-manager", Namespace: "agent-platform"}}
+	minted := map[string]any{"serviceAccount": map[string]any{"name": "agent-manager", "namespace": "agent-platform"}}
+	release := func(secret string) map[string]any {
+		values := map[string]any{"skills": skillsValues(Skills{{Name: "a", Path: "a", Git: &GitSkill{URL: skillsRepo, Commit: mainHead}}})}
+		if secret != "" {
+			values[SkillsGitAuthValuesKey] = map[string]any{"name": secret}
+		}
+		return values
+	}
+
+	values := release("kagent-skills-token")
+	mergeSkillsGitAuth(values, nil, cfg)
+	assert.Equal(t, minted, values[SkillsGitAuthMintValuesKey], "the shared Secret is not the agent's own")
+	assert.NotContains(t, values, SkillsGitAuthValuesKey)
+
+	values = release("team-token")
+	mergeSkillsGitAuth(values, nil, cfg)
+	assert.Equal(t, map[string]any{"name": "team-token"}, values[SkillsGitAuthValuesKey], "a Secret of the agent's own stays")
+	assert.NotContains(t, values, SkillsGitAuthMintValuesKey)
+
+	mergeSkillsGitAuth(values, str(""), cfg)
+	assert.Equal(t, minted, values[SkillsGitAuthMintValuesKey], `"" goes back to the default`)
+
+	values = release("")
+	values[SkillsGitAuthMintValuesKey] = minted
+	mergeSkillsGitAuth(values, nil, ComposeConfig{SkillsGitAuthSecretName: "kagent-skills-token"})
+	assert.Equal(t, map[string]any{"name": "kagent-skills-token"}, values[SkillsGitAuthValuesKey], "per-agent minting turned off returns to the shared Secret")
+	assert.NotContains(t, values, SkillsGitAuthMintValuesKey)
+}
+
 func TestCreateRefusesSkillsFromARepositoryTheCallerCannotRead(t *testing.T) {
 	f := seeded(t)
 	private := Skills{{Name: "runbooks", Path: "runbooks", Git: &GitSkill{URL: privateSkillsRepo, Commit: mainHead}}}

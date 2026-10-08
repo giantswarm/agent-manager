@@ -83,6 +83,14 @@ spec:
             {{- if .Values.skills.mintGitAuthSecret }}
             - --skills-git-auth-mint=true
             {{- end }}
+            {{- if .Values.skills.mintGitAuthSecretPerAgent }}
+            {{- if not .Values.skills.github.app.secretName }}
+            {{- fail "skills.mintGitAuthSecretPerAgent needs skills.github.app.secretName: every agent's Secret is filled with a token of the skills GitHub App" }}
+            {{- end }}
+            - --skills-git-auth-mint-per-agent=true
+            - --service-account-name={{ include "agent-manager.serviceAccountName" . }}
+            - --service-account-namespace={{ .Release.Namespace }}
+            {{- end }}
             {{- if .Values.skills.github.app.secretName }}
             {{- if .Values.skills.github.tokenSecret.name }}
             {{- fail "skills.github.app.secretName and skills.github.tokenSecret.name are mutually exclusive: skills are read with one credential" }}

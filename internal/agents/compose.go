@@ -55,6 +55,18 @@ type ComposeConfig struct {
 	// git skill or git plugin reads them with, unless the agent names its
 	// own. Empty: such agents fetch anonymously.
 	SkillsGitAuthSecretName string
+	// SkillsGitAuthMint is agent-manager's own ServiceAccount when it mints a
+	// token per agent: every agent with a git source that names no Secret of
+	// its own gets the chart value skillsGitAuthMint.serviceAccount instead of
+	// the installation's Secret, and the chart renders the agent's Secret and
+	// the Role that lets this ServiceAccount fill it.
+	SkillsGitAuthMint *ServiceAccountRef
+}
+
+// ServiceAccountRef names a ServiceAccount.
+type ServiceAccountRef struct {
+	Name      string
+	Namespace string
 }
 
 // Defaults of the composition, the values composeManifests.ts uses.
@@ -94,10 +106,18 @@ var (
 // out to every git skill and git plugin: {name: <Secret>}.
 const SkillsGitAuthValuesKey = "skillsGitAuthSecretRef"
 
-// skillsGitAuth is the credential Secret an agent with these skills and
-// plugins reads them with: its own, else the installation's; none without a
-// git source.
-func skillsGitAuth(own string, skills Skills, plugins Plugins, cfg ComposeConfig) string {
+// SkillsGitAuthMintValuesKey is the chart value that gives the agent a
+// Secret of its own, filled by agent-manager with a token that reads only
+// the agent's repositories: {serviceAccount: {name, namespace}}.
+const SkillsGitAuthMintValuesKey = "skillsGitAuthMint"
+
+// setSkillsGitAuth writes the credential values of an agent with these
+// skills and plugins: its own Secret when it names one, else a minted Secret
+// of its own when agent-manager mints per agent, else the installation's
+// Secret; none without a git source.
+func setSkillsGitAuth(values map[string]any, own string, skills Skills, plugins Plugins, cfg ComposeConfig) {
+	delete(values, SkillsGitAuthValuesKey)
+	delete(values, SkillsGitAuthMintValuesKey)
 	hasGit := false
 	for _, sk := range skills {
 		hasGit = hasGit || sk.Git != nil
@@ -105,10 +125,17 @@ func skillsGitAuth(own string, skills Skills, plugins Plugins, cfg ComposeConfig
 	for _, pl := range plugins {
 		hasGit = hasGit || pl.Git != nil
 	}
-	if !hasGit {
-		return ""
+	switch {
+	case !hasGit:
+	case own != "":
+		values[SkillsGitAuthValuesKey] = map[string]any{"name": own}
+	case cfg.SkillsGitAuthMint != nil:
+		values[SkillsGitAuthMintValuesKey] = map[string]any{"serviceAccount": map[string]any{
+			"name": cfg.SkillsGitAuthMint.Name, "namespace": cfg.SkillsGitAuthMint.Namespace,
+		}}
+	case cfg.SkillsGitAuthSecretName != "":
+		values[SkillsGitAuthValuesKey] = map[string]any{"name": cfg.SkillsGitAuthSecretName}
 	}
-	return orDefault(own, cfg.SkillsGitAuthSecretName)
 }
 
 // MaxSystemMessageLength is the agent chart's cap on agent.systemMessage: the
@@ -179,9 +206,7 @@ func BuildValues(spec Spec, cfg ComposeConfig) map[string]any {
 	if plugins := pluginsValues(spec.Plugins); plugins != nil {
 		values["plugins"] = plugins
 	}
-	if name := skillsGitAuth(spec.GitAuthSecretName, spec.Skills, spec.Plugins, cfg); name != "" {
-		values[SkillsGitAuthValuesKey] = map[string]any{"name": name}
-	}
+	setSkillsGitAuth(values, spec.GitAuthSecretName, spec.Skills, spec.Plugins, cfg)
 	if len(spec.Toolset) > 0 {
 		// Exactly the declared list, as the chart's top-level value. Never
 		// muster.tools: that key narrows the binding, not the toolset.

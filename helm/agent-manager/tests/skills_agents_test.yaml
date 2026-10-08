@@ -1,0 +1,94 @@
+# Per-agent skills Secrets: the read access to Agents agent-manager watches
+# them with, and the flags that turn the minting on.
+#
+# Run with: make helm-test (helm unittest helm/agent-manager)
+suite: per-agent skills Secrets
+templates:
+  - templates/skills-agents.yaml
+  - templates/deployment.yaml
+set:
+  skills:
+    mintGitAuthSecretPerAgent: true
+    github:
+      app:
+        secretName: skills-github-app
+tests:
+  - it: renders nothing without per-agent minting
+    template: templates/skills-agents.yaml
+    set:
+      skills:
+        mintGitAuthSecretPerAgent: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: grants read access to Agents in every managed namespace, and nothing on Secrets
+    template: templates/skills-agents.yaml
+    set:
+      kagent:
+        namespace: kagent
+        additionalNamespaces: [team-a]
+    asserts:
+      - hasDocuments:
+          count: 4
+      - isKind:
+          of: Role
+        documentIndex: 2
+      - equal:
+          path: metadata.namespace
+          value: team-a
+        documentIndex: 2
+      - equal:
+          path: rules
+          value:
+            - apiGroups: ["api.kagent.dev"]
+              resources: ["agents"]
+              verbs: ["get", "list", "watch"]
+        documentIndex: 0
+
+  - it: binds the Role even when the caller's RBAC governs everything else
+    template: templates/skills-agents.yaml
+    set:
+      oauth:
+        enabled: true
+        baseURL: https://agent-manager.example.com
+        downstream:
+          enabled: true
+        dex:
+          issuerURL: https://dex.example.com
+          clientID: agent-manager
+    asserts:
+      - isKind:
+          of: RoleBinding
+        documentIndex: 1
+      - equal:
+          path: subjects[0]
+          value:
+            kind: ServiceAccount
+            name: RELEASE-NAME-agent-manager
+            namespace: NAMESPACE
+        documentIndex: 1
+
+  - it: passes the flag and the ServiceAccount agent releases grant
+    template: templates/deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --skills-git-auth-mint-per-agent=true
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --service-account-name=RELEASE-NAME-agent-manager
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --service-account-namespace=NAMESPACE
+
+  - it: refuses per-agent minting without the skills GitHub App
+    template: templates/deployment.yaml
+    set:
+      skills:
+        github:
+          app:
+            secretName: ""
+    asserts:
+      - failedTemplate:
+          errorPattern: "skills.mintGitAuthSecretPerAgent needs skills.github.app.secretName"

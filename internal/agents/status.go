@@ -88,6 +88,11 @@ func (s *Service) status(ctx context.Context, site *site, name string) (*Status,
 		st.Events = append(st.Events, s.warningEvents(ctx, site.fluxClient, site.fluxNS, site.releaseName(name))...)
 	}
 	st.sourceFailure = s.sourceFailure(ctx, site, hr)
+	if s.cfg.SkillsAgentSecrets != nil && !site.loc.IsSet() {
+		if cred, ok := s.cfg.SkillsAgentSecrets.StatusOf(ns, name); ok {
+			st.SkillsCredential = &cred
+		}
+	}
 	st.Verdict, st.Summary = verdict(st)
 	return st, nil
 }

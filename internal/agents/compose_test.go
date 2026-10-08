@@ -388,6 +388,26 @@ func TestBuildValuesComposesTheSkillsCredential(t *testing.T) {
 	}
 }
 
+func TestBuildValuesComposesAMintedSkillsCredentialPerAgent(t *testing.T) {
+	git := Skills{{Name: "a", Path: "a", Git: &GitSkill{URL: "https://github.com/o/private", Commit: strings.Repeat("a", 40)}}}
+	cfg := ComposeConfig{SkillsGitAuthSecretName: "kagent-skills-token", SkillsGitAuthMint: &ServiceAccountRef{Name: "agent-manager", Namespace: "agent-platform"}}
+	minted := map[string]any{"serviceAccount": map[string]any{"name": "agent-manager", "namespace": "agent-platform"}}
+
+	values := BuildValues(Spec{Name: "a", Skills: git}, cfg)
+	assert.Equal(t, minted, values[SkillsGitAuthMintValuesKey])
+	assert.NotContains(t, values, SkillsGitAuthValuesKey, "never both")
+
+	values = BuildValues(Spec{Name: "a", Plugins: Plugins{{Git: &GitSkill{URL: "https://github.com/o/private", Commit: strings.Repeat("a", 40)}, Skills: []string{"x"}}}}, cfg)
+	assert.Equal(t, minted, values[SkillsGitAuthMintValuesKey], "a git plugin is a git source too")
+
+	values = BuildValues(Spec{Name: "a", Skills: git, GitAuthSecretName: "team-token"}, cfg)
+	assert.Equal(t, map[string]any{"name": "team-token"}, values[SkillsGitAuthValuesKey], "the agent's own wins")
+	assert.NotContains(t, values, SkillsGitAuthMintValuesKey)
+
+	values = BuildValues(Spec{Name: "a", Skills: Skills{{Name: "b", OCI: "gsoci.azurecr.io/s@sha256:" + strings.Repeat("b", 64)}}}, cfg)
+	assert.NotContains(t, values, SkillsGitAuthMintValuesKey, "nothing to fetch with git")
+}
+
 func TestSkillMountName(t *testing.T) {
 	assert.Equal(t, "explicit", Skill{Name: "explicit", Path: "a/b"}.mountName())
 	assert.Equal(t, "b", Skill{Git: &GitSkill{URL: "https://github.com/o/r"}, Path: "a/b/"}.mountName())

@@ -198,11 +198,30 @@ Two credentials are involved, neither of them a person's token:
   before its one-hour expiry. The egress gateway reads the Secret on every
   fetch, so a replaced token needs no restart. `get_info` reports the last
   refresh and a failed one as `skillsGitAuthMint`.
+- **Boot, per agent**: with `--skills-git-auth-mint-per-agent` (chart
+  `skills.mintGitAuthSecretPerAgent`) every agent gets a token that reads
+  only its own repositories. An agent that names no Secret of its own is
+  composed with the agent chart value `skillsGitAuthMint.serviceAccount`
+  (agent-manager's ServiceAccount); the agent chart then renders the
+  agent's Secret, without data, and a Role that lets that ServiceAccount get
+  and update it by name. agent-manager watches the Agents of every managed
+  namespace (read-only), and for the Secret an Agent's git sources name,
+  marked `ui.giantswarm.io/agent-skills-git-auth: agent` and annotated
+  `ui.giantswarm.io/agent-skills-git-auth-agent: <agent>`, mints a token
+  scoped to the Agent's git skill and plugin repositories with
+  `contents: read`. Sources of another owner than the App installation's
+  account are left out (reported as `skipped`); an Agent with none left gets
+  no token at all. A GitOps agent opts in with the same chart value. An
+  update moves an agent off the installation's Secret.
+  `get_info.skillsGitAuthAgents` and `get_agent_status.skillsCredential`
+  report each Secret's repositories, expiry and last error. The egress
+  gateway sends the token to every request to `github.com`, so the token's
+  scope is the agent's scope.
 
 A private repository is only for the people who can read it themselves:
 `list_skills` shows it only to a caller whose GitHub login has read access
 (`GET /repos/{owner}/{repo}/collaborators/{login}/permission`), and
-`create_agent`, `update_agent` and `validate_agent` refuse a skill from it
+`create_agent`, `update_agent` and `validate_agent` refuse a skill or a plugin from it
 otherwise (`403 forbidden`, naming the repository). The login is the one the
 GitHub App pin verifies (see "Write modes"); a caller without one can use
 public repositories only.

@@ -52,6 +52,9 @@ type Config struct {
 	// filled with the skills GitHub App's token; nil: the Secret is
 	// provisioned by someone else.
 	SkillsBootSecret *skills.BootSecret
+	// SkillsAgentSecrets keeps every agent's own skills Secret filled with a
+	// token scoped to the agent's repositories; nil: no per-agent minting.
+	SkillsAgentSecrets *skills.AgentSecrets
 	// Sessions is the kagent controller the session operations call through
 	// agentgateway as the caller. Nil: they are refused as unsupported.
 	Sessions SessionClient
@@ -163,6 +166,9 @@ type InfoResponse struct {
 	// it filled with the skills GitHub App's token: the last refresh, the
 	// token's expiry and a failed refresh's error.
 	SkillsGitAuthMint *skills.BootSecretStatus `json:"skillsGitAuthMint,omitempty"`
+	// SkillsGitAuthAgents is the state of every agent's own skills Secret
+	// when agent-manager mints one per agent.
+	SkillsGitAuthAgents []skills.AgentSecretStatus `json:"skillsGitAuthAgents,omitempty"`
 }
 
 // Info reports the installation's capabilities.
@@ -212,6 +218,9 @@ func (s *Service) Info(ctx context.Context) InfoResponse {
 		st := s.cfg.SkillsBootSecret.Status()
 		out.SkillsGitAuthMint = &st
 	}
+	if s.cfg.SkillsAgentSecrets != nil {
+		out.SkillsGitAuthAgents = s.cfg.SkillsAgentSecrets.Status()
+	}
 	return out
 }
 
@@ -237,7 +246,12 @@ func (s *Service) kagentGVR(resource string) schema.GroupVersionResource {
 	return schema.GroupVersionResource{Group: KagentAPIGroup, Version: s.cfg.KagentAPIVersion, Resource: resource}
 }
 
-func (s *Service) agentGVR() schema.GroupVersionResource       { return s.kagentGVR("agents") }
+// AgentGVR is the Agent resource of the kagent API version.
+func AgentGVR(version string) schema.GroupVersionResource {
+	return schema.GroupVersionResource{Group: KagentAPIGroup, Version: version, Resource: "agents"}
+}
+
+func (s *Service) agentGVR() schema.GroupVersionResource       { return AgentGVR(s.cfg.KagentAPIVersion) }
 func (s *Service) mcpServerGVR() schema.GroupVersionResource   { return s.kagentGVR("remotemcpservers") }
 func (s *Service) harnessGVR() schema.GroupVersionResource     { return s.kagentGVR("harnesses") }
 func (s *Service) modelConfigGVR() schema.GroupVersionResource { return s.kagentGVR("modelconfigs") }
@@ -954,19 +968,21 @@ func (s *Service) writableHelmRelease(ctx context.Context, st *site, name string
 
 // mergeSkillsGitAuth keeps the skills credential in step with the merged
 // skills and plugins: the caller's Secret when it names one (empty: back to
-// the installation's), otherwise the release's own, otherwise the
-// installation's, so an update of an agent written before the credential
-// existed carries it from then on. Without a git source the value is dropped.
+// the installation's default), otherwise the release's own, otherwise the
+// installation's default, so an update of an agent written before the
+// credential existed carries it from then on. A release still naming the
+// installation's shared Secret has no Secret of its own: it moves to a
+// minted one when agent-manager mints per agent. Without a git source the
+// values are dropped.
 func mergeSkillsGitAuth(values map[string]any, own *string, cfg ComposeConfig) {
 	current, _, _ := unstructured.NestedString(values, SkillsGitAuthValuesKey, "name")
+	if current == cfg.SkillsGitAuthSecretName {
+		current = ""
+	}
 	if own != nil {
 		current = *own
 	}
-	if name := skillsGitAuth(current, skillsFromValues(values), pluginsFromValues(values), cfg); name != "" {
-		values[SkillsGitAuthValuesKey] = map[string]any{"name": name}
-	} else {
-		delete(values, SkillsGitAuthValuesKey)
-	}
+	setSkillsGitAuth(values, current, skillsFromValues(values), pluginsFromValues(values), cfg)
 }
 
 // mergedValues applies an Update to the release's current values and returns

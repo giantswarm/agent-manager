@@ -239,7 +239,7 @@ func (a *AgentSecrets) ownSecret(ctx context.Context, agent *unstructured.Unstru
 			continue
 		}
 		if owner := secret.Annotations[AgentSecretAnnotation]; owner != agent.GetName() {
-			return name, fmt.Errorf("Secret %s/%s is the skills Secret of Agent %q, not of %q: every Agent gets its own", agent.GetNamespace(), name, owner, agent.GetName())
+			return name, fmt.Errorf("the Secret %s/%s is the skills Secret of Agent %q, not of %q: every Agent gets its own", agent.GetNamespace(), name, owner, agent.GetName())
 		}
 		return name, nil
 	}
