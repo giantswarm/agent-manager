@@ -1182,6 +1182,37 @@ func TestCreateRefusesSkillsFromARepositoryTheCallerCannotRead(t *testing.T) {
 	assert.Equal(t, "private-analyst", res.Agent.Name)
 }
 
+func TestCreateRefusesPluginsFromARepositoryTheCallerCannotRead(t *testing.T) {
+	f := seeded(t)
+	private := Plugins{{Path: "bundle", Git: &GitSkill{URL: privateSkillsRepo, Commit: mainHead}, Skills: []string{"runbooks"}}}
+	spec := func(name string) Spec {
+		return Spec{Name: name, ModelConfig: "default-model-config", Toolset: []string{"preset:read-only"}, Plugins: private}
+	}
+	asGitHub := func(login string) context.Context {
+		return identity.ContextWithGitHub(t.Context(), &identity.GitHub{Login: login, Token: "ghu_" + login})
+	}
+
+	for name, ctx := range map[string]context.Context{"john": asGitHub("john"), "unknown": t.Context()} {
+		_, err := f.svc.Create(ctx, spec("refused-"+name))
+		require.ErrorIs(t, err, ErrForbidden, name)
+		assert.Contains(t, err.Error(), "plugins[0]")
+		assert.Contains(t, err.Error(), privateSkillsRepo)
+		_, getErr := f.dyn.Resource(hrGVR).Namespace("kagent").Get(ctx, "refused-"+name, metav1.GetOptions{})
+		assert.True(t, apierrors.IsNotFound(getErr), "a refusal writes nothing")
+		dry, err := f.svc.ValidateCreate(ctx, spec("refused-"+name))
+		require.NoError(t, err)
+		assert.False(t, dry.Valid)
+		assert.Contains(t, strings.Join(dry.Errors, "\n"), privateSkillsRepo)
+	}
+
+	_, err := f.svc.Update(asGitHub("john"), Update{Name: "verifier", Plugins: &private})
+	require.ErrorIs(t, err, ErrForbidden, "an update cannot add what the caller cannot read either")
+
+	res, err := f.svc.Create(asGitHub("jane"), spec("private-bundle"))
+	require.NoError(t, err)
+	assert.Equal(t, "private-bundle", res.Agent.Name)
+}
+
 func TestStatusVerdictOfAHelmReleaseThatIsNotReady(t *testing.T) {
 	cond := func(typ, status, reason, message string) map[string]any {
 		return map[string]any{"type": typ, "status": status, "reason": reason, "message": message}

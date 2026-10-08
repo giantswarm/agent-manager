@@ -40,21 +40,38 @@ func gitHubLogin(ctx context.Context) string {
 	return ""
 }
 
-// requireReadableSkills refuses skills from a repository the caller cannot
-// read: an agent never mounts a skill its creator could not read themselves,
-// though the platform's credential could.
-func requireReadableSkills(ctx context.Context, pinner SkillPinner, list Skills) error {
+// requireReadableSources refuses git skills and git plugins from a
+// repository the caller cannot read: an agent never fetches a source its
+// creator could not read themselves, though the platform's credential could.
+func requireReadableSources(ctx context.Context, pinner SkillPinner, skillList Skills, pluginList Plugins) error {
 	seen := map[string]bool{}
-	for _, sk := range list {
-		if sk.Git == nil || seen[sk.Git.URL] {
+	check := func(repoURL, what string) error {
+		if seen[repoURL] {
+			return nil
+		}
+		seen[repoURL] = true
+		if err := pinner.RequireReadable(ctx, repoURL, gitHubLogin(ctx)); err != nil {
+			if errors.Is(err, skills.ErrNotReadable) {
+				return fmt.Errorf("%w: %s: %v", ErrForbidden, what, err)
+			}
+			return invalidf("%s: %v", what, err)
+		}
+		return nil
+	}
+	for _, sk := range skillList {
+		if sk.Git == nil {
 			continue
 		}
-		seen[sk.Git.URL] = true
-		if err := pinner.RequireReadable(ctx, sk.Git.URL, gitHubLogin(ctx)); err != nil {
-			if errors.Is(err, skills.ErrNotReadable) {
-				return fmt.Errorf("%w: skill %q: %v", ErrForbidden, sk.Name, err)
-			}
-			return invalidf("skill %q: %v", sk.Name, err)
+		if err := check(sk.Git.URL, fmt.Sprintf("skill %q", sk.Name)); err != nil {
+			return err
+		}
+	}
+	for i, pl := range pluginList {
+		if pl.Git == nil {
+			continue
+		}
+		if err := check(pl.Git.URL, fmt.Sprintf("plugins[%d]", i)); err != nil {
+			return err
 		}
 	}
 	return nil

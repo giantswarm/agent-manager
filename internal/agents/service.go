@@ -677,7 +677,7 @@ func (s *Service) ValidateCreate(ctx context.Context, spec Spec) (*ValidateResul
 		// name unchecked; create_agent still refuses a taken name.
 		res.Notes = append(res.Notes, fmt.Sprintf("the name %q could not be checked for a clash: %v", spec.Name, err))
 	}
-	if err := requireReadableSkills(ctx, s.pinner, spec.Skills); err != nil {
+	if err := requireReadableSources(ctx, s.pinner, spec.Skills, spec.Plugins); err != nil {
 		res.addError(err)
 	}
 	if pinned, err := pinSkills(ctx, s.pinner, spec.Skills, false); err != nil {
@@ -811,7 +811,7 @@ func (s *Service) Create(ctx context.Context, spec Spec) (*CreateResult, error) 
 	if err := s.requireHarness(ctx, st.agent, ns, spec); err != nil {
 		return nil, err
 	}
-	if err := requireReadableSkills(ctx, s.pinner, spec.Skills); err != nil {
+	if err := requireReadableSources(ctx, s.pinner, spec.Skills, spec.Plugins); err != nil {
 		return nil, err
 	}
 	if spec.Skills, err = pinSkills(ctx, s.pinner, spec.Skills, false); err != nil {
@@ -1022,7 +1022,7 @@ func (s *Service) mergedValues(ctx context.Context, st *site, upd Update, hr *un
 			if err := ValidateSkills(list); err != nil {
 				return after, before, err
 			}
-			if err := requireReadableSkills(ctx, s.pinner, list); err != nil {
+			if err := requireReadableSources(ctx, s.pinner, list, nil); err != nil {
 				return after, before, err
 			}
 		}
@@ -1038,6 +1038,9 @@ func (s *Service) mergedValues(ctx context.Context, st *site, upd Update, hr *un
 	}
 	if upd.Plugins != nil {
 		if err := ValidatePlugins(*upd.Plugins); err != nil {
+			return after, before, err
+		}
+		if err := requireReadableSources(ctx, s.pinner, nil, *upd.Plugins); err != nil {
 			return after, before, err
 		}
 		if pl := pluginsValues(*upd.Plugins); pl != nil {
