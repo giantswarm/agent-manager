@@ -715,6 +715,13 @@ func TestUpdateMergesIntoValuesAndHonorsOwnership(t *testing.T) {
 	require.ErrorIs(t, err, ErrGitOpsOwned)
 	_, err = f.svc.Update(ctx, Update{Name: "gitops", DisplayName: str("x"), WriteOptions: WriteOptions{Mode: ModeCommit}})
 	require.ErrorIs(t, err, ErrUnsupported)
+	// The dry run answers as the write does.
+	_, err = f.svc.ValidateUpdate(ctx, Update{Name: "gitops", DisplayName: str("x")})
+	require.ErrorIs(t, err, ErrGitOpsOwned)
+	_, err = f.svc.ValidateUpdate(ctx, Update{Name: "gitops", DisplayName: str("x"), Force: true})
+	require.ErrorIs(t, err, ErrGitOpsOwned)
+	_, err = f.svc.ValidateUpdate(ctx, Update{Name: "gitops", DisplayName: str("x"), WriteOptions: WriteOptions{Mode: ModeCommit}})
+	require.ErrorIs(t, err, ErrUnsupported)
 
 	// A bare Agent has nothing to write to.
 	mustCreate(t, f, agentGVR, agentObject("kagent", "bare", "", "", true, true))

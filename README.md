@@ -59,7 +59,8 @@ MCP-server-writer half.
 
 The three writes take `dryRun` and `mode` (`apply` | `commit`, see
 [Write modes](#write-modes-apply-and-commit)); in commit mode the "Writes"
-column is files of a pull request, nothing live.
+column is files of a pull request, nothing live. `validate_agent` takes
+`mode` too and answers as the write would.
 
 Errors are `{"error":{"code":"not_found|invalid_request|conflict|gitops_owned|forbidden|unauthenticated|auth_required|unsupported|backend_error","message":"…"}}`;
 `conflict` (409) covers "exists already", "suspended" and "bare
@@ -310,7 +311,9 @@ unknown` and one sentence:
   desired state lives in git and a live write would be undone on the next
   reconciliation. `update_agent` and `delete_agent` refuse it in mode `apply`
   with `gitops_owned`, `force` or not; mode `commit` changes it with a pull
-  request in the repository that owns it. The
+  request in the repository that owns it, and `validate_agent` (`update:
+  true`) follows the same rule, so the dry run of such a change names mode
+  `commit`. The
   release may live in another namespace (the fleet's `sre-agent` releases sit
   in `flux-giantswarm` with `targetNamespace: kagent`); the Agent's
   provenance labels lead to it.

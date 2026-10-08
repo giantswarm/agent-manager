@@ -113,6 +113,18 @@ func TestModeArguments(t *testing.T) {
 	_, err = f.svc.Create(ctx, spec)
 	assert.ErrorIs(t, err, ErrUnsupported, "commit mode without the GitHub pin")
 	assert.False(t, f.svc.Info(ctx).Capabilities["commit"])
+
+	// The dry runs check the mode the same way.
+	spec.WriteOptions = WriteOptions{Mode: "push"}
+	_, err = f.svc.ValidateCreate(ctx, spec)
+	assert.ErrorIs(t, err, ErrInvalid)
+	spec.WriteOptions = WriteOptions{Mode: ModeCommit}
+	_, err = f.svc.ValidateCreate(ctx, spec)
+	assert.ErrorIs(t, err, ErrUnsupported)
+	_, err = f.svc.ValidateUpdate(ctx, Update{Name: "verifier", Description: str("x"), WriteOptions: WriteOptions{Mode: "push"}})
+	assert.ErrorIs(t, err, ErrInvalid)
+	_, err = f.svc.ValidateUpdate(ctx, Update{Name: "verifier", Description: str("x"), WriteOptions: WriteOptions{Mode: ModeCommit}})
+	assert.ErrorIs(t, err, ErrUnsupported)
 }
 
 func TestCommitCreateOpensThePullRequestAsThePerson(t *testing.T) {
@@ -192,6 +204,49 @@ func TestApplyRefusesAGitOpsOwnedReleaseNamingTheTarget(t *testing.T) {
 	assert.Contains(t, err.Error(), "giantswarm/fleet, directory agents/agent-manager on main")
 	_, err = f.svc.Delete(ctx, In(""), "gitops", true, WriteOptions{})
 	assert.ErrorIs(t, err, ErrGitOpsOwned)
+}
+
+func TestValidateUpdateFollowsTheWriteModesOwnershipRule(t *testing.T) {
+	f, fake, ctx := gitOpsFixture(t, true)
+
+	// Apply mode answers as update_agent would, force or not.
+	_, err := f.svc.ValidateUpdate(ctx, Update{Name: "gitops", Description: str("reviews")})
+	require.ErrorIs(t, err, ErrGitOpsOwned)
+	assert.Contains(t, err.Error(), "mode commit")
+	_, err = f.svc.ValidateUpdate(ctx, Update{Name: "gitops", Description: str("reviews"), Force: true})
+	require.ErrorIs(t, err, ErrGitOpsOwned, "force never passes a GitOps-owned release, on the dry run as on the write")
+
+	// Commit mode validates the change its pull request would carry: the
+	// composed manifests, nothing written, no pull request opened.
+	commit := WriteOptions{Mode: ModeCommit}
+	dry, err := f.svc.ValidateUpdate(ctx, Update{Name: "gitops", Description: str("reviews"), WriteOptions: commit})
+	require.NoError(t, err)
+	assert.True(t, dry.Valid, dry.Errors)
+	assert.Equal(t, "update", dry.Mode)
+	assert.Contains(t, dry.Manifests.HelmRelease, "description: reviews")
+	assert.Empty(t, fake.PullRequests(), "a dry run opens nothing")
+	got, err := f.svc.Get(ctx, In(""), "gitops")
+	require.NoError(t, err)
+	assert.Equal(t, ManagedGitOps, got.Managed)
+	_, described := got.Values["agent"].(map[string]any)["description"]
+	assert.False(t, described, "a dry run changes nothing")
+
+	// A violation comes back listed, as for a live release.
+	dry, err = f.svc.ValidateUpdate(ctx, Update{Name: "gitops", Toolset: &[]string{"label:x=y"}, WriteOptions: commit})
+	require.NoError(t, err)
+	assert.False(t, dry.Valid)
+	assert.Contains(t, strings.Join(dry.Errors, "\n"), "presets only")
+
+	// The dry run needs no GitHub authorization: the pull request is the write's.
+	dry, err = f.svc.ValidateUpdate(context.Background(), Update{Name: "gitops", Description: str("reviews"), WriteOptions: commit})
+	require.NoError(t, err)
+	assert.True(t, dry.Valid, dry.Errors)
+
+	// A live release validates in commit mode too; the write refuses it with
+	// its own conflict (TestCommitUpdateRewritesTheReleaseFile).
+	dry, err = f.svc.ValidateUpdate(ctx, Update{Name: "verifier", Description: str("reviews"), WriteOptions: commit})
+	require.NoError(t, err)
+	assert.True(t, dry.Valid, dry.Errors)
 }
 
 func TestCommitUpdateRewritesTheReleaseFile(t *testing.T) {

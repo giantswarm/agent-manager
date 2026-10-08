@@ -285,7 +285,7 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 	), t.getAgentStatus)
 
 	s.AddTool(mcp.NewTool(ToolValidateAgent,
-		mcp.WithDescription("Read-only dry run of create_agent (or of update_agent when update is true): composes the OCIRepository and HelmRelease, checks the name, the modelConfig, the harness, the toolset (required for a create; validated when given for an update), pins the skills, checks the plugins come pinned and validates the values against the agent chart's values.schema.json, and returns the manifests and every violation. Nothing is written."),
+		mcp.WithDescription("Read-only dry run of create_agent (or of update_agent when update is true): composes the OCIRepository and HelmRelease, checks the name, the modelConfig, the harness, the toolset (required for a create; validated when given for an update), pins the skills, checks the plugins come pinned and validates the values against the agent chart's values.schema.json, and returns the manifests and every violation. Nothing is written. mode answers as the write would: an update of a GitOps-owned release (managed: gitops) is refused in mode apply with gitops_owned and validated in mode commit, the change its pull request carries."),
 		mcp.WithString(argName, mcp.Required(), mcp.Description("Agent name")),
 		mcp.WithString(argModelConfig, mcp.Description("ModelConfig name (required for a create)")),
 		mcp.WithString(argHarness, mcp.Description(harnessDesc)),
@@ -302,10 +302,11 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 		labelsProp,
 		annotationsProp,
 		mcp.WithBoolean(argUpdate, mcp.Description("Validate as an update of the existing agent instead of a create (default false)")),
-		mcp.WithBoolean(argForce, mcp.Description("With update: ignore the GitOps/suspended guards (default false)")),
+		mcp.WithBoolean(argForce, mcp.Description("With update: validate a change to a suspended HelmRelease anyway (default false). A GitOps-owned release is never written live: use mode commit")),
 		nsProp,
 		orgProp,
 		clusterProp,
+		modeProp,
 		mcp.WithReadOnlyHintAnnotation(true),
 		mcp.WithDestructiveHintAnnotation(false),
 		mcp.WithIdempotentHintAnnotation(false),
