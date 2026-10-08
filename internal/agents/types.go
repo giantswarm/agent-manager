@@ -362,6 +362,49 @@ type Agent struct {
 	Values map[string]any `json:"values,omitempty"`
 }
 
+// AgentSummary is an agent as list_agents reports it unless asked for
+// details: what tells the agents apart, without the system prompt, the
+// skills, the status details and the values get_agent reports.
+type AgentSummary struct {
+	Name      string `json:"name"`
+	Namespace string `json:"namespace"`
+	Target
+	Exists             bool     `json:"exists"`
+	DisplayName        string   `json:"displayName,omitempty"`
+	Description        string   `json:"description,omitempty"`
+	ModelConfig        string   `json:"modelConfig,omitempty"`
+	Toolset            []string `json:"toolset,omitempty"`
+	ImplicitFullAccess bool     `json:"implicitFullAccess,omitempty"`
+	Ready              *bool    `json:"ready"`
+	Managed            string   `json:"managed"`
+}
+
+// Summary is the agent as an AgentSummary.
+func (a Agent) Summary() AgentSummary {
+	return AgentSummary{
+		Name:               a.Name,
+		Namespace:          a.Namespace,
+		Target:             a.Target,
+		Exists:             a.Exists,
+		DisplayName:        a.DisplayName,
+		Description:        a.Description,
+		ModelConfig:        a.ModelConfig,
+		Toolset:            a.Toolset,
+		ImplicitFullAccess: a.ImplicitFullAccess,
+		Ready:              a.Ready,
+		Managed:            a.Managed,
+	}
+}
+
+// Summaries maps Summary over a list.
+func Summaries(list []Agent) []AgentSummary {
+	out := make([]AgentSummary, 0, len(list))
+	for _, a := range list {
+		out = append(out, a.Summary())
+	}
+	return out
+}
+
 // ModelConfig is a kagent ModelConfig an agent can reference.
 type ModelConfig struct {
 	Name      string `json:"name"`

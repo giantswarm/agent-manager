@@ -86,12 +86,17 @@ func location(r *http.Request, ns string) agents.Location {
 }
 
 func (h *REST) listAgents(w http.ResponseWriter, r *http.Request) {
-	list, err := h.svc.List(r.Context(), location(r, r.URL.Query().Get("namespace")))
+	q := r.URL.Query()
+	list, err := h.svc.List(r.Context(), location(r, q.Get("namespace")))
 	if err != nil {
 		h.writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"agents": list})
+	if strings.EqualFold(q.Get("details"), "true") {
+		writeJSON(w, http.StatusOK, map[string]any{"agents": list})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"agents": agents.Summaries(list)})
 }
 
 func (h *REST) getAgent(w http.ResponseWriter, r *http.Request) {

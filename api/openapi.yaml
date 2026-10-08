@@ -117,13 +117,18 @@ paths:
         Every AgentTemplate with its RemoteMCPServer and its owning HelmRelease
         (found through the Flux provenance labels, possibly in another
         namespace), plus every HelmRelease of the agent chart that has not
-        rendered a template yet (`exists: false`).
+        rendered a template yet (`exists: false`). One `AgentSummary` each;
+        `details=true` reports every agent in full (`Agent`, as `getAgent`).
       operationId: listAgents
       x-mcp-tool: list_agents
       parameters:
         - $ref: "#/components/parameters/namespaceQuery"
         - $ref: "#/components/parameters/organizationQuery"
         - $ref: "#/components/parameters/clusterQuery"
+        - name: details
+          in: query
+          description: Report every agent in full, system prompt and HelmRelease values included
+          schema: { type: boolean }
       responses:
         "200":
           description: agents
@@ -134,7 +139,10 @@ paths:
                 properties:
                   agents:
                     type: array
-                    items: { $ref: "#/components/schemas/Agent" }
+                    items:
+                      oneOf:
+                        - { $ref: "#/components/schemas/AgentSummary" }
+                        - { $ref: "#/components/schemas/Agent" }
         "400": { $ref: "#/components/responses/Error" }
     post:
       tags: [agents]
@@ -618,6 +626,22 @@ components:
             kind: { type: string }
             name: { type: string }
             namespace: { type: string }
+    AgentSummary:
+      type: object
+      description: An agent as listAgents reports it without details; the fields mean what they mean on Agent
+      properties:
+        name: { type: string }
+        namespace: { type: string }
+        organization: { type: string }
+        cluster: { type: string }
+        exists: { type: boolean }
+        displayName: { type: string }
+        description: { type: string }
+        modelConfig: { type: string }
+        toolset: { $ref: "#/components/schemas/Toolset" }
+        implicitFullAccess: { type: boolean }
+        ready: { type: [boolean, "null"] }
+        managed: { type: string, enum: [helmrelease, gitops, none] }
     Agent:
       type: object
       properties:

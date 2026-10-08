@@ -41,7 +41,7 @@ MCP-server-writer half.
 | Operation | REST | MCP tool | Writes |
 |---|---|---|---|
 | Version, chart (OCI URL, `1.x` range, latest version, schema in use), managed namespaces, capabilities, API versions, platform Harness, muster URL, identity | `GET /api/v1/info` | `get_info` | no |
-| Agents of a namespace (AgentTemplates + HelmReleases of the chart not rendered yet) | `GET /api/v1/agents?namespace=` | `list_agents` | no |
+| Agents of a namespace (AgentTemplates + HelmReleases of the chart not rendered yet), one summary each: display name, description, model config, toolset, readiness, management mode; `details` reports each in full | `GET /api/v1/agents?namespace=[&details=true]` | `list_agents` | no |
 | One agent with its HelmRelease values, pinned skills, toolset and per-Harness status | `GET /api/v1/agents/{ns}/{name}` | `get_agent` | no |
 | Create: OCIRepository (when missing) + HelmRelease, after skill pinning, schema and ModelConfig validation | `POST /api/v1/agents` | `create_agent` | HelmRelease, OCIRepository |
 | Update: merge into the HelmRelease values (`refreshSkills` re-pins git skills), validate, update | `PATCH /api/v1/agents/{ns}/{name}[?force=true]` | `update_agent` | HelmRelease |

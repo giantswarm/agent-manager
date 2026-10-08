@@ -42,6 +42,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `list_agents` (and `GET /api/v1/agents`) reports one summary per agent: `name`, `namespace`, `organization`/`cluster`, `exists`, `displayName`, `description`, `modelConfig`, `toolset`, `implicitFullAccess`, `ready` and `managed`. The system prompt, pinned skills, MCP bindings, per-Harness status, HelmRelease and values come from `get_agent`, or for every agent at once from `details: true` (REST `?details=true`). On gazelle a full listing of 19 agents was about 250k characters, most of it every system prompt twice. ([giantswarm/giantswarm#38221](https://github.com/giantswarm/giantswarm/issues/38221))
 - A HelmRelease applied from git (`managed: gitops`) is never written live: `update_agent` and `delete_agent` in mode `apply` answer `gitops_owned` naming `mode: commit` and the target, whether `force` is passed or not; `force` keeps overriding a suspended release and deletes a bare AgentTemplate. ([#24](https://github.com/giantswarm/agent-manager/issues/24))
 
 - Create and update refuse a `systemMessage` longer than 20000 characters (counted in characters, not bytes) with a 400 that names the field, the limit and the actual length. The agent chart caps `agent.systemMessage` at the same length, because the compiled agent config has to fit Substrate's 32768-character env value limit; a longer prompt used to be accepted and the agent never became Ready.
