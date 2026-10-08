@@ -408,6 +408,14 @@ func TestBuildValuesComposesAMintedSkillsCredentialPerAgent(t *testing.T) {
 	assert.NotContains(t, values, SkillsGitAuthMintValuesKey, "nothing to fetch with git")
 }
 
+func TestForTargetComposesNoInstallationSkillsCredential(t *testing.T) {
+	git := Skills{{Name: "a", Path: "a", Git: &GitSkill{URL: "https://github.com/o/private", Commit: strings.Repeat("a", 40)}}}
+	cfg := ComposeConfig{SkillsGitAuthSecretName: "kagent-skills-token", SkillsGitAuthMint: &ServiceAccountRef{Name: "agent-manager", Namespace: "agent-platform"}}.ForTarget()
+	values := BuildValues(Spec{Name: "a", Skills: git}, cfg)
+	assert.NotContains(t, values, SkillsGitAuthValuesKey)
+	assert.NotContains(t, values, SkillsGitAuthMintValuesKey, "nothing on the workload cluster fills the Secret")
+}
+
 func TestSkillMountName(t *testing.T) {
 	assert.Equal(t, "explicit", Skill{Name: "explicit", Path: "a/b"}.mountName())
 	assert.Equal(t, "b", Skill{Git: &GitSkill{URL: "https://github.com/o/r"}, Path: "a/b/"}.mountName())

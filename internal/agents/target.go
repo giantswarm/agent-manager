@@ -137,6 +137,7 @@ func placedOn(hr *unstructured.Unstructured) (secret, targetNS string) {
 func (c ComposeConfig) ForTarget() ComposeConfig {
 	c.MusterURL = c.TargetMusterURL
 	c.SkillsGitAuthSecretName = ""
+	c.SkillsGitAuthMint = nil
 	return c
 }
 
