@@ -84,7 +84,8 @@ func (a *App) Token(ctx context.Context) (string, error) {
 
 // TokenValidFor returns an installation token for the whole installation that
 // stays valid for at least d, and its expiry, minting a new one when the
-// current one expires sooner. It never leaves agent-manager: agents get
+// current one expires sooner. Outside agent-manager only the installation's
+// shared boot Secret (BootSecret) carries it; an agent's own Secret carries
 // ScopedTokenValidFor's.
 func (a *App) TokenValidFor(ctx context.Context, d time.Duration) (string, time.Time, error) {
 	return a.tokenValidFor(ctx, "", nil, d)
