@@ -9,10 +9,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Changed
-
-- `list_skills` (and `GET /api/v1/skills`) lists every skill once, under its repository. The top-level `skills`, which repeated every repository's skills, is gone, and a skill carries only `name`, `description` and `path`; its repository's `repoUrl`, `ref` and `commit` are no longer repeated on each skill. MCP tool results are compact JSON instead of indented. A full `list_skills` on gazelle (153 skills in three repositories) shrinks from about 184k to 63k characters. ([giantswarm/giantswarm#38220](https://github.com/giantswarm/giantswarm/issues/38220))
-
 ### Added
 
 - Agents on a workload cluster, managed from the installation. `organization` and `cluster` on `create_agent`, `validate_agent`, `update_agent`, `delete_agent`, `get_agent`, `get_agent_status`, `list_agents` and `list_model_configs` (REST: the same fields and query parameters) place the agent's HelmRelease, `<cluster>-<agent>`, in `org-<organization>` on the installation with `spec.kubeConfig.secretRef` naming the cluster's Cluster API Secret `<cluster>-kubeconfig` (key `value`), `releaseName`, `targetNamespace` and `storageNamespace`, beside the shared OCIRepository there; the AgentTemplate, its RemoteMCPServer, the ModelConfigs, the Harnesses and the events are read on the workload cluster through a client built from that Secret that presents the caller's token (the kubeconfig's own credentials only when running as the ServiceAccount). A 401 there names the identity precondition. Such agents reach muster at `--target-muster-url` (`AGENT_TARGET_MUSTER_URL`, chart `muster.targetUrl`); unset, a target is refused. `get_info` reports `capabilities.targetCluster` and `muster.targetUrl`. Without a target nothing changes. ([#22](https://github.com/giantswarm/agent-manager/issues/22))
@@ -52,6 +48,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - An untagged local build reports the toolchain's pseudo-version (`1.1.9-0.20260916142110-aef0725928df`: the next patch and the commit) instead of `dev`, as the other Agent Platform managers, muster and agentlab do; `dev` remains for a build without version-control information.
 - The chart README no longer renders a version badge (`chart.badgesSection` removed from `README.md.gotmpl`): a release PR bumping `Chart.yaml`'s `version` no longer changes the checked-in `README.md`, so the helm-docs pre-commit hook no longer fails on it. ([giantswarm/devctl#2180](https://github.com/giantswarm/devctl/issues/2180))
+- `list_skills` (and `GET /api/v1/skills`) lists every skill once, under its repository. The top-level `skills`, which repeated every repository's skills, is gone, and a skill carries only `name`, `description` and `path`; its repository's `repoUrl`, `ref` and `commit` are no longer repeated on each skill. MCP tool results are compact JSON instead of indented. A full `list_skills` on gazelle (153 skills in three repositories) shrinks from about 184k to 63k characters. ([giantswarm/giantswarm#38220](https://github.com/giantswarm/giantswarm/issues/38220))
 
 ### Fixed
 

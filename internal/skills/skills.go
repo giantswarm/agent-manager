@@ -3,12 +3,11 @@
 // repository is one skill, its frontmatter name and description describe it,
 // and its directory is the skill an agent mounts (url + path). kagent API v2
 // pins skills to immutable sources, so the ref that was read is resolved to
-// its head commit and reported on the repository: Repository.Entry turns a
-// listed skill into the skills entry create_agent takes as is. Results are
-// cached per repository for a short time so a meta agent listing skills
-// repeatedly does not exhaust GitHub's rate limit. The Resolver (resolve.go)
-// is the same GitHub path for the composer: a branch or tag to its head
-// commit, a repository to its default branch.
+// its head commit and reported on the repository: the commit a skills entry
+// of create_agent pins. Results are cached per repository for a short time
+// so a meta agent listing skills repeatedly does not exhaust GitHub's rate
+// limit. The Resolver (resolve.go) is the same GitHub path for the composer:
+// a branch or tag to its head commit, a repository to its default branch.
 package skills
 
 import (
@@ -34,16 +33,6 @@ type Skill struct {
 	Path string `json:"path"`
 }
 
-// mountName is the directory the skill mounts under: the last path segment,
-// else the frontmatter name.
-func (s Skill) mountName() string {
-	if p := strings.Trim(s.Path, "/"); p != "" {
-		parts := strings.Split(p, "/")
-		return parts[len(parts)-1]
-	}
-	return s.Name
-}
-
 // Repository is the discovery result of one configured repository.
 type Repository struct {
 	RepoURL string `json:"repoUrl"`
@@ -60,16 +49,6 @@ type Repository struct {
 	// Error is set when the repository could not be read at all.
 	Error     string     `json:"error,omitempty"`
 	FetchedAt *time.Time `json:"fetchedAt,omitempty"`
-}
-
-// Entry is the repository's skill s as a create_agent/update_agent skills
-// entry: pinned to the commit the repository was read at.
-func (r Repository) Entry(s Skill) map[string]any {
-	out := map[string]any{"name": s.mountName(), "git": map[string]any{"url": r.RepoURL, "commit": r.Commit}}
-	if s.Path != "" {
-		out["path"] = s.Path
-	}
-	return out
 }
 
 // Result is what list_skills returns: every skill once, under its repository.

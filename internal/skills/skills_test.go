@@ -130,8 +130,6 @@ func TestDiscoverMirrorsThePortalSemantics(t *testing.T) {
 		{Name: "noname", Description: "", Path: "noname"},
 	}, repo.Skills, "sorted by path; the directory names a skill without frontmatter")
 
-	assert.Equal(t, map[string]any{"name": "agent-self-awareness", "path": "agent-self-awareness", "git": map[string]any{"url": repo.RepoURL, "commit": headCommit}}, repo.Entry(repo.Skills[0]), "the entry pins the repository's commit, ready for create_agent")
-
 	encoded, err := json.Marshal(res)
 	require.NoError(t, err)
 	var shape map[string]any
