@@ -61,6 +61,7 @@ const (
 	argRepository    = "repository"
 	argRef           = "ref"
 	argRefresh       = "refresh"
+	argDetails       = "details"
 	argMode          = "mode"
 	argDryRun        = "dryRun"
 	argBranch        = "branch"
@@ -146,10 +147,11 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 	), t.getInfo)
 
 	s.AddTool(mcp.NewTool(ToolListAgents,
-		mcp.WithDescription("Read-only. List the agents of a namespace: display name, description, icon URL, model config, pinned skills, the declared toolset (or implicitFullAccess: true for an agent without one — it sees every tool the gateway exposes and still needs a toolset), the MCP bindings, ready (the platform Harness's verdict on the AgentTemplate) with the per-Harness status, the owning HelmRelease (Ready, chart version) and how each is managed (helmrelease: writable here; gitops: applied from git, read-only without force; none: a bare AgentTemplate). HelmReleases of the agent chart that have not rendered a template yet are listed too (exists: false)."),
+		mcp.WithDescription("Read-only. List the agents of a namespace, one summary each: display name, description, model config, the declared toolset (or implicitFullAccess: true for an agent without one — it sees every tool the gateway exposes and still needs a toolset), ready (the platform Harness's verdict on the AgentTemplate) and how each is managed (helmrelease: writable here; gitops: applied from git, changed only with mode commit; none: a bare AgentTemplate), plus suspended, deleting and the release's reason and message when its HelmRelease is suspended, being uninstalled or not Ready. HelmReleases of the agent chart that have not rendered a template yet are listed too (exists: false). The system prompt, pinned skills, MCP bindings, per-Harness status, HelmRelease and values of one agent come from get_agent."),
 		nsProp,
 		orgProp,
 		clusterProp,
+		mcp.WithBoolean(argDetails, mcp.Description("Report every agent in full, as get_agent does, system prompt and HelmRelease values included (default false). Large: prefer get_agent for the agents you need.")),
 		mcp.WithReadOnlyHintAnnotation(true),
 		mcp.WithDestructiveHintAnnotation(false),
 		mcp.WithIdempotentHintAnnotation(false),
@@ -312,7 +314,10 @@ func (t *tools) listAgents(ctx context.Context, req mcp.CallToolRequest) (*mcp.C
 	if err != nil {
 		return errResult(err), nil
 	}
-	return jsonResult(map[string]any{"agents": list})
+	if req.GetBool(argDetails, false) {
+		return jsonResult(map[string]any{"agents": list})
+	}
+	return jsonResult(map[string]any{"agents": agents.Summaries(list)})
 }
 
 func (t *tools) getAgent(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
