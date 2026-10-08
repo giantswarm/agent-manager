@@ -147,7 +147,7 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 	), t.getInfo)
 
 	s.AddTool(mcp.NewTool(ToolListAgents,
-		mcp.WithDescription("Read-only. List the agents of a namespace, one summary each: display name, description, model config, the declared toolset (or implicitFullAccess: true for an agent without one — it sees every tool the gateway exposes and still needs a toolset), ready (the platform Harness's verdict on the AgentTemplate) and how each is managed (helmrelease: writable here; gitops: applied from git, read-only without force; none: a bare AgentTemplate). HelmReleases of the agent chart that have not rendered a template yet are listed too (exists: false). The system prompt, pinned skills, MCP bindings, per-Harness status, HelmRelease and values of one agent come from get_agent."),
+		mcp.WithDescription("Read-only. List the agents of a namespace, one summary each: display name, description, model config, the declared toolset (or implicitFullAccess: true for an agent without one — it sees every tool the gateway exposes and still needs a toolset), ready (the platform Harness's verdict on the AgentTemplate) and how each is managed (helmrelease: writable here; gitops: applied from git, changed only with mode commit; none: a bare AgentTemplate), plus suspended, deleting and the release's reason and message when its HelmRelease is suspended, being uninstalled or not Ready. HelmReleases of the agent chart that have not rendered a template yet are listed too (exists: false). The system prompt, pinned skills, MCP bindings, per-Harness status, HelmRelease and values of one agent come from get_agent."),
 		nsProp,
 		orgProp,
 		clusterProp,

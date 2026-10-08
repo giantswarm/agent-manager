@@ -140,7 +140,7 @@ paths:
                   agents:
                     type: array
                     items:
-                      oneOf:
+                      anyOf:
                         - { $ref: "#/components/schemas/AgentSummary" }
                         - { $ref: "#/components/schemas/Agent" }
         "400": { $ref: "#/components/responses/Error" }
@@ -642,6 +642,10 @@ components:
         implicitFullAccess: { type: boolean }
         ready: { type: [boolean, "null"] }
         managed: { type: string, enum: [helmrelease, gitops, none] }
+        suspended: { type: boolean, description: The HelmRelease is suspended (absent when not) }
+        deleting: { type: boolean, description: helm-controller is uninstalling the release (absent when not) }
+        releaseReason: { type: string, description: The HelmRelease's Ready reason, when it is not Ready }
+        releaseMessage: { type: string, description: The HelmRelease's Ready message, when it is not Ready }
     Agent:
       type: object
       properties:

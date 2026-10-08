@@ -377,11 +377,17 @@ type AgentSummary struct {
 	ImplicitFullAccess bool     `json:"implicitFullAccess,omitempty"`
 	Ready              *bool    `json:"ready"`
 	Managed            string   `json:"managed"`
+	// The owning HelmRelease's state, when it needs attention: suspended,
+	// being uninstalled, or not Ready (its reason and message).
+	Suspended      bool   `json:"suspended,omitempty"`
+	Deleting       bool   `json:"deleting,omitempty"`
+	ReleaseReason  string `json:"releaseReason,omitempty"`
+	ReleaseMessage string `json:"releaseMessage,omitempty"`
 }
 
 // Summary is the agent as an AgentSummary.
 func (a Agent) Summary() AgentSummary {
-	return AgentSummary{
+	s := AgentSummary{
 		Name:               a.Name,
 		Namespace:          a.Namespace,
 		Target:             a.Target,
@@ -394,6 +400,15 @@ func (a Agent) Summary() AgentSummary {
 		Ready:              a.Ready,
 		Managed:            a.Managed,
 	}
+	if hr := a.HelmRelease; hr != nil {
+		s.Suspended = hr.Suspended
+		s.Deleting = hr.Deleting
+		if hr.Ready != nil && !*hr.Ready {
+			s.ReleaseReason = hr.Reason
+			s.ReleaseMessage = hr.Message
+		}
+	}
+	return s
 }
 
 // Summaries maps Summary over a list.
