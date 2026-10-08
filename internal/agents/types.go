@@ -412,6 +412,7 @@ type AgentSummary struct {
 	DisplayName        string   `json:"displayName,omitempty"`
 	Description        string   `json:"description,omitempty"`
 	ModelConfig        string   `json:"modelConfig,omitempty"`
+	Harness            string   `json:"harness,omitempty"`
 	Toolset            []string `json:"toolset,omitempty"`
 	ImplicitFullAccess bool     `json:"implicitFullAccess,omitempty"`
 	Ready              *bool    `json:"ready"`
@@ -434,6 +435,7 @@ func (a Agent) Summary() AgentSummary {
 		DisplayName:        a.DisplayName,
 		Description:        a.Description,
 		ModelConfig:        a.ModelConfig,
+		Harness:            a.Harness,
 		Toolset:            a.Toolset,
 		ImplicitFullAccess: a.ImplicitFullAccess,
 		Ready:              a.Ready,
