@@ -124,14 +124,18 @@ func TestDiscoverMirrorsThePortalSemantics(t *testing.T) {
 	assert.Equal(t, headCommit, repo.Commit, "the branch is resolved to the commit an agent pins")
 	assert.False(t, repo.Truncated)
 	assert.Empty(t, repo.Error)
-	require.Len(t, res.Skills, 3)
 	assert.Equal(t, []Skill{
-		{Name: "self-awareness", Description: "Knows what it is.", RepoURL: repo.RepoURL, Path: "agent-self-awareness", Ref: "main", Commit: headCommit},
-		{Name: "runbooks", Description: "Operates things.", RepoURL: repo.RepoURL, Path: "nested/runbooks", Ref: "main", Commit: headCommit},
-		{Name: "noname", Description: "", RepoURL: repo.RepoURL, Path: "noname", Ref: "main", Commit: headCommit},
-	}, res.Skills, "sorted by path; the directory names a skill without frontmatter")
+		{Name: "self-awareness", Description: "Knows what it is.", Path: "agent-self-awareness"},
+		{Name: "runbooks", Description: "Operates things.", Path: "nested/runbooks"},
+		{Name: "noname", Description: "", Path: "noname"},
+	}, repo.Skills, "sorted by path; the directory names a skill without frontmatter")
 
-	assert.Equal(t, map[string]any{"name": "agent-self-awareness", "path": "agent-self-awareness", "git": map[string]any{"url": repo.RepoURL, "commit": headCommit}}, res.Skills[0].Entry(), "the entry pins the commit, ready for create_agent")
+	encoded, err := json.Marshal(res)
+	require.NoError(t, err)
+	var shape map[string]any
+	require.NoError(t, json.Unmarshal(encoded, &shape))
+	assert.NotContains(t, shape, "skills", "each skill is listed once, under its repository")
+	assert.Equal(t, 1, strings.Count(string(encoded), `"agent-self-awareness"`))
 
 	before := *hits
 	_, err = d.List(context.Background(), "", "", false)
@@ -146,7 +150,7 @@ func TestDiscoverMirrorsThePortalSemantics(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, featureCommit, res.Repositories[0].Commit)
 	assert.Equal(t, "feature", res.Repositories[0].Ref)
-	assert.Empty(t, res.Skills, "the feature branch carries no skill")
+	assert.Empty(t, res.Repositories[0].Skills, "the feature branch carries no skill")
 }
 
 func TestListRejectsNonGitHubRepositoriesAndReportsUnreadableOnes(t *testing.T) {
@@ -159,7 +163,7 @@ func TestListRejectsNonGitHubRepositoriesAndReportsUnreadableOnes(t *testing.T) 
 	require.NoError(t, err)
 	require.Len(t, res.Repositories, 1)
 	assert.NotEmpty(t, res.Repositories[0].Error)
-	assert.Empty(t, res.Skills)
+	assert.Empty(t, res.Repositories[0].Skills)
 }
 
 func TestResolverPinsGitRefs(t *testing.T) {
@@ -311,11 +315,11 @@ func TestExpiredEntryOnTheSameCommitIsRenewedWithoutRereading(t *testing.T) {
 
 	first, err := d.List(context.Background(), "", "", false)
 	require.NoError(t, err)
-	require.Len(t, first.Skills, 3)
+	require.Len(t, first.Repositories[0].Skills, 3)
 	before := *hits
 	again, err := d.List(context.Background(), "", "", false)
 	require.NoError(t, err)
-	assert.Equal(t, first.Skills, again.Skills)
+	assert.Equal(t, first.Repositories[0].Skills, again.Repositories[0].Skills)
 	assert.Equal(t, 2, *hits-before, "an expired entry costs the repository and its head commit, not every SKILL.md")
 }
 
@@ -328,5 +332,5 @@ func TestAReadOutlivesACallerThatGivesUp(t *testing.T) {
 	res, err := d.List(ctx, "", "", false)
 	require.NoError(t, err)
 	assert.False(t, res.Repositories[0].Truncated, "a cancelled caller does not truncate the listing")
-	assert.Len(t, res.Skills, 3)
+	assert.Len(t, res.Repositories[0].Skills, 3)
 }

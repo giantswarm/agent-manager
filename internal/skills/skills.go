@@ -3,8 +3,8 @@
 // repository is one skill, its frontmatter name and description describe it,
 // and its directory is the skill an agent mounts (url + path). kagent API v2
 // pins skills to immutable sources, so the ref that was read is resolved to
-// its head commit and reported next to it: the skills entry a listing yields
-// feeds create_agent as is. Results are cached per repository for a short time
+// its head commit and reported on the repository: the commit a skills entry
+// of create_agent pins. Results are cached per repository for a short time
 // so a meta agent listing skills repeatedly does not exhaust GitHub's rate
 // limit. The Resolver (resolve.go) is the same GitHub path for the composer:
 // a branch or tag to its head commit, a repository to its default branch.
@@ -22,41 +22,15 @@ import (
 	"sigs.k8s.io/yaml"
 )
 
-// Skill is one discovered skill, shaped as the portal returns it.
+// Skill is one discovered skill. Its repository carries the URL, the ref and
+// the commit it was read at.
 type Skill struct {
 	// Name is the frontmatter name, else the directory (or repository) name.
 	Name string `json:"name"`
 	// Description is the frontmatter description ("" when absent).
 	Description string `json:"description"`
-	// RepoURL is the canonical https://github.com/<owner>/<repo>.
-	RepoURL string `json:"repoUrl"`
 	// Path is the skill directory; "" at the repository root.
 	Path string `json:"path"`
-	// Ref is the git ref (branch) the skill was read from.
-	Ref string `json:"ref"`
-	// Commit is the commit Ref resolved to when it was read: the immutable
-	// reference an agent pins the skill to.
-	Commit string `json:"commit"`
-}
-
-// Entry is the skill as a create_agent/update_agent skills entry: pinned to
-// the commit it was read at.
-func (s Skill) Entry() map[string]any {
-	out := map[string]any{"name": s.mountName(), "git": map[string]any{"url": s.RepoURL, "commit": s.Commit}}
-	if s.Path != "" {
-		out["path"] = s.Path
-	}
-	return out
-}
-
-// mountName is the directory the skill mounts under: the last path segment,
-// else the frontmatter name.
-func (s Skill) mountName() string {
-	if p := strings.Trim(s.Path, "/"); p != "" {
-		parts := strings.Split(p, "/")
-		return parts[len(parts)-1]
-	}
-	return s.Name
 }
 
 // Repository is the discovery result of one configured repository.
@@ -77,11 +51,9 @@ type Repository struct {
 	FetchedAt *time.Time `json:"fetchedAt,omitempty"`
 }
 
-// Result is what list_skills returns.
+// Result is what list_skills returns: every skill once, under its repository.
 type Result struct {
 	Repositories []Repository `json:"repositories"`
-	// Skills flattens every repository's skills (stable order).
-	Skills []Skill `json:"skills"`
 }
 
 // Config tunes the discoverer and the resolver.
@@ -145,12 +117,7 @@ func (d *Discoverer) List(ctx context.Context, repository, ref string, refresh b
 		}()
 	}
 	wg.Wait()
-	res := &Result{Repositories: []Repository{}, Skills: []Skill{}}
-	for _, repo := range found {
-		res.Repositories = append(res.Repositories, repo)
-		res.Skills = append(res.Skills, repo.Skills...)
-	}
-	return res, nil
+	return &Result{Repositories: found}, nil
 }
 
 func (d *Discoverer) discover(ctx context.Context, repoURL, ref string, refresh bool) Repository {
@@ -306,10 +273,7 @@ func (d *Discoverer) read(ctx context.Context, repoURL, ref string) (Repository,
 		repo.Skills = append(repo.Skills, Skill{
 			Name:        skillName,
 			Description: strings.TrimSpace(fm["description"]),
-			RepoURL:     canonical,
 			Path:        dir,
-			Ref:         branch,
-			Commit:      head,
 		})
 	}
 	sort.Slice(repo.Skills, func(i, j int) bool {

@@ -49,7 +49,7 @@ MCP-server-writer half.
 | Status verdict: the agent's Harness entry on the AgentTemplate, HelmRelease conditions/history, Warning events | `GET /api/v1/agents/{ns}/{name}/status` | `get_agent_status` | no |
 | Dry run of create/update: pinned skills, composed manifests + every violation | `POST /api/v1/agents/validate` | `validate_agent` | no |
 | kagent ModelConfigs of a namespace | `GET /api/v1/modelconfigs?namespace=` | `list_model_configs` | no |
-| Skills (`SKILL.md`) of the configured GitHub repositories, each with its head commit | `GET /api/v1/skills[?repository=&ref=&refresh=]` | `list_skills` | no |
+| Skills (`SKILL.md`) of the configured GitHub repositories, grouped by repository with its head commit | `GET /api/v1/skills[?repository=&ref=&refresh=]` | `list_skills` | no |
 | Health | `GET /healthz`, `GET /readyz` | — | no |
 
 The three writes take `dryRun` and `mode` (`apply` | `commit`, see
@@ -118,7 +118,7 @@ kagent API v2 reads skills from immutable sources only: a git repository at a
 full commit id, or an OCI image by digest. `skills` is a list of
 
 - `{name, path, git: {url, ref | commit}}` — a git skill. `commit` (40 or 64
-  hex characters; `list_skills` reports it) is the pin. `ref` — a branch or a
+  hex characters; `list_skills` reports it per repository) is the pin. `ref` — a branch or a
   tag — is resolved to its head commit at write time through the GitHub API
   (`--skills-github-api`, `GITHUB_TOKEN`); neither means the head of the
   repository's default branch. Give one, not both.

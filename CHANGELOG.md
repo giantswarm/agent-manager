@@ -48,6 +48,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - An untagged local build reports the toolchain's pseudo-version (`1.1.9-0.20260916142110-aef0725928df`: the next patch and the commit) instead of `dev`, as the other Agent Platform managers, muster and agentlab do; `dev` remains for a build without version-control information.
 - The chart README no longer renders a version badge (`chart.badgesSection` removed from `README.md.gotmpl`): a release PR bumping `Chart.yaml`'s `version` no longer changes the checked-in `README.md`, so the helm-docs pre-commit hook no longer fails on it. ([giantswarm/devctl#2180](https://github.com/giantswarm/devctl/issues/2180))
+- `list_skills` (and `GET /api/v1/skills`) lists every skill once, under its repository. The top-level `skills`, which repeated every repository's skills, is gone, and a skill carries only `name`, `description` and `path`; its repository's `repoUrl`, `ref` and `commit` are no longer repeated on each skill. MCP tool results are compact JSON instead of indented. A full `list_skills` on gazelle (153 skills in three repositories) shrinks from about 184k to 63k characters. ([giantswarm/giantswarm#38220](https://github.com/giantswarm/giantswarm/issues/38220))
 
 ### Fixed
 
