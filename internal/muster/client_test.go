@@ -62,7 +62,7 @@ func TestResolveToolsetsAsTheCaller(t *testing.T) {
 		case toolset[0] == "preset:read-only" && offset == 0:
 			return pageJSON(t, map[string]any{"truncated": true, "tools": []any{
 				map[string]any{"name": "x_kubernetes_get", "server": "kubernetes", "annotations": map[string]any{"readOnlyHint": true}},
-			}, "toolset_requiring_auth": []any{map[string]any{"server": "github"}}, "toolset_unmatched": []any{"server:nothing"}}), nil
+			}, "toolset_requiring_auth": []any{map[string]any{"name": "github", "status": "auth_required", "auth_tool": "core_auth_login"}}, "toolset_unmatched": []any{"server:nothing"}}), nil
 		case toolset[0] == "preset:read-only":
 			return pageJSON(t, map[string]any{"tools": []any{map[string]any{"name": "x_kubernetes_delete"}}}), nil
 		default:

@@ -58,7 +58,7 @@ func (t Tool) ReadOnly() bool {
 
 // ServerAuth is a server whose tools the caller cannot list before signing in.
 type ServerAuth struct {
-	Server string `json:"server"`
+	Name string `json:"name"`
 }
 
 // Resolution is what one toolset resolves to for the caller.
@@ -142,7 +142,7 @@ func resolve(ctx context.Context, mc *client.Client, selectors []string) (Resolu
 		if i == 0 {
 			res.Unmatched = p.ToolsetUnmatched
 			for _, s := range p.ToolsetRequiringAuth {
-				res.RequiringAuth = append(res.RequiringAuth, s.Server)
+				res.RequiringAuth = append(res.RequiringAuth, s.Name)
 			}
 		}
 		if !p.Truncated {

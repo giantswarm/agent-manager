@@ -146,8 +146,11 @@ other Harness is not touched):
   `filter_tools`, as the caller, against the muster the agent reaches
   (`--muster-url`, else the Generic chart's default) and refuses a tool
   without `readOnlyHint`, `invoke_agent_instance` under any server prefix,
-  every tool of `preset:agent-platform`, and a toolset naming a server the
-  caller has not signed in to (its tools are unknown). The check fails
+  every tool of `preset:agent-platform` that is not read-only, a `tool:`,
+  `server:` or `workflow:` selector that selects no tool (a tool appearing
+  under that name later would reach the agent unchecked; a preset may select
+  nothing), and a toolset naming a server the caller has not signed in to
+  (its tools are unknown). `preset:read-only` passes. The check fails
   closed: muster unreachable or answering an error, or a call without the
   caller's token, refuses the write.
 - **No `requireApproval` and no bindings beside muster's**

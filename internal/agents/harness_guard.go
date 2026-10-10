@@ -30,8 +30,9 @@ const ClaudeRuntime = "claude"
 const DefaultMusterURL = "http://muster.agent-platform.svc.cluster.local:8090/mcp"
 
 // AgentPlatformPreset is the preset of the agent-platform tools (agent
-// lifecycle and invocation): a coding agent never reaches them, whatever
-// their hints, so it cannot create, change or invoke agents.
+// lifecycle and invocation): a coding agent reaches only the read-only ones
+// (listing and reading agents and sessions), so it cannot create, change or
+// invoke agents.
 const AgentPlatformPreset = "preset:agent-platform"
 
 // deniedTools are tool names a claude Harness agent never reaches, under any
@@ -120,8 +121,12 @@ func refuseApproval(values map[string]any) []error {
 }
 
 // checkClaudeToolset resolves the toolset with muster's filter_tools as the
-// caller and refuses an empty toolset, a tool without readOnlyHint and a
-// denied tool. Every failure to resolve refuses the write.
+// caller and refuses an empty toolset, a tool without readOnlyHint, a denied
+// tool and a selector that selects nothing: muster resolves the toolset again
+// on every request, so a name that selects nothing today would let a tool
+// appearing under it later reach the agent unchecked. A preset is the
+// platform's and may select nothing (preset:none). Every failure to resolve
+// refuses the write.
 func (s *Service) checkClaudeToolset(ctx context.Context, st *site, harness string, values map[string]any) []error {
 	selectors := stringSlice(values[ToolsetValuesKey])
 	if len(selectors) == 0 {
@@ -141,17 +146,23 @@ func (s *Service) checkClaudeToolset(ctx context.Context, st *site, harness stri
 	}
 	got, platform := res[0], res[1]
 	var errs []error
-	if len(got.RequiringAuth) > 0 {
-		errs = append(errs, invalidf("toolset names servers whose tools are unknown until you sign in to them (%s): sign in through muster, then write the agent again", strings.Join(got.RequiringAuth, ", ")))
+	signIn := slices.DeleteFunc(slices.Clone(got.RequiringAuth), func(s string) bool { return s == "" })
+	if len(signIn) > 0 {
+		errs = append(errs, invalidf("toolset names servers whose tools are unknown until you sign in to them (%s): sign in through muster, then write the agent again", strings.Join(signIn, ", ")))
 	}
-	denied := map[string]bool{}
+	if unknown := unknownSelectors(got.Unmatched, signIn); len(unknown) > 0 {
+		errs = append(errs, invalidf("toolset selectors resolve to no tool for you: %s; name existing read-only tools, servers or workflows, or a preset such as preset:read-only", strings.Join(unknown, ", ")))
+	}
+	platformWrites := map[string]bool{}
 	for _, t := range platform.Tools {
-		denied[t.Name] = true
+		if !t.ReadOnly() {
+			platformWrites[t.Name] = true
+		}
 	}
 	var deny, writes []string
 	for _, t := range got.Tools {
 		switch {
-		case denied[t.Name] || isDeniedName(t.Name):
+		case platformWrites[t.Name] || isDeniedName(t.Name):
 			deny = append(deny, t.Name)
 		case !t.ReadOnly():
 			writes = append(writes, t.Name)
@@ -159,13 +170,31 @@ func (s *Service) checkClaudeToolset(ctx context.Context, st *site, harness stri
 	}
 	if len(deny) > 0 {
 		sort.Strings(deny)
-		errs = append(errs, invalidf("toolset reaches tools a claude Harness agent may not use (invoke_agent_instance and the %s tools): %s", AgentPlatformPreset, strings.Join(deny, ", ")))
+		errs = append(errs, invalidf("toolset reaches tools a claude Harness agent may not use (invoke_agent_instance and the %s tools that are not read-only): %s", AgentPlatformPreset, strings.Join(deny, ", ")))
 	}
 	if len(writes) > 0 {
 		sort.Strings(writes)
 		errs = append(errs, invalidf("toolset reaches tools that are not marked read-only (no readOnlyHint): %s; a claude Harness agent's writes are git and the forge's CLI from its workspace, so its muster tools are read-only (preset:read-only)", strings.Join(writes, ", ")))
 	}
 	return errs
+}
+
+// unknownSelectors are the unmatched selectors a claude Harness agent may not
+// keep, sorted: every one but a preset, and but a server awaiting the
+// caller's sign-in, which is refused for that already.
+func unknownSelectors(unmatched, signIn []string) []string {
+	var out []string
+	for _, sel := range unmatched {
+		if strings.HasPrefix(sel, "preset:") {
+			continue
+		}
+		if server, ok := strings.CutPrefix(sel, "server:"); ok && slices.Contains(signIn, server) {
+			continue
+		}
+		out = append(out, sel)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // isDeniedName matches a denied tool under any server prefix.
