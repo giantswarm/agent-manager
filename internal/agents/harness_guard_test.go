@@ -15,8 +15,9 @@ import (
 	"github.com/giantswarm/agent-manager/internal/muster"
 )
 
-// fakeToolsets resolves toolsets from a table keyed by the joined selectors,
-// and refuses a call without a caller token as muster's client does.
+// fakeToolsets resolves toolsets from a table keyed by selector, reports a
+// selector missing from it as unmatched, and refuses a call without a caller
+// token as muster's client does.
 type fakeToolsets struct {
 	tools         map[string][]muster.Tool
 	requiringAuth []string
@@ -32,9 +33,12 @@ func readOnlyTool(name string) muster.Tool {
 
 func newFakeToolsets() *fakeToolsets {
 	return &fakeToolsets{tools: map[string][]muster.Tool{
-		"preset:read-only":                    {readOnlyTool("x_kubernetes_get"), readOnlyTool("x_kubernetes_list")},
-		"preset:agent-platform":               {readOnlyTool("x_agent-manager_list_agents"), {Name: "x_agent-manager_create_agent"}},
+		"preset:read-only":                    {readOnlyTool("x_kubernetes_get"), readOnlyTool("x_kubernetes_list"), readOnlyTool("core_workflow_get"), readOnlyTool("x_agent-manager_list_agents")},
+		"preset:infrastructure":               {readOnlyTool("x_kubernetes_get")},
+		"preset:agent-platform":               {readOnlyTool("core_workflow_get"), readOnlyTool("x_agent-manager_list_agents"), {Name: "x_agent-manager_create_agent"}, {Name: "x_kagent_invoke_agent_instance"}},
+		"tool:x_kubernetes_get":               {readOnlyTool("x_kubernetes_get")},
 		"tool:x_kubernetes_delete":            {{Name: "x_kubernetes_delete"}},
+		"tool:x_agent-manager_create_agent":   {{Name: "x_agent-manager_create_agent"}},
 		"tool:x_kagent_invoke_agent_instance": {readOnlyTool("x_kagent_invoke_agent_instance")},
 		"tool:x_agent-manager_list_agents":    {readOnlyTool("x_agent-manager_list_agents")},
 		"server:github":                       {},
@@ -54,7 +58,11 @@ func (f *fakeToolsets) ResolveToolsets(_ context.Context, url, token string, too
 	for i, ts := range toolsets {
 		var res muster.Resolution
 		for _, sel := range ts {
-			res.Tools = append(res.Tools, f.tools[sel]...)
+			tools, known := f.tools[sel]
+			if !known {
+				res.Unmatched = append(res.Unmatched, sel)
+			}
+			res.Tools = append(res.Tools, tools...)
 		}
 		if i == 0 {
 			res.RequiringAuth = f.requiringAuth
@@ -169,7 +177,7 @@ func TestClaudeHarnessRefusesAWriteTool(t *testing.T) {
 func TestClaudeHarnessRefusesDeniedTools(t *testing.T) {
 	for name, sel := range map[string]string{
 		"agent invocation":      "tool:x_kagent_invoke_agent_instance",
-		"agent-platform preset": "tool:x_agent-manager_list_agents",
+		"agent-platform preset": "tool:x_agent-manager_create_agent",
 	} {
 		t.Run(name, func(t *testing.T) {
 			f, ctx := claudeFixture(t, coderValues("preset:read-only"))
@@ -177,9 +185,56 @@ func TestClaudeHarnessRefusesDeniedTools(t *testing.T) {
 			refusedEverywhere(t, f, ctx,
 				coderSpec("preset:read-only", sel),
 				Update{Name: "coder", Toolset: &[]string{"preset:read-only", sel}},
-				"may not use (invoke_agent_instance and the preset:agent-platform tools): "+denied)
+				"may not use (invoke_agent_instance and the preset:agent-platform tools that are not read-only): "+denied)
 		})
 	}
+}
+
+// The preset the guard's own refusal recommends passes it, read-only
+// agent-platform and core tools included, as do the other presets and a
+// single read tool.
+func TestClaudeHarnessAcceptsReadOnlySelectors(t *testing.T) {
+	for _, toolset := range [][]string{
+		{"preset:read-only"},
+		{"preset:infrastructure"},
+		{"preset:none"},
+		{"tool:x_kubernetes_get"},
+		{"tool:x_agent-manager_list_agents"},
+	} {
+		t.Run(strings.Join(toolset, ","), func(t *testing.T) {
+			f, ctx := claudeFixture(t, coderValues("preset:read-only"))
+			spec := coderSpec(toolset...)
+			spec.Name = "fresh"
+			dry, err := f.svc.ValidateCreate(ctx, spec)
+			require.NoError(t, err)
+			assert.True(t, dry.Valid, "validate create: %v", dry.Errors)
+			_, err = f.svc.Create(ctx, spec)
+			require.NoError(t, err)
+			_, err = f.svc.Update(ctx, Update{Name: "coder", Toolset: &toolset})
+			require.NoError(t, err)
+		})
+	}
+}
+
+func TestClaudeHarnessRefusesUnknownSelectors(t *testing.T) {
+	for _, sel := range []string{"tool:x_kubernetes_drain", "server:nothing", "workflow:nothing"} {
+		t.Run(sel, func(t *testing.T) {
+			f, ctx := claudeFixture(t, coderValues("preset:read-only"))
+			refusedEverywhere(t, f, ctx,
+				coderSpec("preset:read-only", sel),
+				Update{Name: "coder", Toolset: &[]string{"preset:read-only", sel}},
+				"toolset selectors resolve to no tool for you: "+sel)
+		})
+	}
+}
+
+func TestClaudeHarnessSignInRefusalNamesServers(t *testing.T) {
+	f, ctx := claudeFixture(t, nil)
+	f.toolsets.requiringAuth = []string{""}
+	dry, err := f.svc.ValidateCreate(ctx, coderSpec("preset:read-only"))
+	require.NoError(t, err)
+	assert.True(t, dry.Valid, "no server awaits sign-in: %v", dry.Errors)
+	assert.NotContains(t, strings.Join(dry.Errors, "\n"), "sign in")
 }
 
 func TestClaudeHarnessRefusesRequireApproval(t *testing.T) {
