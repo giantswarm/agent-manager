@@ -134,6 +134,37 @@ Claude Code skills and plugins. Per-turn bounds (a budget, a turn cap) are the
 Harness's (`Harness.spec.claude.limits`, platform-admin owned), not the
 agent's.
 
+### Guards on a claude Harness
+
+A coding agent runs Bash in its sandbox and writes with `git` and the forge's
+CLI from its workspace, so `validate_agent`, `create_agent` and `update_agent`
+hold an agent on a Harness with `spec.claude` to these rules (an agent on any
+other Harness is not touched):
+
+- **A read-only toolset.** The toolset is required, also on an update of a
+  release written without one. agent-manager resolves it with muster's
+  `filter_tools`, as the caller, against the muster the agent reaches
+  (`--muster-url`, else the Generic chart's default) and refuses a tool
+  without `readOnlyHint`, `invoke_agent_instance` under any server prefix,
+  every tool of `preset:agent-platform`, and a toolset naming a server the
+  caller has not signed in to (its tools are unknown). The check fails
+  closed: muster unreachable or answering an error, or a call without the
+  caller's token, refuses the write.
+- **No `requireApproval` and no bindings beside muster's**
+  (`muster.requireApproval`, `extraTools`, `extraAgentSpec.tools`): their
+  tools would not be resolved through muster.
+- **The platform's egress.** `--harness-egress` (chart `harness.egress`)
+  lists the origins per claude Harness, the installation's forge and git hosts
+  and the toolchain's registries. agent-manager writes that list into
+  `agent.egress` (the Agent's `spec.egress`) on every write and refuses any
+  other origin; a claude Harness without an entry reaches none.
+- **The egress note.** The system prompt ends with a short section, from its
+  heading `## Network access (set by the platform)` on, naming those origins
+  and saying that a denied request is policy, not an outage; it is rewritten
+  on every write.
+
+The guards are write-time: a HelmRelease applied directly bypasses them.
+
 - `plugins` is a list of Agent Plugins bundles, `{git: {url, commit}, path,
   skills}` or `{oci: <ref>@sha256:<digest>, path, skills}` (chart `plugins[]`,
   `spec.template.plugins[]`). A plugin is written as given and must come

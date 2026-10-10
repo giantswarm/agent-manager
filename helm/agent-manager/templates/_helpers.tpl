@@ -217,6 +217,27 @@ port: {{ $port }}
 {{- end -}}
 
 {{/*
+The muster a claude Harness agent's toolset is resolved with, as the caller
+(OAuth only): muster.url, else the Generic chart's default, which is the muster
+the agent reaches. The egress rule: the Service's namespace when the host is
+<service>.<namespace>.svc[...], else every address, on its port.
+*/}}
+{{- define "agent-manager.musterEgress" -}}
+{{- if .Values.oauth.enabled -}}
+{{- $url := urlParse (.Values.muster.url | default "http://muster.agent-platform.svc.cluster.local:8090/mcp") -}}
+{{- $hostPort := splitList ":" $url.host -}}
+{{- $port := ternary (last $hostPort) (ternary "443" "80" (eq $url.scheme "https")) (gt (len $hostPort) 1) -}}
+{{- $labels := splitList "." (first $hostPort) -}}
+{{- $namespace := "" -}}
+{{- if and (ge (len $labels) 3) (eq (index $labels 2) "svc") -}}
+{{- $namespace = index $labels 1 -}}
+{{- end -}}
+namespace: {{ $namespace | quote }}
+port: {{ $port }}
+{{- end -}}
+{{- end -}}
+
+{{/*
 The installation's skills boot Secret: the minted one, else
 skills.gitAuthSecretName.
 */}}
