@@ -71,7 +71,7 @@ harness:
   # and refuses any other origin; a claude Harness without an entry reaches
   # none. Origins are `http(s)://host[:port]`, a host may start with `*.`.
   # @default -- GitHub plus the Go and npm registries for `claude-go` and `claude-node`
-  egress:
+  egress:  # @schema additionalProperties: true
     claude:
       - https://github.com
       - https://api.github.com
