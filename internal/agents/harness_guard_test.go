@@ -17,13 +17,28 @@ import (
 
 // fakeToolsets resolves toolsets from a table keyed by selector, reports a
 // selector missing from it as unmatched, and refuses a call without a caller
-// token as muster's client does.
+// token as muster's client does. Like muster, it reports a server awaiting
+// sign-in for a toolset that names it: by a preset, by server or by a tool
+// of its (x_<server>_ prefix).
 type fakeToolsets struct {
 	tools         map[string][]muster.Tool
 	requiringAuth []string
 	err           error
 	calls         int
 	url, token    string
+}
+
+func (f *fakeToolsets) awaiting(selectors []string) []string {
+	var out []string
+	for _, server := range f.requiringAuth {
+		for _, sel := range selectors {
+			if isPreset(sel) || sel == "server:"+server || strings.HasPrefix(sel, "tool:x_"+server+"_") {
+				out = append(out, server)
+				break
+			}
+		}
+	}
+	return out
 }
 
 func readOnlyTool(name string) muster.Tool {
@@ -35,6 +50,8 @@ func newFakeToolsets() *fakeToolsets {
 	return &fakeToolsets{tools: map[string][]muster.Tool{
 		"preset:read-only":                    {readOnlyTool("x_kubernetes_get"), readOnlyTool("x_kubernetes_list"), readOnlyTool("core_workflow_get"), readOnlyTool("x_agent-manager_list_agents")},
 		"preset:infrastructure":               {readOnlyTool("x_kubernetes_get")},
+		"preset:full":                         {readOnlyTool("x_kubernetes_get"), {Name: "x_kubernetes_delete"}},
+		"preset:agent-invocation":             {readOnlyTool("x_kagent_invoke_agent_instance")},
 		"preset:agent-platform":               {readOnlyTool("core_workflow_get"), readOnlyTool("x_agent-manager_list_agents"), {Name: "x_agent-manager_create_agent"}, {Name: "x_kagent_invoke_agent_instance"}},
 		"tool:x_kubernetes_get":               {readOnlyTool("x_kubernetes_get")},
 		"tool:x_kubernetes_delete":            {{Name: "x_kubernetes_delete"}},
@@ -55,17 +72,14 @@ func (f *fakeToolsets) ResolveToolsets(_ context.Context, url, token string, too
 		return nil, muster.ErrNoToken
 	}
 	out := make([]muster.Resolution, 0, len(toolsets))
-	for i, ts := range toolsets {
-		var res muster.Resolution
+	for _, ts := range toolsets {
+		res := muster.Resolution{RequiringAuth: f.awaiting(ts)}
 		for _, sel := range ts {
 			tools, known := f.tools[sel]
 			if !known {
 				res.Unmatched = append(res.Unmatched, sel)
 			}
 			res.Tools = append(res.Tools, tools...)
-		}
-		if i == 0 {
-			res.RequiringAuth = f.requiringAuth
 		}
 		out = append(out, res)
 	}
@@ -235,6 +249,55 @@ func TestClaudeHarnessSignInRefusalNamesServers(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, dry.Valid, "no server awaits sign-in: %v", dry.Errors)
 	assert.NotContains(t, strings.Join(dry.Errors, "\n"), "sign in")
+}
+
+// A preset spans every server, also those awaiting the caller's sign-in:
+// muster resolves it per request and admits the preset's tools only, so the
+// servers it spans need no sign-in before the write.
+func TestClaudeHarnessPresetSkipsServersAwaitingSignIn(t *testing.T) {
+	f, ctx := claudeFixture(t, coderValues("preset:infrastructure"))
+	f.toolsets.requiringAuth = []string{"github", "jira"}
+	toolset := []string{"preset:read-only"}
+	spec := coderSpec(toolset...)
+	spec.Name = "fresh"
+
+	dry, err := f.svc.ValidateCreate(ctx, spec)
+	require.NoError(t, err)
+	assert.True(t, dry.Valid, "validate create: %v", dry.Errors)
+	_, err = f.svc.Create(ctx, spec)
+	require.NoError(t, err)
+	assert.Equal(t, []any{"preset:read-only"}, mustValues(mustGet(t, f, "fresh"))[ToolsetValuesKey])
+
+	dryUpd, err := f.svc.ValidateUpdate(ctx, Update{Name: "coder", Toolset: &toolset})
+	require.NoError(t, err)
+	assert.True(t, dryUpd.Valid, "validate update: %v", dryUpd.Errors)
+	_, err = f.svc.Update(ctx, Update{Name: "coder", Toolset: &toolset})
+	require.NoError(t, err)
+	assert.Equal(t, []any{"preset:read-only"}, mustValues(mustGet(t, f, "coder"))[ToolsetValuesKey])
+}
+
+// Selectors that name a server awaiting sign-in, by server or by a tool of
+// its, stay refused beside a preset, naming only that server; a preset that
+// reaches a write or a denied tool stays refused while servers await sign-in.
+func TestClaudeHarnessSignInStillRefusesExplicitSelectors(t *testing.T) {
+	for name, tc := range map[string]struct {
+		toolset []string
+		want    string
+	}{
+		"server":            {[]string{"preset:read-only", "server:github"}, "unknown until you sign in to them (github):"},
+		"tool":              {[]string{"preset:read-only", "tool:x_github_get_issue"}, "unknown until you sign in to them (github):"},
+		"write preset":      {[]string{"preset:full"}, "not marked read-only (no readOnlyHint): x_kubernetes_delete"},
+		"invocation preset": {[]string{"preset:agent-invocation"}, "may not use (invoke_agent_instance and the preset:agent-platform tools that are not read-only): x_kagent_invoke_agent_instance"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f, ctx := claudeFixture(t, coderValues("preset:read-only"))
+			f.toolsets.requiringAuth = []string{"github", "jira"}
+			refusedEverywhere(t, f, ctx, coderSpec(tc.toolset...), Update{Name: "coder", Toolset: &tc.toolset}, tc.want)
+			dry, err := f.svc.ValidateCreate(ctx, Spec{Name: "other", ModelConfig: "default-model-config", Harness: "claude", Toolset: tc.toolset})
+			require.NoError(t, err)
+			assert.NotContains(t, strings.Join(dry.Errors, "\n"), "jira", "a server only the preset spans is not refused")
+		})
+	}
 }
 
 func TestClaudeHarnessRefusesRequireApproval(t *testing.T) {
