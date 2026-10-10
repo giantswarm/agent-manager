@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -21,6 +22,7 @@ import (
 	"github.com/giantswarm/agent-manager/internal/chart"
 	"github.com/giantswarm/agent-manager/internal/kagent"
 	"github.com/giantswarm/agent-manager/internal/kube"
+	"github.com/giantswarm/agent-manager/internal/muster"
 	"github.com/giantswarm/agent-manager/internal/server"
 	"github.com/giantswarm/agent-manager/internal/skills"
 )
@@ -36,6 +38,7 @@ type serveOptions struct {
 	managedNamespaces string
 	kagentAPIVersion  string
 	harnessName       string
+	harnessEgress     string
 	musterURL         string
 	targetMusterURL   string
 	helmReleaseAPI    string
@@ -102,6 +105,7 @@ environment variable named next to it; flags win over the environment.`,
 	f.StringVar(&o.managedNamespaces, "managed-namespaces", envOr("AGENT_MANAGER_MANAGED_NAMESPACES", ""), "Comma-separated additional namespaces agents may live in; RBAC must exist there (AGENT_MANAGER_MANAGED_NAMESPACES)")
 	f.StringVar(&o.kagentAPIVersion, "kagent-api-version", envOr("KAGENT_API_VERSION", "auto"), "api.kagent.dev API version for Agents, Harnesses, RemoteMCPServers and ModelConfigs; auto discovers the version serving agents, default "+agents.DefaultKagentAPIVersion+" (KAGENT_API_VERSION)")
 	f.StringVar(&o.harnessName, "harness-name", envOr("AGENT_HARNESS_NAME", agents.DefaultHarnessName), "Name of the platform Harness an agent runs on unless create_agent names another: composed as the chart value agent.harness, the Agent's spec.harnessRef.name (AGENT_HARNESS_NAME)")
+	f.StringVar(&o.harnessEgress, "harness-egress", envOr("AGENT_MANAGER_HARNESS_EGRESS", ""), "JSON object of the origins a coding agent on a claude Harness reaches, by Harness name ({\"claude\": [\"https://github.com\"]}): written into the Agent's spec.egress, and the only origins such an agent may name; a claude Harness without an entry reaches none (AGENT_MANAGER_HARNESS_EGRESS)")
 	f.StringVar(&o.musterURL, "muster-url", envOr("AGENT_MUSTER_URL", ""), "The platform's muster MCP URL, composed into every agent as the chart value muster.url; empty composes nothing and the chart default applies (AGENT_MUSTER_URL)")
 	f.StringVar(&o.targetMusterURL, "target-muster-url", envOr("AGENT_TARGET_MUSTER_URL", ""), "The muster MCP URL composed into an agent on a workload cluster: one those clusters reach (the installation's public muster endpoint); empty refuses target clusters (AGENT_TARGET_MUSTER_URL)")
 	f.StringVar(&o.helmReleaseAPI, "flux-helmrelease-api-version", envOr("FLUX_HELMRELEASE_API_VERSION", "auto"), "helm.toolkit.fluxcd.io API version composed into HelmReleases; auto discovers it (FLUX_HELMRELEASE_API_VERSION)")
@@ -234,6 +238,11 @@ func runServe(ctx context.Context, o *serveOptions) error {
 		bootSecret = skills.NewBootSecret(app, clients.Typed(), o.skillsGitAuth, agents.ManagedNamespaces(o.kagentNamespace, splitList(o.managedNamespaces)), log)
 	}
 
+	harnessEgress, err := parseHarnessEgress(o.harnessEgress)
+	if err != nil {
+		return err
+	}
+
 	var sessions agents.SessionClient
 	if o.kagentTarget != "" {
 		client, err := kagent.Dial(o.kagentTarget)
@@ -267,6 +276,10 @@ func runServe(ctx context.Context, o *serveOptions) error {
 		Version:          build.Version,
 		GitHub:           gitHubRemote(o.githubAuthorizationServer, o.githubAPIURL),
 		Sessions:         sessions,
+		// A claude Harness agent's toolset is resolved as the caller through
+		// muster's filter_tools; every failure refuses the write.
+		Toolsets:      &muster.Client{Version: build.Version},
+		HarnessEgress: harnessEgress,
 	}, log)
 
 	srvCfg := server.Config{Addr: o.listen, MCPEnabled: o.mcpEnabled, MCPPath: o.mcpPath}
@@ -323,6 +336,24 @@ func discoverGroupVersion(flag string, clients kube.Client, group, resource, def
 		return def
 	}
 	return group + "/" + v
+}
+
+// parseHarnessEgress reads --harness-egress: origins by Harness name, each
+// list checked as the Agent CRD checks spec.egress.
+func parseHarnessEgress(raw string) (map[string][]string, error) {
+	if strings.TrimSpace(raw) == "" {
+		return nil, nil
+	}
+	var out map[string][]string
+	if err := json.Unmarshal([]byte(raw), &out); err != nil {
+		return nil, fmt.Errorf("--harness-egress: a JSON object of origin lists by Harness name: %w", err)
+	}
+	for harness, origins := range out {
+		if err := agents.ValidateEgress(origins); err != nil {
+			return nil, fmt.Errorf("--harness-egress: Harness %s: %w", harness, err)
+		}
+	}
+	return out, nil
 }
 
 func splitList(s string) []string {

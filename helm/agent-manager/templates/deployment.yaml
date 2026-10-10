@@ -53,6 +53,9 @@ spec:
             {{- end }}
             - --kagent-api-version={{ .Values.kagent.apiVersion }}
             - --harness-name={{ .Values.harness.name }}
+            {{- with .Values.harness.egress }}
+            - {{ printf "--harness-egress=%s" (toJson .) | quote }}
+            {{- end }}
             {{- with .Values.muster.url }}
             - --muster-url={{ . }}
             {{- end }}

@@ -1,0 +1,90 @@
+# The claude Harness guards: the per-Harness origin list agent-manager writes
+# into a coding agent's egress, and the egress rule to the muster whose
+# filter_tools resolves its toolset as the caller (OAuth only).
+#
+# Run with: make helm-test (helm unittest helm/agent-manager)
+suite: claude Harness guards
+templates:
+  - templates/deployment.yaml
+  - templates/networkpolicy.yaml
+set:
+  oauth:
+    enabled: true
+    existingSecret: platform-oauth
+  global:
+    domain: example.com
+    identity:
+      issuerUrl: https://dex.example.com
+      clientId: platform-client
+tests:
+  - it: passes the origin lists by Harness name as JSON
+    template: templates/deployment.yaml
+    set:
+      harness.egress:
+        claude: [https://github.com]
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[?(@ =~ /^--harness-egress=/)]
+          pattern: '^--harness-egress=\{"claude":\["https://github.com"\],"claude-go":'
+
+  - it: ships GitHub and the toolchain registries by default
+    template: templates/deployment.yaml
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[?(@ =~ /^--harness-egress=/)]
+          pattern: '"claude-go":\[[^]]*"https://proxy.golang.org"'
+
+  - it: passes no list when none is set
+    template: templates/deployment.yaml
+    set:
+      harness.egress: null
+    asserts:
+      - notExists:
+          path: spec.template.spec.containers[0].args[?(@ =~ /^--harness-egress=/)]
+
+  - it: opens egress to the default muster Service's namespace on its port
+    template: templates/networkpolicy.yaml
+    set:
+      networkPolicy.enabled: true
+    asserts:
+      - contains:
+          path: spec.egress
+          content:
+            to:
+              - namespaceSelector:
+                  matchLabels:
+                    kubernetes.io/metadata.name: agent-platform
+            ports:
+              - {protocol: TCP, port: 8090}
+
+  - it: opens egress to every address on 443 for a public muster
+    template: templates/networkpolicy.yaml
+    set:
+      networkPolicy.enabled: true
+      muster.url: https://muster.example.com/mcp
+    asserts:
+      - contains:
+          path: spec.egress
+          content:
+            to:
+              - ipBlock:
+                  cidr: 0.0.0.0/0
+            ports:
+              - {protocol: TCP, port: 443}
+
+  - it: opens no muster egress without OAuth, where no toolset can be resolved as the caller
+    template: templates/networkpolicy.yaml
+    set:
+      networkPolicy.enabled: true
+      oauth.enabled: false
+      kagent.controllerTarget: ""
+    asserts:
+      - notContains:
+          path: spec.egress
+          content:
+            to:
+              - namespaceSelector:
+                  matchLabels:
+                    kubernetes.io/metadata.name: agent-platform
+            ports:
+              - {protocol: TCP, port: 8090}

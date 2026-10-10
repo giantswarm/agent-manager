@@ -55,6 +55,13 @@ type Config struct {
 	// Sessions is the kagent controller the session operations call through
 	// agentgateway as the caller. Nil: they are refused as unsupported.
 	Sessions SessionClient
+	// Toolsets resolves a claude Harness agent's toolset through muster as
+	// the caller. Nil: every claude Harness agent is refused.
+	Toolsets ToolsetResolver
+	// HarnessEgress is the platform's origin list per claude Harness, by
+	// Harness name: written into a coding agent's egress, and the only
+	// origins it may name. A claude Harness without an entry reaches none.
+	HarnessEgress map[string][]string
 }
 
 // Service is the agent lifecycle.
@@ -545,31 +552,32 @@ func (s *Service) requireModelConfig(ctx context.Context, dyn dynamic.Interface,
 }
 
 // harnessFor resolves the Harness an agent runs on: name, else the platform
-// Harness. A named Harness must exist in ns (the refusal lists the ones that
-// do); the platform Harness may be absent (the connectivity chart provisions
-// it, and the Agent reports ResolvedRefs False until then).
-func (s *Service) harnessFor(ctx context.Context, dyn dynamic.Interface, ns, name string) (string, error) {
+// Harness, with its object (nil when the platform Harness is absent). A named
+// Harness must exist in ns (the refusal lists the ones that do); the platform
+// Harness may be absent (the connectivity chart provisions it, and the Agent
+// reports ResolvedRefs False until then).
+func (s *Service) harnessFor(ctx context.Context, dyn dynamic.Interface, ns, name string) (string, *unstructured.Unstructured, error) {
 	harness := orDefault(name, s.cfg.Compose.HarnessName)
 	h, err := s.getObject(ctx, dyn, s.harnessGVR(), ns, harness, "harness")
 	if err != nil {
-		return harness, err
+		return harness, nil, err
 	}
 	if h != nil || name == "" {
-		return harness, nil
+		return harness, h, nil
 	}
 	list, err := dyn.Resource(s.harnessGVR()).Namespace(ns).List(ctx, metav1.ListOptions{})
 	if err != nil {
-		return harness, wrapKube(err, "list harnesses in "+ns)
+		return harness, nil, wrapKube(err, "list harnesses in "+ns)
 	}
 	names := make([]string, 0, len(list.Items))
 	for i := range list.Items {
 		names = append(names, list.Items[i].GetName())
 	}
 	if len(names) == 0 {
-		return harness, invalidf("harness %q does not exist in namespace %s (no Harness there)", name, ns)
+		return harness, nil, invalidf("harness %q does not exist in namespace %s (no Harness there)", name, ns)
 	}
 	slices.Sort(names)
-	return harness, invalidf("harness %q does not exist in namespace %s; valid: %s", name, ns, strings.Join(names, ", "))
+	return harness, nil, invalidf("harness %q does not exist in namespace %s; valid: %s", name, ns, strings.Join(names, ", "))
 }
 
 // ---- skills -------------------------------------------------------------------
@@ -629,10 +637,45 @@ func checkSpec(spec Spec) []error {
 	return errs
 }
 
-// requireHarness checks the Harness a create names.
-func (s *Service) requireHarness(ctx context.Context, dyn dynamic.Interface, ns string, spec Spec) error {
-	_, err := s.harnessFor(ctx, dyn, ns, spec.Harness)
-	return err
+// requireHarness checks the Harness a create names and returns it, with
+// whether it runs Claude Code.
+func (s *Service) requireHarness(ctx context.Context, dyn dynamic.Interface, ns string, spec Spec) (string, bool, error) {
+	harness, obj, err := s.harnessFor(ctx, dyn, ns, spec.Harness)
+	return harness, isClaudeHarness(obj), err
+}
+
+// releaseHarness is the Harness an existing release runs on (its
+// agent.harness value, else the platform's), with whether it runs Claude
+// Code. A Harness the release names that is gone is refused: whether its
+// guards apply cannot be told.
+func (s *Service) releaseHarness(ctx context.Context, st *site, values map[string]any) (string, bool, error) {
+	agentBlock, _ := values["agent"].(map[string]any)
+	name, _ := agentBlock["harness"].(string)
+	if name == s.cfg.Compose.HarnessName {
+		name = ""
+	}
+	harness, obj, err := s.harnessFor(ctx, st.agent, st.ns(), name)
+	return harness, isClaudeHarness(obj), err
+}
+
+// guardUpdate applies the claude Harness guards to an update's merged values;
+// nil for an agent on any other Harness.
+func (s *Service) guardUpdate(ctx context.Context, st *site, upd Update, after map[string]any) ([]error, error) {
+	harness, claude, err := s.releaseHarness(ctx, st, after)
+	if err != nil {
+		if isDomainError(err) {
+			return []error{err}, nil
+		}
+		return nil, err
+	}
+	if !claude {
+		return nil, nil
+	}
+	var requested []string
+	if upd.Egress != nil {
+		requested = *upd.Egress
+	}
+	return s.guardClaude(ctx, st, harness, after, requested), nil
 }
 
 // ValidateCreate is create_agent without the write. It takes the write's mode
@@ -664,7 +707,8 @@ func (s *Service) ValidateCreate(ctx context.Context, spec Spec) (*ValidateResul
 		}
 		res.addError(err)
 	}
-	if err := s.requireHarness(ctx, st.agent, ns, spec); err != nil {
+	harness, claude, err := s.requireHarness(ctx, st.agent, ns, spec)
+	if err != nil {
 		if !isDomainError(err) {
 			return nil, err
 		}
@@ -686,6 +730,11 @@ func (s *Service) ValidateCreate(ctx context.Context, spec Spec) (*ValidateResul
 		spec.Skills = pinned
 	}
 	values := BuildValues(spec, st.compose)
+	if claude {
+		for _, e := range s.guardClaude(ctx, st, harness, values, spec.Egress) {
+			res.addError(e)
+		}
+	}
 	sch, violations := ValidateValues(ctx, s.chart, values)
 	res.Errors = append(res.Errors, violations...)
 	res.SchemaVersion, res.SchemaSource = sch.Version, sch.Source
@@ -751,6 +800,15 @@ func (s *Service) ValidateUpdate(ctx context.Context, upd Update) (*ValidateResu
 		}
 		res.addError(err)
 	}
+	if values != nil {
+		guardErrs, err := s.guardUpdate(ctx, st, upd, values)
+		if err != nil {
+			return nil, err
+		}
+		for _, e := range guardErrs {
+			res.addError(e)
+		}
+	}
 	sch, violations := ValidateValues(ctx, s.chart, values)
 	res.Errors = append(res.Errors, violations...)
 	res.SchemaVersion, res.SchemaSource = sch.Version, sch.Source
@@ -808,7 +866,8 @@ func (s *Service) Create(ctx context.Context, spec Spec) (*CreateResult, error) 
 	if err := s.requireModelConfig(ctx, st.agent, ns, spec.ModelConfig); err != nil {
 		return nil, err
 	}
-	if err := s.requireHarness(ctx, st.agent, ns, spec); err != nil {
+	harness, claude, err := s.requireHarness(ctx, st.agent, ns, spec)
+	if err != nil {
 		return nil, err
 	}
 	if err := requireReadableSkills(ctx, s.pinner, spec.Skills); err != nil {
@@ -818,6 +877,11 @@ func (s *Service) Create(ctx context.Context, spec Spec) (*CreateResult, error) 
 		return nil, err
 	}
 	values := BuildValues(spec, st.compose)
+	if claude {
+		if errs := s.guardClaude(ctx, st, harness, values, spec.Egress); len(errs) > 0 {
+			return nil, errs[0]
+		}
+	}
 	sch, violations := ValidateValues(ctx, s.chart, values)
 	if len(violations) > 0 {
 		return nil, invalidf("values do not satisfy the agent chart schema %s (%s): %s", sch.Version, sch.Source, strings.Join(violations, "; "))
@@ -1132,6 +1196,13 @@ func (s *Service) update(ctx context.Context, st *site, upd Update) (*UpdateResu
 	after, before, err := s.mergedValues(ctx, st, upd, hr)
 	if err != nil {
 		return nil, err
+	}
+	guardErrs, err := s.guardUpdate(ctx, st, upd, after)
+	if err != nil {
+		return nil, err
+	}
+	if len(guardErrs) > 0 {
+		return nil, guardErrs[0]
 	}
 	sch, violations := ValidateValues(ctx, s.chart, after)
 	if len(violations) > 0 {

@@ -184,6 +184,16 @@
             "type": "object",
             "additionalProperties": false,
             "properties": {
+                "egress": {
+                    "type": "object",
+                    "description": "The origins a coding agent on a claude Harness reaches, by Harness name: the installation's forge and git hosts plus the toolchain's registries. agent-manager writes the list into the Agent's `spec.egress` and refuses any other origin; a claude Harness without an entry reaches none. Origins are `http(s)://host[:port]`, a host may start with `*.`.",
+                    "additionalProperties": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        }
+                    }
+                },
                 "name": {
                     "type": "string",
                     "description": "Name of the platform Harness an agent runs on unless `create_agent` names another (the connectivity chart renders it): composed as the chart value `agent.harness`, the Agent's `spec.harnessRef.name`."
