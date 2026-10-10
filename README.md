@@ -149,8 +149,10 @@ other Harness is not touched):
   every tool of `preset:agent-platform` that is not read-only, a `tool:`,
   `server:` or `workflow:` selector that selects no tool (a tool appearing
   under that name later would reach the agent unchecked; a preset may select
-  nothing), and a toolset naming a server the caller has not signed in to
-  (its tools are unknown). `preset:read-only` passes. The check fails
+  nothing), and a `server:` or `tool:` selector naming a server the caller
+  has not signed in to (its tools are unknown). A preset spans servers
+  awaiting sign-in without a refusal: muster resolves it per request and
+  admits the preset's tools only. `preset:read-only` passes. The check fails
   closed: muster unreachable or answering an error, or a call without the
   caller's token, refuses the write.
 - **No `requireApproval` and no bindings beside muster's**

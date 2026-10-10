@@ -125,8 +125,11 @@ func refuseApproval(values map[string]any) []error {
 // tool and a selector that selects nothing: muster resolves the toolset again
 // on every request, so a name that selects nothing today would let a tool
 // appearing under it later reach the agent unchecked. A preset is the
-// platform's and may select nothing (preset:none). Every failure to resolve
-// refuses the write.
+// platform's and may select nothing (preset:none); the servers awaiting the
+// caller's sign-in that only a preset spans are not refused either, since
+// muster resolves the preset per request and admits the preset's tools only.
+// A server or tool selector naming such a server is refused: its tools are
+// unknown until the sign-in. Every failure to resolve refuses the write.
 func (s *Service) checkClaudeToolset(ctx context.Context, st *site, harness string, values map[string]any) []error {
 	selectors := stringSlice(values[ToolsetValuesKey])
 	if len(selectors) == 0 {
@@ -137,16 +140,26 @@ func (s *Service) checkClaudeToolset(ctx context.Context, st *site, harness stri
 	}
 	url := orDefault(st.compose.MusterURL, DefaultMusterURL)
 	token, _ := identity.TokenFromContext(ctx)
-	res, err := s.cfg.Toolsets.ResolveToolsets(ctx, url, token, selectors, []string{AgentPlatformPreset})
-	if err == nil && len(res) != 2 {
-		err = fmt.Errorf("muster answered %d resolutions for 2 toolsets", len(res))
+	toolsets := [][]string{selectors, {AgentPlatformPreset}}
+	// muster reports the servers awaiting sign-in per toolset, so the
+	// explicit selectors are resolved on their own to learn the ones they name.
+	explicit := slices.DeleteFunc(slices.Clone(selectors), isPreset)
+	if len(explicit) > 0 {
+		toolsets = append(toolsets, explicit)
+	}
+	res, err := s.cfg.Toolsets.ResolveToolsets(ctx, url, token, toolsets...)
+	if err == nil && len(res) != len(toolsets) {
+		err = fmt.Errorf("muster answered %d resolutions for %d toolsets", len(res), len(toolsets))
 	}
 	if err != nil {
 		return []error{invalidf("toolset could not be checked with muster's filter_tools (%v); a claude Harness agent is written only once its toolset is known to be read-only", err)}
 	}
 	got, platform := res[0], res[1]
 	var errs []error
-	signIn := slices.DeleteFunc(slices.Clone(got.RequiringAuth), func(s string) bool { return s == "" })
+	var signIn []string
+	if len(explicit) > 0 {
+		signIn = slices.DeleteFunc(slices.Clone(res[2].RequiringAuth), func(s string) bool { return s == "" })
+	}
 	if len(signIn) > 0 {
 		errs = append(errs, invalidf("toolset names servers whose tools are unknown until you sign in to them (%s): sign in through muster, then write the agent again", strings.Join(signIn, ", ")))
 	}
@@ -185,7 +198,7 @@ func (s *Service) checkClaudeToolset(ctx context.Context, st *site, harness stri
 func unknownSelectors(unmatched, signIn []string) []string {
 	var out []string
 	for _, sel := range unmatched {
-		if strings.HasPrefix(sel, "preset:") {
+		if isPreset(sel) {
 			continue
 		}
 		if server, ok := strings.CutPrefix(sel, "server:"); ok && slices.Contains(signIn, server) {
@@ -195,6 +208,11 @@ func unknownSelectors(unmatched, signIn []string) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// isPreset reports whether a selector names one of the platform's presets.
+func isPreset(sel string) bool {
+	return strings.HasPrefix(sel, "preset:")
 }
 
 // isDeniedName matches a denied tool under any server prefix.
