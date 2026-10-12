@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/giantswarm/agent-manager/internal/kagent"
 	apiv1alpha1 "github.com/giantswarm/agent-manager/internal/kagent/gen/kagent/api/v1alpha1"
@@ -119,11 +120,12 @@ func TestCreateSessionAndSendMessage(t *testing.T) {
 	ctrl, conn := kagenttest.New(t)
 	c := kagent.NewClient(conn)
 
-	s, err := c.CreateSession(t.Context(), token, sre, "req-1", "triage")
+	s, err := c.CreateSession(t.Context(), token, kagent.SessionCreate{Agent: sre, RequestID: "req-1", Name: "triage"})
 	require.NoError(t, err)
-	again, err := c.CreateSession(t.Context(), token, sre, "req-1", "triage")
+	again, err := c.CreateSession(t.Context(), token, kagent.SessionCreate{Agent: sre, RequestID: "req-1", Name: "triage"})
 	require.NoError(t, err)
 	assert.Equal(t, s.GetId(), again.GetId(), "a retry with the same request id is the same session")
+	assert.Nil(t, s.GetVolumeSource(), "no workspace was asked for")
 
 	first, err := c.SendMessage(t.Context(), token, sre, s.GetContextId(), "msg-1", "hello")
 	require.NoError(t, err)
@@ -155,8 +157,34 @@ func TestCreateSessionAndSendMessage(t *testing.T) {
 func TestCreateSessionRefusedWithoutAReadyRevision(t *testing.T) {
 	ctrl, conn := kagenttest.New(t)
 	ctrl.NotReady["kagent/sre"] = true
-	_, err := kagent.NewClient(conn).CreateSession(t.Context(), token, sre, "req-1", "")
+	_, err := kagent.NewClient(conn).CreateSession(t.Context(), token, kagent.SessionCreate{Agent: sre, RequestID: "req-1"})
 	assert.Equal(t, codes.FailedPrecondition, status.Code(err))
+}
+
+func TestCreateSessionInAWorkspace(t *testing.T) {
+	ctrl, conn := kagenttest.New(t)
+	c := kagent.NewClient(conn)
+	source := &apiv1alpha1.SessionVolumeSource{
+		Volume: &apiv1alpha1.SessionVolume{CsiDriver: "nfs.csi.k8s.io", VolumeHandle: "handle"},
+		Mounts: []*apiv1alpha1.SessionVolumeMount{
+			{SubPath: "sessions/${SESSION_ID}", MountPath: "/workspace"},
+			{SubPath: "mirrors", MountPath: "/mirrors", ReadOnly: true},
+		},
+	}
+	s, err := c.CreateSession(t.Context(), token, kagent.SessionCreate{Agent: sre, RequestID: "req-1", VolumeSource: source, AdmissionToken: "grant"})
+	require.NoError(t, err)
+	assert.True(t, proto.Equal(source, s.GetVolumeSource()), "the session shows its volume source")
+	req := ctrl.Calls()[0].Request.(*apiv1alpha1.CreateSessionRequest)
+	assert.Equal(t, "grant", req.GetAdmissionToken())
+	assert.True(t, proto.Equal(source, req.GetVolumeSource()))
+
+	// The controller's admission refuses with its reason.
+	ctrl.Admission = func(*apiv1alpha1.CreateSessionRequest) error {
+		return status.Error(codes.PermissionDenied, "admission grant names another person")
+	}
+	_, err = c.CreateSession(t.Context(), token, kagent.SessionCreate{Agent: sre, RequestID: "req-2", VolumeSource: source, AdmissionToken: "grant"})
+	assert.Equal(t, codes.PermissionDenied, status.Code(err))
+	assert.Contains(t, status.Convert(err).Message(), "another person")
 }
 
 func TestNoTokenNoCall(t *testing.T) {
@@ -168,7 +196,7 @@ func TestNoTokenNoCall(t *testing.T) {
 	require.ErrorIs(t, err, kagent.ErrNoToken)
 	_, err = c.ListSessionTasks(t.Context(), "", sre, "id")
 	require.ErrorIs(t, err, kagent.ErrNoToken)
-	_, err = c.CreateSession(t.Context(), "", sre, "r", "")
+	_, err = c.CreateSession(t.Context(), "", kagent.SessionCreate{Agent: sre, RequestID: "r"})
 	require.ErrorIs(t, err, kagent.ErrNoToken)
 	_, err = c.SendMessage(t.Context(), "", sre, "id", "m", "hi")
 	require.ErrorIs(t, err, kagent.ErrNoToken)

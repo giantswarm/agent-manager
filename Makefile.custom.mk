@@ -16,12 +16,12 @@ test-race: ## Run tests with the race detector.
 
 ##@ kagent
 
-# Commit of giantswarm/kagent-upstream (tag v1.3.1) the kagent.api.v1alpha1
+# Commit of giantswarm/kagent-upstream (tag v1.10.0) the kagent.api.v1alpha1
 # protos under hack/kagent-proto/ are copied from. Bump it, run `make
 # generate-kagent`, and commit hack/kagent-proto/ and internal/kagent/gen/
 # together.
 KAGENT_PROTO_REPO ?= https://github.com/giantswarm/kagent-upstream.git
-KAGENT_PROTO_COMMIT ?= 1b166604dfa12713cfd8ca50697518678df2cf07
+KAGENT_PROTO_COMMIT ?= a32ce670287481feba0cba562ace607a64b4ecb9
 KAGENT_PROTO_FILES := common runtime sessions
 
 .PHONY: generate-kagent

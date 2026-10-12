@@ -53,7 +53,7 @@ MCP-server-writer half.
 | kagent ModelConfigs of a namespace | `GET /api/v1/modelconfigs?namespace=` | `list_model_configs` | no |
 | Skills (`SKILL.md`) of the configured GitHub repositories, grouped by repository with its head commit | `GET /api/v1/skills[?repository=&ref=&refresh=]` | `list_skills` | no |
 | Sessions of an agent, as the caller (`SessionService/ListSessions`; `allCreators` when the controller grants it) | `GET /api/v1/agents/{ns}/{name}/sessions[?allCreators=true]` | `list_sessions` | no |
-| Start a session: create it, send the first message, answer once the turn is accepted | `POST /api/v1/agents/{ns}/{name}/sessions` | `start_session` | a kagent Session |
+| Start a session: create it (in a workspace with `workspaceGrant`), send the first message, answer once the turn is accepted | `POST /api/v1/agents/{ns}/{name}/sessions` | `start_session` | a kagent Session |
 | One session and its conversation (the A2A tasks of its context, oldest first) | `GET /api/v1/sessions/{id}` | `get_session` | no |
 | Health | `GET /healthz`, `GET /readyz` | — | no |
 
@@ -498,6 +498,22 @@ and without the caller's token a session operation is `401 unauthenticated`.
   once the agent has accepted the turn; the turn keeps running when the stream
   closes, and `get_session` shows it finish. `requestId` makes a retry
   idempotent.
+- `workspaceGrant` on `start_session` starts the session in a workspace: the
+  grant is the signed, short-lived token a workspace manager's
+  `authorize_workspace` returned to the caller once they may read every
+  repository of the workspace, naming the person (`sub`, their email), the
+  workspace, its volume and the directories of it a session may mount.
+  agent-manager holds no key: it decodes the grant without trusting it, refuses
+  one that names another person, has expired or cannot be read (`403` or `400`
+  with the reason, nothing created), and composes the request's
+  `volume_source` from it, the session's own directory `sessions/${SESSION_ID}`
+  read-write at `/workspace` and the workspace's git mirrors read-only at
+  `/mirrors`, kagent's fixed layout, with the grant as the request's
+  `admission_token`. kagent's admission verifies the grant against the
+  workspace manager's published keys and refuses with its reason (`403`).
+  The session shows its `volumeSource`, and the answer names the `workspace`.
+  Without a grant the request is exactly the one the surfaces send today. The
+  grant appears in no log line, error or response.
 - `get_session` is `SessionService/GetSession` plus `A2AService/ListTasks`
   addressed to the session's Agent and filtered by its context.
 - `list_sessions` is `SessionService/ListSessions` for one Agent.
