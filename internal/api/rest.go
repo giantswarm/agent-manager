@@ -227,7 +227,7 @@ func (h *REST) listSessions(w http.ResponseWriter, r *http.Request) {
 
 // startSessionRequest is the body of POST /agents/{namespace}/{name}/sessions.
 type startSessionRequest struct {
-	Message        string `json:"message"`
+	Message        string `json:"message,omitempty"`
 	RequestID      string `json:"requestId,omitempty"`
 	SessionName    string `json:"sessionName,omitempty"`
 	WorkspaceGrant string `json:"workspaceGrant,omitempty"`

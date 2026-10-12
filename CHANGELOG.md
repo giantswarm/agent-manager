@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `message` on `start_session` (REST: the same field) is optional. Without it, `start_session` only creates the session, with the same `workspaceGrant` checks, and answers `{session, workspace}` with no `turn`: the caller sends the first message itself over A2A with the session as `contextId`, for instance one with file parts. With it, nothing changes. ([#137](https://github.com/giantswarm/agent-manager/issues/137))
+
 ### Fixed
 
 - The MCP endpoint refuses a request body larger than 1 MiB, the REST API's bound, before mcp-go reads it whole (CVE-2026-108859, no fixed mcp-go release yet; the scan ignores it until 2026-11-12). ([#139](https://github.com/giantswarm/agent-manager/issues/139))

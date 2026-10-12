@@ -17,6 +17,7 @@ import (
 
 	"github.com/giantswarm/agent-manager/internal/identity"
 	"github.com/giantswarm/agent-manager/internal/kagent"
+	apiv1alpha1 "github.com/giantswarm/agent-manager/internal/kagent/gen/kagent/api/v1alpha1"
 	"github.com/giantswarm/agent-manager/internal/kagent/kagenttest"
 )
 
@@ -58,7 +59,6 @@ func TestSessionArgumentsAreChecked(t *testing.T) {
 	svc, ctrl := newSessionFixture(t)
 	ctx := identity.ContextWithToken(t.Context(), callerToken)
 	for name, in := range map[string]StartSession{
-		"no message":          {Name: "sre"},
 		"blank message":       {Name: "sre", Message: "  "},
 		"long message":        {Name: "sre", Message: strings.Repeat("x", MaxSessionMessageLength+1)},
 		"long request id":     {Name: "sre", Message: "hi", RequestID: strings.Repeat("r", 129)},
@@ -144,6 +144,44 @@ func TestStartSessionThenReadTheAnswer(t *testing.T) {
 	last := ctrl.Calls()[len(ctrl.Calls())-2].Request.(*a2apb.ListTasksRequest)
 	assert.Equal(t, "tenant/sre", last.GetTenant())
 	assert.Equal(t, session.ContextID, last.GetContextId())
+}
+
+func TestStartSessionWithoutAMessageStartsNoTurn(t *testing.T) {
+	svc, ctrl := newSessionFixture(t)
+	ctx := identity.ContextWithToken(t.Context(), callerToken)
+
+	started, err := svc.StartSession(ctx, StartSession{Namespace: "tenant", Name: "sre", SessionName: "triage", RequestID: "req-1"})
+	require.NoError(t, err)
+	assert.Nil(t, started.Turn)
+	data, err := json.Marshal(started)
+	require.NoError(t, err)
+	assert.NotContains(t, string(data), `"turn"`, "the answer has no turn")
+	var session struct {
+		ID    string `json:"id"`
+		Name  string `json:"name"`
+		State string `json:"state"`
+	}
+	require.NoError(t, json.Unmarshal(started.Session, &session))
+	assert.Equal(t, "RUNTIME_STATE_READY", session.State)
+	assert.Equal(t, "triage", session.Name)
+
+	var methods []string
+	for _, call := range ctrl.Calls() {
+		methods = append(methods, call.Method)
+	}
+	assert.Equal(t, []string{"CreateSession"}, methods, "the session is created and no message is sent")
+	create := ctrl.Calls()[0].Request.(*apiv1alpha1.CreateSessionRequest)
+	assert.Equal(t, "req-1", create.GetRequestId())
+
+	detail, err := svc.GetSession(ctx, session.ID)
+	require.NoError(t, err)
+	assert.Empty(t, detail.Tasks, "no turn was started")
+
+	// A retry with the same requestId answers the same session, still without a turn.
+	again, err := svc.StartSession(ctx, StartSession{Namespace: "tenant", Name: "sre", SessionName: "triage", RequestID: "req-1"})
+	require.NoError(t, err)
+	assert.JSONEq(t, string(started.Session), string(again.Session))
+	assert.Nil(t, again.Turn)
 }
 
 func TestStartSessionRetryReusesTheSession(t *testing.T) {

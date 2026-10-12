@@ -370,7 +370,8 @@ func TestMCPToolsMirrorREST(t *testing.T) {
 			assert.Equal(t, []any{agents.ModeApply, agents.ModeCommit}, tool.InputSchema.Properties["mode"].(map[string]any)["enum"])
 		case ToolStartSession:
 			assert.Contains(t, tool.Description, "WRITES", tool.Name)
-			assert.ElementsMatch(t, []string{"name", "message"}, tool.InputSchema.Required)
+			assert.ElementsMatch(t, []string{"name"}, tool.InputSchema.Required, "message is optional")
+			assert.Contains(t, tool.InputSchema.Properties, "message")
 		default:
 			assert.Contains(t, tool.Description, "Read-only", tool.Name)
 		}
