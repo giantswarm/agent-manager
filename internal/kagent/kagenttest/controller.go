@@ -47,6 +47,10 @@ type Controller struct {
 	NotReady map[string]bool
 	// Fail makes a method (its bare name, e.g. "ListSessions") answer the error.
 	Fail map[string]error
+	// Admission decides a CreateSession that names a volume source or carries
+	// an admission token, as the controller's configured admission does: its
+	// error is the refusal. Nil admits every such request.
+	Admission func(req *apiv1alpha1.CreateSessionRequest) error
 
 	mu        sync.Mutex
 	sessions  []*apiv1alpha1.Session
@@ -88,7 +92,7 @@ func New(t *testing.T) (*Controller, *grpc.ClientConn) {
 func (c *Controller) AddSession(namespace, name string, tasks ...*a2apb.Task) *apiv1alpha1.Session {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	s := c.newSession(namespace, name, "")
+	s := c.newSession(namespace, name, "", nil)
 	for _, task := range tasks {
 		task.ContextId = s.GetContextId()
 	}
@@ -114,12 +118,13 @@ func (c *Controller) Tasks(contextID string) []*a2apb.Task {
 // hung up, and the fake finishes the turn regardless, as the gateway does.
 func (c *Controller) TurnEnded() <-chan struct{} { return c.turnEnded }
 
-func (c *Controller) newSession(namespace, name, sessionName string) *apiv1alpha1.Session {
+func (c *Controller) newSession(namespace, name, sessionName string, volume *apiv1alpha1.SessionVolumeSource) *apiv1alpha1.Session {
 	id := uuid.NewString()
 	s := &apiv1alpha1.Session{
 		Id: id, ContextId: id, Creator: Creator, Name: sessionName,
-		Agent: &apiv1alpha1.ResourceReference{Namespace: namespace, Name: name},
-		State: apiv1alpha1.RuntimeState_RUNTIME_STATE_READY,
+		Agent:        &apiv1alpha1.ResourceReference{Namespace: namespace, Name: name},
+		State:        apiv1alpha1.RuntimeState_RUNTIME_STATE_READY,
+		VolumeSource: volume,
 	}
 	c.sessions = append(c.sessions, s)
 	return s
@@ -205,7 +210,8 @@ func (c *Controller) GetSession(ctx context.Context, req *apiv1alpha1.GetSession
 }
 
 // CreateSession implements SessionService: idempotent on request_id, refused
-// for a NotReady Agent.
+// for a NotReady Agent, a volume source admitted by Admission and kept on the
+// session (the admission token never is, as on the controller).
 func (c *Controller) CreateSession(ctx context.Context, req *apiv1alpha1.CreateSessionRequest) (*apiv1alpha1.CreateSessionResponse, error) {
 	if err := c.record(ctx, "CreateSession", req); err != nil {
 		return nil, err
@@ -222,7 +228,12 @@ func (c *Controller) CreateSession(ctx context.Context, req *apiv1alpha1.CreateS
 	if id, ok := c.requests[req.GetRequestId()]; ok {
 		return &apiv1alpha1.CreateSessionResponse{Session: c.session(id)}, nil
 	}
-	s := c.newSession(req.GetAgent().GetNamespace(), req.GetAgent().GetName(), req.GetName())
+	if (req.GetVolumeSource() != nil || req.GetAdmissionToken() != "") && c.Admission != nil {
+		if err := c.Admission(req); err != nil {
+			return nil, err
+		}
+	}
+	s := c.newSession(req.GetAgent().GetNamespace(), req.GetAgent().GetName(), req.GetName(), req.GetVolumeSource())
 	c.requests[req.GetRequestId()] = s.GetId()
 	return &apiv1alpha1.CreateSessionResponse{Session: s}, nil
 }

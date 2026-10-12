@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -17,6 +18,7 @@ import (
 	"github.com/giantswarm/agent-manager/internal/agents"
 	"github.com/giantswarm/agent-manager/internal/identity"
 	"github.com/giantswarm/agent-manager/internal/kagent"
+	apiv1alpha1 "github.com/giantswarm/agent-manager/internal/kagent/gen/kagent/api/v1alpha1"
 	"github.com/giantswarm/agent-manager/internal/kagent/kagenttest"
 	"github.com/giantswarm/agent-manager/internal/kube"
 )
@@ -84,6 +86,23 @@ func TestSessionsOverREST(t *testing.T) {
 	code, _ = do(t, h, http.MethodPost, Prefix+"/agents/kagent/sre/sessions", map[string]any{"message": "hi", "agentInstance": "x"})
 	assert.Equal(t, http.StatusBadRequest, code)
 
+	// A workspace grant starts the session in the workspace; one kagent would
+	// refuse is refused here with the reason, and the grant is echoed nowhere.
+	signer := kagenttest.NewSigner(t)
+	grant := signer.Sign(t, "admin@lab.local", 5*time.Minute, kagenttest.WorkspaceGrant())
+	code, body = do(t, h, http.MethodPost, Prefix+"/agents/kagent/sre/sessions", map[string]any{"message": "hello", "requestId": "req-2", "workspaceGrant": grant})
+	require.Equal(t, http.StatusCreated, code, body)
+	assert.Equal(t, "kagent/platform", body["workspace"])
+	assert.Equal(t, "nfs.csi.k8s.io", body["session"].(map[string]any)["volumeSource"].(map[string]any)["volume"].(map[string]any)["csiDriver"])
+	waitTurn(t, ctrl)
+	last := ctrl.Calls()[len(ctrl.Calls())-2].Request.(*apiv1alpha1.CreateSessionRequest)
+	assert.Equal(t, grant, last.GetAdmissionToken())
+	code, body = do(t, h, http.MethodPost, Prefix+"/agents/kagent/sre/sessions", map[string]any{"message": "hello", "workspaceGrant": signer.Sign(t, "dev@lab.local", 5*time.Minute, kagenttest.WorkspaceGrant())})
+	assert.Equal(t, http.StatusForbidden, code)
+	assert.Equal(t, "forbidden", body["error"].(map[string]any)["code"])
+	assert.Contains(t, body["error"].(map[string]any)["message"], "names another person")
+	assert.NotContains(t, fmt.Sprint(body), grant[:16])
+
 	ctrl.NotReady["kagent/fresh"] = true
 	code, body = do(t, h, http.MethodPost, Prefix+"/agents/kagent/fresh/sessions", map[string]any{"message": "hi"})
 	assert.Equal(t, http.StatusConflict, code)
@@ -125,6 +144,21 @@ func TestSessionsOverMCP(t *testing.T) {
 	text, isErr = callToolCtx(t, ctx, srv, ToolStartSession, map[string]any{"name": "sre"})
 	assert.True(t, isErr)
 	assert.Contains(t, text, "invalid_request")
+
+	// With a workspace grant, as the person it names.
+	person := identity.ContextWith(ctx, &identity.Identity{Subject: "dex-admin", Email: "admin@lab.local"})
+	signer := kagenttest.NewSigner(t)
+	grant := signer.Sign(t, "admin@lab.local", 5*time.Minute, kagenttest.WorkspaceGrant())
+	text, isErr = callToolCtx(t, person, srv, ToolStartSession, map[string]any{"name": "sre", "message": "hello", "workspaceGrant": grant})
+	require.False(t, isErr, text)
+	assert.Contains(t, text, `"workspace":"kagent/platform"`)
+	assert.Contains(t, text, `"csiDriver":"nfs.csi.k8s.io"`)
+	assert.NotContains(t, text, grant[:16])
+	waitTurn(t, ctrl)
+	text, isErr = callToolCtx(t, person, srv, ToolStartSession, map[string]any{"name": "sre", "message": "hello", "workspaceGrant": signer.Sign(t, "admin@lab.local", -time.Minute, kagenttest.WorkspaceGrant())})
+	assert.True(t, isErr)
+	assert.Contains(t, text, "forbidden")
+	assert.Contains(t, text, "expired at")
 
 	text, isErr = callTool(t, srv, ToolListSessions, map[string]any{"name": "sre"})
 	assert.True(t, isErr)

@@ -215,17 +215,37 @@ func (c *Client) ListSessionTasks(ctx context.Context, token string, agent Ref, 
 	return out, nil
 }
 
-// CreateSession is SessionService/CreateSession for agent. requestID makes a
-// retry idempotent: the controller keys it on (creator, request_id).
-func (c *Client) CreateSession(ctx context.Context, token string, agent Ref, requestID, name string) (*apiv1alpha1.Session, error) {
+// SessionCreate is what CreateSession asks for: the Agent, the idempotency
+// key and the display name, and for a session in a workspace the volume
+// source and the admission token that admits it.
+type SessionCreate struct {
+	Agent Ref
+	// RequestID makes a retry idempotent: the controller keys it on
+	// (creator, request_id).
+	RequestID string
+	// Name is the display name; empty leaves the session unnamed.
+	Name string
+	// VolumeSource is the workspace volume the session works in and how its
+	// actor mounts it; nil for a session without one, which leaves the
+	// request as it always was.
+	VolumeSource *apiv1alpha1.SessionVolumeSource
+	// AdmissionToken is the proof the controller's admission verifies for
+	// VolumeSource. The controller stores and shows it nowhere.
+	AdmissionToken string
+}
+
+// CreateSession is SessionService/CreateSession.
+func (c *Client) CreateSession(ctx context.Context, token string, in SessionCreate) (*apiv1alpha1.Session, error) {
 	ctx, err := asCaller(ctx, token)
 	if err != nil {
 		return nil, err
 	}
 	resp, err := c.sessions.CreateSession(ctx, &apiv1alpha1.CreateSessionRequest{
-		Agent:     &apiv1alpha1.ResourceReference{Namespace: agent.Namespace, Name: agent.Name},
-		RequestId: requestID,
-		Name:      name,
+		Agent:          &apiv1alpha1.ResourceReference{Namespace: in.Agent.Namespace, Name: in.Agent.Name},
+		RequestId:      in.RequestID,
+		Name:           in.Name,
+		VolumeSource:   in.VolumeSource,
+		AdmissionToken: in.AdmissionToken,
 	})
 	if err != nil {
 		return nil, err

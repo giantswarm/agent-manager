@@ -617,6 +617,10 @@ func conflictf(format string, args ...any) error {
 	return fmt.Errorf("%w: %s", ErrConflict, fmt.Sprintf(format, args...))
 }
 
+func forbiddenf(format string, args ...any) error {
+	return fmt.Errorf("%w: %s", ErrForbidden, fmt.Sprintf(format, args...))
+}
+
 func gitOpsOwnedf(format string, args ...any) error {
 	return fmt.Errorf("%w: %s", ErrGitOpsOwned, fmt.Sprintf(format, args...))
 }

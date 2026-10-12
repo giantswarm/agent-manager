@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	a2apb "github.com/a2aproject/a2a-go/v2/a2apb/v1"
@@ -37,7 +38,7 @@ type SessionClient interface {
 	ListSessions(ctx context.Context, token string, agent kagent.Ref, allCreators bool) ([]*apiv1alpha1.Session, error)
 	GetSession(ctx context.Context, token, sessionID string) (*apiv1alpha1.Session, error)
 	ListSessionTasks(ctx context.Context, token string, agent kagent.Ref, contextID string) ([]*a2apb.Task, error)
-	CreateSession(ctx context.Context, token string, agent kagent.Ref, requestID, name string) (*apiv1alpha1.Session, error)
+	CreateSession(ctx context.Context, token string, in kagent.SessionCreate) (*apiv1alpha1.Session, error)
 	SendMessage(ctx context.Context, token string, agent kagent.Ref, contextID, messageID, text string) (*a2apb.StreamResponse, error)
 }
 
@@ -60,10 +61,12 @@ type SessionDetail struct {
 // SessionStart is the answer of start_session: the new session and the first
 // event of its first turn (proto3 JSON of lf.a2a.v1.StreamResponse, usually
 // {task} in TASK_STATE_SUBMITTED or WORKING). The turn keeps running; its
-// answer is read with get_session.
+// answer is read with get_session. Workspace names the workspace the session
+// works in, when it was started with a grant.
 type SessionStart struct {
-	Session json.RawMessage `json:"session"`
-	Turn    json.RawMessage `json:"turn"`
+	Session   json.RawMessage `json:"session"`
+	Turn      json.RawMessage `json:"turn"`
+	Workspace string          `json:"workspace,omitempty"`
 }
 
 // AgentRef names an Agent.
@@ -83,6 +86,10 @@ type StartSession struct {
 	RequestID string `json:"requestId,omitempty"`
 	// SessionName is the conversation's display name; empty leaves it unnamed.
 	SessionName string `json:"sessionName,omitempty"`
+	// WorkspaceGrant starts the session in a workspace: the grant a workspace
+	// manager's authorize_workspace returned to the caller. Empty starts it
+	// without one, as the surfaces do today.
+	WorkspaceGrant string `json:"workspaceGrant,omitempty"`
 }
 
 var protoJSON = protojson.MarshalOptions{}
@@ -159,6 +166,10 @@ func (s *Service) GetSession(ctx context.Context, sessionID string) (*SessionDet
 
 // StartSession creates a session of the Agent and sends it the first message.
 // The controller refuses the create while the Agent has no ready revision.
+// With a workspace grant the session gets its directory on the workspace's
+// volume: the grant is checked to name the caller and to be unexpired, then
+// passed to the controller as the admission token of the volume source it
+// names; the controller's admission verifies it and refuses with its reason.
 func (s *Service) StartSession(ctx context.Context, in StartSession) (*SessionStart, error) {
 	if strings.TrimSpace(in.Message) == "" {
 		return nil, invalidf("message is required")
@@ -180,7 +191,15 @@ func (s *Service) StartSession(ctx context.Context, in StartSession) (*SessionSt
 	if requestID == "" {
 		requestID = uuid.NewString()
 	}
-	session, err := s.cfg.Sessions.CreateSession(ctx, token, ref, requestID, in.SessionName)
+	create := kagent.SessionCreate{Agent: ref, RequestID: requestID, Name: in.SessionName}
+	var workspace *Workspace
+	if in.WorkspaceGrant != "" {
+		if workspace, err = workspaceGrant(ctx, in.WorkspaceGrant, time.Now()); err != nil {
+			return nil, err
+		}
+		create.VolumeSource, create.AdmissionToken = workspace.Volume, in.WorkspaceGrant
+	}
+	session, err := s.cfg.Sessions.CreateSession(ctx, token, create)
 	if err != nil {
 		return nil, kagentError(err, fmt.Sprintf("a session of agent %s", ref.Tenant()))
 	}
@@ -193,8 +212,13 @@ func (s *Service) StartSession(ctx context.Context, in StartSession) (*SessionSt
 		return nil, fmt.Errorf("session %s was created but its first message was not accepted (start again with requestId %q to reuse it): %w",
 			session.GetId(), requestID, kagentError(err, fmt.Sprintf("session %s", session.GetId())))
 	}
-	s.log.InfoContext(ctx, "session started", identity.LogAttr(ctx), "agent", ref.Tenant(), "session", session.GetId())
 	out := &SessionStart{}
+	attrs := []any{identity.LogAttr(ctx), "agent", ref.Tenant(), "session", session.GetId()}
+	if workspace != nil {
+		out.Workspace = workspace.Name
+		attrs = append(attrs, "workspace", workspace.Name)
+	}
+	s.log.InfoContext(ctx, "session started", attrs...)
 	if out.Session, err = marshalProto(session); err != nil {
 		return nil, err
 	}
