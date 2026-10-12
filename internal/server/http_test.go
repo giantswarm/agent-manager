@@ -57,4 +57,15 @@ func TestServerMountsHealthRESTAndMCP(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = resp.Body.Close() }()
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+	// A body beyond the bound is refused, and the endpoint keeps answering.
+	big := `{"jsonrpc":"2.0","id":2,"method":"ping","params":{"pad":"` + strings.Repeat("x", maxMCPBodyBytes) + `"}}`
+	req, _ = http.NewRequest(http.MethodPost, ts.URL+"/mcp", strings.NewReader(big))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json, text/event-stream")
+	tooBig, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	_ = tooBig.Body.Close()
+	assert.GreaterOrEqual(t, tooBig.StatusCode, 400)
+	assert.Equal(t, http.StatusOK, get("/healthz"))
 }

@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- The MCP endpoint refuses a request body larger than 1 MiB, the REST API's bound, before mcp-go reads it whole (CVE-2026-108859, no fixed mcp-go release yet; the scan ignores it until 2026-11-12). ([#139](https://github.com/giantswarm/agent-manager/issues/139))
+
 ### Added
 
 - `workspaceGrant` on `start_session` (REST: the same field): the signed, short-lived grant a workspace manager's `authorize_workspace` returned to the caller starts the session in that workspace. agent-manager decodes the grant without trusting it, refuses one that names another person, has expired or cannot be read (`403` or `400` with the reason, nothing created), and passes it to kagent's `CreateSession` as the `admission_token` of the `volume_source` it names (the session's own directory read-write at `/workspace`, the workspace's mirrors read-only at `/mirrors`); kagent's admission verifies it and refuses with its reason. The answer names the `workspace`, the session shows its `volumeSource`, and without a grant the request is the one the surfaces send today. The grant appears in no log line, error or response. The kagent stubs are generated from `giantswarm/kagent-upstream` v1.10.0, the line whose `CreateSession` takes a volume source and an admission token.
