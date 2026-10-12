@@ -58,14 +58,15 @@ type SessionDetail struct {
 	Tasks   []json.RawMessage `json:"tasks"`
 }
 
-// SessionStart is the answer of start_session: the new session and the first
-// event of its first turn (proto3 JSON of lf.a2a.v1.StreamResponse, usually
-// {task} in TASK_STATE_SUBMITTED or WORKING). The turn keeps running; its
-// answer is read with get_session. Workspace names the workspace the session
-// works in, when it was started with a grant.
+// SessionStart is the answer of start_session: the new session and, when it
+// was started with a first message, the first event of its first turn (proto3
+// JSON of lf.a2a.v1.StreamResponse, usually {task} in TASK_STATE_SUBMITTED or
+// WORKING). The turn keeps running; its answer is read with get_session.
+// Workspace names the workspace the session works in, when it was started with
+// a grant.
 type SessionStart struct {
 	Session   json.RawMessage `json:"session"`
-	Turn      json.RawMessage `json:"turn"`
+	Turn      json.RawMessage `json:"turn,omitempty"`
 	Workspace string          `json:"workspace,omitempty"`
 }
 
@@ -79,8 +80,9 @@ type AgentRef struct {
 type StartSession struct {
 	Namespace string `json:"namespace,omitempty"`
 	Name      string `json:"name"`
-	// Message is the first user message of the conversation.
-	Message string `json:"message"`
+	// Message is the first user message of the conversation. Empty creates
+	// the session without a turn: the caller sends the first message itself.
+	Message string `json:"message,omitempty"`
 	// RequestID makes a retried start idempotent: the same id answers the
 	// session the first attempt created. Empty: a new id per call.
 	RequestID string `json:"requestId,omitempty"`
@@ -164,15 +166,17 @@ func (s *Service) GetSession(ctx context.Context, sessionID string) (*SessionDet
 	return out, nil
 }
 
-// StartSession creates a session of the Agent and sends it the first message.
+// StartSession creates a session of the Agent and sends it the first message,
+// when one is given; without one the session is only created and the caller
+// sends its first turn itself.
 // The controller refuses the create while the Agent has no ready revision.
 // With a workspace grant the session gets its directory on the workspace's
 // volume: the grant is checked to name the caller and to be unexpired, then
 // passed to the controller as the admission token of the volume source it
 // names; the controller's admission verifies it and refuses with its reason.
 func (s *Service) StartSession(ctx context.Context, in StartSession) (*SessionStart, error) {
-	if strings.TrimSpace(in.Message) == "" {
-		return nil, invalidf("message is required")
+	if in.Message != "" && strings.TrimSpace(in.Message) == "" {
+		return nil, invalidf("message is blank: omit it to create the session without a first message")
 	}
 	if utf8.RuneCountInString(in.Message) > MaxSessionMessageLength {
 		return nil, invalidf("message is longer than %d characters", MaxSessionMessageLength)
@@ -203,14 +207,17 @@ func (s *Service) StartSession(ctx context.Context, in StartSession) (*SessionSt
 	if err != nil {
 		return nil, kagentError(err, fmt.Sprintf("a session of agent %s", ref.Tenant()))
 	}
-	contextID := session.GetContextId()
-	if contextID == "" {
-		contextID = session.GetId()
-	}
-	turn, err := s.cfg.Sessions.SendMessage(ctx, token, ref, contextID, uuid.NewString(), in.Message)
-	if err != nil {
-		return nil, fmt.Errorf("session %s was created but its first message was not accepted (start again with requestId %q to reuse it): %w",
-			session.GetId(), requestID, kagentError(err, fmt.Sprintf("session %s", session.GetId())))
+	var turn *a2apb.StreamResponse
+	if in.Message != "" {
+		contextID := session.GetContextId()
+		if contextID == "" {
+			contextID = session.GetId()
+		}
+		turn, err = s.cfg.Sessions.SendMessage(ctx, token, ref, contextID, uuid.NewString(), in.Message)
+		if err != nil {
+			return nil, fmt.Errorf("session %s was created but its first message was not accepted (start again with requestId %q to reuse it): %w",
+				session.GetId(), requestID, kagentError(err, fmt.Sprintf("session %s", session.GetId())))
+		}
 	}
 	out := &SessionStart{}
 	attrs := []any{identity.LogAttr(ctx), "agent", ref.Tenant(), "session", session.GetId()}
@@ -222,8 +229,10 @@ func (s *Service) StartSession(ctx context.Context, in StartSession) (*SessionSt
 	if out.Session, err = marshalProto(session); err != nil {
 		return nil, err
 	}
-	if out.Turn, err = marshalProto(turn); err != nil {
-		return nil, err
+	if turn != nil {
+		if out.Turn, err = marshalProto(turn); err != nil {
+			return nil, err
+		}
 	}
 	return out, nil
 }

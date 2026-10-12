@@ -53,7 +53,7 @@ MCP-server-writer half.
 | kagent ModelConfigs of a namespace | `GET /api/v1/modelconfigs?namespace=` | `list_model_configs` | no |
 | Skills (`SKILL.md`) of the configured GitHub repositories, grouped by repository with its head commit | `GET /api/v1/skills[?repository=&ref=&refresh=]` | `list_skills` | no |
 | Sessions of an agent, as the caller (`SessionService/ListSessions`; `allCreators` when the controller grants it) | `GET /api/v1/agents/{ns}/{name}/sessions[?allCreators=true]` | `list_sessions` | no |
-| Start a session: create it (in a workspace with `workspaceGrant`), send the first message, answer once the turn is accepted | `POST /api/v1/agents/{ns}/{name}/sessions` | `start_session` | a kagent Session |
+| Start a session: create it (in a workspace with `workspaceGrant`), send the first message when one is given and answer once the turn is accepted; without `message` only create it | `POST /api/v1/agents/{ns}/{name}/sessions` | `start_session` | a kagent Session |
 | One session and its conversation (the A2A tasks of its context, oldest first) | `GET /api/v1/sessions/{id}` | `get_session` | no |
 | Health | `GET /healthz`, `GET /readyz` | — | no |
 
@@ -498,6 +498,11 @@ and without the caller's token a session operation is `401 unauthenticated`.
   once the agent has accepted the turn; the turn keeps running when the stream
   closes, and `get_session` shows it finish. `requestId` makes a retry
   idempotent.
+- `message` is optional: without it `start_session` only creates the session
+  and answers `{session, workspace}` with no `turn`. The caller then sends the
+  first message itself over A2A, with the Agent as `tenant` and the session's
+  `contextId` as `message.contextId`, for instance one that carries file parts
+  or that the caller streams. A whitespace-only `message` is refused.
 - `workspaceGrant` on `start_session` starts the session in a workspace: the
   grant is the signed, short-lived token a workspace manager's
   `authorize_workspace` returned to the caller once they may read every

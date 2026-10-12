@@ -82,6 +82,15 @@ func TestSessionsOverREST(t *testing.T) {
 	assert.Len(t, body["sessions"], 1)
 	assert.Equal(t, map[string]any{"namespace": "kagent", "name": "sre"}, body["agent"])
 
+	// Without a message the session is only created: no turn, nothing sent.
+	calls := len(ctrl.Calls())
+	code, body = do(t, h, http.MethodPost, Prefix+"/agents/kagent/sre/sessions", map[string]any{"sessionName": "attachments"})
+	require.Equal(t, http.StatusCreated, code, body)
+	assert.Equal(t, "attachments", body["session"].(map[string]any)["name"])
+	assert.NotContains(t, body, "turn")
+	require.Len(t, ctrl.Calls(), calls+1)
+	assert.Equal(t, "CreateSession", ctrl.Calls()[calls].Method)
+
 	// Unknown fields are refused, as on every write.
 	code, _ = do(t, h, http.MethodPost, Prefix+"/agents/kagent/sre/sessions", map[string]any{"message": "hi", "agentInstance": "x"})
 	assert.Equal(t, http.StatusBadRequest, code)
@@ -109,7 +118,7 @@ func TestSessionsOverREST(t *testing.T) {
 	assert.Equal(t, "conflict", body["error"].(map[string]any)["code"])
 
 	// Without the caller's token nothing is sent.
-	calls := len(ctrl.Calls())
+	calls = len(ctrl.Calls())
 	code, body = do(t, mux, http.MethodGet, Prefix+"/agents/kagent/sre/sessions", nil)
 	assert.Equal(t, http.StatusUnauthorized, code)
 	assert.Equal(t, "unauthenticated", body["error"].(map[string]any)["code"])
@@ -141,7 +150,16 @@ func TestSessionsOverMCP(t *testing.T) {
 	require.False(t, isErr, text)
 	assert.Contains(t, text, started.Session.ID)
 
+	// Without a message the session is only created, with no turn.
+	calls := len(ctrl.Calls())
 	text, isErr = callToolCtx(t, ctx, srv, ToolStartSession, map[string]any{"name": "sre"})
+	require.False(t, isErr, text)
+	assert.Contains(t, text, `"session":`)
+	assert.NotContains(t, text, `"turn"`)
+	require.Len(t, ctrl.Calls(), calls+1)
+	assert.Equal(t, "CreateSession", ctrl.Calls()[calls].Method)
+
+	text, isErr = callToolCtx(t, ctx, srv, ToolStartSession, map[string]any{"name": "sre", "message": " "})
 	assert.True(t, isErr)
 	assert.Contains(t, text, "invalid_request")
 
