@@ -481,15 +481,33 @@ paths:
       description: |
         `SessionService/GetSession`, then `A2AService/ListTasks` addressed to
         the session's Agent and filtered by its context, as the caller: the
-        session and its tasks oldest first, each with its status (the agent's
-        reply is the status message of a completed task), history and
-        artifacts. A session of somebody else is `404`, as one that does not
-        exist.
+        session and its turns oldest first, one per task, indexed from 0. A
+        session of somebody else is `404`, as one that does not exist.
+
+        `detail=summary` (default) answers per turn its task id, state,
+        timestamp, the user's message, the agent's reply (the task's status
+        message) and one stub per tool call; never tool arguments, responses
+        or artifacts. `transcript` adds every message, tool call arguments
+        clipped and tool results as stubs. `full` answers the raw tasks
+        (`tasks`, with history and artifacts). The answer stays within
+        `maxBytes`: the newest turns that fit are kept and the older ones
+        counted in `omittedTurns`; a newest turn too big on its own is clipped
+        (`clipped`), or in `full` left out. Read one turn whole with
+        `GET /api/v1/sessions/{id}/turns/{turn}`.
       operationId: getSession
       x-mcp-tool: get_session
+      parameters:
+        - name: detail
+          in: query
+          schema: { type: string, enum: [summary, transcript, full], default: summary }
+        - name: lastTurns
+          in: query
+          description: Only the last n turns; default all
+          schema: { type: integer, minimum: 1 }
+        - $ref: "#/components/parameters/maxBytesQuery"
       responses:
         "200":
-          description: the session and its tasks
+          description: the session and its turns
           content:
             application/json:
               schema: { $ref: "#/components/schemas/SessionDetail" }
@@ -498,8 +516,65 @@ paths:
         "404": { $ref: "#/components/responses/Error" }
         "501": { $ref: "#/components/responses/Error" }
         "502": { $ref: "#/components/responses/Error" }
+  /api/v1/sessions/{id}/turns/{turn}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: Session id (a UUID)
+        schema: { type: string }
+      - name: turn
+        in: path
+        required: true
+        description: The turn's task id, its index (from 0) or `last`
+        schema: { type: string }
+    get:
+      tags: [sessions]
+      summary: Read one turn of a session
+      description: |
+        The turn's task by `A2AService/GetTask` addressed to the session's
+        Agent, as the caller; a task of another session is `404`.
+        `detail=transcript` (default) answers its messages from `fromMessage`
+        on as in the transcript view of a session, `full` as A2A messages
+        (`history`) and, from message 0, the task's artifacts. Messages that
+        do not fit `maxBytes` are left for the next call: `nextMessage` is
+        the `fromMessage` to continue with. `toolCall` answers one tool call
+        instead, its arguments and its response unwrapped from the envelopes
+        it travelled in (MCP results, JSON in strings), clipped to
+        `maxBytes`.
+      operationId: getSessionTurn
+      x-mcp-tool: get_session_turn
+      parameters:
+        - name: detail
+          in: query
+          schema: { type: string, enum: [transcript, full], default: transcript }
+        - name: toolCall
+          in: query
+          description: One tool call of the turn, by its index or id
+          schema: { type: string }
+        - name: fromMessage
+          in: query
+          description: First message to answer; default 0
+          schema: { type: integer, minimum: 0 }
+        - $ref: "#/components/parameters/maxBytesQuery"
+      responses:
+        "200":
+          description: the turn
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SessionTurn" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "501": { $ref: "#/components/responses/Error" }
+        "502": { $ref: "#/components/responses/Error" }
 components:
   parameters:
+    maxBytesQuery:
+      name: maxBytes
+      in: query
+      description: Bound on the answer's size in bytes; default 100000
+      schema: { type: integer, minimum: 4096, maximum: 1048576 }
     namespaceQuery:
       name: namespace
       in: query
@@ -1015,7 +1090,101 @@ components:
       type: object
       properties:
         session: { $ref: "#/components/schemas/Session" }
-        tasks: { type: array, items: { $ref: "#/components/schemas/Task" }, description: Oldest first }
+        detail: { type: string, enum: [summary, transcript, full] }
+        totalTurns: { type: integer }
+        truncated: { type: boolean, description: Turns were left out or clipped to fit maxBytes }
+        omittedTurns: { type: integer, description: Older turns left out to fit maxBytes }
+        hint: { type: string }
+        turns: { type: array, items: { $ref: "#/components/schemas/Turn" }, description: "summary and transcript: oldest first" }
+        tasks: { type: array, items: { $ref: "#/components/schemas/Task" }, description: "full: oldest first" }
+    Turn:
+      type: object
+      properties:
+        index: { type: integer }
+        taskId: { type: string }
+        state: { type: string, description: TASK_STATE_* }
+        timestamp: { type: string, format: date-time }
+        user: { type: string, description: The first user message's text }
+        reply: { type: string, description: The status message's text }
+        toolCalls: { type: array, items: { $ref: "#/components/schemas/ToolCallStub" } }
+        messages: { type: array, items: { $ref: "#/components/schemas/TurnMessage" }, description: transcript only }
+        clipped: { type: boolean }
+    ToolCallStub:
+      type: object
+      properties:
+        index: { type: integer }
+        id: { type: string }
+        name: { type: string }
+        error: { type: boolean }
+        pending: { type: boolean, description: No response yet }
+    TurnMessage:
+      type: object
+      properties:
+        index: { type: integer }
+        role: { type: string, enum: [user, agent] }
+        clipped: { type: boolean }
+        parts:
+          type: array
+          items:
+            type: object
+            description: Exactly one of text, toolCall, toolResult, other
+            properties:
+              text: { type: string }
+              toolCall:
+                type: object
+                properties:
+                  index: { type: integer }
+                  id: { type: string }
+                  name: { type: string }
+                  args: { type: string, description: The arguments as JSON, clipped }
+              toolResult:
+                type: object
+                properties:
+                  index: { type: integer }
+                  id: { type: string }
+                  name: { type: string }
+                  error: { type: boolean }
+                  bytes: { type: integer }
+              other:
+                type: object
+                properties:
+                  kind: { type: string, enum: [raw, url, data] }
+                  mediaType: { type: string }
+                  filename: { type: string }
+                  url: { type: string }
+                  bytes: { type: integer }
+    SessionTurn:
+      type: object
+      properties:
+        sessionId: { type: string }
+        detail: { type: string, enum: [transcript, full] }
+        index: { type: integer }
+        totalTurns: { type: integer }
+        taskId: { type: string }
+        state: { type: string }
+        timestamp: { type: string, format: date-time }
+        totalMessages: { type: integer }
+        fromMessage: { type: integer }
+        nextMessage: { type: integer, description: The fromMessage to continue with; absent when every message was answered }
+        truncated: { type: boolean }
+        hint: { type: string }
+        toolCalls: { type: array, items: { $ref: "#/components/schemas/ToolCallStub" } }
+        messages: { type: array, items: { $ref: "#/components/schemas/TurnMessage" }, description: transcript }
+        history: { type: array, items: { type: object, additionalProperties: true }, description: "full: lf.a2a.v1.Message in proto3 JSON" }
+        artifacts: { type: array, items: { type: object, additionalProperties: true }, description: "full, from message 0: lf.a2a.v1.Artifact in proto3 JSON" }
+        omittedArtifacts: { type: integer }
+        toolCall:
+          type: object
+          properties:
+            index: { type: integer }
+            id: { type: string }
+            name: { type: string }
+            pending: { type: boolean }
+            error: { type: boolean }
+            args: { description: The arguments }
+            argsText: { type: string, description: The arguments clipped, in place of args }
+            response: { description: The response, unwrapped }
+            responseText: { type: string, description: The response clipped, in place of response }
     StartSessionRequest:
       type: object
       required: [message]

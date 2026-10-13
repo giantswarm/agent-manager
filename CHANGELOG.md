@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking:** `get_session` (REST: `GET /api/v1/sessions/{id}`) answers a bounded summary by default instead of every task whole. `detail` picks the view: `summary` (default) is per turn the task id, state, timestamp, the user's message, the agent's reply and one stub per tool call; `transcript` adds every message with tool call arguments clipped and tool results as stubs; `full` is the former `tasks`. `lastTurns` answers only the last n turns. `maxBytes` (4096 to 1048576, default 100000) bounds every view: the newest turns that fit are kept and the older ones counted in `omittedTurns`. Artifacts are read from kagent for `full` only. A caller that reads `tasks` passes `detail=full`.
 - `message` on `start_session` (REST: the same field) is optional. Without it, `start_session` only creates the session, with the same `workspaceGrant` checks, and answers `{session, workspace}` with no `turn`: the caller sends the first message itself over A2A with the session as `contextId`, for instance one with file parts. With it, nothing changes. ([#137](https://github.com/giantswarm/agent-manager/issues/137))
 
 ### Fixed
@@ -18,6 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The MCP endpoint refuses a request body larger than 1 MiB, the REST API's bound, before mcp-go reads it whole (CVE-2026-108859, no fixed mcp-go release yet; the scan ignores it until 2026-11-12). ([#139](https://github.com/giantswarm/agent-manager/issues/139))
 
 ### Added
+
+- `get_session_turn` (REST: `GET /api/v1/sessions/{id}/turns/{turn}`) reads one turn of a session, by its task id, its index or `last`, through `A2AService/GetTask`: its messages from `fromMessage` on as a transcript or as A2A messages (`detail=full`), paged within `maxBytes` with `nextMessage`, or with `toolCall` one tool call whole, its response unwrapped from the MCP envelopes muster nests it in.
 
 - `workspaceGrant` on `start_session` (REST: the same field): the signed, short-lived grant a workspace manager's `authorize_workspace` returned to the caller starts the session in that workspace. agent-manager decodes the grant without trusting it, refuses one that names another person, has expired or cannot be read (`403` or `400` with the reason, nothing created), and passes it to kagent's `CreateSession` as the `admission_token` of the `volume_source` it names (the session's own directory read-write at `/workspace`, the workspace's mirrors read-only at `/mirrors`); kagent's admission verifies it and refuses with its reason. The answer names the `workspace`, the session shows its `volumeSource`, and without a grant the request is the one the surfaces send today. The grant appears in no log line, error or response. The kagent stubs are generated from `giantswarm/kagent-upstream` v1.10.0, the line whose `CreateSession` takes a volume source and an admission token.
 

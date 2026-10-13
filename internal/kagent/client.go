@@ -183,10 +183,18 @@ func (c *Client) GetSession(ctx context.Context, token, sessionID string) (*apiv
 	return resp.GetSession(), nil
 }
 
+// TaskListOptions shape the tasks ListSessionTasks reads. HistoryLength nil
+// reads every task's whole history, 0 none; IncludeArtifacts adds the tasks'
+// artifacts.
+type TaskListOptions struct {
+	HistoryLength    *int32
+	IncludeArtifacts bool
+}
+
 // ListSessionTasks is A2AService/ListTasks addressed to the session's Agent
 // and filtered by its context, walked to the end: the conversation, oldest
-// task first, with every task's history and artifacts.
-func (c *Client) ListSessionTasks(ctx context.Context, token string, agent Ref, contextID string) ([]*a2apb.Task, error) {
+// task first.
+func (c *Client) ListSessionTasks(ctx context.Context, token string, agent Ref, contextID string, opts TaskListOptions) ([]*a2apb.Task, error) {
 	ctx, err := asCaller(ctx, token)
 	if err != nil {
 		return nil, err
@@ -194,14 +202,14 @@ func (c *Client) ListSessionTasks(ctx context.Context, token string, agent Ref, 
 	var out []*a2apb.Task
 	pageToken := ""
 	size := int32(pageSize)
-	includeArtifacts := true
 	for range maxTaskPages {
 		resp, err := c.a2a.ListTasks(ctx, &a2apb.ListTasksRequest{
 			Tenant:           agent.Tenant(),
 			ContextId:        contextID,
 			PageSize:         &size,
 			PageToken:        pageToken,
-			IncludeArtifacts: &includeArtifacts,
+			HistoryLength:    opts.HistoryLength,
+			IncludeArtifacts: &opts.IncludeArtifacts,
 		})
 		if err != nil {
 			return nil, err
@@ -213,6 +221,16 @@ func (c *Client) ListSessionTasks(ctx context.Context, token string, agent Ref, 
 		}
 	}
 	return out, nil
+}
+
+// GetSessionTask is A2AService/GetTask addressed to the session's Agent: one
+// task with its whole history. The caller checks it belongs to the session.
+func (c *Client) GetSessionTask(ctx context.Context, token string, agent Ref, taskID string) (*a2apb.Task, error) {
+	ctx, err := asCaller(ctx, token)
+	if err != nil {
+		return nil, err
+	}
+	return c.a2a.GetTask(ctx, &a2apb.GetTaskRequest{Tenant: agent.Tenant(), Id: taskID})
 }
 
 // SessionCreate is what CreateSession asks for: the Agent, the idempotency

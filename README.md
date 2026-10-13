@@ -27,7 +27,7 @@ The same operations are exposed twice from one process:
 - **MCP** (streamable HTTP, `/mcp`) for muster — tools `get_info`,
   `list_agents`, `get_agent`, `create_agent`, `update_agent`, `delete_agent`,
   `get_agent_status`, `validate_agent`, `list_model_configs`, `list_skills`,
-  `list_sessions`, `get_session`, `start_session`
+  `list_sessions`, `get_session`, `get_session_turn`, `start_session`
   (through muster: `x_agent-manager_<tool>`). Every tool description says
   whether it writes and what it writes, and every tool sets all four
   annotations: read-only, destructive, idempotent and open-world (true for the
@@ -54,7 +54,8 @@ MCP-server-writer half.
 | Skills (`SKILL.md`) of the configured GitHub repositories, grouped by repository with its head commit | `GET /api/v1/skills[?repository=&ref=&refresh=]` | `list_skills` | no |
 | Sessions of an agent, as the caller (`SessionService/ListSessions`; `allCreators` when the controller grants it) | `GET /api/v1/agents/{ns}/{name}/sessions[?allCreators=true]` | `list_sessions` | no |
 | Start a session: create it (in a workspace with `workspaceGrant`), send the first message when one is given and answer once the turn is accepted; without `message` only create it | `POST /api/v1/agents/{ns}/{name}/sessions` | `start_session` | a kagent Session |
-| One session and its conversation (the A2A tasks of its context, oldest first) | `GET /api/v1/sessions/{id}` | `get_session` | no |
+| One session and its conversation, one turn per A2A task of its context, oldest first, within `maxBytes`: a summary per turn by default, a transcript or the raw tasks on request | `GET /api/v1/sessions/{id}[?detail=&lastTurns=&maxBytes=]` | `get_session` | no |
+| One turn of a session: its messages, paged within `maxBytes`, or one tool call whole | `GET /api/v1/sessions/{id}/turns/{turn}[?detail=&toolCall=&fromMessage=&maxBytes=]` | `get_session_turn` | no |
 | Health | `GET /healthz`, `GET /readyz` | — | no |
 
 The three writes take `dryRun` and `mode` (`apply` | `commit`, see
@@ -479,7 +480,7 @@ agentgateway JWT policy, muster) can reach.
 
 ## Sessions
 
-`list_sessions`, `get_session` and `start_session` let a caller, a meta agent
+`list_sessions`, `get_session`, `get_session_turn` and `start_session` let a caller, a meta agent
 working through muster for instance, talk to an agent and read what it did. A
 conversation is a kagent `Session` of the `Agent` (kagent 1.3, `SessionService`),
 held in the controller's database. agent-manager calls the controller's gRPC
@@ -520,7 +521,38 @@ and without the caller's token a session operation is `401 unauthenticated`.
   Without a grant the request is exactly the one the surfaces send today. The
   grant appears in no log line, error or response.
 - `get_session` is `SessionService/GetSession` plus `A2AService/ListTasks`
-  addressed to the session's Agent and filtered by its context.
+  addressed to the session's Agent and filtered by its context. A turn is one
+  task, indexed from 0 oldest first. A session's tasks carry every tool call
+  and response, so the answer is shaped to fit a caller's context:
+  - `detail`: `summary` (default) is per turn the task id, state, timestamp,
+    the user's message, the agent's reply (the task's status message) and one
+    stub per tool call (`index`, `id`, `name`, `error`, `pending`), never tool
+    arguments, responses or artifacts. `transcript` adds every message, with
+    tool call arguments clipped and tool results as stubs carrying their size.
+    `full` answers the raw tasks (`tasks`, with history and artifacts).
+  - `lastTurns` answers only the last n turns; `lastTurns: 1` is how to poll a
+    running turn.
+  - `maxBytes` (4096 to 1048576, default 100000) bounds the answer. The newest
+    turns that fit are kept, the older ones are counted in `omittedTurns` with
+    `truncated: true`. A newest turn too big on its own is clipped
+    (`clipped: true`), or in `full` left out.
+
+  Tool calls are read from the A2A data parts the ADK writes, typed
+  `function_call` and `function_response` under the metadata key `adk_type`
+  or `kagent_type`. A response's `error` is an `isError` or `error` in it or in
+  any envelope it is wrapped in.
+- `get_session_turn` reads one turn, named by its task id, its index or
+  `last`, with `A2AService/GetTask`; a task of another session is `404`.
+  `detail` `transcript` (default) answers its messages from `fromMessage` on,
+  `full` the A2A messages (`history`) and, from message 0, the task's
+  artifacts. Messages that do not fit `maxBytes` are left for the next call:
+  `nextMessage` is the `fromMessage` to continue with, and a single message
+  too big on its own is clipped (`transcript`) or replaced by a note of its
+  size (`full`). `toolCall`, an index or id from `toolCalls`, answers that call
+  instead: its arguments and its response unwrapped from the envelopes it
+  travelled in (a runtime's `{result, isError}`, an MCP result's single text
+  content, JSON in a string, as muster nests them), clipped to `maxBytes`
+  (`argsText`, `responseText`) when they do not fit.
 - `list_sessions` is `SessionService/ListSessions` for one Agent.
 
 Session and task bodies are kagent's proto3 JSON, passed through: session

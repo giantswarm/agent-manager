@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -37,7 +39,8 @@ const (
 type SessionClient interface {
 	ListSessions(ctx context.Context, token string, agent kagent.Ref, allCreators bool) ([]*apiv1alpha1.Session, error)
 	GetSession(ctx context.Context, token, sessionID string) (*apiv1alpha1.Session, error)
-	ListSessionTasks(ctx context.Context, token string, agent kagent.Ref, contextID string) ([]*a2apb.Task, error)
+	ListSessionTasks(ctx context.Context, token string, agent kagent.Ref, contextID string, opts kagent.TaskListOptions) ([]*a2apb.Task, error)
+	GetSessionTask(ctx context.Context, token string, agent kagent.Ref, taskID string) (*a2apb.Task, error)
 	CreateSession(ctx context.Context, token string, in kagent.SessionCreate) (*apiv1alpha1.Session, error)
 	SendMessage(ctx context.Context, token string, agent kagent.Ref, contextID, messageID, text string) (*a2apb.StreamResponse, error)
 }
@@ -50,12 +53,90 @@ type SessionList struct {
 	Sessions []json.RawMessage `json:"sessions"`
 }
 
+// SessionQuery is the input of get_session.
+type SessionQuery struct {
+	SessionID string `json:"sessionId"`
+	// Detail is DetailSummary (default), DetailTranscript or DetailFull.
+	Detail string `json:"detail,omitempty"`
+	// LastTurns reads only the last n turns; 0 reads all.
+	LastTurns int `json:"lastTurns,omitempty"`
+	// MaxBytes bounds the answer; 0 is DefaultSessionMaxBytes.
+	MaxBytes int `json:"maxBytes,omitempty"`
+}
+
 // SessionDetail is the answer of get_session: the session and its
-// conversation, every A2A task of the session's context oldest first (proto3
-// JSON of lf.a2a.v1.Task: status, history, artifacts).
+// conversation, one turn per A2A task of the session's context, oldest first.
+// Turns holds the summary and transcript views, Tasks the full view (proto3
+// JSON of lf.a2a.v1.Task: status, history, artifacts). The newest turns that
+// fit the budget are kept; OmittedTurns counts the older ones left out.
 type SessionDetail struct {
-	Session json.RawMessage   `json:"session"`
-	Tasks   []json.RawMessage `json:"tasks"`
+	Session      json.RawMessage   `json:"session"`
+	Detail       string            `json:"detail"`
+	TotalTurns   int               `json:"totalTurns"`
+	Truncated    bool              `json:"truncated,omitempty"`
+	OmittedTurns int               `json:"omittedTurns,omitempty"`
+	Hint         string            `json:"hint,omitempty"`
+	Turns        []Turn            `json:"turns,omitempty"`
+	Tasks        []json.RawMessage `json:"tasks,omitempty"`
+}
+
+// IndexOrID names a turn or a tool call by its index or its id. It reads a
+// JSON number or string.
+type IndexOrID string
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (v *IndexOrID) UnmarshalJSON(data []byte) error {
+	var s string
+	if err := json.Unmarshal(data, &s); err == nil {
+		*v = IndexOrID(s)
+		return nil
+	}
+	var n json.Number
+	if err := json.Unmarshal(data, &n); err != nil {
+		return fmt.Errorf("want an index or an id: %w", err)
+	}
+	*v = IndexOrID(n.String())
+	return nil
+}
+
+// TurnQuery is the input of get_session_turn.
+type TurnQuery struct {
+	SessionID string `json:"sessionId"`
+	// Turn is the turn's task id, its index or "last".
+	Turn IndexOrID `json:"turn"`
+	// Detail is DetailTranscript (default) or DetailFull.
+	Detail string `json:"detail,omitempty"`
+	// ToolCall answers one tool call of the turn whole, by its index or id.
+	ToolCall IndexOrID `json:"toolCall,omitempty"`
+	// FromMessage is the first message answered.
+	FromMessage int `json:"fromMessage,omitempty"`
+	// MaxBytes bounds the answer; 0 is DefaultSessionMaxBytes.
+	MaxBytes int `json:"maxBytes,omitempty"`
+}
+
+// SessionTurn is the answer of get_session_turn: one turn, either its
+// messages from FromMessage on that fit the budget (Messages in the
+// transcript view, History and Artifacts as proto3 JSON in the full view;
+// NextMessage continues them) or, asked for one, a tool call whole.
+type SessionTurn struct {
+	SessionID        string            `json:"sessionId"`
+	Detail           string            `json:"detail"`
+	Index            int               `json:"index"`
+	TotalTurns       int               `json:"totalTurns"`
+	TaskID           string            `json:"taskId"`
+	State            string            `json:"state"`
+	Timestamp        string            `json:"timestamp,omitempty"`
+	TotalMessages    int               `json:"totalMessages"`
+	FromMessage      int               `json:"fromMessage"`
+	NextMessage      int               `json:"nextMessage,omitempty"`
+	Truncated        bool              `json:"truncated,omitempty"`
+	Hint             string            `json:"hint,omitempty"`
+	ToolCalls        []ToolCallStub    `json:"toolCalls,omitempty"`
+	Messages         []TurnMessage     `json:"messages,omitempty"`
+	History          []json.RawMessage `json:"history,omitempty"`
+	Artifacts        []json.RawMessage `json:"artifacts,omitempty"`
+	OmittedArtifacts int               `json:"omittedArtifacts,omitempty"`
+	ToolCall         *ToolCallDetail   `json:"toolCall,omitempty"`
 }
 
 // SessionStart is the answer of start_session: the new session and, when it
@@ -122,9 +203,248 @@ func (s *Service) ListSessions(ctx context.Context, namespace, name string, allC
 	return out, nil
 }
 
-// GetSession is one session and its conversation: the A2A tasks of the
-// session's context, read from the session's Agent.
-func (s *Service) GetSession(ctx context.Context, sessionID string) (*SessionDetail, error) {
+var sessionTruncatedHint = fmt.Sprintf("older turns were left out to fit maxBytes: raise maxBytes (at most %d), pick turns with lastTurns, or read one turn with get_session_turn", MaxSessionMaxBytes)
+
+// envelopeSlack is what an answer's fields set after its budget was taken
+// (truncated, omitted counts, a short hint) may add.
+const envelopeSlack = 128
+
+// GetSession is one session and its conversation, the A2A tasks of the
+// session's context read from the session's Agent, in the view q asks for
+// and within its budget.
+func (s *Service) GetSession(ctx context.Context, q SessionQuery) (*SessionDetail, error) {
+	detail, err := sessionDetailLevel(q.Detail, DetailSummary, DetailSummary, DetailTranscript, DetailFull)
+	if err != nil {
+		return nil, err
+	}
+	maxBytes, err := sessionMaxBytes(q.MaxBytes)
+	if err != nil {
+		return nil, err
+	}
+	if q.LastTurns < 0 {
+		return nil, invalidf("lastTurns must not be negative")
+	}
+	sc, err := s.readSession(ctx, q.SessionID)
+	if err != nil {
+		return nil, err
+	}
+	tasks, err := s.cfg.Sessions.ListSessionTasks(ctx, sc.token, sc.agent, sc.contextID, kagent.TaskListOptions{IncludeArtifacts: detail == DetailFull})
+	if err != nil {
+		return nil, kagentError(err, fmt.Sprintf("conversation of session %s", q.SessionID))
+	}
+	out := &SessionDetail{Session: sc.raw, Detail: detail, TotalTurns: len(tasks)}
+	budget := maxBytes - jsonSize(out) - len(sessionTruncatedHint) - envelopeSlack
+	first := 0
+	if q.LastTurns > 0 {
+		first = max(len(tasks)-q.LastTurns, 0)
+	}
+	clipped := false
+	if detail == DetailFull {
+		var raws []json.RawMessage
+		for _, task := range tasks[first:] {
+			raw, err := marshalProto(task)
+			if err != nil {
+				return nil, err
+			}
+			raws = append(raws, raw)
+		}
+		out.Tasks, out.OmittedTurns = packNewest(raws, budget, nil)
+	} else {
+		var turns []Turn
+		for i, task := range tasks[first:] {
+			t := readTurn(first+i, task)
+			if detail == DetailTranscript {
+				turns = append(turns, t.transcript())
+			} else {
+				turns = append(turns, t.summary())
+			}
+		}
+		out.Turns, out.OmittedTurns = packNewest(turns, budget, fitTurn)
+		clipped = len(out.Turns) > 0 && out.Turns[len(out.Turns)-1].Clipped
+	}
+	if out.OmittedTurns > 0 || clipped {
+		out.Truncated, out.Hint = true, sessionTruncatedHint
+	}
+	return out, nil
+}
+
+// GetSessionTurn is one turn of a session's conversation: its messages from
+// q.FromMessage on in the view q asks for, or one of its tool calls whole,
+// within q's budget.
+func (s *Service) GetSessionTurn(ctx context.Context, q TurnQuery) (*SessionTurn, error) {
+	detail, err := sessionDetailLevel(q.Detail, DetailTranscript, DetailTranscript, DetailFull)
+	if err != nil {
+		return nil, err
+	}
+	maxBytes, err := sessionMaxBytes(q.MaxBytes)
+	if err != nil {
+		return nil, err
+	}
+	if q.FromMessage < 0 {
+		return nil, invalidf("fromMessage must not be negative")
+	}
+	ref := strings.TrimSpace(string(q.Turn))
+	if ref == "" {
+		return nil, invalidf("turn is required: a task id, an index or last")
+	}
+	sc, err := s.readSession(ctx, q.SessionID)
+	if err != nil {
+		return nil, err
+	}
+	none := int32(0)
+	tasks, err := s.cfg.Sessions.ListSessionTasks(ctx, sc.token, sc.agent, sc.contextID, kagent.TaskListOptions{HistoryLength: &none})
+	if err != nil {
+		return nil, kagentError(err, fmt.Sprintf("conversation of session %s", q.SessionID))
+	}
+	index := turnIndex(tasks, ref)
+	if index < 0 {
+		return nil, notFoundf("session %s has no turn %s (it has %d, indexed from 0)", q.SessionID, ref, len(tasks))
+	}
+	task, err := s.cfg.Sessions.GetSessionTask(ctx, sc.token, sc.agent, tasks[index].GetId())
+	if err != nil {
+		return nil, kagentError(err, fmt.Sprintf("turn %d of session %s", index, q.SessionID))
+	}
+	if task.GetContextId() != "" && task.GetContextId() != sc.contextID {
+		return nil, notFoundf("session %s has no turn %s", q.SessionID, ref)
+	}
+	t := readTurn(index, task)
+	out := &SessionTurn{
+		SessionID: q.SessionID, Detail: detail, Index: index, TotalTurns: len(tasks), TaskID: task.GetId(),
+		State: t.state(), Timestamp: t.timestamp(), TotalMessages: len(t.messages), FromMessage: q.FromMessage,
+		ToolCalls: t.stubs(),
+	}
+	if q.ToolCall != "" {
+		call := t.call(strings.TrimSpace(string(q.ToolCall)))
+		if call == nil {
+			return nil, notFoundf("turn %d of session %s has no tool call %s (it has %d, indexed from 0)", index, q.SessionID, q.ToolCall, len(t.calls))
+		}
+		out.ToolCalls = nil
+		whole, clipped := t.toolCallDetail(call, maxBytes-jsonSize(out)-envelopeSlack)
+		out.ToolCall, out.Truncated = &whole, clipped
+		return out, nil
+	}
+	if q.FromMessage > len(t.messages) {
+		return nil, invalidf("fromMessage %d is past the turn's %d messages", q.FromMessage, len(t.messages))
+	}
+	budget := maxBytes - jsonSize(out) - envelopeSlack
+	next := 0
+	if detail == DetailFull {
+		used := 0
+		if q.FromMessage == 0 {
+			for _, artifact := range task.GetArtifacts() {
+				raw, err := marshalProto(artifact)
+				if err != nil {
+					return nil, err
+				}
+				if size := len(raw) + 1; used+size <= budget/2 {
+					out.Artifacts, used = append(out.Artifacts, raw), used+size
+				} else {
+					out.OmittedArtifacts++
+				}
+			}
+		}
+		out.History, next, err = packForward(len(t.messages), q.FromMessage, budget-used, func(i int) (json.RawMessage, error) {
+			return marshalProto(t.messages[i])
+		}, func(i int, raw json.RawMessage, _ int) json.RawMessage {
+			msg := t.messages[i]
+			placeholder, _ := json.Marshal(map[string]any{
+				"messageId": msg.GetMessageId(), "role": msg.GetRole().String(),
+				"omitted": fmt.Sprintf("%d bytes exceed maxBytes; read its tool calls with toolCall", len(raw)),
+			})
+			return placeholder
+		})
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		out.Messages, next, _ = packForward(len(t.messages), q.FromMessage, budget, func(i int) (TurnMessage, error) {
+			return t.messageView(i), nil
+		}, func(_ int, m TurnMessage, budget int) TurnMessage { return fitMessage(m, budget) })
+	}
+	if next < len(t.messages) {
+		out.NextMessage, out.Truncated, out.Hint = next, true, "continue with fromMessage: "+fmt.Sprint(next)
+	}
+	if out.OmittedArtifacts > 0 {
+		out.Truncated = true
+	}
+	return out, nil
+}
+
+// turnIndex is the index of the turn ref names in tasks: "last", an index
+// or a task id; -1 for none.
+func turnIndex(tasks []*a2apb.Task, ref string) int {
+	if ref == "last" {
+		return len(tasks) - 1
+	}
+	if n, err := strconv.Atoi(ref); err == nil {
+		if n < 0 || n >= len(tasks) {
+			return -1
+		}
+		return n
+	}
+	for i, task := range tasks {
+		if task.GetId() == ref {
+			return i
+		}
+	}
+	return -1
+}
+
+// packForward renders items from on while they fit budget bytes and answers
+// them and the index of the first left out. The first item is always kept:
+// fit cuts it down when it alone exceeds the budget.
+func packForward[T any](n, from, budget int, render func(int) (T, error), fit func(int, T, int) T) ([]T, int, error) {
+	var out []T
+	used := 0
+	i := from
+	for ; i < n; i++ {
+		item, err := render(i)
+		if err != nil {
+			return nil, 0, err
+		}
+		size := jsonSize(item) + 1
+		if used+size > budget {
+			if len(out) > 0 {
+				break
+			}
+			item = fit(i, item, budget-1)
+			size = jsonSize(item) + 1
+		}
+		out, used = append(out, item), used+size
+	}
+	return out, i, nil
+}
+
+// fitMessage cuts a message that alone exceeds budget: its texts are clipped
+// to a share each, and its parts dropped when that is not enough.
+func fitMessage(in TurnMessage, budget int) TurnMessage {
+	out := in
+	out.Clipped = true
+	out.Parts = slices.Clone(in.Parts)
+	share := budget / (len(out.Parts) + 1)
+	for i, part := range out.Parts {
+		if part.Text != "" {
+			out.Parts[i].Text = clipText(part.Text, share)
+		}
+	}
+	if jsonSize(out) > budget {
+		out.Parts = nil
+	}
+	return out
+}
+
+// sessionRef is a session read for its conversation: the caller's token,
+// the session's Agent and its A2A context.
+type sessionRef struct {
+	token     string
+	raw       json.RawMessage
+	agent     kagent.Ref
+	contextID string
+}
+
+// readSession reads a session as the caller and resolves where its
+// conversation is addressed.
+func (s *Service) readSession(ctx context.Context, sessionID string) (*sessionRef, error) {
 	if !s.SessionsAvailable() {
 		return nil, errSessionsUnsupported
 	}
@@ -143,27 +463,37 @@ func (s *Service) GetSession(ctx context.Context, sessionID string) (*SessionDet
 	if agent.GetNamespace() == "" || agent.GetName() == "" {
 		return nil, conflictf("session %s names no Agent, so its conversation cannot be addressed", sessionID)
 	}
-	ref := kagent.Ref{Namespace: agent.GetNamespace(), Name: agent.GetName()}
-	contextID := session.GetContextId()
-	if contextID == "" {
-		contextID = session.GetId()
+	out := &sessionRef{token: token, agent: kagent.Ref{Namespace: agent.GetNamespace(), Name: agent.GetName()}, contextID: session.GetContextId()}
+	if out.contextID == "" {
+		out.contextID = session.GetId()
 	}
-	tasks, err := s.cfg.Sessions.ListSessionTasks(ctx, token, ref, contextID)
-	if err != nil {
-		return nil, kagentError(err, fmt.Sprintf("conversation of session %s", sessionID))
-	}
-	out := &SessionDetail{Tasks: []json.RawMessage{}}
-	if out.Session, err = marshalProto(session); err != nil {
+	if out.raw, err = marshalProto(session); err != nil {
 		return nil, err
 	}
-	for _, task := range tasks {
-		raw, err := marshalProto(task)
-		if err != nil {
-			return nil, err
-		}
-		out.Tasks = append(out.Tasks, raw)
-	}
 	return out, nil
+}
+
+// sessionDetailLevel is level, or def when it is empty, if allowed lists it.
+func sessionDetailLevel(level, def string, allowed ...string) (string, error) {
+	if level == "" {
+		return def, nil
+	}
+	if !slices.Contains(allowed, level) {
+		return "", invalidf("detail must be one of %s", strings.Join(allowed, ", "))
+	}
+	return level, nil
+}
+
+// sessionMaxBytes is the answer budget n asks for, DefaultSessionMaxBytes
+// for 0.
+func sessionMaxBytes(n int) (int, error) {
+	if n == 0 {
+		return DefaultSessionMaxBytes, nil
+	}
+	if n < MinSessionMaxBytes || n > MaxSessionMaxBytes {
+		return 0, invalidf("maxBytes must be between %d and %d", MinSessionMaxBytes, MaxSessionMaxBytes)
+	}
+	return n, nil
 }
 
 // StartSession creates a session of the Agent and sends it the first message,
