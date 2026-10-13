@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- An agent on a claude Harness takes any toolset, as every other agent does: `create_agent`, `update_agent` and `validate_agent` no longer resolve it with muster's `filter_tools` and no longer refuse a tool without `readOnlyHint`, `invoke_agent_instance`, the `preset:agent-platform` write tools, a selector that selects nothing or a server awaiting sign-in. Which muster tools a coding agent reaches is the person's choice; muster authorizes every call as the person. The egress list, the egress note and the `requireApproval` and extra-binding refusals stay. The chart's network policy no longer opens egress to muster, which only that check called. ([#151](https://github.com/giantswarm/agent-manager/issues/151))
+
 - `message` on `start_session` (REST: the same field) is optional. Without it, `start_session` only creates the session, with the same `workspaceGrant` checks, and answers `{session, workspace}` with no `turn`: the caller sends the first message itself over A2A with the session as `contextId`, for instance one with file parts. With it, nothing changes. ([#137](https://github.com/giantswarm/agent-manager/issues/137))
 
 ### Fixed
