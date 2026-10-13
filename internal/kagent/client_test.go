@@ -187,6 +187,17 @@ func TestCreateSessionInAWorkspace(t *testing.T) {
 	assert.Contains(t, status.Convert(err).Message(), "another person")
 }
 
+func TestDeleteSessionAsTheCaller(t *testing.T) {
+	ctrl, conn := kagenttest.New(t)
+	c := kagent.NewClient(conn)
+	session := ctrl.AddSession(sre.Namespace, sre.Name)
+	deleted, err := c.DeleteSession(t.Context(), token, session.GetId())
+	require.NoError(t, err)
+	assert.Equal(t, apiv1alpha1.RuntimeState_RUNTIME_STATE_DELETED, deleted.GetState())
+	assert.Equal(t, session.GetId(), ctrl.Calls()[0].Request.(*apiv1alpha1.DeleteSessionRequest).GetSessionId())
+	assertCallerOnly(t, ctrl.Calls())
+}
+
 func TestNoTokenNoCall(t *testing.T) {
 	ctrl, conn := kagenttest.New(t)
 	c := kagent.NewClient(conn)
@@ -199,6 +210,8 @@ func TestNoTokenNoCall(t *testing.T) {
 	_, err = c.CreateSession(t.Context(), "", kagent.SessionCreate{Agent: sre, RequestID: "r"})
 	require.ErrorIs(t, err, kagent.ErrNoToken)
 	_, err = c.SendMessage(t.Context(), "", sre, "id", "m", "hi")
+	require.ErrorIs(t, err, kagent.ErrNoToken)
+	_, err = c.DeleteSession(t.Context(), "", "id")
 	require.ErrorIs(t, err, kagent.ErrNoToken)
 	assert.Empty(t, ctrl.Calls())
 }

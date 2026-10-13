@@ -317,6 +317,8 @@ var wantHints = map[string]hints{
 	ToolGetSession:       annotations(readOnly, additive, notIdempotent, closedWorld),
 	// start_session messages an agent, which acts on the world with its tools.
 	ToolStartSession: annotations(writes, additive, notIdempotent, openWorld),
+	// delete_session ends a conversation for good, so clients ask first.
+	ToolDeleteSession: annotations(writes, destructive, notIdempotent, closedWorld),
 }
 
 func TestMCPToolsMirrorREST(t *testing.T) {
@@ -372,6 +374,9 @@ func TestMCPToolsMirrorREST(t *testing.T) {
 			assert.Contains(t, tool.Description, "WRITES", tool.Name)
 			assert.ElementsMatch(t, []string{"name"}, tool.InputSchema.Required, "message is optional")
 			assert.Contains(t, tool.InputSchema.Properties, "message")
+		case ToolDeleteSession:
+			assert.Contains(t, tool.Description, "WRITES", tool.Name)
+			assert.ElementsMatch(t, []string{"sessionId"}, tool.InputSchema.Required)
 		default:
 			assert.Contains(t, tool.Description, "Read-only", tool.Name)
 		}

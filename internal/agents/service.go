@@ -187,8 +187,8 @@ func (s *Service) Info(ctx context.Context) InfoResponse {
 		// targetCluster: create_agent and the reads take organization and
 		// cluster to place an agent on a workload cluster.
 		"targetCluster": s.cfg.Compose.TargetMusterURL != "",
-		// sessions: list_sessions, get_session and start_session reach the
-		// kagent controller.
+		// sessions: list_sessions, get_session, start_session and
+		// delete_session reach the kagent controller.
 		"sessions": s.SessionsAvailable(),
 	}
 	out.Identity = s.kube.Identity()

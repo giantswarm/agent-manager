@@ -112,6 +112,17 @@ func TestSessionsOverREST(t *testing.T) {
 	assert.Contains(t, body["error"].(map[string]any)["message"], "names another person")
 	assert.NotContains(t, fmt.Sprint(body), grant[:16])
 
+	// DELETE ends the caller's session; it is gone from every read after.
+	code, body = do(t, h, http.MethodDelete, Prefix+"/sessions/"+session["id"].(string), nil)
+	require.Equal(t, http.StatusOK, code, body)
+	assert.Equal(t, "RUNTIME_STATE_DELETED", body["session"].(map[string]any)["state"])
+	code, _ = do(t, h, http.MethodGet, Prefix+"/sessions/"+session["id"].(string), nil)
+	assert.Equal(t, http.StatusNotFound, code)
+	theirs := ctrl.AddSessionOf("dev@lab.local", "kagent", "sre")
+	code, body = do(t, h, http.MethodDelete, Prefix+"/sessions/"+theirs.GetId(), nil)
+	assert.Equal(t, http.StatusNotFound, code)
+	assert.Equal(t, "not_found", body["error"].(map[string]any)["code"])
+
 	ctrl.NotReady["kagent/fresh"] = true
 	code, body = do(t, h, http.MethodPost, Prefix+"/agents/kagent/fresh/sessions", map[string]any{"message": "hi"})
 	assert.Equal(t, http.StatusConflict, code)
@@ -177,6 +188,21 @@ func TestSessionsOverMCP(t *testing.T) {
 	assert.True(t, isErr)
 	assert.Contains(t, text, "forbidden")
 	assert.Contains(t, text, "expired at")
+
+	// delete_session removes the caller's own session and refuses another's.
+	text, isErr = callToolCtx(t, ctx, srv, ToolDeleteSession, map[string]any{"sessionId": started.Session.ID})
+	require.False(t, isErr, text)
+	assert.Contains(t, text, `"state":"RUNTIME_STATE_DELETED"`)
+	text, isErr = callToolCtx(t, ctx, srv, ToolListSessions, map[string]any{"name": "sre"})
+	require.False(t, isErr, text)
+	assert.NotContains(t, text, started.Session.ID)
+	theirs := ctrl.AddSessionOf("dev@lab.local", "kagent", "sre")
+	text, isErr = callToolCtx(t, ctx, srv, ToolDeleteSession, map[string]any{"sessionId": theirs.GetId()})
+	assert.True(t, isErr)
+	assert.Contains(t, text, "not_found")
+	text, isErr = callToolCtx(t, ctx, srv, ToolDeleteSession, map[string]any{})
+	assert.True(t, isErr)
+	assert.Contains(t, text, "invalid_request")
 
 	text, isErr = callTool(t, srv, ToolListSessions, map[string]any{"name": "sre"})
 	assert.True(t, isErr)

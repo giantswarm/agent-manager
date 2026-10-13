@@ -51,6 +51,7 @@ func (h *REST) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET "+Prefix+"/agents/{namespace}/{name}/sessions", h.listSessions)
 	mux.HandleFunc("POST "+Prefix+"/agents/{namespace}/{name}/sessions", h.startSession)
 	mux.HandleFunc("GET "+Prefix+"/sessions/{id}", h.getSession)
+	mux.HandleFunc("DELETE "+Prefix+"/sessions/{id}", h.deleteSession)
 }
 
 type errorBody struct {
@@ -251,6 +252,15 @@ func (h *REST) startSession(w http.ResponseWriter, r *http.Request) {
 
 func (h *REST) getSession(w http.ResponseWriter, r *http.Request) {
 	res, err := h.svc.GetSession(r.Context(), r.PathValue("id"))
+	if err != nil {
+		h.writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
+func (h *REST) deleteSession(w http.ResponseWriter, r *http.Request) {
+	res, err := h.svc.DeleteSession(r.Context(), r.PathValue("id"))
 	if err != nil {
 		h.writeError(w, err)
 		return

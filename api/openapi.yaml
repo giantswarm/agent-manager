@@ -498,6 +498,30 @@ paths:
         "404": { $ref: "#/components/responses/Error" }
         "501": { $ref: "#/components/responses/Error" }
         "502": { $ref: "#/components/responses/Error" }
+    delete:
+      tags: [sessions]
+      summary: Delete one of the caller's sessions
+      description: |
+        `SessionService/DeleteSession` as the caller: the controller ends the
+        session's runtime, removes its state and answers the session in
+        `RUNTIME_STATE_DELETED`; it is gone from every read after. kagent
+        scopes the delete to the session's creator: a session of somebody
+        else is `404`, as one that does not exist. While another operation on
+        the session runs the delete is `409`; retry it shortly.
+      operationId: deleteSession
+      x-mcp-tool: delete_session
+      responses:
+        "200":
+          description: the deleted session
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SessionDelete" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "501": { $ref: "#/components/responses/Error" }
+        "502": { $ref: "#/components/responses/Error" }
 components:
   parameters:
     namespaceQuery:
@@ -1016,6 +1040,10 @@ components:
       properties:
         session: { $ref: "#/components/schemas/Session" }
         tasks: { type: array, items: { $ref: "#/components/schemas/Task" }, description: Oldest first }
+    SessionDelete:
+      type: object
+      properties:
+        session: { $ref: "#/components/schemas/Session" }
     StartSessionRequest:
       type: object
       required: [message]
