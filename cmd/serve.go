@@ -275,7 +275,7 @@ func runServe(ctx context.Context, o *serveOptions) error {
 		Version:          build.Version,
 		GitHub:           gitHubRemote(o.githubAuthorizationServer, o.githubAPIURL),
 		Sessions:         sessions,
-		HarnessEgress: harnessEgress,
+		HarnessEgress:    harnessEgress,
 	}, log)
 
 	srvCfg := server.Config{Addr: o.listen, MCPEnabled: o.mcpEnabled, MCPPath: o.mcpPath}
