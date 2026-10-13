@@ -55,9 +55,6 @@ type Config struct {
 	// Sessions is the kagent controller the session operations call through
 	// agentgateway as the caller. Nil: they are refused as unsupported.
 	Sessions SessionClient
-	// Toolsets resolves a claude Harness agent's toolset through muster as
-	// the caller. Nil: every claude Harness agent is refused.
-	Toolsets ToolsetResolver
 	// HarnessEgress is the platform's origin list per claude Harness, by
 	// Harness name: written into a coding agent's egress, and the only
 	// origins it may name. A claude Harness without an entry reaches none.
@@ -675,7 +672,7 @@ func (s *Service) guardUpdate(ctx context.Context, st *site, upd Update, after m
 	if upd.Egress != nil {
 		requested = *upd.Egress
 	}
-	return s.guardClaude(ctx, st, harness, after, requested), nil
+	return s.guardClaude(harness, after, requested), nil
 }
 
 // ValidateCreate is create_agent without the write. It takes the write's mode
@@ -731,7 +728,7 @@ func (s *Service) ValidateCreate(ctx context.Context, spec Spec) (*ValidateResul
 	}
 	values := BuildValues(spec, st.compose)
 	if claude {
-		for _, e := range s.guardClaude(ctx, st, harness, values, spec.Egress) {
+		for _, e := range s.guardClaude(harness, values, spec.Egress) {
 			res.addError(e)
 		}
 	}
@@ -878,7 +875,7 @@ func (s *Service) Create(ctx context.Context, spec Spec) (*CreateResult, error) 
 	}
 	values := BuildValues(spec, st.compose)
 	if claude {
-		if errs := s.guardClaude(ctx, st, harness, values, spec.Egress); len(errs) > 0 {
+		if errs := s.guardClaude(harness, values, spec.Egress); len(errs) > 0 {
 			return nil, errs[0]
 		}
 	}

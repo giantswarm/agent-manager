@@ -44,11 +44,10 @@ var (
 )
 
 type fixture struct {
-	dyn      *dynamicfake.FakeDynamicClient
-	typed    *kubefake.Clientset
-	pinner   *fakePinner
-	toolsets *fakeToolsets
-	svc      *Service
+	dyn    *dynamicfake.FakeDynamicClient
+	typed  *kubefake.Clientset
+	pinner *fakePinner
+	svc    *Service
 }
 
 func newFixture(t *testing.T, dynObjs []runtime.Object, typedObjs ...runtime.Object) *fixture {
@@ -57,14 +56,12 @@ func newFixture(t *testing.T, dynObjs []runtime.Object, typedObjs ...runtime.Obj
 	typed := kubefake.NewClientset(typedObjs...)
 	client := kube.FromInterfaces(dyn, typed, typed.Discovery())
 	pinner := &fakePinner{}
-	toolsets := newFakeToolsets()
 	svc := New(kube.NewServiceAccountProvider(client), embeddedChart{}, nil, pinner, Config{
 		DefaultNamespace: "kagent", ManagedNamespaces: []string{"tenant"}, Version: "test",
 		Compose:       ComposeConfig{MusterURL: "http://muster.agent-platform.svc.cluster.local:8090/mcp"},
-		Toolsets:      toolsets,
 		HarnessEgress: map[string][]string{"claude": {"https://github.com", "https://*.githubusercontent.com"}},
 	}, nil)
-	return &fixture{dyn: dyn, typed: typed, pinner: pinner, toolsets: toolsets, svc: svc}
+	return &fixture{dyn: dyn, typed: typed, pinner: pinner, svc: svc}
 }
 
 func modelConfig(ns, name, provider, model string) *unstructured.Unstructured {

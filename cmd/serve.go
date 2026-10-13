@@ -22,7 +22,6 @@ import (
 	"github.com/giantswarm/agent-manager/internal/chart"
 	"github.com/giantswarm/agent-manager/internal/kagent"
 	"github.com/giantswarm/agent-manager/internal/kube"
-	"github.com/giantswarm/agent-manager/internal/muster"
 	"github.com/giantswarm/agent-manager/internal/server"
 	"github.com/giantswarm/agent-manager/internal/skills"
 )
@@ -276,9 +275,6 @@ func runServe(ctx context.Context, o *serveOptions) error {
 		Version:          build.Version,
 		GitHub:           gitHubRemote(o.githubAuthorizationServer, o.githubAPIURL),
 		Sessions:         sessions,
-		// A claude Harness agent's toolset is resolved as the caller through
-		// muster's filter_tools; every failure refuses the write.
-		Toolsets:      &muster.Client{Version: build.Version},
 		HarnessEgress: harnessEgress,
 	}, log)
 
