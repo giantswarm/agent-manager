@@ -23,6 +23,11 @@ func TestUnwrapResponse(t *testing.T) {
 		"nested envelopes":     {in: envelope(encoded(envelope(`{"a":1}`, false)), false), want: map[string]any{"a": 1.0}},
 		"inner error":          {in: envelope(encoded(envelope("denied", true)), false), want: "denied", wantFailed: true},
 		"error key":            {in: map[string]any{"error": "no route"}, want: map[string]any{"error": "no route"}, wantFailed: true},
+		"error true":           {in: map[string]any{"error": true}, want: map[string]any{"error": true}, wantFailed: true},
+		"error object":         {in: map[string]any{"error": map[string]any{"code": 7.0}}, want: map[string]any{"error": map[string]any{"code": 7.0}}, wantFailed: true},
+		"error false":          {in: map[string]any{"error": false, "items": []any{}}, want: map[string]any{"error": false, "items": []any{}}},
+		"error empty":          {in: map[string]any{"error": map[string]any{}}, want: map[string]any{"error": map[string]any{}}},
+		"error zero":           {in: map[string]any{"error": 0.0}, want: map[string]any{"error": 0.0}},
 		"text that is no json": {in: "{not json", want: "{not json"},
 		"two contents stay": {
 			in:   map[string]any{"content": []any{map[string]any{"type": "text", "text": "a"}, map[string]any{"type": "text", "text": "b"}}},
@@ -35,25 +40,18 @@ func TestUnwrapResponse(t *testing.T) {
 	}
 }
 
-func TestClipTextKeepsRunesWhole(t *testing.T) {
+func TestClipTextStaysWithinItsBound(t *testing.T) {
 	assert.Equal(t, "short", clipText("short", 100))
 	got := clipText(strings.Repeat("é", 100), 51)
 	assert.True(t, utf8.ValidString(got))
 	assert.True(t, strings.HasSuffix(got, "bytes clipped]"))
 	assert.LessOrEqual(t, len(got), 51)
-}
 
-func TestPackNewest(t *testing.T) {
-	items := []string{"aaaa", "bbbb", "cccc"}
-	kept, omitted := packNewest(items, 14, nil)
-	assert.Equal(t, []string{"bbbb", "cccc"}, kept, "oldest first, the newest that fit")
-	assert.Equal(t, 1, omitted)
-
-	kept, omitted = packNewest(items, 3, nil)
-	assert.Empty(t, kept)
-	assert.Equal(t, 3, omitted)
-
-	kept, omitted = packNewest(items, 3, func(s string, _ int) (string, bool) { return "c", true })
-	assert.Equal(t, []string{"c"}, kept, "fit cuts the newest down")
-	assert.Equal(t, 2, omitted)
+	huge := strings.Repeat("x", 5_000_000)
+	for _, n := range []int{0, 5, 23, 24, 30, 1000} {
+		got := clipText(huge, n)
+		assert.LessOrEqual(t, len(got), n, n)
+	}
+	assert.Equal(t, "xxxxx", clipText(huge, 5), "no room to say what was cut")
+	assert.True(t, utf8.ValidString(clipText(strings.Repeat("é", 10), 5)))
 }

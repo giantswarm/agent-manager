@@ -39,7 +39,9 @@ const (
 )
 
 // Turn is one turn of a conversation, one A2A task, indexed from 0 oldest
-// first. Messages is set in the transcript view only.
+// first. The summary view sets User, Reply and ToolCalls, the transcript
+// view Messages, which hold all of them. Artifacts counts the task's
+// artifacts.
 type Turn struct {
 	Index     int            `json:"index"`
 	TaskID    string         `json:"taskId"`
@@ -48,6 +50,7 @@ type Turn struct {
 	User      string         `json:"user,omitempty"`
 	Reply     string         `json:"reply,omitempty"`
 	ToolCalls []ToolCallStub `json:"toolCalls,omitempty"`
+	Artifacts int            `json:"artifacts,omitempty"`
 	Messages  []TurnMessage  `json:"messages,omitempty"`
 	// Clipped says the turn alone exceeded the budget: its messages and tool
 	// calls were dropped and its texts clipped.
@@ -64,11 +67,13 @@ type ToolCallStub struct {
 	Pending bool   `json:"pending,omitempty"`
 }
 
-// TurnMessage is one message of a turn in the transcript view. Index is its
+// TurnMessage is one message of a turn in the transcript view, or one of the
+// task's artifacts after them (role "artifact", with its name). Index is its
 // position in the turn, as get_session_turn's fromMessage counts.
 type TurnMessage struct {
 	Index   int        `json:"index"`
 	Role    string     `json:"role"`
+	Name    string     `json:"name,omitempty"`
 	Parts   []PartView `json:"parts,omitempty"`
 	Clipped bool       `json:"clipped,omitempty"`
 }
@@ -244,11 +249,19 @@ func (t *turn) stubs() []ToolCallStub {
 }
 
 // summary is the turn in the summary view: the first user message, the
-// status message and the tool call stubs.
+// status message (else the artifacts' text, where a runtime may answer) and
+// the tool call stubs.
 func (t *turn) summary() Turn {
-	out := Turn{
-		Index: t.index, TaskID: t.task.GetId(), State: t.state(), Timestamp: t.timestamp(),
-		Reply: messageText(t.task.GetStatus().GetMessage()), ToolCalls: t.stubs(),
+	out := t.header()
+	out.Reply, out.ToolCalls = messageText(t.task.GetStatus().GetMessage()), t.stubs()
+	if out.Reply == "" {
+		var texts []string
+		for _, artifact := range t.task.GetArtifacts() {
+			if text := partsText(artifact.GetParts()); text != "" {
+				texts = append(texts, text)
+			}
+		}
+		out.Reply = strings.Join(texts, "\n")
 	}
 	for _, msg := range t.messages {
 		if msg.GetRole() == a2apb.Role_ROLE_USER {
@@ -259,22 +272,51 @@ func (t *turn) summary() Turn {
 	return out
 }
 
-// transcript is the summary with every message.
+// transcript is the turn with every message and artifact, which hold what
+// the summary picks from them.
 func (t *turn) transcript() Turn {
-	out := t.summary()
-	for i := range t.messages {
+	out := t.header()
+	for i := range t.items() {
 		out.Messages = append(out.Messages, t.messageView(i))
 	}
 	return out
 }
 
+func (t *turn) header() Turn {
+	return Turn{Index: t.index, TaskID: t.task.GetId(), State: t.state(), Timestamp: t.timestamp(), Artifacts: len(t.task.GetArtifacts())}
+}
+
+// items counts the turn's messages and, after them, its artifacts.
+func (t *turn) items() int { return len(t.messages) + len(t.task.GetArtifacts()) }
+
 func (t *turn) messageView(i int) TurnMessage {
+	if i >= len(t.messages) {
+		artifact := t.task.GetArtifacts()[i-len(t.messages)]
+		out := TurnMessage{Index: i, Role: "artifact", Name: artifact.GetName()}
+		for _, part := range artifact.GetParts() {
+			out.Parts = append(out.Parts, t.partView(part))
+		}
+		return out
+	}
 	msg := t.messages[i]
 	out := TurnMessage{Index: i, Role: strings.ToLower(strings.TrimPrefix(msg.GetRole().String(), "ROLE_"))}
 	for _, part := range msg.GetParts() {
 		out.Parts = append(out.Parts, t.partView(part))
 	}
 	return out
+}
+
+// rawItem is the i-th message as proto3 JSON, or an artifact as
+// {"artifact": …}.
+func (t *turn) rawItem(i int) (json.RawMessage, error) {
+	if i < len(t.messages) {
+		return marshalProto(t.messages[i])
+	}
+	raw, err := marshalProto(t.task.GetArtifacts()[i-len(t.messages)])
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(map[string]json.RawMessage{"artifact": raw})
 }
 
 func (t *turn) partView(part *a2apb.Part) PartView {
@@ -311,22 +353,52 @@ func (t *turn) toolCallDetail(call *toolCall, budget int) (ToolCallDetail, bool)
 	if jsonSize(out) <= budget {
 		return out, false
 	}
-	if len(out.Args) > budget/4 {
-		out.ArgsText, out.Args = clipText(string(out.Args), budget/4), nil
+	// The smaller of arguments and response stays whole when it fits half the
+	// room; the other is clipped to what is left.
+	args, response := out.Args, out.Response
+	out.Args, out.Response = nil, nil
+	room := budget - jsonSize(out)
+	argsShare, responseShare := room/2, room/2
+	switch {
+	case len(args) <= room/2:
+		argsShare, responseShare = len(args), room-len(args)
+	case len(response) <= room/2:
+		argsShare, responseShare = room-len(response), len(response)
 	}
-	responseText := string(out.Response)
-	var s string
-	if json.Unmarshal(out.Response, &s) == nil {
-		responseText = s
+	if len(args) <= argsShare {
+		out.Args = args
 	}
-	out.Response = nil
-	for limit := budget - jsonSize(out); limit > 0; limit /= 2 {
-		out.ResponseText = clipText(responseText, limit)
-		if jsonSize(out) <= budget {
+	if len(response) <= responseShare {
+		out.Response = response
+	}
+	for range 8 {
+		if out.Args == nil && len(args) > 0 {
+			out.ArgsText = clipText(jsonString(args), argsShare)
+		}
+		if out.Response == nil && len(response) > 0 {
+			out.ResponseText = clipText(jsonString(response), responseShare)
+		}
+		over := jsonSize(out) - budget
+		if over <= 0 {
 			break
+		}
+		// Escaping grew the clipped texts: take the excess off them.
+		if out.ResponseText != "" {
+			responseShare = max(responseShare-over, 0)
+		} else {
+			argsShare = max(argsShare-over, 0)
 		}
 	}
 	return out, true
+}
+
+// jsonString is a JSON string's value, or any other JSON as its text.
+func jsonString(data json.RawMessage) string {
+	var s string
+	if json.Unmarshal(data, &s) == nil {
+		return s
+	}
+	return string(data)
 }
 
 // call is the turn's tool call ref names: its index or its id.
@@ -359,10 +431,26 @@ func unwrapResponse(v any) (any, bool) {
 		}
 		v = next
 	}
-	if m, ok := v.(map[string]any); ok && m["error"] != nil && m["error"] != "" {
+	if m, ok := v.(map[string]any); ok && reportsError(m["error"]) {
 		failed = true
 	}
 	return v, failed
+}
+
+// reportsError says whether an error field holds an error: true, a message
+// or an object with content, not false, "", null or {}.
+func reportsError(v any) bool {
+	switch e := v.(type) {
+	case bool:
+		return e
+	case string:
+		return e != ""
+	case map[string]any:
+		return len(e) > 0
+	case []any:
+		return len(e) > 0
+	}
+	return false
 }
 
 func unwrapOnce(v any) (next any, failed, ok bool) {
@@ -403,9 +491,11 @@ func onlyKeys(m map[string]any, keys ...string) bool {
 	return true
 }
 
-func messageText(msg *a2apb.Message) string {
+func messageText(msg *a2apb.Message) string { return partsText(msg.GetParts()) }
+
+func partsText(parts []*a2apb.Part) string {
 	var texts []string
-	for _, part := range msg.GetParts() {
+	for _, part := range parts {
 		if text := part.GetText(); text != "" {
 			texts = append(texts, text)
 		}
@@ -433,30 +523,41 @@ func jsonSize(v any) int {
 	return len(data)
 }
 
-// clipText cuts s to about n bytes on a rune boundary and says how much it
-// cut.
+// clipText cuts s to at most n bytes on a rune boundary and says how much it
+// cut, when n leaves room to say so.
 func clipText(s string, n int) string {
 	if len(s) <= n {
 		return s
 	}
-	cut := max(n-24, 0)
+	n = max(n, 0)
+	// The marker for cutting all of s is the longest one.
+	reserve := len(clipMarker(len(s)))
+	if n < reserve {
+		reserve = 0
+	}
+	cut := n - reserve
 	for cut > 0 && !utf8.RuneStart(s[cut]) {
 		cut--
 	}
-	return s[:cut] + fmt.Sprintf("…[%d bytes clipped]", len(s)-cut)
+	if reserve == 0 {
+		return s[:cut]
+	}
+	return s[:cut] + clipMarker(len(s)-cut)
 }
 
-// fitTurn cuts a turn that alone exceeds budget: it drops the messages, then
-// the tool calls, then clips the texts until it fits. It answers false when
-// even that is too big.
+func clipMarker(clipped int) string { return fmt.Sprintf("…[%d bytes clipped]", clipped) }
+
+// fitTurn cuts a turn's summary that alone exceeds budget: it drops the tool
+// calls, then clips the texts until it fits. It answers false when even that
+// is too big.
 func fitTurn(in Turn, budget int) (Turn, bool) {
 	out := in
-	out.Clipped, out.Messages = true, nil
+	out.Clipped = true
 	if jsonSize(out) <= budget {
 		return out, true
 	}
 	out.ToolCalls = nil
-	rest := budget - jsonSize(Turn{Index: out.Index, TaskID: out.TaskID, State: out.State, Timestamp: out.Timestamp, Clipped: true})
+	rest := budget - jsonSize(Turn{Index: out.Index, TaskID: out.TaskID, State: out.State, Timestamp: out.Timestamp, Artifacts: out.Artifacts, Clipped: true})
 	for userMax, replyMax := rest/4, rest*3/4; replyMax > 0; userMax, replyMax = userMax/2, replyMax/2 {
 		out.User, out.Reply = clipText(in.User, userMax), clipText(in.Reply, replyMax)
 		if jsonSize(out) <= budget {
@@ -464,29 +565,4 @@ func fitTurn(in Turn, budget int) (Turn, bool) {
 		}
 	}
 	return out, false
-}
-
-// packNewest keeps the newest items that fit budget bytes, oldest first, and
-// counts the older ones it left out. When even the newest does not fit, fit
-// may cut it down; without fit it is left out too.
-func packNewest[T any](items []T, budget int, fit func(T, int) (T, bool)) (kept []T, omitted int) {
-	used := 0
-	i := len(items) - 1
-	for ; i >= 0; i-- {
-		size := jsonSize(items[i]) + 1
-		if used+size <= budget {
-			kept = append(kept, items[i])
-			used += size
-			continue
-		}
-		if len(kept) == 0 && fit != nil {
-			if cut, ok := fit(items[i], budget-1); ok {
-				kept = append(kept, cut)
-				i--
-			}
-		}
-		break
-	}
-	slices.Reverse(kept)
-	return kept, i + 1
 }

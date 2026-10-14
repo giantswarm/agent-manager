@@ -149,7 +149,8 @@ func TestStartSessionThenReadTheAnswer(t *testing.T) {
 		assert.Equal(t, []string{"Bearer " + callerToken}, call.Metadata.Get("authorization"), call.Method)
 	}
 	// The conversation was read from the session's own Agent and context.
-	last := ctrl.Calls()[len(ctrl.Calls())-2].Request.(*a2apb.ListTasksRequest)
+	lists := methodCalls(ctrl, "ListTasks")
+	last := lists[len(lists)-1].(*a2apb.ListTasksRequest)
 	assert.Equal(t, "tenant/sre", last.GetTenant())
 	assert.Equal(t, session.ContextID, last.GetContextId())
 }

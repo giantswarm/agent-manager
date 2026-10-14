@@ -269,7 +269,7 @@ func (h *REST) getSession(w http.ResponseWriter, r *http.Request) {
 		h.writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, res)
+	writeCompactJSON(w, res)
 }
 
 func (h *REST) getSessionTurn(w http.ResponseWriter, r *http.Request) {
@@ -292,7 +292,7 @@ func (h *REST) getSessionTurn(w http.ResponseWriter, r *http.Request) {
 		h.writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, res)
+	writeCompactJSON(w, res)
 }
 
 // queryInt is the integer query parameter name, 0 when it is absent.
@@ -395,6 +395,14 @@ func statusFor(err error) (int, string) {
 	default:
 		return http.StatusBadGateway, "backend_error"
 	}
+}
+
+// writeCompactJSON answers 200 with v unindented: a session read is bounded
+// by maxBytes measured on compact JSON.
+func writeCompactJSON(w http.ResponseWriter, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(v)
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

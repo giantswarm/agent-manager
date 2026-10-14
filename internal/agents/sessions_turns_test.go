@@ -3,6 +3,7 @@ package agents
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/giantswarm/agent-manager/internal/identity"
+	"github.com/giantswarm/agent-manager/internal/kagent"
 	"github.com/giantswarm/agent-manager/internal/kagent/kagenttest"
 )
 
@@ -93,8 +95,119 @@ func TestGetSessionSummaryLeavesToolPayloadsOut(t *testing.T) {
 	assert.NotContains(t, answer, "web-0", "no tool arguments")
 	assert.Less(t, len(answer), 4096)
 
-	req := ctrl.Calls()[len(ctrl.Calls())-1].Request.(*a2apb.ListTasksRequest)
-	assert.False(t, req.GetIncludeArtifacts(), "the summary reads no artifacts")
+	list := methodCalls(ctrl, "ListTasks")
+	require.Len(t, list, 1)
+	req := list[0].(*a2apb.ListTasksRequest)
+	require.NotNil(t, req.HistoryLength)
+	assert.Zero(t, req.GetHistoryLength(), "the turns are listed without their history")
+	assert.False(t, req.GetIncludeArtifacts())
+	assert.Len(t, methodCalls(ctrl, "GetTask"), 3, "each turn answered is read whole")
+}
+
+// methodCalls are the requests of the calls of method the fake served.
+func methodCalls(ctrl *kagenttest.Controller, method string) []any {
+	var out []any
+	for _, call := range ctrl.Calls() {
+		if call.Method == method {
+			out = append(out, call.Request)
+		}
+	}
+	return out
+}
+
+func TestPollingTheLastTurnReadsOnlyIt(t *testing.T) {
+	svc, ctrl, ctx, id := conversation(t)
+
+	got, err := svc.GetSession(ctx, SessionQuery{SessionID: id, LastTurns: 1})
+	require.NoError(t, err)
+	require.Len(t, got.Turns, 1)
+	assert.Equal(t, 2, got.Turns[0].Index)
+	assert.Equal(t, 3, got.TotalTurns)
+	gets := methodCalls(ctrl, "GetTask")
+	require.Len(t, gets, 1)
+	assert.Equal(t, "task-2", gets[0].(*a2apb.GetTaskRequest).GetId())
+}
+
+func TestGetSessionReadsAtMostMaxFetchedTurns(t *testing.T) {
+	svc, ctrl := newSessionFixture(t)
+	ctx := identity.ContextWithToken(t.Context(), callerToken)
+	tasks := make([]*a2apb.Task, maxFetchedTurns+50)
+	for i := range tasks {
+		tasks[i] = taskOf(fmt.Sprintf("task-%d", i), a2apb.TaskState_TASK_STATE_COMPLETED, "ok")
+	}
+	s := ctrl.AddSession("kagent", "sre", tasks...)
+
+	got, err := svc.GetSession(ctx, SessionQuery{SessionID: s.GetId()})
+	require.NoError(t, err)
+	assert.Len(t, got.Turns, maxFetchedTurns)
+	assert.Equal(t, 50, got.OmittedTurns)
+	assert.Equal(t, len(tasks)-1, got.Turns[len(got.Turns)-1].Index)
+	assert.Contains(t, got.Hint, "lastTurns")
+	assert.Len(t, methodCalls(ctrl, "GetTask"), maxFetchedTurns)
+}
+
+func TestGetSessionRefusesAConversationLongerThanItLists(t *testing.T) {
+	svc, ctrl := newSessionFixture(t)
+	ctx := identity.ContextWithToken(t.Context(), callerToken)
+	tasks := make([]*a2apb.Task, kagent.MaxListedTasks+1)
+	for i := range tasks {
+		tasks[i] = &a2apb.Task{Id: fmt.Sprintf("task-%d", i)}
+	}
+	s := ctrl.AddSession("kagent", "sre", tasks...)
+
+	_, err := svc.GetSession(ctx, SessionQuery{SessionID: s.GetId(), LastTurns: 1})
+	require.ErrorIs(t, err, ErrConflict)
+	assert.Contains(t, err.Error(), "more than 10000 turns")
+	_, err = svc.GetSessionTurn(ctx, TurnQuery{SessionID: s.GetId(), Turn: "last"})
+	require.ErrorIs(t, err, ErrConflict)
+	assert.Empty(t, methodCalls(ctrl, "GetTask"), "no turn is answered as the newest")
+}
+
+func TestASessionWithoutTurnsAnswersAnEmptyList(t *testing.T) {
+	svc, ctrl := newSessionFixture(t)
+	ctx := identity.ContextWithToken(t.Context(), callerToken)
+	s := ctrl.AddSession("kagent", "sre")
+	for detail, key := range map[string]string{DetailSummary: `"turns":[]`, DetailFull: `"tasks":[]`} {
+		got, err := svc.GetSession(ctx, SessionQuery{SessionID: s.GetId(), Detail: detail})
+		require.NoError(t, err)
+		assert.Contains(t, encoded(got), key, detail)
+	}
+}
+
+func TestAnArtifactReplyIsAnswered(t *testing.T) {
+	svc, ctrl := newSessionFixture(t)
+	ctx := identity.ContextWithToken(t.Context(), callerToken)
+	task := taskOf("task-0", a2apb.TaskState_TASK_STATE_COMPLETED, "", userSays("report please"))
+	task.Artifacts = []*a2apb.Artifact{
+		{ArtifactId: "a1", Name: "report", Parts: []*a2apb.Part{kagenttest.Text("the report")}},
+		{ArtifactId: "a2", Name: "big", Parts: []*a2apb.Part{kagenttest.Text(strings.Repeat("x", 20_000))}},
+	}
+	s := ctrl.AddSession("kagent", "sre", task)
+
+	got, err := svc.GetSession(ctx, SessionQuery{SessionID: s.GetId()})
+	require.NoError(t, err)
+	require.Len(t, got.Turns, 1)
+	assert.Equal(t, 2, got.Turns[0].Artifacts)
+	assert.True(t, strings.HasPrefix(got.Turns[0].Reply, "the report\n"), "the artifacts answer for an empty status message")
+
+	// Artifacts follow the messages, paged as they are; one too big alone is
+	// clipped in the transcript and named in the full view.
+	turn, err := svc.GetSessionTurn(ctx, TurnQuery{SessionID: s.GetId(), Turn: "0", MaxBytes: MinSessionMaxBytes})
+	require.NoError(t, err)
+	assert.Equal(t, 3, turn.TotalMessages)
+	require.Len(t, turn.Messages, 2)
+	assert.Equal(t, TurnMessage{Index: 1, Role: "artifact", Name: "report", Parts: []PartView{{Text: "the report"}}}, turn.Messages[1])
+	assert.Equal(t, 2, turn.NextMessage)
+	big, err := svc.GetSessionTurn(ctx, TurnQuery{SessionID: s.GetId(), Turn: "0", FromMessage: 2, MaxBytes: MinSessionMaxBytes})
+	require.NoError(t, err)
+	require.Len(t, big.Messages, 1)
+	assert.True(t, big.Messages[0].Clipped)
+	assert.Contains(t, big.Messages[0].Parts[0].Text, "bytes clipped]")
+	assert.LessOrEqual(t, len(encoded(big)), MinSessionMaxBytes)
+	full, err := svc.GetSessionTurn(ctx, TurnQuery{SessionID: s.GetId(), Turn: "0", Detail: DetailFull})
+	require.NoError(t, err)
+	require.Len(t, full.History, 3)
+	assert.Contains(t, string(full.History[1]), `"artifact":{"artifactId":"a1"`)
 }
 
 func TestGetSessionTranscriptClipsArgumentsAndStubsResults(t *testing.T) {
@@ -105,6 +218,9 @@ func TestGetSessionTranscriptClipsArgumentsAndStubsResults(t *testing.T) {
 	require.Len(t, got.Turns, 2, "the last two turns")
 	assert.Equal(t, 1, got.Turns[0].Index)
 	assert.Zero(t, got.OmittedTurns, "turns left out by lastTurns are not omitted by the budget")
+	assert.Empty(t, got.Turns[0].User, "the messages hold the user's message")
+	assert.Empty(t, got.Turns[0].Reply, "the messages hold the reply")
+	assert.Empty(t, got.Turns[0].ToolCalls, "the messages hold the tool calls")
 	msgs := got.Turns[0].Messages
 	require.Len(t, msgs, 6, "four tool messages, the user's and the status message")
 	assert.Equal(t, TurnMessage{Index: 0, Role: "user", Parts: []PartView{{Text: "why is it failing"}}}, msgs[0])
@@ -154,6 +270,8 @@ func TestGetSessionClipsANewestTurnThatAloneIsTooBig(t *testing.T) {
 	assert.True(t, got.Truncated)
 	assert.Contains(t, got.Turns[0].Reply, "bytes clipped]")
 	assert.LessOrEqual(t, len(encoded(got)), MinSessionMaxBytes)
+	assert.Zero(t, got.OmittedTurns)
+	assert.Equal(t, clippedTurnHint, got.Hint, "no older turn was left out")
 
 	full, err := svc.GetSession(ctx, SessionQuery{SessionID: s.GetId(), Detail: DetailFull, MaxBytes: MinSessionMaxBytes})
 	require.NoError(t, err)
@@ -181,10 +299,13 @@ func TestGetSessionChecksItsArguments(t *testing.T) {
 func TestGetSessionTurnAddressesATurn(t *testing.T) {
 	svc, ctrl, ctx, id := conversation(t)
 
-	for ref, want := range map[IndexOrID]string{"last": "task-2", "1": "task-1", "task-0": "task-0"} {
-		got, err := svc.GetSessionTurn(ctx, TurnQuery{SessionID: id, Turn: ref})
-		require.NoError(t, err, ref)
-		assert.Equal(t, want, got.TaskID, ref)
+	for _, tc := range []struct {
+		ref  IndexOrID
+		want string
+	}{{"last", "task-2"}, {"1", "task-1"}, {"task-0", "task-0"}} {
+		got, err := svc.GetSessionTurn(ctx, TurnQuery{SessionID: id, Turn: tc.ref})
+		require.NoError(t, err, tc.ref)
+		assert.Equal(t, tc.want, got.TaskID, tc.ref)
 		assert.Equal(t, 3, got.TotalTurns)
 		assert.Equal(t, DetailTranscript, got.Detail)
 	}
@@ -200,7 +321,6 @@ func TestGetSessionTurnAddressesATurn(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 6, got.TotalMessages)
 	assert.Len(t, got.Messages, 6)
-	assert.Len(t, got.ToolCalls, 2)
 	assert.Zero(t, got.NextMessage)
 	assert.False(t, got.Truncated)
 
@@ -246,6 +366,24 @@ func TestGetSessionTurnAnswersAToolCallWhole(t *testing.T) {
 
 	_, err = svc.GetSessionTurn(ctx, TurnQuery{SessionID: id, Turn: "0", ToolCall: "7"})
 	require.ErrorIs(t, err, ErrNotFound)
+}
+
+func TestAToolCallsSmallResponseStaysWholeBesideLargeArguments(t *testing.T) {
+	svc, ctrl := newSessionFixture(t)
+	ctx := identity.ContextWithToken(t.Context(), callerToken)
+	s := ctrl.AddSession("kagent", "sre", taskOf("task-0", a2apb.TaskState_TASK_STATE_COMPLETED, "done",
+		agentSays(kagenttest.ToolCall("adk_", "c1", "write_file", map[string]any{"content": strings.Repeat("y", 50_000)})),
+		agentSays(kagenttest.ToolResult("adk_", "c1", "write_file", map[string]any{"ok": true})),
+	))
+
+	got, err := svc.GetSessionTurn(ctx, TurnQuery{SessionID: s.GetId(), Turn: "0", ToolCall: "0", MaxBytes: 10_000})
+	require.NoError(t, err)
+	assert.True(t, got.Truncated)
+	assert.JSONEq(t, `{"ok":true}`, string(got.ToolCall.Response), "the response was not clipped")
+	assert.Empty(t, got.ToolCall.ResponseText)
+	assert.Nil(t, got.ToolCall.Args)
+	assert.Greater(t, len(got.ToolCall.ArgsText), 8_000, "the arguments get the room the response leaves")
+	assert.LessOrEqual(t, len(encoded(got)), 10_000)
 }
 
 func TestGetSessionTurnPagesItsMessages(t *testing.T) {

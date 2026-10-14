@@ -522,37 +522,45 @@ and without the caller's token a session operation is `401 unauthenticated`.
   grant appears in no log line, error or response.
 - `get_session` is `SessionService/GetSession` plus `A2AService/ListTasks`
   addressed to the session's Agent and filtered by its context. A turn is one
-  task, indexed from 0 oldest first. A session's tasks carry every tool call
-  and response, so the answer is shaped to fit a caller's context:
+  task, indexed from 0 oldest first. The tasks are listed without their
+  history, and only the turns answered are read whole (`A2AService/GetTask`),
+  newest first. A session's tasks carry every tool call and response, so the
+  answer is shaped to fit a caller's context:
   - `detail`: `summary` (default) is per turn the task id, state, timestamp,
-    the user's message, the agent's reply (the task's status message) and one
-    stub per tool call (`index`, `id`, `name`, `error`, `pending`), never tool
-    arguments, responses or artifacts. `transcript` adds every message, with
-    tool call arguments clipped and tool results as stubs carrying their size.
-    `full` answers the raw tasks (`tasks`, with history and artifacts).
+    the user's message, the agent's reply (the task's status message, else
+    its artifacts' text), one stub per tool call (`index`, `id`, `name`,
+    `error`, `pending`) and the number of artifacts, never tool arguments or
+    responses. `transcript` is per turn every message and, after them, every
+    artifact (`role: artifact`), with tool call arguments clipped and tool
+    results as stubs carrying their size. `full` answers the raw tasks
+    (`tasks`, with history and artifacts).
   - `lastTurns` answers only the last n turns; `lastTurns: 1` is how to poll a
-    running turn.
+    running turn, and reads only that turn.
   - `maxBytes` (4096 to 1048576, default 100000) bounds the answer. The newest
-    turns that fit are kept, the older ones are counted in `omittedTurns` with
-    `truncated: true`. A newest turn too big on its own is clipped
-    (`clipped: true`), or in `full` left out.
+    turns that fit are kept, at most 200, and the older ones are counted in
+    `omittedTurns` with `truncated: true`. A newest turn too big on its own is
+    clipped (`clipped: true`), or in `full` left out.
 
   Tool calls are read from the A2A data parts the ADK writes, typed
   `function_call` and `function_response` under the metadata key `adk_type`
-  or `kagent_type`. A response's `error` is an `isError` or `error` in it or in
+  or `kagent_type`. A response's `error` is an `isError: true`, or an `error`
+  holding something (`true`, a message, an object with fields), in it or in
   any envelope it is wrapped in.
 - `get_session_turn` reads one turn, named by its task id, its index or
   `last`, with `A2AService/GetTask`; a task of another session is `404`.
-  `detail` `transcript` (default) answers its messages from `fromMessage` on,
-  `full` the A2A messages (`history`) and, from message 0, the task's
-  artifacts. Messages that do not fit `maxBytes` are left for the next call:
-  `nextMessage` is the `fromMessage` to continue with, and a single message
-  too big on its own is clipped (`transcript`) or replaced by a note of its
-  size (`full`). `toolCall`, an index or id from `toolCalls`, answers that call
-  instead: its arguments and its response unwrapped from the envelopes it
-  travelled in (a runtime's `{result, isError}`, an MCP result's single text
-  content, JSON in a string, as muster nests them), clipped to `maxBytes`
-  (`argsText`, `responseText`) when they do not fit.
+  `detail` `transcript` (default) answers its messages and then its artifacts
+  from `fromMessage` on, `full` the same as A2A messages and
+  `{artifact: …}` objects (`history`). What does not fit `maxBytes` is left
+  for the next call: `nextMessage` is the `fromMessage` to continue with, and
+  a single message or artifact too big on its own is clipped (`transcript`) or
+  replaced by a note of its size (`full`). `toolCall`, an index or id of a
+  tool call, answers that call instead: its arguments and its response
+  unwrapped from the envelopes it travelled in (a runtime's
+  `{result, isError}`, an MCP result's single text content, JSON in a string,
+  as muster nests them). When they do not fit `maxBytes`, the smaller stays
+  whole and the larger is clipped (`argsText`, `responseText`).
+- Both read conversations of up to 10000 turns; a longer one is `409
+  conflict`, as its newest turns could not be named.
 - `list_sessions` is `SessionService/ListSessions` for one Agent.
 
 Session and task bodies are kagent's proto3 JSON, passed through: session

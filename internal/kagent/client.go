@@ -45,11 +45,16 @@ const (
 	// maxSessionPages and maxTaskPages bound how far a listing is followed, so
 	// a misbehaving next_page_token cannot loop forever.
 	maxSessionPages = 20
-	maxTaskPages    = 10
+	maxTaskPages    = MaxListedTasks / pageSize
 	// maxMessageBytes bounds one response: a session's tasks carry its whole
 	// history and artifacts.
 	maxMessageBytes = 32 << 20
 )
+
+// MaxListedTasks is how many tasks ListSessionTasks reads before it stops:
+// a conversation's tasks are listed without their history, to address its
+// turns, and only the turns answered are read whole.
+const MaxListedTasks = 10_000
 
 // ErrNoToken is returned for a call without a caller token: there is no
 // other identity to make it with.
@@ -191,15 +196,22 @@ type TaskListOptions struct {
 	IncludeArtifacts bool
 }
 
+// TaskList is a session's tasks, oldest first. Complete is false when the
+// listing stopped at MaxListedTasks with tasks left.
+type TaskList struct {
+	Tasks    []*a2apb.Task
+	Complete bool
+}
+
 // ListSessionTasks is A2AService/ListTasks addressed to the session's Agent
-// and filtered by its context, walked to the end: the conversation, oldest
-// task first.
-func (c *Client) ListSessionTasks(ctx context.Context, token string, agent Ref, contextID string, opts TaskListOptions) ([]*a2apb.Task, error) {
+// and filtered by its context, walked to the end or MaxListedTasks: the
+// conversation, oldest task first.
+func (c *Client) ListSessionTasks(ctx context.Context, token string, agent Ref, contextID string, opts TaskListOptions) (*TaskList, error) {
 	ctx, err := asCaller(ctx, token)
 	if err != nil {
 		return nil, err
 	}
-	var out []*a2apb.Task
+	out := &TaskList{}
 	pageToken := ""
 	size := int32(pageSize)
 	for range maxTaskPages {
@@ -214,9 +226,10 @@ func (c *Client) ListSessionTasks(ctx context.Context, token string, agent Ref, 
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, resp.GetTasks()...)
+		out.Tasks = append(out.Tasks, resp.GetTasks()...)
 		pageToken = resp.GetNextPageToken()
 		if pageToken == "" {
+			out.Complete = true
 			break
 		}
 	}

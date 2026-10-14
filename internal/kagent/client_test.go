@@ -101,8 +101,9 @@ func TestListSessionTasksAddressesTheAgentAndContext(t *testing.T) {
 	none := int32(0)
 	got, err := c.ListSessionTasks(t.Context(), token, sre, s.GetContextId(), kagent.TaskListOptions{HistoryLength: &none, IncludeArtifacts: true})
 	require.NoError(t, err)
-	require.Len(t, got, 120)
-	assert.Equal(t, "task-000", got[0].GetId(), "oldest first")
+	assert.True(t, got.Complete)
+	require.Len(t, got.Tasks, 120)
+	assert.Equal(t, "task-000", got.Tasks[0].GetId(), "oldest first")
 
 	calls := ctrl.Calls()
 	require.Len(t, calls, 2)
@@ -117,6 +118,20 @@ func TestListSessionTasksAddressesTheAgentAndContext(t *testing.T) {
 	// The wrong Agent cannot read the session.
 	_, err = c.ListSessionTasks(t.Context(), token, kagent.Ref{Namespace: "kagent", Name: "other"}, s.GetContextId(), kagent.TaskListOptions{})
 	assert.Equal(t, codes.NotFound, status.Code(err))
+}
+
+func TestListSessionTasksStopsAtItsBound(t *testing.T) {
+	ctrl, conn := kagenttest.New(t)
+	tasks := make([]*a2apb.Task, kagent.MaxListedTasks+1)
+	for i := range tasks {
+		tasks[i] = &a2apb.Task{Id: fmt.Sprintf("task-%05d", i)}
+	}
+	s := ctrl.AddSession("kagent", "sre", tasks...)
+
+	got, err := kagent.NewClient(conn).ListSessionTasks(t.Context(), token, sre, s.GetContextId(), kagent.TaskListOptions{})
+	require.NoError(t, err)
+	assert.False(t, got.Complete, "tasks are left")
+	assert.Len(t, got.Tasks, kagent.MaxListedTasks)
 }
 
 func TestGetSessionTaskAddressesTheAgent(t *testing.T) {

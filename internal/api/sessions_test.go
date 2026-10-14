@@ -95,6 +95,12 @@ func TestSessionsOverREST(t *testing.T) {
 	require.Equal(t, http.StatusOK, code, body)
 	assert.Len(t, body["history"], 1)
 
+	// maxBytes bounds the body as sent: compact, not indented.
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, Prefix+"/sessions/"+session["id"].(string)+"?detail=transcript", nil))
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.NotContains(t, rec.Body.String(), "\n  ")
+
 	for _, query := range []string{"?maxBytes=lots", "?lastTurns=-1", "?detail=everything"} {
 		code, body = do(t, h, http.MethodGet, Prefix+"/sessions/"+session["id"].(string)+query, nil)
 		assert.Equal(t, http.StatusBadRequest, code, query)

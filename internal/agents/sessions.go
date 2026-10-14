@@ -13,6 +13,7 @@ import (
 
 	a2apb "github.com/a2aproject/a2a-go/v2/a2apb/v1"
 	"github.com/google/uuid"
+	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -39,7 +40,7 @@ const (
 type SessionClient interface {
 	ListSessions(ctx context.Context, token string, agent kagent.Ref, allCreators bool) ([]*apiv1alpha1.Session, error)
 	GetSession(ctx context.Context, token, sessionID string) (*apiv1alpha1.Session, error)
-	ListSessionTasks(ctx context.Context, token string, agent kagent.Ref, contextID string, opts kagent.TaskListOptions) ([]*a2apb.Task, error)
+	ListSessionTasks(ctx context.Context, token string, agent kagent.Ref, contextID string, opts kagent.TaskListOptions) (*kagent.TaskList, error)
 	GetSessionTask(ctx context.Context, token string, agent kagent.Ref, taskID string) (*a2apb.Task, error)
 	CreateSession(ctx context.Context, token string, in kagent.SessionCreate) (*apiv1alpha1.Session, error)
 	SendMessage(ctx context.Context, token string, agent kagent.Ref, contextID, messageID, text string) (*a2apb.StreamResponse, error)
@@ -67,8 +68,9 @@ type SessionQuery struct {
 // SessionDetail is the answer of get_session: the session and its
 // conversation, one turn per A2A task of the session's context, oldest first.
 // Turns holds the summary and transcript views, Tasks the full view (proto3
-// JSON of lf.a2a.v1.Task: status, history, artifacts). The newest turns that
-// fit the budget are kept; OmittedTurns counts the older ones left out.
+// JSON of lf.a2a.v1.Task: status, history, artifacts); the view's list is
+// always present. The newest turns that fit the budget are kept;
+// OmittedTurns counts the older ones left out.
 type SessionDetail struct {
 	Session      json.RawMessage   `json:"session"`
 	Detail       string            `json:"detail"`
@@ -76,8 +78,8 @@ type SessionDetail struct {
 	Truncated    bool              `json:"truncated,omitempty"`
 	OmittedTurns int               `json:"omittedTurns,omitempty"`
 	Hint         string            `json:"hint,omitempty"`
-	Turns        []Turn            `json:"turns,omitempty"`
-	Tasks        []json.RawMessage `json:"tasks,omitempty"`
+	Turns        []Turn            `json:"turns,omitzero"`
+	Tasks        []json.RawMessage `json:"tasks,omitzero"`
 }
 
 // IndexOrID names a turn or a tool call by its index or its id. It reads a
@@ -115,28 +117,26 @@ type TurnQuery struct {
 }
 
 // SessionTurn is the answer of get_session_turn: one turn, either its
-// messages from FromMessage on that fit the budget (Messages in the
-// transcript view, History and Artifacts as proto3 JSON in the full view;
+// messages, then its artifacts, from FromMessage on that fit the budget
+// (Messages in the transcript view; History in the full view, an
+// lf.a2a.v1.Message or {artifact: lf.a2a.v1.Artifact} each, proto3 JSON;
 // NextMessage continues them) or, asked for one, a tool call whole.
 type SessionTurn struct {
-	SessionID        string            `json:"sessionId"`
-	Detail           string            `json:"detail"`
-	Index            int               `json:"index"`
-	TotalTurns       int               `json:"totalTurns"`
-	TaskID           string            `json:"taskId"`
-	State            string            `json:"state"`
-	Timestamp        string            `json:"timestamp,omitempty"`
-	TotalMessages    int               `json:"totalMessages"`
-	FromMessage      int               `json:"fromMessage"`
-	NextMessage      int               `json:"nextMessage,omitempty"`
-	Truncated        bool              `json:"truncated,omitempty"`
-	Hint             string            `json:"hint,omitempty"`
-	ToolCalls        []ToolCallStub    `json:"toolCalls,omitempty"`
-	Messages         []TurnMessage     `json:"messages,omitempty"`
-	History          []json.RawMessage `json:"history,omitempty"`
-	Artifacts        []json.RawMessage `json:"artifacts,omitempty"`
-	OmittedArtifacts int               `json:"omittedArtifacts,omitempty"`
-	ToolCall         *ToolCallDetail   `json:"toolCall,omitempty"`
+	SessionID     string            `json:"sessionId"`
+	Detail        string            `json:"detail"`
+	Index         int               `json:"index"`
+	TotalTurns    int               `json:"totalTurns"`
+	TaskID        string            `json:"taskId"`
+	State         string            `json:"state"`
+	Timestamp     string            `json:"timestamp,omitempty"`
+	TotalMessages int               `json:"totalMessages"`
+	FromMessage   int               `json:"fromMessage"`
+	NextMessage   int               `json:"nextMessage,omitempty"`
+	Truncated     bool              `json:"truncated,omitempty"`
+	Hint          string            `json:"hint,omitempty"`
+	Messages      []TurnMessage     `json:"messages,omitzero"`
+	History       []json.RawMessage `json:"history,omitzero"`
+	ToolCall      *ToolCallDetail   `json:"toolCall,omitempty"`
 }
 
 // SessionStart is the answer of start_session: the new session and, when it
@@ -203,15 +203,25 @@ func (s *Service) ListSessions(ctx context.Context, namespace, name string, allC
 	return out, nil
 }
 
-var sessionTruncatedHint = fmt.Sprintf("older turns were left out to fit maxBytes: raise maxBytes (at most %d), pick turns with lastTurns, or read one turn with get_session_turn", MaxSessionMaxBytes)
+var (
+	omittedTurnsHint = fmt.Sprintf("older turns were left out to fit maxBytes: raise maxBytes (at most %d), pick turns with lastTurns, or read one turn with get_session_turn", MaxSessionMaxBytes)
+	clippedTurnHint  = "the newest turn alone exceeds maxBytes and was clipped: read it with get_session_turn"
+)
 
-// envelopeSlack is what an answer's fields set after its budget was taken
-// (truncated, omitted counts, a short hint) may add.
-const envelopeSlack = 128
+const (
+	// envelopeSlack is what an answer's fields set after its budget was
+	// taken (truncated, omitted counts, a short hint) may add.
+	envelopeSlack = 128
+	// fetchBatch turns are read whole at a time, newest first, until the
+	// budget is spent; maxFetchedTurns bounds how many one answer reads.
+	fetchBatch      = 8
+	maxFetchedTurns = 200
+)
 
 // GetSession is one session and its conversation, the A2A tasks of the
 // session's context read from the session's Agent, in the view q asks for
-// and within its budget.
+// and within its budget. The tasks are listed without their history; only
+// the newest that fit are read whole.
 func (s *Service) GetSession(ctx context.Context, q SessionQuery) (*SessionDetail, error) {
 	detail, err := sessionDetailLevel(q.Detail, DetailSummary, DetailSummary, DetailTranscript, DetailFull)
 	if err != nil {
@@ -228,49 +238,91 @@ func (s *Service) GetSession(ctx context.Context, q SessionQuery) (*SessionDetai
 	if err != nil {
 		return nil, err
 	}
-	tasks, err := s.cfg.Sessions.ListSessionTasks(ctx, sc.token, sc.agent, sc.contextID, kagent.TaskListOptions{IncludeArtifacts: detail == DetailFull})
+	tasks, err := s.listTurns(ctx, sc, q.SessionID)
 	if err != nil {
-		return nil, kagentError(err, fmt.Sprintf("conversation of session %s", q.SessionID))
+		return nil, err
 	}
 	out := &SessionDetail{Session: sc.raw, Detail: detail, TotalTurns: len(tasks)}
-	budget := maxBytes - jsonSize(out) - len(sessionTruncatedHint) - envelopeSlack
+	budget := maxBytes - jsonSize(out) - len(omittedTurnsHint) - envelopeSlack
 	first := 0
 	if q.LastTurns > 0 {
 		first = max(len(tasks)-q.LastTurns, 0)
 	}
+	fetch := func(batch []*a2apb.Task) ([]*a2apb.Task, error) { return s.fetchTasks(ctx, sc, batch) }
 	clipped := false
 	if detail == DetailFull {
-		var raws []json.RawMessage
-		for _, task := range tasks[first:] {
-			raw, err := marshalProto(task)
-			if err != nil {
-				return nil, err
-			}
-			raws = append(raws, raw)
+		out.Tasks, out.OmittedTurns, _, err = packNewestTurns(tasks, first, budget, fetch, func(t *turn) (json.RawMessage, error) {
+			return marshalProto(t.task)
+		}, nil)
+		if out.Tasks == nil {
+			out.Tasks = []json.RawMessage{}
 		}
-		out.Tasks, out.OmittedTurns = packNewest(raws, budget, nil)
 	} else {
-		var turns []Turn
-		for i, task := range tasks[first:] {
-			t := readTurn(first+i, task)
-			if detail == DetailTranscript {
-				turns = append(turns, t.transcript())
-			} else {
-				turns = append(turns, t.summary())
-			}
+		render := func(t *turn) (Turn, error) { return t.summary(), nil }
+		if detail == DetailTranscript {
+			render = func(t *turn) (Turn, error) { return t.transcript(), nil }
 		}
-		out.Turns, out.OmittedTurns = packNewest(turns, budget, fitTurn)
-		clipped = len(out.Turns) > 0 && out.Turns[len(out.Turns)-1].Clipped
+		out.Turns, out.OmittedTurns, clipped, err = packNewestTurns(tasks, first, budget, fetch, render, func(t *turn, budget int) (Turn, bool) {
+			return fitTurn(t.summary(), budget)
+		})
+		if out.Turns == nil {
+			out.Turns = []Turn{}
+		}
 	}
-	if out.OmittedTurns > 0 || clipped {
-		out.Truncated, out.Hint = true, sessionTruncatedHint
+	if err != nil {
+		return nil, err
+	}
+	switch {
+	case out.OmittedTurns > 0:
+		out.Truncated, out.Hint = true, omittedTurnsHint
+	case clipped:
+		out.Truncated, out.Hint = true, clippedTurnHint
 	}
 	return out, nil
 }
 
-// GetSessionTurn is one turn of a session's conversation: its messages from
-// q.FromMessage on in the view q asks for, or one of its tool calls whole,
-// within q's budget.
+// packNewestTurns reads the turns tasks[first:] whole, newest first and a
+// batch at a time, renders them and keeps those that fit budget bytes. It
+// answers them oldest first and how many older turns it left out. When even
+// the newest does not fit, fit may cut it down (clipped); without fit it is
+// left out too.
+func packNewestTurns[T any](tasks []*a2apb.Task, first, budget int, fetch func([]*a2apb.Task) ([]*a2apb.Task, error), render func(*turn) (T, error), fit func(*turn, int) (T, bool)) (kept []T, omitted int, clipped bool, err error) {
+	used := 0
+	next := len(tasks) - 1
+	fetched := 0
+pack:
+	for next >= first && fetched < maxFetchedTurns {
+		n := min(fetchBatch, next-first+1, maxFetchedTurns-fetched)
+		batch, err := fetch(tasks[next-n+1 : next+1])
+		if err != nil {
+			return nil, 0, false, err
+		}
+		fetched += n
+		for j := n - 1; j >= 0; j-- {
+			t := readTurn(next, batch[j])
+			item, err := render(t)
+			if err != nil {
+				return nil, 0, false, err
+			}
+			if size := jsonSize(item) + 1; used+size <= budget {
+				kept, used, next = append(kept, item), used+size, next-1
+				continue
+			}
+			if len(kept) == 0 && fit != nil {
+				if cut, ok := fit(t, budget-1); ok {
+					kept, clipped, next = append(kept, cut), true, next-1
+				}
+			}
+			break pack
+		}
+	}
+	slices.Reverse(kept)
+	return kept, next - first + 1, clipped, nil
+}
+
+// GetSessionTurn is one turn of a session's conversation: its messages and
+// artifacts from q.FromMessage on in the view q asks for, or one of its tool
+// calls whole, within q's budget.
 func (s *Service) GetSessionTurn(ctx context.Context, q TurnQuery) (*SessionTurn, error) {
 	detail, err := sessionDetailLevel(q.Detail, DetailTranscript, DetailTranscript, DetailFull)
 	if err != nil {
@@ -291,81 +343,102 @@ func (s *Service) GetSessionTurn(ctx context.Context, q TurnQuery) (*SessionTurn
 	if err != nil {
 		return nil, err
 	}
-	none := int32(0)
-	tasks, err := s.cfg.Sessions.ListSessionTasks(ctx, sc.token, sc.agent, sc.contextID, kagent.TaskListOptions{HistoryLength: &none})
+	tasks, err := s.listTurns(ctx, sc, q.SessionID)
 	if err != nil {
-		return nil, kagentError(err, fmt.Sprintf("conversation of session %s", q.SessionID))
+		return nil, err
 	}
 	index := turnIndex(tasks, ref)
 	if index < 0 {
 		return nil, notFoundf("session %s has no turn %s (it has %d, indexed from 0)", q.SessionID, ref, len(tasks))
 	}
-	task, err := s.cfg.Sessions.GetSessionTask(ctx, sc.token, sc.agent, tasks[index].GetId())
+	whole, err := s.fetchTasks(ctx, sc, tasks[index:index+1])
 	if err != nil {
-		return nil, kagentError(err, fmt.Sprintf("turn %d of session %s", index, q.SessionID))
+		return nil, err
 	}
+	task := whole[0]
 	if task.GetContextId() != "" && task.GetContextId() != sc.contextID {
 		return nil, notFoundf("session %s has no turn %s", q.SessionID, ref)
 	}
 	t := readTurn(index, task)
 	out := &SessionTurn{
 		SessionID: q.SessionID, Detail: detail, Index: index, TotalTurns: len(tasks), TaskID: task.GetId(),
-		State: t.state(), Timestamp: t.timestamp(), TotalMessages: len(t.messages), FromMessage: q.FromMessage,
-		ToolCalls: t.stubs(),
+		State: t.state(), Timestamp: t.timestamp(), TotalMessages: t.items(), FromMessage: q.FromMessage,
 	}
 	if q.ToolCall != "" {
 		call := t.call(strings.TrimSpace(string(q.ToolCall)))
 		if call == nil {
 			return nil, notFoundf("turn %d of session %s has no tool call %s (it has %d, indexed from 0)", index, q.SessionID, q.ToolCall, len(t.calls))
 		}
-		out.ToolCalls = nil
-		whole, clipped := t.toolCallDetail(call, maxBytes-jsonSize(out)-envelopeSlack)
-		out.ToolCall, out.Truncated = &whole, clipped
+		answer, clipped := t.toolCallDetail(call, maxBytes-jsonSize(out)-envelopeSlack)
+		out.ToolCall, out.Truncated = &answer, clipped
 		return out, nil
 	}
-	if q.FromMessage > len(t.messages) {
-		return nil, invalidf("fromMessage %d is past the turn's %d messages", q.FromMessage, len(t.messages))
+	if q.FromMessage > t.items() {
+		return nil, invalidf("fromMessage %d is past the turn's %d messages", q.FromMessage, t.items())
 	}
 	budget := maxBytes - jsonSize(out) - envelopeSlack
 	next := 0
 	if detail == DetailFull {
-		used := 0
-		if q.FromMessage == 0 {
-			for _, artifact := range task.GetArtifacts() {
-				raw, err := marshalProto(artifact)
-				if err != nil {
-					return nil, err
-				}
-				if size := len(raw) + 1; used+size <= budget/2 {
-					out.Artifacts, used = append(out.Artifacts, raw), used+size
-				} else {
-					out.OmittedArtifacts++
-				}
-			}
-		}
-		out.History, next, err = packForward(len(t.messages), q.FromMessage, budget-used, func(i int) (json.RawMessage, error) {
-			return marshalProto(t.messages[i])
-		}, func(i int, raw json.RawMessage, _ int) json.RawMessage {
-			msg := t.messages[i]
+		out.History, next, err = packForward(t.items(), q.FromMessage, budget, t.rawItem, func(i int, raw json.RawMessage, _ int) json.RawMessage {
 			placeholder, _ := json.Marshal(map[string]any{
-				"messageId": msg.GetMessageId(), "role": msg.GetRole().String(),
-				"omitted": fmt.Sprintf("%d bytes exceed maxBytes; read its tool calls with toolCall", len(raw)),
+				"index":   i,
+				"omitted": fmt.Sprintf("%d bytes exceed maxBytes: read it clipped with detail transcript, or its tool calls with toolCall", len(raw)),
 			})
 			return placeholder
 		})
 		if err != nil {
 			return nil, err
 		}
+		if out.History == nil {
+			out.History = []json.RawMessage{}
+		}
 	} else {
-		out.Messages, next, _ = packForward(len(t.messages), q.FromMessage, budget, func(i int) (TurnMessage, error) {
+		out.Messages, next, _ = packForward(t.items(), q.FromMessage, budget, func(i int) (TurnMessage, error) {
 			return t.messageView(i), nil
 		}, func(_ int, m TurnMessage, budget int) TurnMessage { return fitMessage(m, budget) })
+		if out.Messages == nil {
+			out.Messages = []TurnMessage{}
+		}
 	}
-	if next < len(t.messages) {
+	if next < t.items() {
 		out.NextMessage, out.Truncated, out.Hint = next, true, "continue with fromMessage: "+fmt.Sprint(next)
 	}
-	if out.OmittedArtifacts > 0 {
-		out.Truncated = true
+	return out, nil
+}
+
+// listTurns is the session's tasks without their history, oldest first:
+// what its turns are addressed by. A conversation longer than agent-manager
+// lists is refused, as its newest turns could not be named.
+func (s *Service) listTurns(ctx context.Context, sc *sessionRef, sessionID string) ([]*a2apb.Task, error) {
+	none := int32(0)
+	list, err := s.cfg.Sessions.ListSessionTasks(ctx, sc.token, sc.agent, sc.contextID, kagent.TaskListOptions{HistoryLength: &none})
+	if err != nil {
+		return nil, kagentError(err, fmt.Sprintf("conversation of session %s", sessionID))
+	}
+	if !list.Complete {
+		return nil, conflictf("session %s has more than %d turns, more than agent-manager reads", sessionID, kagent.MaxListedTasks)
+	}
+	return list.Tasks, nil
+}
+
+// fetchTasks reads tasks whole (A2AService/GetTask), fetchBatch at a time,
+// in their order.
+func (s *Service) fetchTasks(ctx context.Context, sc *sessionRef, tasks []*a2apb.Task) ([]*a2apb.Task, error) {
+	out := make([]*a2apb.Task, len(tasks))
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(fetchBatch)
+	for i, task := range tasks {
+		g.Go(func() error {
+			whole, err := s.cfg.Sessions.GetSessionTask(gctx, sc.token, sc.agent, task.GetId())
+			if err != nil {
+				return kagentError(err, fmt.Sprintf("turn %s", task.GetId()))
+			}
+			out[i] = whole
+			return nil
+		})
+	}
+	if err := g.Wait(); err != nil {
+		return nil, err
 	}
 	return out, nil
 }
