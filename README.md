@@ -536,7 +536,10 @@ and without the caller's token a session operation is `401 unauthenticated`.
   (`<namespace>/<name>`) and the session as `message.contextId`. It answers
   once the agent has accepted the turn; the turn keeps running when the stream
   closes, and `get_session` shows it finish. `requestId` makes a retry
-  idempotent.
+  idempotent: the same `requestId` answers the session the first attempt
+  created, and when its first turn already carries the first message (the
+  message id is derived from the `requestId`) it answers that turn's latest
+  state and sends nothing, so a retry after a lost answer starts no second turn.
 - `message` is optional: without it `start_session` only creates the session
   and answers `{session, workspace}` with no `turn`. The caller then sends the
   first message itself over A2A, with the Agent as `tenant` and the session's
