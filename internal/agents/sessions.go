@@ -172,7 +172,8 @@ type StartSession struct {
 	// the session without a turn: the caller sends the first message itself.
 	Message string `json:"message,omitempty"`
 	// RequestID makes a retried start idempotent: the same id answers the
-	// session the first attempt created. Empty: a new id per call.
+	// session the first attempt created and sends its first message once,
+	// answering the turn it started. Empty: a new id per call.
 	RequestID string `json:"requestId,omitempty"`
 	// SessionName is the conversation's display name; empty leaves it unnamed.
 	SessionName string `json:"sessionName,omitempty"`
@@ -619,14 +620,8 @@ func (s *Service) StartSession(ctx context.Context, in StartSession) (*SessionSt
 	}
 	var turn *a2apb.StreamResponse
 	if in.Message != "" {
-		contextID := session.GetContextId()
-		if contextID == "" {
-			contextID = session.GetId()
-		}
-		turn, err = s.cfg.Sessions.SendMessage(ctx, token, ref, contextID, uuid.NewString(), in.Message)
-		if err != nil {
-			return nil, fmt.Errorf("session %s was created but its first message was not accepted (start again with requestId %q to reuse it): %w",
-				session.GetId(), requestID, kagentError(err, fmt.Sprintf("session %s", session.GetId())))
+		if turn, err = s.firstTurn(ctx, token, ref, session, requestID, in.Message); err != nil {
+			return nil, err
 		}
 	}
 	out := &SessionStart{}
@@ -645,6 +640,57 @@ func (s *Service) StartSession(ctx context.Context, in StartSession) (*SessionSt
 		}
 	}
 	return out, nil
+}
+
+// firstMessageIDs is the namespace of the first messages' ids: a start's
+// first message has the id its request id names, so a retry finds it.
+var firstMessageIDs = uuid.MustParse("6f1c4b5e-2d0a-4f43-9a8e-3b7d1c0e5a21")
+
+// firstTurn sends a session's first message once per request id: the message
+// id is derived from the request id, and when the session's first turn
+// already carries that message (a retry of a start whose answer was lost) it
+// answers that turn's latest state and sends nothing.
+func (s *Service) firstTurn(ctx context.Context, token string, ref kagent.Ref, session *apiv1alpha1.Session, requestID, message string) (*a2apb.StreamResponse, error) {
+	contextID := session.GetContextId()
+	if contextID == "" {
+		contextID = session.GetId()
+	}
+	messageID := uuid.NewSHA1(firstMessageIDs, []byte(requestID)).String()
+	sent, err := s.sentFirstTurn(ctx, token, ref, contextID, messageID)
+	if err != nil {
+		return nil, fmt.Errorf("session %s was created but its turns could not be read to send the first message once (start again with requestId %q to reuse it): %w",
+			session.GetId(), requestID, kagentError(err, fmt.Sprintf("session %s", session.GetId())))
+	}
+	if sent != nil {
+		return &a2apb.StreamResponse{Payload: &a2apb.StreamResponse_Task{Task: sent}}, nil
+	}
+	turn, err := s.cfg.Sessions.SendMessage(ctx, token, ref, contextID, messageID, message)
+	if err != nil {
+		return nil, fmt.Errorf("session %s was created but its first message was not accepted (start again with requestId %q to reuse it): %w",
+			session.GetId(), requestID, kagentError(err, fmt.Sprintf("session %s", session.GetId())))
+	}
+	return turn, nil
+}
+
+// sentFirstTurn is the session's first turn when it carries the message
+// messageID, nil when the session has no turn or its first turn is another.
+func (s *Service) sentFirstTurn(ctx context.Context, token string, ref kagent.Ref, contextID, messageID string) (*a2apb.Task, error) {
+	none := int32(0)
+	list, err := s.cfg.Sessions.ListSessionTasks(ctx, token, ref, contextID, kagent.TaskListOptions{HistoryLength: &none})
+	if err != nil || len(list.Tasks) == 0 {
+		return nil, err
+	}
+	first, err := s.cfg.Sessions.GetSessionTask(ctx, token, ref, list.Tasks[0].GetId())
+	if err != nil {
+		return nil, err
+	}
+	for _, m := range first.GetHistory() {
+		if m.GetMessageId() == messageID {
+			first.History, first.Artifacts = nil, nil
+			return first, nil
+		}
+	}
+	return nil, nil
 }
 
 // DeleteSession deletes one of the caller's sessions and its runtime state.

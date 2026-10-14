@@ -138,7 +138,12 @@ func TestSessionsOverREST(t *testing.T) {
 	assert.Equal(t, "kagent/platform", body["workspace"])
 	assert.Equal(t, "nfs.csi.k8s.io", body["session"].(map[string]any)["volumeSource"].(map[string]any)["volume"].(map[string]any)["csiDriver"])
 	waitTurn(t, ctrl)
-	last := ctrl.Calls()[len(ctrl.Calls())-2].Request.(*apiv1alpha1.CreateSessionRequest)
+	var last *apiv1alpha1.CreateSessionRequest
+	for _, call := range ctrl.Calls() {
+		if call.Method == "CreateSession" {
+			last = call.Request.(*apiv1alpha1.CreateSessionRequest)
+		}
+	}
 	assert.Equal(t, grant, last.GetAdmissionToken())
 	code, body = do(t, h, http.MethodPost, Prefix+"/agents/kagent/sre/sessions", map[string]any{"message": "hello", "workspaceGrant": signer.Sign(t, "dev@lab.local", 5*time.Minute, kagenttest.WorkspaceGrant())})
 	assert.Equal(t, http.StatusForbidden, code)
