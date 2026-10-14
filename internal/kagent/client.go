@@ -45,11 +45,16 @@ const (
 	// maxSessionPages and maxTaskPages bound how far a listing is followed, so
 	// a misbehaving next_page_token cannot loop forever.
 	maxSessionPages = 20
-	maxTaskPages    = 10
+	maxTaskPages    = MaxListedTasks / pageSize
 	// maxMessageBytes bounds one response: a session's tasks carry its whole
 	// history and artifacts.
 	maxMessageBytes = 32 << 20
 )
+
+// MaxListedTasks is how many tasks ListSessionTasks reads before it stops:
+// a conversation's tasks are listed without their history, to address its
+// turns, and only the turns answered are read whole.
+const MaxListedTasks = 10_000
 
 // ErrNoToken is returned for a call without a caller token: there is no
 // other identity to make it with.
@@ -183,36 +188,62 @@ func (c *Client) GetSession(ctx context.Context, token, sessionID string) (*apiv
 	return resp.GetSession(), nil
 }
 
+// TaskListOptions shape the tasks ListSessionTasks reads. HistoryLength nil
+// reads every task's whole history, 0 none; IncludeArtifacts adds the tasks'
+// artifacts.
+type TaskListOptions struct {
+	HistoryLength    *int32
+	IncludeArtifacts bool
+}
+
+// TaskList is a session's tasks, oldest first. Complete is false when the
+// listing stopped at MaxListedTasks with tasks left.
+type TaskList struct {
+	Tasks    []*a2apb.Task
+	Complete bool
+}
+
 // ListSessionTasks is A2AService/ListTasks addressed to the session's Agent
-// and filtered by its context, walked to the end: the conversation, oldest
-// task first, with every task's history and artifacts.
-func (c *Client) ListSessionTasks(ctx context.Context, token string, agent Ref, contextID string) ([]*a2apb.Task, error) {
+// and filtered by its context, walked to the end or MaxListedTasks: the
+// conversation, oldest task first.
+func (c *Client) ListSessionTasks(ctx context.Context, token string, agent Ref, contextID string, opts TaskListOptions) (*TaskList, error) {
 	ctx, err := asCaller(ctx, token)
 	if err != nil {
 		return nil, err
 	}
-	var out []*a2apb.Task
+	out := &TaskList{}
 	pageToken := ""
 	size := int32(pageSize)
-	includeArtifacts := true
 	for range maxTaskPages {
 		resp, err := c.a2a.ListTasks(ctx, &a2apb.ListTasksRequest{
 			Tenant:           agent.Tenant(),
 			ContextId:        contextID,
 			PageSize:         &size,
 			PageToken:        pageToken,
-			IncludeArtifacts: &includeArtifacts,
+			HistoryLength:    opts.HistoryLength,
+			IncludeArtifacts: &opts.IncludeArtifacts,
 		})
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, resp.GetTasks()...)
+		out.Tasks = append(out.Tasks, resp.GetTasks()...)
 		pageToken = resp.GetNextPageToken()
 		if pageToken == "" {
+			out.Complete = true
 			break
 		}
 	}
 	return out, nil
+}
+
+// GetSessionTask is A2AService/GetTask addressed to the session's Agent: one
+// task with its whole history. The caller checks it belongs to the session.
+func (c *Client) GetSessionTask(ctx context.Context, token string, agent Ref, taskID string) (*a2apb.Task, error) {
+	ctx, err := asCaller(ctx, token)
+	if err != nil {
+		return nil, err
+	}
+	return c.a2a.GetTask(ctx, &a2apb.GetTaskRequest{Tenant: agent.Tenant(), Id: taskID})
 }
 
 // SessionCreate is what CreateSession asks for: the Agent, the idempotency

@@ -10,6 +10,8 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 
 	spec "github.com/giantswarm/agent-manager/api"
@@ -51,6 +53,7 @@ func (h *REST) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET "+Prefix+"/agents/{namespace}/{name}/sessions", h.listSessions)
 	mux.HandleFunc("POST "+Prefix+"/agents/{namespace}/{name}/sessions", h.startSession)
 	mux.HandleFunc("GET "+Prefix+"/sessions/{id}", h.getSession)
+	mux.HandleFunc("GET "+Prefix+"/sessions/{id}/turns/{turn}", h.getSessionTurn)
 }
 
 type errorBody struct {
@@ -250,12 +253,59 @@ func (h *REST) startSession(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *REST) getSession(w http.ResponseWriter, r *http.Request) {
-	res, err := h.svc.GetSession(r.Context(), r.PathValue("id"))
+	q := r.URL.Query()
+	in := agents.SessionQuery{SessionID: r.PathValue("id"), Detail: q.Get("detail")}
+	var err error
+	if in.LastTurns, err = queryInt(q, "lastTurns"); err != nil {
+		h.writeError(w, err)
+		return
+	}
+	if in.MaxBytes, err = queryInt(q, "maxBytes"); err != nil {
+		h.writeError(w, err)
+		return
+	}
+	res, err := h.svc.GetSession(r.Context(), in)
 	if err != nil {
 		h.writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, res)
+	writeCompactJSON(w, res)
+}
+
+func (h *REST) getSessionTurn(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	in := agents.TurnQuery{
+		SessionID: r.PathValue("id"), Turn: agents.IndexOrID(r.PathValue("turn")),
+		Detail: q.Get("detail"), ToolCall: agents.IndexOrID(q.Get("toolCall")),
+	}
+	var err error
+	if in.FromMessage, err = queryInt(q, "fromMessage"); err != nil {
+		h.writeError(w, err)
+		return
+	}
+	if in.MaxBytes, err = queryInt(q, "maxBytes"); err != nil {
+		h.writeError(w, err)
+		return
+	}
+	res, err := h.svc.GetSessionTurn(r.Context(), in)
+	if err != nil {
+		h.writeError(w, err)
+		return
+	}
+	writeCompactJSON(w, res)
+}
+
+// queryInt is the integer query parameter name, 0 when it is absent.
+func queryInt(q url.Values, name string) (int, error) {
+	v := q.Get(name)
+	if v == "" {
+		return 0, nil
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return 0, fmt.Errorf("%w: %s must be an integer", agents.ErrInvalid, name)
+	}
+	return n, nil
 }
 
 // SpecToUpdate turns a full spec into a partial update: every non-empty field
@@ -345,6 +395,14 @@ func statusFor(err error) (int, string) {
 	default:
 		return http.StatusBadGateway, "backend_error"
 	}
+}
+
+// writeCompactJSON answers 200 with v unindented: a session read is bounded
+// by maxBytes measured on compact JSON.
+func writeCompactJSON(w http.ResponseWriter, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(v)
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
