@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strings"
 	"testing"
 	"time"
 
@@ -144,7 +145,7 @@ func TestTenantPolicyEnvtest(t *testing.T) {
 	// it: wait for the first refusal.
 	require.Eventually(t, func() bool {
 		err := secret("org-acme", "cluster-kubeconfig")
-		return err != nil && bytes.Contains([]byte(err.Error()), []byte("agent-manager copies only the Secret"))
+		return err != nil && strings.Contains(err.Error(), "agent-manager copies only the Secret")
 	}, 30*time.Second, 200*time.Millisecond, "the policy never refused a Secret the reconciler does not copy")
 
 	tests := []struct {
