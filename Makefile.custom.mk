@@ -14,6 +14,11 @@ docker-build: build-linux-amd64 ## Build a local dev image (TAG=agent-manager:de
 test-race: ## Run tests with the race detector.
 	go test -race ./...
 
+.PHONY: test-envtest
+test-envtest: ## Run the envtest-backed tests against a real kube-apiserver (downloads one via setup-envtest; needs helm).
+	KUBEBUILDER_ASSETS="$$(go run sigs.k8s.io/controller-runtime/tools/setup-envtest@release-0.25 use -p path)" \
+		go test ./... -run Envtest -count=1 -v
+
 ##@ kagent
 
 # Commit of giantswarm/kagent-upstream (tag v1.10.0) the kagent.api.v1alpha1
