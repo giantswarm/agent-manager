@@ -304,7 +304,46 @@ func (c *Controller) ListTasks(ctx context.Context, req *a2apb.ListTasksRequest)
 	if err != nil {
 		return nil, err
 	}
-	return &a2apb.ListTasksResponse{Tasks: items, NextPageToken: next, TotalSize: int32(len(all))}, nil // #nosec G115 -- a test fixture's task count
+	shaped := make([]*a2apb.Task, 0, len(items))
+	for _, task := range items {
+		shaped = append(shaped, shapeTask(task, req.HistoryLength, req.GetIncludeArtifacts()))
+	}
+	return &a2apb.ListTasksResponse{Tasks: shaped, NextPageToken: next, TotalSize: int32(len(all))}, nil // #nosec G115 -- a test fixture's task count
+}
+
+// GetTask implements A2AService: one task by id, through its session's Agent.
+func (c *Controller) GetTask(ctx context.Context, req *a2apb.GetTaskRequest) (*a2apb.Task, error) {
+	if err := c.record(ctx, "GetTask", req); err != nil {
+		return nil, err
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for contextID, tasks := range c.tasks {
+		for _, task := range tasks {
+			if task.GetId() != req.GetId() {
+				continue
+			}
+			if _, err := c.routed(req.GetTenant(), contextID); err != nil {
+				return nil, status.Error(codes.NotFound, "task not found")
+			}
+			return shapeTask(task, req.HistoryLength, true), nil
+		}
+	}
+	return nil, status.Error(codes.NotFound, "task not found")
+}
+
+// shapeTask is a copy of task with its last historyLength messages (nil: all)
+// and its artifacts only when asked for, as the gateway shapes a task.
+func shapeTask(task *a2apb.Task, historyLength *int32, artifacts bool) *a2apb.Task {
+	out := proto.Clone(task).(*a2apb.Task)
+	if historyLength != nil {
+		n := min(int(*historyLength), len(out.History))
+		out.History = out.History[len(out.History)-n:]
+	}
+	if !artifacts {
+		out.Artifacts = nil
+	}
+	return out
 }
 
 // SendStreamingMessage implements A2AService: the turn is accepted (a task

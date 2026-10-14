@@ -73,9 +73,43 @@ func TestSessionsOverREST(t *testing.T) {
 
 	code, body = do(t, h, http.MethodGet, Prefix+"/sessions/"+session["id"].(string), nil)
 	require.Equal(t, http.StatusOK, code, body)
+	assert.Equal(t, "summary", body["detail"])
+	turns := body["turns"].([]any)
+	require.Len(t, turns, 1)
+	assert.Equal(t, "echo: hello", turns[0].(map[string]any)["reply"])
+	assert.NotContains(t, body, "tasks")
+
+	code, body = do(t, h, http.MethodGet, Prefix+"/sessions/"+session["id"].(string)+"?detail=full&lastTurns=1&maxBytes=50000", nil)
+	require.Equal(t, http.StatusOK, code, body)
 	tasks := body["tasks"].([]any)
 	require.Len(t, tasks, 1)
 	assert.Equal(t, "TASK_STATE_COMPLETED", tasks[0].(map[string]any)["status"].(map[string]any)["state"])
+
+	code, body = do(t, h, http.MethodGet, Prefix+"/sessions/"+session["id"].(string)+"/turns/last", nil)
+	require.Equal(t, http.StatusOK, code, body)
+	assert.Equal(t, tasks[0].(map[string]any)["id"], body["taskId"])
+	assert.Equal(t, "transcript", body["detail"])
+	assert.Len(t, body["messages"], 2, "the user's message and the reply")
+
+	code, body = do(t, h, http.MethodGet, Prefix+"/sessions/"+session["id"].(string)+"/turns/0?fromMessage=1&detail=full", nil)
+	require.Equal(t, http.StatusOK, code, body)
+	assert.Len(t, body["history"], 1)
+
+	// maxBytes bounds the body as sent: compact, not indented.
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, Prefix+"/sessions/"+session["id"].(string)+"?detail=transcript", nil))
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.NotContains(t, rec.Body.String(), "\n  ")
+
+	for _, query := range []string{"?maxBytes=lots", "?lastTurns=-1", "?detail=everything"} {
+		code, body = do(t, h, http.MethodGet, Prefix+"/sessions/"+session["id"].(string)+query, nil)
+		assert.Equal(t, http.StatusBadRequest, code, query)
+		assert.Equal(t, "invalid_request", body["error"].(map[string]any)["code"], query)
+	}
+	code, _ = do(t, h, http.MethodGet, Prefix+"/sessions/"+session["id"].(string)+"/turns/0?fromMessage=x", nil)
+	assert.Equal(t, http.StatusBadRequest, code)
+	code, _ = do(t, h, http.MethodGet, Prefix+"/sessions/"+session["id"].(string)+"/turns/5", nil)
+	assert.Equal(t, http.StatusNotFound, code)
 
 	code, body = do(t, h, http.MethodGet, Prefix+"/agents/kagent/sre/sessions?allCreators=true", nil)
 	require.Equal(t, http.StatusOK, code, body)
@@ -155,7 +189,25 @@ func TestSessionsOverMCP(t *testing.T) {
 
 	text, isErr = callToolCtx(t, ctx, srv, ToolGetSession, map[string]any{"sessionId": started.Session.ID})
 	require.False(t, isErr, text)
-	assert.Contains(t, text, "echo: hello")
+	assert.Contains(t, text, `"reply":"echo: hello"`)
+
+	text, isErr = callToolCtx(t, ctx, srv, ToolGetSession, map[string]any{"sessionId": started.Session.ID, "detail": "full", "lastTurns": 1, "maxBytes": 50000})
+	require.False(t, isErr, text)
+	assert.Contains(t, text, `"tasks":[`)
+
+	text, isErr = callToolCtx(t, ctx, srv, ToolGetSession, map[string]any{"sessionId": started.Session.ID, "maxBytes": 10})
+	assert.True(t, isErr)
+	assert.Contains(t, text, "invalid_request")
+
+	// turn takes an index as a number as well as a string.
+	for _, turn := range []any{0, "0", "last"} {
+		text, isErr = callToolCtx(t, ctx, srv, ToolGetSessionTurn, map[string]any{"sessionId": started.Session.ID, "turn": turn})
+		require.False(t, isErr, text)
+		assert.Contains(t, text, `"text":"echo: hello"`)
+	}
+	text, isErr = callToolCtx(t, ctx, srv, ToolGetSessionTurn, map[string]any{"sessionId": started.Session.ID, "turn": 0, "toolCall": 0})
+	assert.True(t, isErr)
+	assert.Contains(t, text, "no tool call")
 
 	text, isErr = callToolCtx(t, ctx, srv, ToolListSessions, map[string]any{"name": "sre"})
 	require.False(t, isErr, text)

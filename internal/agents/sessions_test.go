@@ -38,7 +38,7 @@ func TestSessionsUnsupportedWithoutATarget(t *testing.T) {
 	assert.False(t, f.svc.Info(ctx).Capabilities["sessions"])
 	_, err := f.svc.ListSessions(ctx, "", "sre", false)
 	require.ErrorIs(t, err, ErrUnsupported)
-	_, err = f.svc.GetSession(ctx, uuid.NewString())
+	_, err = f.svc.GetSession(ctx, SessionQuery{SessionID: uuid.NewString()})
 	require.ErrorIs(t, err, ErrUnsupported)
 	_, err = f.svc.StartSession(ctx, StartSession{Name: "sre", Message: "hi"})
 	require.ErrorIs(t, err, ErrUnsupported)
@@ -51,7 +51,7 @@ func TestSessionsNeverRunWithoutTheCallerToken(t *testing.T) {
 	assert.True(t, svc.Info(t.Context()).Capabilities["sessions"])
 	_, err := svc.ListSessions(t.Context(), "", "sre", false)
 	require.ErrorIs(t, err, ErrUnauthenticated)
-	_, err = svc.GetSession(t.Context(), uuid.NewString())
+	_, err = svc.GetSession(t.Context(), SessionQuery{SessionID: uuid.NewString()})
 	require.ErrorIs(t, err, ErrUnauthenticated)
 	_, err = svc.StartSession(t.Context(), StartSession{Name: "sre", Message: "hi"})
 	require.ErrorIs(t, err, ErrUnauthenticated)
@@ -76,7 +76,7 @@ func TestSessionArgumentsAreChecked(t *testing.T) {
 	}
 	_, err := svc.ListSessions(ctx, "elsewhere", "sre", false)
 	require.ErrorIs(t, err, ErrInvalid)
-	_, err = svc.GetSession(ctx, "")
+	_, err = svc.GetSession(ctx, SessionQuery{})
 	require.ErrorIs(t, err, ErrInvalid)
 	_, err = svc.DeleteSession(ctx, " ")
 	require.ErrorIs(t, err, ErrInvalid)
@@ -119,7 +119,15 @@ func TestStartSessionThenReadTheAnswer(t *testing.T) {
 		t.Fatal("the turn's stream stayed open")
 	}
 
-	detail, err := svc.GetSession(ctx, session.ID)
+	summary, err := svc.GetSession(ctx, SessionQuery{SessionID: session.ID})
+	require.NoError(t, err)
+	assert.Equal(t, DetailSummary, summary.Detail)
+	assert.Equal(t, 1, summary.TotalTurns)
+	assert.Empty(t, summary.Tasks)
+	require.Len(t, summary.Turns, 1)
+	assert.Equal(t, Turn{Index: 0, TaskID: turn.Task.ID, State: "TASK_STATE_COMPLETED", User: "hello", Reply: "echo: hello"}, summary.Turns[0])
+
+	detail, err := svc.GetSession(ctx, SessionQuery{SessionID: session.ID, Detail: DetailFull})
 	require.NoError(t, err)
 	require.Len(t, detail.Tasks, 1)
 	var task struct {
@@ -148,7 +156,8 @@ func TestStartSessionThenReadTheAnswer(t *testing.T) {
 		assert.Equal(t, []string{"Bearer " + callerToken}, call.Metadata.Get("authorization"), call.Method)
 	}
 	// The conversation was read from the session's own Agent and context.
-	last := ctrl.Calls()[len(ctrl.Calls())-2].Request.(*a2apb.ListTasksRequest)
+	lists := methodCalls(ctrl, "ListTasks")
+	last := lists[len(lists)-1].(*a2apb.ListTasksRequest)
 	assert.Equal(t, "tenant/sre", last.GetTenant())
 	assert.Equal(t, session.ContextID, last.GetContextId())
 }
@@ -180,9 +189,10 @@ func TestStartSessionWithoutAMessageStartsNoTurn(t *testing.T) {
 	create := ctrl.Calls()[0].Request.(*apiv1alpha1.CreateSessionRequest)
 	assert.Equal(t, "req-1", create.GetRequestId())
 
-	detail, err := svc.GetSession(ctx, session.ID)
+	detail, err := svc.GetSession(ctx, SessionQuery{SessionID: session.ID})
 	require.NoError(t, err)
-	assert.Empty(t, detail.Tasks, "no turn was started")
+	assert.Zero(t, detail.TotalTurns)
+	assert.Empty(t, detail.Turns, "no turn was started")
 
 	// A retry with the same requestId answers the same session, still without a turn.
 	again, err := svc.StartSession(ctx, StartSession{Namespace: "tenant", Name: "sre", SessionName: "triage", RequestID: "req-1"})
@@ -220,9 +230,9 @@ func TestStartSessionRefusedWhileTheAgentIsNotReady(t *testing.T) {
 func TestGetSessionErrors(t *testing.T) {
 	svc, _ := newSessionFixture(t)
 	ctx := identity.ContextWithToken(t.Context(), callerToken)
-	_, err := svc.GetSession(ctx, uuid.NewString())
+	_, err := svc.GetSession(ctx, SessionQuery{SessionID: uuid.NewString()})
 	require.ErrorIs(t, err, ErrNotFound)
-	_, err = svc.GetSession(ctx, "not-a-uuid")
+	_, err = svc.GetSession(ctx, SessionQuery{SessionID: "not-a-uuid"})
 	require.ErrorIs(t, err, ErrInvalid)
 }
 
@@ -248,7 +258,7 @@ func TestDeleteSessionRemovesTheCallersOwn(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, list.Sessions, 1)
 	assert.Contains(t, string(list.Sessions[0]), kept.GetId())
-	_, err = svc.GetSession(ctx, session.GetId())
+	_, err = svc.GetSession(ctx, SessionQuery{SessionID: session.GetId()})
 	require.ErrorIs(t, err, ErrNotFound)
 	_, err = svc.DeleteSession(ctx, session.GetId())
 	require.ErrorIs(t, err, ErrNotFound, "a second delete finds nothing")

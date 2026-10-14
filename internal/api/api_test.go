@@ -315,6 +315,7 @@ var wantHints = map[string]hints{
 	ToolDeleteAgent:      annotations(writes, destructive, notIdempotent, closedWorld),
 	ToolListSessions:     annotations(readOnly, additive, notIdempotent, closedWorld),
 	ToolGetSession:       annotations(readOnly, additive, notIdempotent, closedWorld),
+	ToolGetSessionTurn:   annotations(readOnly, additive, notIdempotent, closedWorld),
 	// start_session messages an agent, which acts on the world with its tools.
 	ToolStartSession: annotations(writes, additive, notIdempotent, openWorld),
 	// delete_session ends a conversation for good, so clients ask first.

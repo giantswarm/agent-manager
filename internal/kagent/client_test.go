@@ -98,10 +98,12 @@ func TestListSessionTasksAddressesTheAgentAndContext(t *testing.T) {
 	s := ctrl.AddSession("kagent", "sre", tasks...)
 	c := kagent.NewClient(conn)
 
-	got, err := c.ListSessionTasks(t.Context(), token, sre, s.GetContextId())
+	none := int32(0)
+	got, err := c.ListSessionTasks(t.Context(), token, sre, s.GetContextId(), kagent.TaskListOptions{HistoryLength: &none, IncludeArtifacts: true})
 	require.NoError(t, err)
-	require.Len(t, got, 120)
-	assert.Equal(t, "task-000", got[0].GetId(), "oldest first")
+	assert.True(t, got.Complete)
+	require.Len(t, got.Tasks, 120)
+	assert.Equal(t, "task-000", got.Tasks[0].GetId(), "oldest first")
 
 	calls := ctrl.Calls()
 	require.Len(t, calls, 2)
@@ -110,9 +112,47 @@ func TestListSessionTasksAddressesTheAgentAndContext(t *testing.T) {
 	assert.Equal(t, "kagent/sre", req.GetTenant())
 	assert.Equal(t, s.GetContextId(), req.GetContextId())
 	assert.True(t, req.GetIncludeArtifacts())
+	require.NotNil(t, req.HistoryLength)
+	assert.Zero(t, req.GetHistoryLength())
 
 	// The wrong Agent cannot read the session.
-	_, err = c.ListSessionTasks(t.Context(), token, kagent.Ref{Namespace: "kagent", Name: "other"}, s.GetContextId())
+	_, err = c.ListSessionTasks(t.Context(), token, kagent.Ref{Namespace: "kagent", Name: "other"}, s.GetContextId(), kagent.TaskListOptions{})
+	assert.Equal(t, codes.NotFound, status.Code(err))
+}
+
+func TestListSessionTasksStopsAtItsBound(t *testing.T) {
+	ctrl, conn := kagenttest.New(t)
+	tasks := make([]*a2apb.Task, kagent.MaxListedTasks+1)
+	for i := range tasks {
+		tasks[i] = &a2apb.Task{Id: fmt.Sprintf("task-%05d", i)}
+	}
+	s := ctrl.AddSession("kagent", "sre", tasks...)
+
+	got, err := kagent.NewClient(conn).ListSessionTasks(t.Context(), token, sre, s.GetContextId(), kagent.TaskListOptions{})
+	require.NoError(t, err)
+	assert.False(t, got.Complete, "tasks are left")
+	assert.Len(t, got.Tasks, kagent.MaxListedTasks)
+}
+
+func TestGetSessionTaskAddressesTheAgent(t *testing.T) {
+	ctrl, conn := kagenttest.New(t)
+	ctrl.AddSession("kagent", "sre", &a2apb.Task{Id: "task-1", History: []*a2apb.Message{kagenttest.Message(a2apb.Role_ROLE_USER, kagenttest.Text("hi"))}})
+	c := kagent.NewClient(conn)
+
+	got, err := c.GetSessionTask(t.Context(), token, sre, "task-1")
+	require.NoError(t, err)
+	assert.Len(t, got.GetHistory(), 1, "the whole history")
+
+	calls := ctrl.Calls()
+	require.Len(t, calls, 1)
+	assertCallerOnly(t, calls)
+	req := calls[0].Request.(*a2apb.GetTaskRequest)
+	assert.Equal(t, "kagent/sre", req.GetTenant())
+	assert.Equal(t, "task-1", req.GetId())
+	assert.Nil(t, req.HistoryLength)
+
+	// The wrong Agent cannot read the task.
+	_, err = c.GetSessionTask(t.Context(), token, kagent.Ref{Namespace: "kagent", Name: "other"}, "task-1")
 	assert.Equal(t, codes.NotFound, status.Code(err))
 }
 
@@ -205,7 +245,9 @@ func TestNoTokenNoCall(t *testing.T) {
 	require.ErrorIs(t, err, kagent.ErrNoToken)
 	_, err = c.GetSession(t.Context(), "", "id")
 	require.ErrorIs(t, err, kagent.ErrNoToken)
-	_, err = c.ListSessionTasks(t.Context(), "", sre, "id")
+	_, err = c.ListSessionTasks(t.Context(), "", sre, "id", kagent.TaskListOptions{})
+	require.ErrorIs(t, err, kagent.ErrNoToken)
+	_, err = c.GetSessionTask(t.Context(), "", sre, "task")
 	require.ErrorIs(t, err, kagent.ErrNoToken)
 	_, err = c.CreateSession(t.Context(), "", kagent.SessionCreate{Agent: sre, RequestID: "r"})
 	require.ErrorIs(t, err, kagent.ErrNoToken)
