@@ -255,3 +255,14 @@ func TestReconcileNamespaceIgnoresOthers(t *testing.T) {
 	assert.Empty(t, f.r.Namespaces())
 	assert.Nil(t, f.get(t, ociGVR, "kagent", "agent"))
 }
+
+// The agent chart's source is created once and never moved: a range changes
+// only through the migrate command.
+func TestTenantOCIRepositoryIsNotMoved(t *testing.T) {
+	oci := obj("source.toolkit.fluxcd.io/v1", "OCIRepository", "org-a", "agent", map[string]any{"url": "oci://example/agent", "ref": map[string]any{"semver": "1.x"}})
+	oci.SetLabels(map[string]string{ObjectLabel: ScopeNamespace})
+	f := newFixture(t, []runtime.Object{oci})
+	f.r.ReconcileAll(context.Background())
+	semver, _, _ := unstructured.NestedString(f.get(t, ociGVR, "org-a", "agent").Object, "spec", "ref", "semver")
+	assert.Equal(t, "1.x", semver)
+}

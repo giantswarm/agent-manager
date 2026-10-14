@@ -298,9 +298,9 @@ func runServe(ctx context.Context, o *serveOptions) error {
 			WorkerPoolGVR:      schema.GroupVersionResource{Group: "ate.dev", Version: poolVersion, Resource: "workerpools"},
 			Interval:           o.tenantInterval,
 		}, log)
-		// The first pass before serving: the tenants are managed namespaces
-		// from the first request on.
-		tenantSet.ReconcileAll(ctx)
+		// The tenants are managed namespaces from the first request on; Run
+		// reconciles them.
+		tenantSet.Discover(ctx)
 	}
 
 	var sessions agents.SessionClient

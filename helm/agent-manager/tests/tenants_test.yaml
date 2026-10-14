@@ -10,6 +10,16 @@ templates:
 set:
   tenants:
     enabled: true
+  flux:
+    helmReleaseServiceAccount: agents-flux
+  oauth:
+    enabled: true
+    baseURL: https://agent-manager.example.com
+    dex:
+      issuerURL: https://dex.example.com
+      clientID: platform
+    downstream:
+      enabled: true
 tests:
   - it: renders nothing and passes no flag while off
     set:
@@ -25,19 +35,29 @@ tests:
         template: templates/deployment.yaml
 
   - it: renders with oauth.downstream, where the ServiceAccount has no other RBAC
-    set:
-      oauth:
-        enabled: true
-        baseURL: https://agent-manager.example.com
-        dex:
-          issuerURL: https://dex.example.com
-          clientID: platform
-        downstream:
-          enabled: true
     template: templates/tenants-rbac.yaml
     asserts:
       - hasDocuments:
           count: 5
+
+  - it: needs oauth.downstream, since a request in a tenant runs as the caller
+    template: templates/tenants-rbac.yaml
+    set:
+      oauth:
+        downstream:
+          enabled: false
+    asserts:
+      - failedTemplate:
+          errorPattern: tenants.enabled needs oauth.enabled and oauth.downstream.enabled
+
+  - it: needs the agents' Flux ServiceAccount
+    template: templates/tenants-rbac.yaml
+    set:
+      flux:
+        helmReleaseServiceAccount: ""
+    asserts:
+      - failedTemplate:
+          errorPattern: flux.helmReleaseServiceAccount is required with tenants.enabled
 
   - it: renders the tenant Flux ClusterRole without agenttemplates
     template: templates/tenants-rbac.yaml
@@ -121,7 +141,7 @@ tests:
           pattern: request.name == 'kagent-anthropic'$
       - matchRegex:
           path: spec.validations[2].expression
-          pattern: object.roleRef.name == 'agent-platform-tenant-flux'
+          pattern: object.roleRef.name == 'agent-platform-tenant-flux' && has\(object.subjects\) && object.subjects.all\(s, s.kind == 'ServiceAccount' && s.name == 'agents-flux' && s.namespace == request.namespace\)
       - contains:
           path: spec.matchConstraints.resourceRules
           content:

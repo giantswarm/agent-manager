@@ -19,6 +19,10 @@ tenant's bindings belong to agent-platform; memberships are declared, never
 written here.
 */}}
 {{- if .Values.tenants.enabled }}
+{{- if not (and .Values.oauth.enabled .Values.oauth.downstream.enabled) }}
+{{- fail "tenants.enabled needs oauth.enabled and oauth.downstream.enabled: requests in a tenant run as the caller, whose RoleBindings there grant the writes; the ServiceAccount's Roles exist only in kagent.namespace and kagent.additionalNamespaces" }}
+{{- end }}
+{{- $fluxSA := required "flux.helmReleaseServiceAccount is required with tenants.enabled: the agents' HelmReleases in a tenant run as it (Kyverno's flux-multi-tenancy policy refuses one without)" .Values.flux.helmReleaseServiceAccount }}
 {{- $sa := include "agent-manager.serviceAccountName" . }}
 {{- $flux := include "agent-manager.tenantFluxClusterRole" . }}
 {{- $secret := required "tenants.modelConfig.apiKeySecretName is required with tenants.enabled" .Values.tenants.modelConfig.apiKeySecretName }}
@@ -163,8 +167,8 @@ spec:
       messageExpression: "'agent-manager writes ' + request.resource.resource + ' only in namespaces labelled giantswarm.io/organization; ' + request.namespace + ' is not one'"
     - expression: {{ printf "!variables.tenant || request.resource.resource != 'secrets' || request.name == '%s'" $secret | quote }}
       messageExpression: {{ printf "'agent-manager copies only the Secret %s into a tenant, not ' + request.name" $secret | quote }}
-    - expression: {{ printf "request.resource.resource != 'rolebindings' || request.operation == 'DELETE' || (object.roleRef.kind == 'ClusterRole' && object.roleRef.name == '%s' && has(object.subjects) && object.subjects.all(s, s.kind == 'ServiceAccount' && s.namespace == request.namespace))" $flux | quote }}
-      messageExpression: {{ printf "'agent-manager binds only the ClusterRole %s to a ServiceAccount of the tenant'" $flux | quote }}
+    - expression: {{ printf "request.resource.resource != 'rolebindings' || request.operation == 'DELETE' || (object.roleRef.kind == 'ClusterRole' && object.roleRef.name == '%s' && has(object.subjects) && object.subjects.all(s, s.kind == 'ServiceAccount' && s.name == '%s' && s.namespace == request.namespace))" $flux $fluxSA | quote }}
+      messageExpression: {{ printf "'agent-manager binds only the ClusterRole %s to the ServiceAccount %s of the tenant'" $flux $fluxSA | quote }}
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicyBinding

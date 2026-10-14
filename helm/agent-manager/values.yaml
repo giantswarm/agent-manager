@@ -405,9 +405,12 @@ tenants:
   # (`harness.name`), its WorkerPool and the pool's ServiceAccount, and the
   # default ModelConfig with its key Secret, all copied from
   # `kagent.namespace`. Renders the ServiceAccount's ClusterRole for that work
-  # (whatever `rbac.create` and `oauth.downstream` say) and a
-  # ValidatingAdmissionPolicy that refuses its writes outside labelled
-  # namespaces (Kubernetes 1.30 or later).
+  # (whatever `rbac.create` says) and a ValidatingAdmissionPolicy that refuses
+  # its writes outside labelled namespaces (Kubernetes 1.30 or later). Needs
+  # `oauth.downstream.enabled` (a request in a tenant runs as the caller) and
+  # `flux.helmReleaseServiceAccount`. An agent in a tenant gets no
+  # installation skills credential (`skills.gitAuthSecretName`,
+  # `skills.mintGitAuthSecret`): it names its own.
   enabled: false
   modelConfig:
     # -- The platform's default ModelConfig a tenant receives with its first

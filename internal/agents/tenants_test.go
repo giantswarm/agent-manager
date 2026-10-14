@@ -111,3 +111,17 @@ func TestCreatorAnnotation(t *testing.T) {
 	_, err = f.svc.Update(bob, Update{Name: "verifier", Annotations: &steal})
 	assert.ErrorIs(t, err, ErrInvalid)
 }
+
+// The installation's skills credential exists in the configured namespaces
+// only, so an agent in a tenant is not composed with it.
+func TestTenantGetsNoInstallationSkillsCredential(t *testing.T) {
+	f := seeded(t)
+	withTenants(f, &fakeTenants{namespaces: []string{"org-a"}})
+	f.svc.cfg.Compose.SkillsGitAuthSecretName = "skills-token"
+	st, err := f.svc.site(context.Background(), In("org-a"))
+	require.NoError(t, err)
+	assert.Empty(t, st.compose.SkillsGitAuthSecretName)
+	st, err = f.svc.site(context.Background(), In("kagent"))
+	require.NoError(t, err)
+	assert.Equal(t, "skills-token", st.compose.SkillsGitAuthSecretName)
+}

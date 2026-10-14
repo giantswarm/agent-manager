@@ -150,9 +150,10 @@ func (r *Reconciler) Kick(namespace string) {
 	}
 }
 
-// Run reconciles every tenant on each interval, and a kicked namespace at
-// once, until ctx ends.
+// Run reconciles every tenant at once and then on each interval, and a
+// kicked namespace at once, until ctx ends.
 func (r *Reconciler) Run(ctx context.Context) {
+	r.ReconcileAll(ctx)
 	t := time.NewTicker(r.cfg.Interval)
 	defer t.Stop()
 	for {
@@ -169,13 +170,13 @@ func (r *Reconciler) Run(ctx context.Context) {
 	}
 }
 
-// ReconcileAll discovers the tenants and reconciles each. A namespace that
-// fails is logged and retried on the next pass; the others go on.
-func (r *Reconciler) ReconcileAll(ctx context.Context) {
+// Discover lists the tenant namespaces and keeps them as the known set; on
+// a failed list the last set stays.
+func (r *Reconciler) Discover(ctx context.Context) []string {
 	list, err := r.typed.CoreV1().Namespaces().List(ctx, metav1.ListOptions{LabelSelector: OrganizationLabel})
 	if err != nil {
 		r.log.Warn("listing the tenant namespaces failed; keeping the last set", "error", err)
-		return
+		return r.Namespaces()
 	}
 	var found []string
 	for i := range list.Items {
@@ -187,7 +188,13 @@ func (r *Reconciler) ReconcileAll(ctx context.Context) {
 	r.mu.Lock()
 	r.namespaces = found
 	r.mu.Unlock()
-	for _, ns := range found {
+	return slices.Clone(found)
+}
+
+// ReconcileAll discovers the tenants and reconciles each. A namespace that
+// fails is logged and retried on the next pass; the others go on.
+func (r *Reconciler) ReconcileAll(ctx context.Context) {
+	for _, ns := range r.Discover(ctx) {
 		if err := r.reconcile(ctx, ns); err != nil {
 			r.log.Warn("tenant reconcile failed", "namespace", ns, "error", err)
 		}
@@ -228,7 +235,7 @@ func (r *Reconciler) isTenant(ns *corev1.Namespace) bool {
 func (r *Reconciler) reconcile(ctx context.Context, ns string) error {
 	var errs []error
 	if r.cfg.OCIRepository != nil {
-		errs = append(errs, r.ensure(ctx, r.cfg.OCIRepositoryGVR, ns, ScopeNamespace, r.cfg.OCIRepository(ns), ""))
+		errs = append(errs, r.ensureExists(ctx, r.cfg.OCIRepositoryGVR, ns, ScopeNamespace, r.cfg.OCIRepository(ns)))
 	}
 	if sa := r.cfg.FluxServiceAccount; sa != "" {
 		errs = append(errs, r.ensureServiceAccount(ctx, ns, sa, ScopeNamespace), r.ensureFluxRoleBinding(ctx, ns))
@@ -458,6 +465,21 @@ func (r *Reconciler) ensure(ctx context.Context, gvr schema.GroupVersionResource
 	}
 	r.log.Info("tenant object updated", "namespace", ns, "resource", gvr.Resource, "name", obj.GetName())
 	return nil
+}
+
+// ensureExists creates obj when nothing of its name exists and never
+// changes it after: the agent chart's source moves to another range only
+// through the migrate command, as in the configured namespaces.
+func (r *Reconciler) ensureExists(ctx context.Context, gvr schema.GroupVersionResource, ns, scope string, obj *unstructured.Unstructured) error {
+	client := r.dyn.Resource(gvr).Namespace(ns)
+	_, err := client.Get(ctx, obj.GetName(), metav1.GetOptions{})
+	if err == nil {
+		return nil
+	}
+	if !apierrors.IsNotFound(err) {
+		return fmt.Errorf("get %s %s/%s: %w", gvr.Resource, ns, obj.GetName(), err)
+	}
+	return r.ensure(ctx, gvr, ns, scope, obj, "")
 }
 
 // delete removes the reconciler's own object of that name.

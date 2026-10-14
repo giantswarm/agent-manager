@@ -495,11 +495,18 @@ create in a tenant may name the default ModelConfig before its copy exists.
 It never writes memberships: who may use a tenant is declared in RoleBindings
 of the namespace.
 
-The chart renders the reconciler's ClusterRole whatever `oauth.downstream`
-says (`bind` on `agent-platform-tenant-flux` only, no `escalate`), and a
+Tenants need `--downstream-oauth`: a request in a tenant runs as the caller,
+whose RoleBindings there grant it. An agent in a tenant gets no installation
+skills credential (`--skills-git-auth-secret-name`): that Secret exists in the
+configured namespaces only, so it names its own. The reconciler creates a
+tenant's OCIRepository once and never moves its range; `agent-manager migrate`
+does not cover the tenants yet.
+
+The chart renders the reconciler's ClusterRole (`bind` on
+`agent-platform-tenant-flux` only, no `escalate`), and a
 ValidatingAdmissionPolicy that refuses the ServiceAccount's writes of those
 kinds outside labelled namespaces, a RoleBinding to any other role or
-subject, and any other Secret: RBAC cannot select namespaces by label.
+subject than the agents' Flux ServiceAccount, and any other Secret: RBAC cannot select namespaces by label.
 
 Every create records the caller as `agent-platform.giantswarm.io/created-by`
 on the HelmRelease and, through the chart's `annotations` value, on the

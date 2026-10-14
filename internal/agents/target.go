@@ -223,6 +223,11 @@ func (s *Service) site(ctx context.Context, loc Location) (*site, error) {
 	}
 	st := &site{loc: loc, flux: dyn, fluxClient: client, fluxNS: ns, agent: dyn, agentClient: client, compose: s.cfg.Compose}
 	if !loc.IsSet() {
+		if s.isTenant(ns) {
+			// The installation's skills credential lives in the configured
+			// namespaces only: an agent in a tenant names its own.
+			st.compose.SkillsGitAuthSecretName = ""
+		}
 		return st, nil
 	}
 	st.fluxNS = loc.FluxNamespace()
