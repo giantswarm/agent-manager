@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/giantswarm/agent-manager/internal/identity"
 )
@@ -62,7 +63,6 @@ func TestTenantNamespaceIsManaged(t *testing.T) {
 func TestInfoListsTheCreatableNamespaces(t *testing.T) {
 	f := seeded(t)
 	withTenants(f, &fakeTenants{namespaces: []string{"org-a", "org-b"}})
-	f.typed.ReactionChain = nil
 	allowCreate(f.typed, func(ns string) bool { return ns == "org-a" })
 	assert.Equal(t, []string{"org-a"}, f.svc.Info(context.Background()).Namespaces.Managed)
 }
@@ -86,13 +86,13 @@ func TestCreatorAnnotation(t *testing.T) {
 	hr, err := f.dyn.Resource(hrGVR).Namespace("kagent").Get(alice, "sre", metav1.GetOptions{})
 	require.NoError(t, err)
 	assert.Equal(t, "alice@example.com", hr.GetAnnotations()[CreatedByAnnotation])
-	assert.Equal(t, "alice@example.com", creatorOf(hr.Object["spec"].(map[string]any)["values"].(map[string]any)))
+	assert.Equal(t, "alice@example.com", valuesCreator(t, hr.Object["spec"].(map[string]any)["values"].(map[string]any)), "the chart's annotations value")
 
 	// Bob replaces the annotations: the creator stays.
 	annotations := map[string]string{"team": "sre"}
 	upd, err := f.svc.Update(bob, Update{Name: "sre", Annotations: &annotations})
 	require.NoError(t, err)
-	assert.Equal(t, "alice@example.com", creatorOf(upd.After))
+	assert.Equal(t, "alice@example.com", valuesCreator(t, upd.After))
 	assert.Equal(t, "sre", upd.After["annotations"].(map[string]any)["team"])
 	hr, err = f.dyn.Resource(hrGVR).Namespace("kagent").Get(bob, "sre", metav1.GetOptions{})
 	require.NoError(t, err)
@@ -102,7 +102,7 @@ func TestCreatorAnnotation(t *testing.T) {
 	empty := map[string]string{}
 	upd, err = f.svc.Update(bob, Update{Name: "sre", Annotations: &empty})
 	require.NoError(t, err)
-	assert.Equal(t, "alice@example.com", creatorOf(upd.After))
+	assert.Equal(t, "alice@example.com", valuesCreator(t, upd.After))
 	steal := map[string]string{CreatedByAnnotation: "bob@example.com"}
 	_, err = f.svc.Update(bob, Update{Name: "sre", Annotations: &steal})
 	assert.ErrorIs(t, err, ErrInvalid)
@@ -112,16 +112,29 @@ func TestCreatorAnnotation(t *testing.T) {
 	assert.ErrorIs(t, err, ErrInvalid)
 }
 
+// valuesCreator reads the creator where the chart reads it:
+// annotations[CreatedByAnnotation] of the values.
+func valuesCreator(t *testing.T, values map[string]any) string {
+	t.Helper()
+	creator, _, err := unstructured.NestedString(values, "annotations", CreatedByAnnotation)
+	require.NoError(t, err)
+	return creator
+}
+
 // The installation's skills credential exists in the configured namespaces
 // only, so an agent in a tenant is not composed with it.
 func TestTenantGetsNoInstallationSkillsCredential(t *testing.T) {
 	f := seeded(t)
 	withTenants(f, &fakeTenants{namespaces: []string{"org-a"}})
 	f.svc.cfg.Compose.SkillsGitAuthSecretName = "skills-token"
-	st, err := f.svc.site(context.Background(), In("org-a"))
-	require.NoError(t, err)
-	assert.Empty(t, st.compose.SkillsGitAuthSecretName)
-	st, err = f.svc.site(context.Background(), In("kagent"))
-	require.NoError(t, err)
-	assert.Equal(t, "skills-token", st.compose.SkillsGitAuthSecretName)
+	gitPlugin := Plugin{Path: "bundles/sre", Git: &GitSkill{URL: skillsRepo, Commit: tagHead}, Skills: []string{"triage"}}
+	values := func(ns string) map[string]any {
+		dry, err := f.svc.ValidateCreate(t.Context(), Spec{Location: In(ns), Name: "sre", ModelConfig: "default-model-config",
+			Toolset: []string{"preset:read-only"}, Plugins: Plugins{gitPlugin}})
+		require.NoError(t, err)
+		require.True(t, dry.Valid, dry.Errors)
+		return dry.Manifests.Values
+	}
+	assert.NotContains(t, values("org-a"), SkillsGitAuthValuesKey)
+	assert.Equal(t, map[string]any{"name": "skills-token"}, values("kagent")[SkillsGitAuthValuesKey])
 }
