@@ -126,11 +126,11 @@ spec:
   matchConstraints:
     resourceRules:
       - apiGroups: [""]
-        apiVersions: ["*"]
+        apiVersions: ["v1"]
         operations: ["CREATE", "UPDATE", "DELETE"]
         resources: ["secrets", "serviceaccounts"]
       - apiGroups: ["rbac.authorization.k8s.io"]
-        apiVersions: ["*"]
+        apiVersions: ["v1"]
         operations: ["CREATE", "UPDATE", "DELETE"]
         resources: ["rolebindings"]
       - apiGroups: ["api.kagent.dev"]
@@ -162,12 +162,17 @@ spec:
     # without OAuth, and an update of the skills boot Secret.
     - name: configured
       expression: {{ printf "request.namespace in %s && (request.resource.resource == 'ocirepositories' || (request.resource.resource == 'secrets' && request.operation == 'UPDATE' && request.name == '%s'))" (include "agent-manager.managedNamespaces" . | replace "\"" "'") (include "agent-manager.skillsGitAuthSecretName" .) | quote }}
+    # The written object read untyped: the policy also matches Secrets and
+    # ServiceAccounts, whose types have no roleRef, and the type check of
+    # status.typeChecking would flag a typed object.roleRef for them.
+    - name: binding
+      expression: "dyn(object)"
   validations:
     - expression: "variables.tenant || variables.configured"
       messageExpression: "'agent-manager writes ' + request.resource.resource + ' only in namespaces labelled giantswarm.io/organization; ' + request.namespace + ' is not one'"
     - expression: {{ printf "!variables.tenant || request.resource.resource != 'secrets' || request.name == '%s'" $secret | quote }}
       messageExpression: {{ printf "'agent-manager copies only the Secret %s into a tenant, not ' + request.name" $secret | quote }}
-    - expression: {{ printf "request.resource.resource != 'rolebindings' || request.operation == 'DELETE' || (object.roleRef.kind == 'ClusterRole' && object.roleRef.name == '%s' && has(object.subjects) && object.subjects.all(s, s.kind == 'ServiceAccount' && s.name == '%s' && s.namespace == request.namespace))" $flux $fluxSA | quote }}
+    - expression: {{ printf "request.resource.resource != 'rolebindings' || request.operation == 'DELETE' || (variables.binding.roleRef.kind == 'ClusterRole' && variables.binding.roleRef.name == '%s' && has(variables.binding.subjects) && variables.binding.subjects.all(s, s.kind == 'ServiceAccount' && s.name == '%s' && s.namespace == request.namespace))" $flux $fluxSA | quote }}
       messageExpression: {{ printf "'agent-manager binds only the ClusterRole %s to the ServiceAccount %s of the tenant'" $flux $fluxSA | quote }}
 ---
 apiVersion: admissionregistration.k8s.io/v1

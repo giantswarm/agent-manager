@@ -141,19 +141,19 @@ tests:
           pattern: request.name == 'kagent-anthropic'$
       - matchRegex:
           path: spec.validations[2].expression
-          pattern: object.roleRef.name == 'agent-platform-tenant-flux' && has\(object.subjects\) && object.subjects.all\(s, s.kind == 'ServiceAccount' && s.name == 'agents-flux' && s.namespace == request.namespace\)
+          pattern: variables.binding.roleRef.name == 'agent-platform-tenant-flux' && has\(variables.binding.subjects\) && variables.binding.subjects.all\(s, s.kind == 'ServiceAccount' && s.name == 'agents-flux' && s.namespace == request.namespace\)
       - contains:
           path: spec.matchConstraints.resourceRules
           content:
             apiGroups: [""]
-            apiVersions: ["*"]
+            apiVersions: ["v1"]
             operations: ["CREATE", "UPDATE", "DELETE"]
             resources: ["secrets", "serviceaccounts"]
       - contains:
           path: spec.matchConstraints.resourceRules
           content:
             apiGroups: ["rbac.authorization.k8s.io"]
-            apiVersions: ["*"]
+            apiVersions: ["v1"]
             operations: ["CREATE", "UPDATE", "DELETE"]
             resources: ["rolebindings"]
 
