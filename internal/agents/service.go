@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strings"
 
+	"golang.org/x/sync/errgroup"
+	authorizationv1 "k8s.io/api/authorization/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -59,6 +61,19 @@ type Config struct {
 	// Harness name: written into a coding agent's egress, and the only
 	// origins it may name. A claude Harness without an entry reaches none.
 	HarnessEgress map[string][]string
+	// Tenants are the tenant namespaces the tenant reconciler keeps, managed
+	// beside ManagedNamespaces. Nil: no tenants.
+	Tenants TenantSet
+}
+
+// TenantSet is the tenant reconciler as the service sees it.
+type TenantSet interface {
+	// Namespaces are the tenant namespaces found so far.
+	Namespaces() []string
+	// ModelConfig is the ModelConfig a tenant receives with its first agent.
+	ModelConfig() string
+	// Kick asks for a namespace to be reconciled now.
+	Kick(namespace string)
 }
 
 // Service is the agent lifecycle.
@@ -109,6 +124,26 @@ func ManagedNamespaces(def string, additional []string) []string {
 	return managed
 }
 
+// Managed are the namespaces the service manages: the configured ones, then
+// the tenants.
+func (s *Service) Managed() []string {
+	managed := slices.Clone(s.cfg.ManagedNamespaces)
+	if s.cfg.Tenants == nil {
+		return managed
+	}
+	for _, ns := range s.cfg.Tenants.Namespaces() {
+		if !slices.Contains(managed, ns) {
+			managed = append(managed, ns)
+		}
+	}
+	return managed
+}
+
+// isTenant reports whether ns is a tenant namespace.
+func (s *Service) isTenant(ns string) bool {
+	return s.cfg.Tenants != nil && slices.Contains(s.cfg.Tenants.Namespaces(), ns)
+}
+
 // InfoResponse is GET /info: what this installation can do, so the portal and
 // agents feature-detect instead of guessing.
 type InfoResponse struct {
@@ -116,7 +151,9 @@ type InfoResponse struct {
 	Chart   chart.Info `json:"chart"`
 	// Namespaces the service manages agents in.
 	Namespaces struct {
-		Default string   `json:"default"`
+		Default string `json:"default"`
+		// Managed are the managed namespaces in which the caller may create
+		// agents (create on helmreleases).
 		Managed []string `json:"managed"`
 	} `json:"namespaces"`
 	// Capabilities are explicit flags; a false flag means the matching
@@ -175,7 +212,7 @@ func (s *Service) Info(ctx context.Context) InfoResponse {
 	out.Version = s.cfg.Version
 	out.Chart = s.chart.Info(ctx)
 	out.Namespaces.Default = s.cfg.DefaultNamespace
-	out.Namespaces.Managed = append([]string(nil), s.cfg.ManagedNamespaces...)
+	out.Namespaces.Managed = s.creatableNamespaces(ctx)
 	out.Capabilities = map[string]bool{
 		"list": true, "get": true, "create": true, "update": true, "delete": true,
 		"status": true, "validate": true, "modelConfigs": true,
@@ -219,6 +256,44 @@ func (s *Service) Info(ctx context.Context) InfoResponse {
 	return out
 }
 
+// creatableNamespaces are the managed namespaces in which the caller may
+// create a HelmRelease, asked with a SelfSubjectAccessReview per namespace as
+// the caller (the ServiceAccount without OAuth). A namespace whose review
+// fails is left out: the list never offers what a create would refuse.
+func (s *Service) creatableNamespaces(ctx context.Context) []string {
+	managed := s.Managed()
+	c, err := s.kube.Client(ctx)
+	if err != nil {
+		return []string{}
+	}
+	gvr := s.helmReleaseGVR()
+	allowed := make([]bool, len(managed))
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(8)
+	for i, ns := range managed {
+		g.Go(func() error {
+			review := &authorizationv1.SelfSubjectAccessReview{Spec: authorizationv1.SelfSubjectAccessReviewSpec{
+				ResourceAttributes: &authorizationv1.ResourceAttributes{Namespace: ns, Verb: "create", Group: gvr.Group, Resource: gvr.Resource},
+			}}
+			res, err := c.Typed().AuthorizationV1().SelfSubjectAccessReviews().Create(gctx, review, metav1.CreateOptions{})
+			if err != nil {
+				s.log.Debug("access review failed; leaving the namespace out", identity.LogAttr(ctx), "namespace", ns, "error", err)
+				return nil
+			}
+			allowed[i] = res.Status.Allowed
+			return nil
+		})
+	}
+	_ = g.Wait()
+	out := []string{}
+	for i, ns := range managed {
+		if allowed[i] {
+			out = append(out, ns)
+		}
+	}
+	return out
+}
+
 // ---- GVRs -----------------------------------------------------------------
 
 func gvrFor(apiVersion, resource string) schema.GroupVersionResource {
@@ -253,12 +328,11 @@ func (s *Service) Namespace(ns string) (string, error) {
 	if ns == "" {
 		return s.cfg.DefaultNamespace, nil
 	}
-	for _, m := range s.cfg.ManagedNamespaces {
-		if m == ns {
-			return ns, nil
-		}
+	managed := s.Managed()
+	if slices.Contains(managed, ns) {
+		return ns, nil
 	}
-	return "", invalidf("namespace %q is not managed by agent-manager (managed: %s)", ns, strings.Join(s.cfg.ManagedNamespaces, ", "))
+	return "", invalidf("namespace %q is not managed by agent-manager (managed: %s)", ns, strings.Join(managed, ", "))
 }
 
 func (s *Service) dyn(ctx context.Context) (dynamic.Interface, kube.Client, error) {
@@ -526,12 +600,15 @@ func (s *Service) listModelConfigs(ctx context.Context, dyn dynamic.Interface, n
 }
 
 // requireModelConfig fails with the valid names when name is not a ModelConfig
-// of ns.
-func (s *Service) requireModelConfig(ctx context.Context, dyn dynamic.Interface, ns, name string) error {
+// of the site's namespace. In a tenant namespace the platform's default
+// ModelConfig is accepted before its copy exists: the tenant reconciler
+// provides it with the first agent.
+func (s *Service) requireModelConfig(ctx context.Context, st *site, name string) error {
 	if strings.TrimSpace(name) == "" {
 		return invalidf("modelConfig is required")
 	}
-	configs, err := s.listModelConfigs(ctx, dyn, ns)
+	ns := st.ns()
+	configs, err := s.listModelConfigs(ctx, st.agent, ns)
 	if err != nil {
 		return err
 	}
@@ -541,6 +618,9 @@ func (s *Service) requireModelConfig(ctx context.Context, dyn dynamic.Interface,
 			return nil
 		}
 		names = append(names, mc.Name)
+	}
+	if !st.loc.IsSet() && s.isTenant(ns) && name == s.cfg.Tenants.ModelConfig() {
+		return nil
 	}
 	if len(names) == 0 {
 		return invalidf("modelConfig %q does not exist in namespace %s (no ModelConfigs there; a platform admin provisions them)", name, ns)
@@ -624,6 +704,9 @@ func checkSpec(spec Spec) []error {
 	if err := ValidateSystemMessage(spec.SystemMessage); err != nil {
 		errs = append(errs, err)
 	}
+	if _, ok := spec.Annotations[CreatedByAnnotation]; ok {
+		errs = append(errs, invalidf("annotation %s is set by agent-manager to the caller who creates the agent", CreatedByAnnotation))
+	}
 	if err := spec.Validate(); err != nil {
 		errs = append(errs, err)
 	} else if spec.IsSet() {
@@ -698,7 +781,7 @@ func (s *Service) ValidateCreate(ctx context.Context, spec Spec) (*ValidateResul
 	if err := s.requireTargetMuster(st); err != nil {
 		res.addError(err)
 	}
-	if err := s.requireModelConfig(ctx, st.agent, ns, spec.ModelConfig); err != nil {
+	if err := s.requireModelConfig(ctx, st, spec.ModelConfig); err != nil {
 		if !isDomainError(err) {
 			return nil, err
 		}
@@ -727,6 +810,7 @@ func (s *Service) ValidateCreate(ctx context.Context, spec Spec) (*ValidateResul
 		spec.Skills = pinned
 	}
 	values := BuildValues(spec, st.compose)
+	setCreator(values, identity.Caller(ctx))
 	if claude {
 		for _, e := range s.guardClaude(harness, values, spec.Egress) {
 			res.addError(e)
@@ -860,7 +944,7 @@ func (s *Service) Create(ctx context.Context, spec Spec) (*CreateResult, error) 
 	if err := s.requireFreeName(ctx, st, spec.Name); err != nil {
 		return nil, err
 	}
-	if err := s.requireModelConfig(ctx, st.agent, ns, spec.ModelConfig); err != nil {
+	if err := s.requireModelConfig(ctx, st, spec.ModelConfig); err != nil {
 		return nil, err
 	}
 	harness, claude, err := s.requireHarness(ctx, st.agent, ns, spec)
@@ -874,6 +958,7 @@ func (s *Service) Create(ctx context.Context, spec Spec) (*CreateResult, error) 
 		return nil, err
 	}
 	values := BuildValues(spec, st.compose)
+	setCreator(values, identity.Caller(ctx))
 	if claude {
 		if errs := s.guardClaude(harness, values, spec.Egress); len(errs) > 0 {
 			return nil, errs[0]
@@ -928,6 +1013,10 @@ func (s *Service) Create(ctx context.Context, spec Spec) (*CreateResult, error) 
 		return nil, wrapKube(err, fmt.Sprintf("create HelmRelease %s/%s", fluxNS, hr.GetName()))
 	}
 	res.Created.HelmRelease = true
+	if !spec.IsSet() && s.isTenant(ns) {
+		// The tenant's Harness and ModelConfig come with its first agent.
+		s.cfg.Tenants.Kick(ns)
+	}
 	agent := Agent{Name: spec.Name, Namespace: ns, Target: spec.Target, Managed: ManagedHelmRelease}
 	applyHelmRelease(&agent, created)
 	res.Agent = agent
@@ -1071,7 +1160,7 @@ func (s *Service) mergedValues(ctx context.Context, st *site, upd Update, hr *un
 
 	var firstErr error
 	if upd.ModelConfig != nil {
-		if err := s.requireModelConfig(ctx, st.agent, st.ns(), *upd.ModelConfig); err != nil {
+		if err := s.requireModelConfig(ctx, st, *upd.ModelConfig); err != nil {
 			firstErr = err
 		}
 		after["modelConfig"] = map[string]any{"name": *upd.ModelConfig}
@@ -1129,6 +1218,9 @@ func (s *Service) mergedValues(ctx context.Context, st *site, upd Update, hr *un
 			after["annotations"] = toAnyMap(*upd.Annotations)
 		} else {
 			delete(after, "annotations")
+		}
+		if err := keepCreator(before, after, *upd.Annotations); err != nil {
+			return after, before, err
 		}
 	}
 	return after, before, firstErr
@@ -1525,6 +1617,7 @@ func agentFromObject(obj, server *unstructured.Unstructured) Agent {
 	a := Agent{Name: obj.GetName(), Namespace: obj.GetNamespace(), Exists: true, Managed: ManagedNone}
 	a.DisplayName = obj.GetAnnotations()[DisplayNameAnnotation]
 	a.IconURL = obj.GetAnnotations()[IconURLAnnotation]
+	a.CreatedBy = obj.GetAnnotations()[CreatedByAnnotation]
 	a.Harness, _, _ = unstructured.NestedString(obj.Object, "spec", "harnessRef", "name")
 	a.Description, _, _ = unstructured.NestedString(obj.Object, "spec", "template", "description")
 	a.ModelConfig, _, _ = unstructured.NestedString(obj.Object, "spec", "template", "modelConfig", "name")
@@ -1618,6 +1711,9 @@ func applyHelmRelease(a *Agent, hr *unstructured.Unstructured) {
 		ref.ChartVersion = ref.LastAttemptedRevision
 	}
 	a.HelmRelease = ref
+	if a.CreatedBy == "" {
+		a.CreatedBy = hr.GetAnnotations()[CreatedByAnnotation]
+	}
 	if ref.GitOpsOwned {
 		a.Managed = ManagedGitOps
 	} else {

@@ -79,6 +79,11 @@ const (
 	// read by the Dev Portal, Swarmgeist and agent-manager.
 	DisplayNameAnnotation = "ui.giantswarm.io/display-name"
 	IconURLAnnotation     = "ui.giantswarm.io/icon-url"
+	// CreatedByAnnotation records who created an agent: on the HelmRelease
+	// and, through the chart's annotations value, on the Agent object. Set
+	// on create, never changed, and read for display and filtering only,
+	// never for authorization.
+	CreatedByAnnotation = "agent-platform.giantswarm.io/created-by"
 	// HelmReleaseNameLabel / HelmReleaseNamespaceLabel are the Flux provenance
 	// labels helm-controller stamps on every object a release renders.
 	HelmReleaseNameLabel      = "helm.toolkit.fluxcd.io/name"
@@ -361,9 +366,12 @@ type Agent struct {
 	Target
 	// Exists is false while the HelmRelease has not rendered the Agent
 	// object yet (or failed to).
-	Exists        bool   `json:"exists"`
-	DisplayName   string `json:"displayName,omitempty"`
-	Description   string `json:"description,omitempty"`
+	Exists      bool   `json:"exists"`
+	DisplayName string `json:"displayName,omitempty"`
+	Description string `json:"description,omitempty"`
+	// CreatedBy is the caller who created the agent (CreatedByAnnotation);
+	// empty for an agent created before it was recorded.
+	CreatedBy     string `json:"createdBy,omitempty"`
 	ModelConfig   string `json:"modelConfig,omitempty"`
 	IconURL       string `json:"iconUrl,omitempty"`
 	SystemMessage string `json:"systemMessage,omitempty"`
@@ -411,6 +419,7 @@ type AgentSummary struct {
 	Exists             bool     `json:"exists"`
 	DisplayName        string   `json:"displayName,omitempty"`
 	Description        string   `json:"description,omitempty"`
+	CreatedBy          string   `json:"createdBy,omitempty"`
 	ModelConfig        string   `json:"modelConfig,omitempty"`
 	Harness            string   `json:"harness,omitempty"`
 	Toolset            []string `json:"toolset,omitempty"`
@@ -434,6 +443,7 @@ func (a Agent) Summary() AgentSummary {
 		Exists:             a.Exists,
 		DisplayName:        a.DisplayName,
 		Description:        a.Description,
+		CreatedBy:          a.CreatedBy,
 		ModelConfig:        a.ModelConfig,
 		Harness:            a.Harness,
 		Toolset:            a.Toolset,

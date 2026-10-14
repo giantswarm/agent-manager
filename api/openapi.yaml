@@ -664,7 +664,7 @@ components:
           type: object
           properties:
             default: { type: string }
-            managed: { type: array, items: { type: string } }
+            managed: { type: array, items: { type: string }, description: "The managed namespaces (the configured ones and, with tenants, every namespace labelled giantswarm.io/organization) in which the caller may create agents (create on helmreleases, asked as the caller)" }
         capabilities:
           type: object
           additionalProperties: { type: boolean }
@@ -885,6 +885,7 @@ components:
         exists: { type: boolean }
         displayName: { type: string }
         description: { type: string }
+        createdBy: { type: string, description: The caller who created the agent (agent-platform.giantswarm.io/created-by); for display and filtering only }
         modelConfig: { type: string }
         toolset: { $ref: "#/components/schemas/Toolset" }
         implicitFullAccess: { type: boolean }
@@ -904,6 +905,7 @@ components:
         exists: { type: boolean, description: The Agent exists (false while the HelmRelease has not rendered it) }
         displayName: { type: string, description: From the ui.giantswarm.io/display-name annotation }
         description: { type: string }
+        createdBy: { type: string, description: "The caller who created the agent: the agent-platform.giantswarm.io/created-by annotation of the Agent, else of the HelmRelease. Set on create, never changed; for display and filtering only, never for authorization" }
         modelConfig: { type: string }
         iconUrl: { type: string, description: From the ui.giantswarm.io/icon-url annotation }
         systemMessage: { type: string }

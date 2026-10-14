@@ -1,0 +1,211 @@
+# The tenant reconciler's RBAC and admission policy (tenants.enabled): its
+# own switch, rendered with oauth.downstream too, binding only
+# agent-platform-tenant-flux, and its writes held to labelled namespaces.
+#
+# Run with: make helm-test (helm unittest helm/agent-manager)
+suite: tenants
+templates:
+  - templates/tenants-rbac.yaml
+  - templates/deployment.yaml
+set:
+  tenants:
+    enabled: true
+tests:
+  - it: renders nothing and passes no flag while off
+    set:
+      tenants:
+        enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+        template: templates/tenants-rbac.yaml
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --tenants=true
+        template: templates/deployment.yaml
+
+  - it: renders with oauth.downstream, where the ServiceAccount has no other RBAC
+    set:
+      oauth:
+        enabled: true
+        baseURL: https://agent-manager.example.com
+        dex:
+          issuerURL: https://dex.example.com
+          clientID: platform
+        downstream:
+          enabled: true
+    template: templates/tenants-rbac.yaml
+    asserts:
+      - hasDocuments:
+          count: 5
+
+  - it: renders the tenant Flux ClusterRole without agenttemplates
+    template: templates/tenants-rbac.yaml
+    documentIndex: 0
+    asserts:
+      - isKind:
+          of: ClusterRole
+      - equal:
+          path: metadata.name
+          value: agent-platform-tenant-flux
+      - equal:
+          path: rules
+          value:
+            - apiGroups: [""]
+              resources: ["secrets"]
+              verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+            - apiGroups: ["api.kagent.dev"]
+              resources: ["agents", "remotemcpservers"]
+              verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+  - it: binds only agent-platform-tenant-flux, never escalates, and names the one Secret it reads
+    template: templates/tenants-rbac.yaml
+    documentIndex: 1
+    asserts:
+      - isKind:
+          of: ClusterRole
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["rbac.authorization.k8s.io"]
+            resources: ["clusterroles"]
+            resourceNames: ["agent-platform-tenant-flux"]
+            verbs: ["bind"]
+      - contains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["secrets"]
+            resourceNames: ["kagent-anthropic"]
+            verbs: ["get", "update", "delete"]
+      - notMatchRegex:
+          path: rules[*].verbs[*]
+          pattern: ^(escalate|impersonate|\*)$
+      - notContains:
+          path: rules
+          content:
+            apiGroups: ["cilium.io"]
+            resources: ["ciliumnetworkpolicies"]
+            verbs: ["get", "create", "update"]
+
+  - it: binds the ClusterRole to the ServiceAccount
+    template: templates/tenants-rbac.yaml
+    documentIndex: 2
+    asserts:
+      - isKind:
+          of: ClusterRoleBinding
+      - equal:
+          path: subjects[0].name
+          value: RELEASE-NAME-agent-manager
+      - equal:
+          path: roleRef.name
+          value: RELEASE-NAME-agent-manager-tenants
+
+  - it: holds the ServiceAccount's writes to labelled namespaces
+    template: templates/tenants-rbac.yaml
+    documentIndex: 3
+    asserts:
+      - isKind:
+          of: ValidatingAdmissionPolicy
+      - equal:
+          path: spec.failurePolicy
+          value: Fail
+      - equal:
+          path: spec.matchConditions[0].expression
+          value: request.userInfo.username == 'system:serviceaccount:NAMESPACE:RELEASE-NAME-agent-manager'
+      - equal:
+          path: spec.variables[0].expression
+          value: has(namespaceObject.metadata.labels) && 'giantswarm.io/organization' in namespaceObject.metadata.labels && namespaceObject.metadata.name != 'kagent'
+      - matchRegex:
+          path: spec.validations[1].expression
+          pattern: request.name == 'kagent-anthropic'$
+      - matchRegex:
+          path: spec.validations[2].expression
+          pattern: object.roleRef.name == 'agent-platform-tenant-flux'
+      - contains:
+          path: spec.matchConstraints.resourceRules
+          content:
+            apiGroups: [""]
+            apiVersions: ["*"]
+            operations: ["CREATE", "UPDATE", "DELETE"]
+            resources: ["secrets", "serviceaccounts"]
+      - contains:
+          path: spec.matchConstraints.resourceRules
+          content:
+            apiGroups: ["rbac.authorization.k8s.io"]
+            apiVersions: ["*"]
+            operations: ["CREATE", "UPDATE", "DELETE"]
+            resources: ["rolebindings"]
+
+  - it: denies what the policy refuses
+    template: templates/tenants-rbac.yaml
+    documentIndex: 4
+    asserts:
+      - isKind:
+          of: ValidatingAdmissionPolicyBinding
+      - equal:
+          path: spec.validationActions
+          value: ["Deny"]
+
+  - it: names the network policy kind of the flavor in the role and the policy
+    template: templates/tenants-rbac.yaml
+    set:
+      tenants:
+        networkPolicy:
+          flavor: cilium
+          names: [substrate-workers]
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["cilium.io"]
+            resources: ["ciliumnetworkpolicies"]
+            verbs: ["get", "create", "update"]
+        documentIndex: 1
+      - contains:
+          path: spec.matchConstraints.resourceRules
+          content:
+            apiGroups: ["cilium.io"]
+            apiVersions: ["*"]
+            operations: ["CREATE", "UPDATE", "DELETE"]
+            resources: ["ciliumnetworkpolicies"]
+        documentIndex: 3
+
+  - it: refuses an unknown flavor
+    template: templates/tenants-rbac.yaml
+    set:
+      tenants:
+        networkPolicy:
+          flavor: calico
+          names: [x]
+    asserts:
+      - failedTemplate:
+          errorPattern: "tenants.networkPolicy.flavor \"calico\": kubernetes, cilium or empty"
+
+  - it: passes the tenant flags
+    template: templates/deployment.yaml
+    set:
+      tenants:
+        workerPoolReplicas: 2
+        networkPolicy:
+          flavor: kubernetes
+          names: [substrate-workers-ingress]
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --tenants=true
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --tenant-worker-pool-replicas=2
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --tenant-flux-cluster-role=agent-platform-tenant-flux
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --tenant-network-policy-flavor=kubernetes
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --tenant-network-policies=substrate-workers-ingress
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --tenant-model-secret=kagent-anthropic

@@ -1,0 +1,178 @@
+{{- /*
+The tenant reconciler's permissions (tenants.enabled). It is background work
+without a caller, so it runs as the ServiceAccount whatever oauth.downstream
+says, and this RBAC does not depend on agent-manager.serviceAccountRBAC.
+
+RBAC cannot select namespaces by label, so the ClusterRole lets the
+ServiceAccount write in every namespace. The ValidatingAdmissionPolicy below
+narrows that: the ServiceAccount's writes of the kinds the reconciler keeps
+land only in namespaces labelled giantswarm.io/organization (never
+kagent.namespace), a RoleBinding only binds agent-platform-tenant-flux to a
+ServiceAccount of its own namespace, and the only Secret is the default
+ModelConfig's key. Without it, two calls (bind agent-platform-tenant-flux to
+itself in kube-system, then read) would give the ServiceAccount every Secret
+there.
+
+The reconciler binds agent-platform-tenant-flux and nothing else: `bind` on
+that one name, no `escalate`. The roles people are bound to and the platform
+tenant's bindings belong to agent-platform; memberships are declared, never
+written here.
+*/}}
+{{- if .Values.tenants.enabled }}
+{{- $sa := include "agent-manager.serviceAccountName" . }}
+{{- $flux := include "agent-manager.tenantFluxClusterRole" . }}
+{{- $secret := required "tenants.modelConfig.apiKeySecretName is required with tenants.enabled" .Values.tenants.modelConfig.apiKeySecretName }}
+{{- $netpol := include "agent-manager.tenantNetworkPolicyResource" . | default "{}" | fromJson }}
+{{- $platform := .Values.kagent.namespace }}
+---
+# What the agents' HelmReleases run as in a tenant namespace (helm-controller
+# impersonates the release's ServiceAccount): the Helm release Secrets and the
+# two kinds the Generic agent chart 2.x renders, an Agent and its
+# RemoteMCPServer.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $flux }}
+  labels:
+    {{- include "agent-manager.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["api.kagent.dev"]
+    resources: ["agents", "remotemcpservers"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "agent-manager.fullname" . }}-tenants
+  labels:
+    {{- include "agent-manager.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list"]
+  # Whether a tenant holds an agent.
+  - apiGroups: ["api.kagent.dev"]
+    resources: ["agents"]
+    verbs: ["list"]
+  - apiGroups: ["helm.toolkit.fluxcd.io"]
+    resources: ["helmreleases"]
+    verbs: ["list"]
+  # The copies: read in kagent.namespace, written in the tenants.
+  - apiGroups: ["api.kagent.dev"]
+    resources: ["harnesses", "modelconfigs"]
+    verbs: ["get", "list", "create", "update", "delete"]
+  - apiGroups: ["ate.dev"]
+    resources: ["workerpools"]
+    verbs: ["get", "list", "create", "update", "delete"]
+  {{- with $netpol.resource }}
+  - apiGroups: [{{ $netpol.group | quote }}]
+    resources: [{{ . | quote }}]
+    verbs: ["get", "create", "update"]
+  {{- end }}
+  - apiGroups: ["source.toolkit.fluxcd.io"]
+    resources: ["ocirepositories"]
+    verbs: ["get", "create", "update"]
+  - apiGroups: [""]
+    resources: ["serviceaccounts"]
+    verbs: ["get", "create", "delete"]
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["rolebindings"]
+    verbs: ["get", "create", "update", "delete"]
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["clusterroles"]
+    resourceNames: [{{ $flux | quote }}]
+    verbs: ["bind"]
+  # The default ModelConfig's key: read in kagent.namespace, copied into the
+  # tenants. RBAC cannot name the object of a create; the admission policy
+  # holds creates to this name.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: [{{ $secret | quote }}]
+    verbs: ["get", "update", "delete"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "agent-manager.fullname" . }}-tenants
+  labels:
+    {{- include "agent-manager.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "agent-manager.fullname" . }}-tenants
+subjects:
+  - kind: ServiceAccount
+    name: {{ $sa }}
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ include "agent-manager.fullname" . }}-tenants
+  labels:
+    {{- include "agent-manager.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE", "DELETE"]
+        resources: ["secrets", "serviceaccounts"]
+      - apiGroups: ["rbac.authorization.k8s.io"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE", "DELETE"]
+        resources: ["rolebindings"]
+      - apiGroups: ["api.kagent.dev"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE", "DELETE"]
+        resources: ["harnesses", "modelconfigs"]
+      - apiGroups: ["ate.dev"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE", "DELETE"]
+        resources: ["workerpools"]
+      - apiGroups: ["source.toolkit.fluxcd.io"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE", "DELETE"]
+        resources: ["ocirepositories"]
+      {{- with $netpol.resource }}
+      - apiGroups: [{{ $netpol.group | quote }}]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE", "DELETE"]
+        resources: [{{ . | quote }}]
+      {{- end }}
+  matchConditions:
+    - name: agent-manager
+      expression: {{ printf "request.userInfo.username == 'system:serviceaccount:%s:%s'" .Release.Namespace $sa | quote }}
+  variables:
+    - name: tenant
+      expression: {{ printf "has(namespaceObject.metadata.labels) && 'giantswarm.io/organization' in namespaceObject.metadata.labels && namespaceObject.metadata.name != '%s'" $platform | quote }}
+    # What the ServiceAccount's own namespaced Roles grant in the configured
+    # namespaces (rbac.yaml, skills-token.yaml): the agents' OCIRepository
+    # without OAuth, and an update of the skills boot Secret.
+    - name: configured
+      expression: {{ printf "request.namespace in %s && (request.resource.resource == 'ocirepositories' || (request.resource.resource == 'secrets' && request.operation == 'UPDATE' && request.name == '%s'))" (include "agent-manager.managedNamespaces" . | replace "\"" "'") (include "agent-manager.skillsGitAuthSecretName" .) | quote }}
+  validations:
+    - expression: "variables.tenant || variables.configured"
+      messageExpression: "'agent-manager writes ' + request.resource.resource + ' only in namespaces labelled giantswarm.io/organization; ' + request.namespace + ' is not one'"
+    - expression: {{ printf "!variables.tenant || request.resource.resource != 'secrets' || request.name == '%s'" $secret | quote }}
+      messageExpression: {{ printf "'agent-manager copies only the Secret %s into a tenant, not ' + request.name" $secret | quote }}
+    - expression: {{ printf "request.resource.resource != 'rolebindings' || request.operation == 'DELETE' || (object.roleRef.kind == 'ClusterRole' && object.roleRef.name == '%s' && has(object.subjects) && object.subjects.all(s, s.kind == 'ServiceAccount' && s.namespace == request.namespace))" $flux | quote }}
+      messageExpression: {{ printf "'agent-manager binds only the ClusterRole %s to a ServiceAccount of the tenant'" $flux | quote }}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ include "agent-manager.fullname" . }}-tenants
+  labels:
+    {{- include "agent-manager.labels" . | nindent 4 }}
+spec:
+  policyName: {{ include "agent-manager.fullname" . }}-tenants
+  validationActions: ["Deny"]
+{{- end }}

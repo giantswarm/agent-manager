@@ -436,10 +436,10 @@ per-caller clients (`internal/kube.CallerProvider`, built from
 (the chart renders no Role or RoleBinding with `oauth.downstream.enabled`) and
 there is no fallback: a request without an IdP token is refused with `401`, a
 token that expires mid-request keeps being presented and the apiserver's `401`
-fails the request, attributed to the caller. agent-manager has no background
-Kubernetes work — API version discovery at startup is what every authenticated
-principal may read — so the ServiceAccount token stays mounted only for the
-in-cluster address and CA. The apiserver must trust the token: with Dex the
+fails the request, attributed to the caller. Only background work runs as the
+ServiceAccount, with RBAC of its own: the tenant reconciler (below) and the
+skills boot Secret; API version discovery at startup is what every
+authenticated principal may read. The apiserver must trust the token: with Dex the
 audience it trusts (`dex-k8s-authenticator` on Giant Swarm clusters,
 `kubernetes` in agentlab) is requested as a cross-client scope through
 `requiredAudiences`; a Google IdP has no cross-client scopes and the platform
@@ -466,6 +466,47 @@ OCIRepositories read/write; Agents, RemoteMCPServers, Harnesses,
 ModelConfigs and events read; Agents and RemoteMCPServers delete for
 the forced cases) — only for a server nothing but a trusted proxy (the
 agentgateway JWT policy, muster) can reach.
+
+## Tenants
+
+With `--tenants` (chart `tenants.enabled`) every namespace labelled
+`giantswarm.io/organization` (an Organization's `org-<name>`; on an
+installation without Organizations the platform team labels it) is a managed
+namespace beside `--kagent-namespace` and `--managed-namespaces`, discovered at
+run time; `--kagent-namespace` itself never is one. The tenant reconciler
+(`internal/tenants`) runs as the ServiceAccount every `--tenant-interval`, and
+at once for a namespace a create writes into, and keeps in each tenant:
+
+- always: the agent chart's OCIRepository, the `--helmrelease-service-account`
+  ServiceAccount with a RoleBinding to `agent-platform-tenant-flux` (the Helm
+  release Secrets, `agents` and `remotemcpservers`), and the network policies
+  `--tenant-network-policies` names, copied from `--kagent-namespace`;
+- while the namespace holds an agent (an Agent, or a HelmRelease of the agent
+  chart that runs on this cluster): copies of the platform Harness, its
+  WorkerPool with `--tenant-worker-pool-replicas` replicas and the
+  ServiceAccount its workers run as, and the default ModelConfig
+  (`--tenant-model-config`) with its key Secret (`--tenant-model-secret`, the
+  only Secret it may copy). They go with the last agent, so a tenant without
+  agents runs no workers.
+
+It writes only objects it labels `agent-manager.giantswarm.io/tenant-object`
+and never changes or deletes another, so a tenant's own ModelConfig stays. A
+create in a tenant may name the default ModelConfig before its copy exists.
+It never writes memberships: who may use a tenant is declared in RoleBindings
+of the namespace.
+
+The chart renders the reconciler's ClusterRole whatever `oauth.downstream`
+says (`bind` on `agent-platform-tenant-flux` only, no `escalate`), and a
+ValidatingAdmissionPolicy that refuses the ServiceAccount's writes of those
+kinds outside labelled namespaces, a RoleBinding to any other role or
+subject, and any other Secret: RBAC cannot select namespaces by label.
+
+Every create records the caller as `agent-platform.giantswarm.io/created-by`
+on the HelmRelease and, through the chart's `annotations` value, on the
+Agent; an update keeps it and nobody can set or change it. `createdBy` on
+`get_agent` and `list_agents` is for display and filtering only, never for
+authorization. `get_info` lists in `namespaces.managed` only the managed
+namespaces in which the caller may create a HelmRelease.
 
 ## Sessions
 

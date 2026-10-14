@@ -12,6 +12,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	authorizationv1 "k8s.io/api/authorization/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -54,6 +55,7 @@ func newFixture(t *testing.T, dynObjs []runtime.Object, typedObjs ...runtime.Obj
 	t.Helper()
 	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), listKinds, dynObjs...)
 	typed := kubefake.NewClientset(typedObjs...)
+	allowCreate(typed, func(string) bool { return true })
 	client := kube.FromInterfaces(dyn, typed, typed.Discovery())
 	pinner := &fakePinner{}
 	svc := New(kube.NewServiceAccountProvider(client), embeddedChart{}, nil, pinner, Config{
@@ -62,6 +64,15 @@ func newFixture(t *testing.T, dynObjs []runtime.Object, typedObjs ...runtime.Obj
 		HarnessEgress: map[string][]string{"claude": {"https://github.com", "https://*.githubusercontent.com"}},
 	}, nil)
 	return &fixture{dyn: dyn, typed: typed, pinner: pinner, svc: svc}
+}
+
+// allowCreate answers every SelfSubjectAccessReview with allowed(namespace).
+func allowCreate(typed *kubefake.Clientset, allowed func(namespace string) bool) {
+	typed.PrependReactor("create", "selfsubjectaccessreviews", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		review := a.(k8stesting.CreateAction).GetObject().(*authorizationv1.SelfSubjectAccessReview)
+		review.Status.Allowed = allowed(review.Spec.ResourceAttributes.Namespace)
+		return true, review, nil
+	})
 }
 
 func modelConfig(ns, name, provider, model string) *unstructured.Unstructured {

@@ -1,0 +1,113 @@
+package agents
+
+import (
+	"context"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/giantswarm/agent-manager/internal/identity"
+)
+
+// fakeTenants is the tenant reconciler as the service sees it.
+type fakeTenants struct {
+	namespaces []string
+	kicked     []string
+}
+
+func (f *fakeTenants) Namespaces() []string { return f.namespaces }
+func (f *fakeTenants) ModelConfig() string  { return "default-model-config" }
+func (f *fakeTenants) Kick(ns string)       { f.kicked = append(f.kicked, ns) }
+
+func withTenants(f *fixture, t *fakeTenants) {
+	f.svc.cfg.Tenants = t
+}
+
+// A tenant namespace is managed beside the configured ones, and its first
+// agent may name the platform's default ModelConfig before the reconciler
+// copied it; the create asks for the tenant to be reconciled at once.
+func TestTenantNamespaceIsManaged(t *testing.T) {
+	f := seeded(t)
+	tenants := &fakeTenants{namespaces: []string{"org-a"}}
+	withTenants(f, tenants)
+	ctx := context.Background()
+
+	assert.Equal(t, []string{"kagent", "tenant", "org-a"}, f.svc.Managed())
+	ns, err := f.svc.Namespace("org-a")
+	require.NoError(t, err)
+	assert.Equal(t, "org-a", ns)
+	_, err = f.svc.Namespace("org-b")
+	assert.ErrorIs(t, err, ErrInvalid)
+
+	spec := Spec{Location: In("org-a"), Name: "sre", ModelConfig: "default-model-config", Toolset: []string{"preset:read-only"}}
+	v, err := f.svc.ValidateCreate(ctx, spec)
+	require.NoError(t, err)
+	assert.True(t, v.Valid, "%v", v.Errors)
+	_, err = f.svc.Create(ctx, spec)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"org-a"}, tenants.kicked)
+
+	// Any other ModelConfig must exist there.
+	_, err = f.svc.Create(ctx, Spec{Location: In("org-a"), Name: "other", ModelConfig: "qwen3-8-27b", Toolset: []string{"preset:read-only"}})
+	assert.ErrorIs(t, err, ErrInvalid)
+	// A configured namespace is not a tenant: nothing to kick, no fallback.
+	_, err = f.svc.Create(ctx, Spec{Location: In("tenant"), Name: "sre", ModelConfig: "default-model-config", Toolset: []string{"preset:read-only"}})
+	assert.ErrorIs(t, err, ErrInvalid)
+	assert.Equal(t, []string{"org-a"}, tenants.kicked)
+}
+
+// get_info lists the managed namespaces in which the caller may create.
+func TestInfoListsTheCreatableNamespaces(t *testing.T) {
+	f := seeded(t)
+	withTenants(f, &fakeTenants{namespaces: []string{"org-a", "org-b"}})
+	f.typed.ReactionChain = nil
+	allowCreate(f.typed, func(ns string) bool { return ns == "org-a" })
+	assert.Equal(t, []string{"org-a"}, f.svc.Info(context.Background()).Namespaces.Managed)
+}
+
+// The creator is recorded on create, on the HelmRelease and in the values
+// the chart puts on the Agent; an update by someone else keeps it, and
+// nobody can set or change it.
+func TestCreatorAnnotation(t *testing.T) {
+	f := seeded(t)
+	alice := identity.ContextWith(context.Background(), &identity.Identity{Subject: "a", Email: "alice@example.com"})
+	bob := identity.ContextWith(context.Background(), &identity.Identity{Subject: "b", Email: "bob@example.com"})
+
+	_, err := f.svc.Create(alice, Spec{Name: "sre", ModelConfig: "default-model-config", Toolset: []string{"preset:read-only"},
+		Annotations: map[string]string{CreatedByAnnotation: "mallory@example.com"}})
+	assert.ErrorIs(t, err, ErrInvalid, "the caller cannot name the creator")
+
+	res, err := f.svc.Create(alice, Spec{Name: "sre", ModelConfig: "default-model-config", Toolset: []string{"preset:read-only"}})
+	require.NoError(t, err)
+	assert.Equal(t, "alice@example.com", res.Agent.CreatedBy)
+	assert.Contains(t, res.Manifests.HelmRelease, CreatedByAnnotation+": alice@example.com")
+	hr, err := f.dyn.Resource(hrGVR).Namespace("kagent").Get(alice, "sre", metav1.GetOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, "alice@example.com", hr.GetAnnotations()[CreatedByAnnotation])
+	assert.Equal(t, "alice@example.com", creatorOf(hr.Object["spec"].(map[string]any)["values"].(map[string]any)))
+
+	// Bob replaces the annotations: the creator stays.
+	annotations := map[string]string{"team": "sre"}
+	upd, err := f.svc.Update(bob, Update{Name: "sre", Annotations: &annotations})
+	require.NoError(t, err)
+	assert.Equal(t, "alice@example.com", creatorOf(upd.After))
+	assert.Equal(t, "sre", upd.After["annotations"].(map[string]any)["team"])
+	hr, err = f.dyn.Resource(hrGVR).Namespace("kagent").Get(bob, "sre", metav1.GetOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, "alice@example.com", hr.GetAnnotations()[CreatedByAnnotation])
+
+	// Clearing every annotation keeps it too; changing it is refused.
+	empty := map[string]string{}
+	upd, err = f.svc.Update(bob, Update{Name: "sre", Annotations: &empty})
+	require.NoError(t, err)
+	assert.Equal(t, "alice@example.com", creatorOf(upd.After))
+	steal := map[string]string{CreatedByAnnotation: "bob@example.com"}
+	_, err = f.svc.Update(bob, Update{Name: "sre", Annotations: &steal})
+	assert.ErrorIs(t, err, ErrInvalid)
+
+	// An agent created before the annotation existed cannot be given one.
+	_, err = f.svc.Update(bob, Update{Name: "verifier", Annotations: &steal})
+	assert.ErrorIs(t, err, ErrInvalid)
+}

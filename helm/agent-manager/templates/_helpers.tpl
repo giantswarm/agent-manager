@@ -90,6 +90,31 @@ every Kubernetes call carries the caller's token.
 {{- end }}
 
 {{/*
+The ClusterRole the tenant reconciler binds to the agents' Flux ServiceAccount
+in every tenant namespace.
+*/}}
+{{- define "agent-manager.tenantFluxClusterRole" -}}
+agent-platform-tenant-flux
+{{- end }}
+
+{{/*
+The network policy resource the tenant reconciler copies, as
+{"group": ..., "resource": ...}; empty without a flavor or without names.
+*/}}
+{{- define "agent-manager.tenantNetworkPolicyResource" -}}
+{{- $flavor := .Values.tenants.networkPolicy.flavor -}}
+{{- if and $flavor .Values.tenants.networkPolicy.names -}}
+{{- if eq $flavor "kubernetes" -}}
+{{- dict "group" "networking.k8s.io" "resource" "networkpolicies" | toJson -}}
+{{- else if eq $flavor "cilium" -}}
+{{- dict "group" "cilium.io" "resource" "ciliumnetworkpolicies" | toJson -}}
+{{- else -}}
+{{- fail (printf "tenants.networkPolicy.flavor %q: kubernetes, cilium or empty" $flavor) -}}
+{{- end -}}
+{{- end -}}
+{{- end }}
+
+{{/*
 Existing Secret with the provider credentials: oauth.existingSecret, else the
 platform's global.identity.existingSecret, else the chart-rendered one.
 */}}

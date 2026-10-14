@@ -16,6 +16,8 @@ import (
 	"github.com/giantswarm/mcp-toolkit/metrics"
 	"github.com/giantswarm/mcp-toolkit/tracing"
 	"github.com/spf13/cobra"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/giantswarm/agent-manager/internal/agents"
 	"github.com/giantswarm/agent-manager/internal/api"
@@ -24,6 +26,7 @@ import (
 	"github.com/giantswarm/agent-manager/internal/kube"
 	"github.com/giantswarm/agent-manager/internal/server"
 	"github.com/giantswarm/agent-manager/internal/skills"
+	"github.com/giantswarm/agent-manager/internal/tenants"
 )
 
 type serveOptions struct {
@@ -62,6 +65,15 @@ type serveOptions struct {
 	skillsCacheTTL     time.Duration
 
 	kagentTarget string
+
+	tenants                  bool
+	tenantModelConfig        string
+	tenantModelSecret        string
+	tenantWorkerPoolReplicas int64
+	tenantFluxClusterRole    string
+	tenantNetworkPolicy      string
+	tenantNetworkPolicies    string
+	tenantInterval           time.Duration
 
 	mcpEnabled bool
 	mcpPath    string
@@ -126,6 +138,14 @@ environment variable named next to it; flags win over the environment.`,
 	f.BoolVar(&o.skillsGitAuthMint, "skills-git-auth-mint", envBool("AGENT_MANAGER_SKILLS_GIT_AUTH_MINT", false), "Keep the Secret --skills-git-auth-secret-name names filled with the skills GitHub App's installation token in every managed namespace, refreshed before it expires; the Secret must exist (the chart renders it) and the ServiceAccount may update it. Needs the skills GitHub App (AGENT_MANAGER_SKILLS_GIT_AUTH_MINT)")
 	f.DurationVar(&o.skillsCacheTTL, "skills-cache-ttl", envDuration("AGENT_MANAGER_SKILLS_CACHE_TTL", 5*time.Minute), "How long a repository's discovered skills are reused (AGENT_MANAGER_SKILLS_CACHE_TTL)")
 	f.StringVar(&o.kagentTarget, "kagent-target", envOr("AGENT_MANAGER_KAGENT_TARGET", ""), "The kagent controller's gRPC target through agentgateway, which list_sessions, get_session, get_session_turn, start_session and delete_session call as the caller: grpc://host:port (h2c, the in-cluster agentgateway Service) or grpcs://host[:port] (TLS). Empty: the session tools answer unsupported. Needs --enable-oauth for a caller token (AGENT_MANAGER_KAGENT_TARGET)")
+	f.BoolVar(&o.tenants, "tenants", envBool("AGENT_MANAGER_TENANTS", false), "Manage the tenant namespaces (labelled "+tenants.OrganizationLabel+") beside the configured ones, and keep in each, as the ServiceAccount, what an agent needs there: the agent chart's OCIRepository, the --helmrelease-service-account ServiceAccount bound to --tenant-flux-cluster-role, the --tenant-network-policies, and while it holds an agent copies of the platform Harness, its WorkerPool and the default ModelConfig with its key Secret, all copied from --kagent-namespace (AGENT_MANAGER_TENANTS)")
+	f.StringVar(&o.tenantModelConfig, "tenant-model-config", envOr("AGENT_MANAGER_TENANT_MODEL_CONFIG", "default-model-config"), "The platform's default ModelConfig a tenant receives with its first agent (AGENT_MANAGER_TENANT_MODEL_CONFIG)")
+	f.StringVar(&o.tenantModelSecret, "tenant-model-secret", envOr("AGENT_MANAGER_TENANT_MODEL_SECRET", "kagent-anthropic"), "The Secret that holds that ModelConfig's API key: the only Secret the reconciler copies (AGENT_MANAGER_TENANT_MODEL_SECRET)")
+	f.Int64Var(&o.tenantWorkerPoolReplicas, "tenant-worker-pool-replicas", envInt64("AGENT_MANAGER_TENANT_WORKER_POOL_REPLICAS", 1), "Warm workers of a tenant's WorkerPool while it holds an agent (AGENT_MANAGER_TENANT_WORKER_POOL_REPLICAS)")
+	f.StringVar(&o.tenantFluxClusterRole, "tenant-flux-cluster-role", envOr("AGENT_MANAGER_TENANT_FLUX_CLUSTER_ROLE", "agent-platform-tenant-flux"), "ClusterRole bound to the agents' Flux ServiceAccount in a tenant (AGENT_MANAGER_TENANT_FLUX_CLUSTER_ROLE)")
+	f.StringVar(&o.tenantNetworkPolicy, "tenant-network-policy-flavor", envOr("AGENT_MANAGER_TENANT_NETWORK_POLICY_FLAVOR", ""), "Kind of the network policies copied into a tenant: kubernetes (NetworkPolicy) or cilium (CiliumNetworkPolicy); empty copies none (AGENT_MANAGER_TENANT_NETWORK_POLICY_FLAVOR)")
+	f.StringVar(&o.tenantNetworkPolicies, "tenant-network-policies", envOr("AGENT_MANAGER_TENANT_NETWORK_POLICIES", ""), "Comma-separated names of the network policies copied from --kagent-namespace into every tenant (AGENT_MANAGER_TENANT_NETWORK_POLICIES)")
+	f.DurationVar(&o.tenantInterval, "tenant-interval", envDuration("AGENT_MANAGER_TENANT_INTERVAL", time.Minute), "How often every tenant is reconciled; a create in a tenant reconciles it at once (AGENT_MANAGER_TENANT_INTERVAL)")
 	f.BoolVar(&o.mcpEnabled, "mcp-enabled", envBool("AGENT_MANAGER_MCP_ENABLED", true), "Serve the MCP streamable-HTTP endpoint (AGENT_MANAGER_MCP_ENABLED)")
 	f.StringVar(&o.mcpPath, "mcp-path", envOr("AGENT_MANAGER_MCP_PATH", "/mcp"), "MCP endpoint path (AGENT_MANAGER_MCP_PATH)")
 	f.BoolVar(&o.oauthEnabled, "enable-oauth", envBool("AGENT_MANAGER_OAUTH_ENABLED", false), "Require an OAuth 2.1 bearer token on the MCP endpoint and the REST API, validated against the platform IdP (mcp-oauth); the caller's identity travels with every request (AGENT_MANAGER_OAUTH_ENABLED)")
@@ -242,6 +262,47 @@ func runServe(ctx context.Context, o *serveOptions) error {
 		return err
 	}
 
+	var tenantSet *tenants.Reconciler
+	if o.tenants {
+		policyGVR, err := networkPolicyGVR(o.tenantNetworkPolicy)
+		if err != nil {
+			return err
+		}
+		poolVersion, err := kube.DiscoverVersion(clients.Discovery(), "ate.dev", "workerpools")
+		if err != nil {
+			log.Warn("WorkerPool API discovery failed, using default", "default", "v1alpha1", "error", err)
+			poolVersion = "v1alpha1"
+		}
+		compose := agents.ComposeConfig{ChartOCIURL: o.chartOCIURL, ChartName: resolver.Name(), ChartSemver: o.chartSemver, ChartSemverFilter: o.chartSemverFilter,
+			OCIRepositoryInterval: o.ociRepositoryInterval, OCIRepositoryAPIVersion: ociRepositoryAPI}
+		kagentGVR := func(resource string) schema.GroupVersionResource {
+			return schema.GroupVersionResource{Group: agents.KagentAPIGroup, Version: kagentVersion, Resource: resource}
+		}
+		tenantSet = tenants.New(clients, tenants.Config{
+			PlatformNamespace:  o.kagentNamespace,
+			HarnessName:        o.harnessName,
+			ModelConfigName:    o.tenantModelConfig,
+			ModelSecretName:    o.tenantModelSecret,
+			WorkerPoolReplicas: o.tenantWorkerPoolReplicas,
+			FluxServiceAccount: o.helmReleaseSA,
+			FluxClusterRole:    o.tenantFluxClusterRole,
+			NetworkPolicies:    splitList(o.tenantNetworkPolicies),
+			NetworkPolicyGVR:   policyGVR,
+			OCIRepository:      func(ns string) *unstructured.Unstructured { return agents.BuildOCIRepository(ns, compose) },
+			ChartName:          resolver.Name(),
+			HelmReleaseGVR:     gvrOf(helmReleaseAPI, "helmreleases"),
+			OCIRepositoryGVR:   gvrOf(ociRepositoryAPI, "ocirepositories"),
+			AgentGVR:           kagentGVR("agents"),
+			HarnessGVR:         kagentGVR("harnesses"),
+			ModelConfigGVR:     kagentGVR("modelconfigs"),
+			WorkerPoolGVR:      schema.GroupVersionResource{Group: "ate.dev", Version: poolVersion, Resource: "workerpools"},
+			Interval:           o.tenantInterval,
+		}, log)
+		// The first pass before serving: the tenants are managed namespaces
+		// from the first request on.
+		tenantSet.ReconcileAll(ctx)
+	}
+
 	var sessions agents.SessionClient
 	if o.kagentTarget != "" {
 		client, err := kagent.Dial(o.kagentTarget)
@@ -276,6 +337,7 @@ func runServe(ctx context.Context, o *serveOptions) error {
 		GitHub:           gitHubRemote(o.githubAuthorizationServer, o.githubAPIURL),
 		Sessions:         sessions,
 		HarnessEgress:    harnessEgress,
+		Tenants:          tenantSetOrNil(tenantSet),
 	}, log)
 
 	srvCfg := server.Config{Addr: o.listen, MCPEnabled: o.mcpEnabled, MCPPath: o.mcpPath}
@@ -306,13 +368,16 @@ func runServe(ctx context.Context, o *serveOptions) error {
 	info := svc.Info(ctx)
 	log.Info("agent-manager starting", "version", build.Version, "commit", build.Commit, "listen", o.listen, "rest", api.Prefix, "mcp", o.mcpPath, "mcpEnabled", o.mcpEnabled,
 		"oauth", o.oauthEnabled, "downstreamOAuth", o.downstreamOAuth, "commit", info.Capabilities["commit"], "identity", info.Identity,
-		"namespaces", info.Namespaces.Managed, "chart", o.chartOCIURL, "chartSemver", o.chartSemver, "chartVersion", info.Chart.LatestVersion, "schemaSource", info.Chart.SchemaSource,
+		"namespaces", svc.Managed(), "tenants", o.tenants, "chart", o.chartOCIURL, "chartSemver", o.chartSemver, "chartVersion", info.Chart.LatestVersion, "schemaSource", info.Chart.SchemaSource,
 		"kagentAPI", kagentVersion, "harness", info.Harness.Name, "musterURL", info.Muster.URL, "helmReleaseAPI", helmReleaseAPI, "ociRepositoryAPI", ociRepositoryAPI, "skillsRepositories", info.SkillsRepositories, "skillsGitHubApp", o.skillsAppID, "skillsGitAuthSecretName", o.skillsGitAuth, "kagentTarget", o.kagentTarget)
 
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if bootSecret != nil {
 		go bootSecret.Run(ctx)
+	}
+	if tenantSet != nil {
+		go tenantSet.Run(ctx)
 	}
 	return srv.Run(ctx)
 }
@@ -352,6 +417,33 @@ func parseHarnessEgress(raw string) (map[string][]string, error) {
 	return out, nil
 }
 
+// tenantSetOrNil keeps a nil reconciler a nil interface.
+func tenantSetOrNil(r *tenants.Reconciler) agents.TenantSet {
+	if r == nil {
+		return nil
+	}
+	return r
+}
+
+// networkPolicyGVR is the kind of network policy a flavor copies.
+func networkPolicyGVR(flavor string) (schema.GroupVersionResource, error) {
+	switch flavor {
+	case "":
+		return schema.GroupVersionResource{}, nil
+	case "kubernetes":
+		return schema.GroupVersionResource{Group: "networking.k8s.io", Version: "v1", Resource: "networkpolicies"}, nil
+	case "cilium":
+		return schema.GroupVersionResource{Group: "cilium.io", Version: "v2", Resource: "ciliumnetworkpolicies"}, nil
+	}
+	return schema.GroupVersionResource{}, fmt.Errorf("--tenant-network-policy-flavor %q: kubernetes, cilium or empty", flavor)
+}
+
+// gvrOf is the resource of a group/version string.
+func gvrOf(groupVersion, resource string) schema.GroupVersionResource {
+	gv, _ := schema.ParseGroupVersion(groupVersion)
+	return gv.WithResource(resource)
+}
+
 func splitList(s string) []string {
 	var out []string
 	for _, p := range strings.Split(s, ",") {
@@ -379,6 +471,18 @@ func envBool(key string, def bool) bool {
 		return def
 	}
 	return b
+}
+
+func envInt64(key string, def int64) int64 {
+	v, ok := os.LookupEnv(key)
+	if !ok || v == "" {
+		return def
+	}
+	n, err := strconv.ParseInt(v, 10, 64)
+	if err != nil {
+		return def
+	}
+	return n
 }
 
 func envDuration(key string, def time.Duration) time.Duration {

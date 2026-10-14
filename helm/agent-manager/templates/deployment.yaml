@@ -75,6 +75,18 @@ spec:
             {{- with .Values.flux.helmReleaseServiceAccount }}
             - --helmrelease-service-account={{ . }}
             {{- end }}
+            {{- if .Values.tenants.enabled }}
+            - --tenants=true
+            - --tenant-model-config={{ .Values.tenants.modelConfig.name }}
+            - --tenant-model-secret={{ .Values.tenants.modelConfig.apiKeySecretName }}
+            - --tenant-worker-pool-replicas={{ .Values.tenants.workerPoolReplicas }}
+            - --tenant-flux-cluster-role={{ include "agent-manager.tenantFluxClusterRole" . }}
+            {{- if include "agent-manager.tenantNetworkPolicyResource" . }}
+            - --tenant-network-policy-flavor={{ .Values.tenants.networkPolicy.flavor }}
+            - --tenant-network-policies={{ join "," .Values.tenants.networkPolicy.names }}
+            {{- end }}
+            - --tenant-interval={{ .Values.tenants.interval }}
+            {{- end }}
             {{- with .Values.skills.repositories }}
             - --skills-repositories={{ join "," . }}
             {{- end }}
