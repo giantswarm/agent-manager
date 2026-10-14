@@ -90,9 +90,18 @@ func New(t *testing.T) (*Controller, *grpc.ClientConn) {
 // AddSession seeds a READY session of agent and its tasks; it answers the
 // session.
 func (c *Controller) AddSession(namespace, name string, tasks ...*a2apb.Task) *apiv1alpha1.Session {
+	return c.AddSessionOf(Creator, namespace, name, tasks...)
+}
+
+// AddSessionOf seeds a READY session of agent created by creator. The fake's
+// caller is always Creator: a session of another creator is answered, as the
+// controller answers it, only to ListSessions with all_creators and is not
+// found otherwise.
+func (c *Controller) AddSessionOf(creator, namespace, name string, tasks ...*a2apb.Task) *apiv1alpha1.Session {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	s := c.newSession(namespace, name, "", nil)
+	s.Creator = creator
 	for _, task := range tasks {
 		task.ContextId = s.GetContextId()
 	}
@@ -138,13 +147,21 @@ func (c *Controller) record(ctx context.Context, method string, req proto.Messag
 	return c.Fail[method]
 }
 
+// session is the caller's live session id: a deleted session or another
+// creator's is not found, as on the controller.
 func (c *Controller) session(id string) *apiv1alpha1.Session {
 	for _, s := range c.sessions {
-		if s.GetId() == id {
+		if s.GetId() == id && visible(s, false) {
 			return s
 		}
 	}
 	return nil
+}
+
+// visible says whether the caller sees s: not deleted, and the caller's own
+// unless allCreators.
+func visible(s *apiv1alpha1.Session, allCreators bool) bool {
+	return s.GetState() != apiv1alpha1.RuntimeState_RUNTIME_STATE_DELETED && (allCreators || s.GetCreator() == Creator)
 }
 
 func tenantOf(ref *apiv1alpha1.ResourceReference) string {
@@ -181,7 +198,7 @@ func (c *Controller) ListSessions(ctx context.Context, req *apiv1alpha1.ListSess
 	defer c.mu.Unlock()
 	var matched []*apiv1alpha1.Session
 	for _, s := range c.sessions {
-		if req.GetAgent() == nil || tenantOf(s.GetAgent()) == tenantOf(req.GetAgent()) {
+		if visible(s, req.GetAllCreators()) && (req.GetAgent() == nil || tenantOf(s.GetAgent()) == tenantOf(req.GetAgent())) {
 			matched = append(matched, s)
 		}
 	}
@@ -236,6 +253,26 @@ func (c *Controller) CreateSession(ctx context.Context, req *apiv1alpha1.CreateS
 	s := c.newSession(req.GetAgent().GetNamespace(), req.GetAgent().GetName(), req.GetName(), req.GetVolumeSource())
 	c.requests[req.GetRequestId()] = s.GetId()
 	return &apiv1alpha1.CreateSessionResponse{Session: s}, nil
+}
+
+// DeleteSession implements SessionService: the caller's session ends in
+// RUNTIME_STATE_DELETED and is gone from every read, its tasks with it.
+func (c *Controller) DeleteSession(ctx context.Context, req *apiv1alpha1.DeleteSessionRequest) (*apiv1alpha1.DeleteSessionResponse, error) {
+	if err := c.record(ctx, "DeleteSession", req); err != nil {
+		return nil, err
+	}
+	if _, err := uuid.Parse(req.GetSessionId()); err != nil {
+		return nil, status.Error(codes.InvalidArgument, "Session identifier is invalid")
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	s := c.session(req.GetSessionId())
+	if s == nil {
+		return nil, status.Error(codes.NotFound, "Session not found")
+	}
+	s.State = apiv1alpha1.RuntimeState_RUNTIME_STATE_DELETED
+	delete(c.tasks, s.GetContextId())
+	return &apiv1alpha1.DeleteSessionResponse{Session: proto.Clone(s).(*apiv1alpha1.Session)}, nil
 }
 
 // routed is the session a call addresses: the tenant must be the session's

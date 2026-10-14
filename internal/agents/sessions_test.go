@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/encoding/protojson"
 	"k8s.io/apimachinery/pkg/runtime"
 
 	"github.com/giantswarm/agent-manager/internal/identity"
@@ -41,6 +42,8 @@ func TestSessionsUnsupportedWithoutATarget(t *testing.T) {
 	require.ErrorIs(t, err, ErrUnsupported)
 	_, err = f.svc.StartSession(ctx, StartSession{Name: "sre", Message: "hi"})
 	require.ErrorIs(t, err, ErrUnsupported)
+	_, err = f.svc.DeleteSession(ctx, uuid.NewString())
+	require.ErrorIs(t, err, ErrUnsupported)
 }
 
 func TestSessionsNeverRunWithoutTheCallerToken(t *testing.T) {
@@ -51,6 +54,8 @@ func TestSessionsNeverRunWithoutTheCallerToken(t *testing.T) {
 	_, err = svc.GetSession(t.Context(), SessionQuery{SessionID: uuid.NewString()})
 	require.ErrorIs(t, err, ErrUnauthenticated)
 	_, err = svc.StartSession(t.Context(), StartSession{Name: "sre", Message: "hi"})
+	require.ErrorIs(t, err, ErrUnauthenticated)
+	_, err = svc.DeleteSession(t.Context(), uuid.NewString())
 	require.ErrorIs(t, err, ErrUnauthenticated)
 	assert.Empty(t, ctrl.Calls(), "nothing reaches kagent without a caller")
 }
@@ -72,6 +77,8 @@ func TestSessionArgumentsAreChecked(t *testing.T) {
 	_, err := svc.ListSessions(ctx, "elsewhere", "sre", false)
 	require.ErrorIs(t, err, ErrInvalid)
 	_, err = svc.GetSession(ctx, SessionQuery{})
+	require.ErrorIs(t, err, ErrInvalid)
+	_, err = svc.DeleteSession(ctx, " ")
 	require.ErrorIs(t, err, ErrInvalid)
 	assert.Empty(t, ctrl.Calls())
 }
@@ -227,6 +234,58 @@ func TestGetSessionErrors(t *testing.T) {
 	require.ErrorIs(t, err, ErrNotFound)
 	_, err = svc.GetSession(ctx, SessionQuery{SessionID: "not-a-uuid"})
 	require.ErrorIs(t, err, ErrInvalid)
+}
+
+func TestDeleteSessionRemovesTheCallersOwn(t *testing.T) {
+	svc, ctrl := newSessionFixture(t)
+	ctx := identity.ContextWithToken(t.Context(), callerToken)
+	session := ctrl.AddSession("kagent", "sre", &a2apb.Task{Id: uuid.NewString()})
+	kept := ctrl.AddSession("kagent", "sre")
+
+	deleted, err := svc.DeleteSession(ctx, session.GetId())
+	require.NoError(t, err)
+	var answered apiv1alpha1.Session
+	require.NoError(t, protojson.Unmarshal(deleted.Session, &answered))
+	assert.Equal(t, session.GetId(), answered.GetId())
+	assert.Equal(t, apiv1alpha1.RuntimeState_RUNTIME_STATE_DELETED, answered.GetState())
+	assert.Empty(t, ctrl.Tasks(session.GetContextId()), "the runtime state goes with it")
+
+	call := ctrl.Calls()[len(ctrl.Calls())-1]
+	assert.Equal(t, "DeleteSession", call.Method)
+	assert.Equal(t, []string{"Bearer " + callerToken}, call.Metadata.Get("authorization"), "deleted as the caller")
+
+	list, err := svc.ListSessions(ctx, "", "sre", false)
+	require.NoError(t, err)
+	require.Len(t, list.Sessions, 1)
+	assert.Contains(t, string(list.Sessions[0]), kept.GetId())
+	_, err = svc.GetSession(ctx, SessionQuery{SessionID: session.GetId()})
+	require.ErrorIs(t, err, ErrNotFound)
+	_, err = svc.DeleteSession(ctx, session.GetId())
+	require.ErrorIs(t, err, ErrNotFound, "a second delete finds nothing")
+}
+
+func TestDeleteSessionRefusesAnotherPersonsSession(t *testing.T) {
+	svc, ctrl := newSessionFixture(t)
+	ctx := identity.ContextWithToken(t.Context(), callerToken)
+	theirs := ctrl.AddSessionOf("dev@lab.local", "kagent", "sre")
+
+	_, err := svc.DeleteSession(ctx, theirs.GetId())
+	require.ErrorIs(t, err, ErrNotFound)
+	assert.Contains(t, err.Error(), theirs.GetId())
+	list, err := svc.ListSessions(ctx, "", "sre", true)
+	require.NoError(t, err)
+	require.Len(t, list.Sessions, 1, "their session stays")
+	assert.Contains(t, string(list.Sessions[0]), "RUNTIME_STATE_READY")
+}
+
+func TestDeleteSessionWhileAnotherOperationRunsAsksForARetry(t *testing.T) {
+	svc, ctrl := newSessionFixture(t)
+	session := ctrl.AddSession("kagent", "sre")
+	ctrl.Fail["DeleteSession"] = status.Error(codes.Aborted, "session operation conflict")
+	_, err := svc.DeleteSession(identity.ContextWithToken(t.Context(), callerToken), session.GetId())
+	require.ErrorIs(t, err, ErrConflict)
+	assert.Contains(t, err.Error(), "session operation conflict")
+	assert.Contains(t, err.Error(), "retry the delete")
 }
 
 func TestKagentErrorMapping(t *testing.T) {

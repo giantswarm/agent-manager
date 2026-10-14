@@ -44,6 +44,7 @@ type SessionClient interface {
 	GetSessionTask(ctx context.Context, token string, agent kagent.Ref, taskID string) (*a2apb.Task, error)
 	CreateSession(ctx context.Context, token string, in kagent.SessionCreate) (*apiv1alpha1.Session, error)
 	SendMessage(ctx context.Context, token string, agent kagent.Ref, contextID, messageID, text string) (*a2apb.StreamResponse, error)
+	DeleteSession(ctx context.Context, token, sessionID string) (*apiv1alpha1.Session, error)
 }
 
 // SessionList is the answer of list_sessions: the Agent's sessions as kagent
@@ -149,6 +150,12 @@ type SessionStart struct {
 	Session   json.RawMessage `json:"session"`
 	Turn      json.RawMessage `json:"turn,omitempty"`
 	Workspace string          `json:"workspace,omitempty"`
+}
+
+// SessionDelete is the answer of delete_session: the session as the
+// controller left it (RUNTIME_STATE_DELETED).
+type SessionDelete struct {
+	Session json.RawMessage `json:"session"`
 }
 
 // AgentRef names an Agent.
@@ -636,6 +643,39 @@ func (s *Service) StartSession(ctx context.Context, in StartSession) (*SessionSt
 		if out.Turn, err = marshalProto(turn); err != nil {
 			return nil, err
 		}
+	}
+	return out, nil
+}
+
+// DeleteSession deletes one of the caller's sessions and its runtime state.
+// The controller scopes the delete to the session's creator: a session of
+// another person is refused as not found, as one that does not exist. While
+// another operation on the session runs, the controller answers aborted and
+// the delete is worth retrying.
+func (s *Service) DeleteSession(ctx context.Context, sessionID string) (*SessionDelete, error) {
+	if !s.SessionsAvailable() {
+		return nil, errSessionsUnsupported
+	}
+	if strings.TrimSpace(sessionID) == "" {
+		return nil, invalidf("session id is required")
+	}
+	token, err := sessionToken(ctx)
+	if err != nil {
+		return nil, err
+	}
+	session, err := s.cfg.Sessions.DeleteSession(ctx, token, sessionID)
+	if status.Code(err) == codes.Aborted {
+		return nil, fmt.Errorf("%w (another operation on the session is running: retry the delete shortly)", kagentError(err, fmt.Sprintf("session %s", sessionID)))
+	}
+	if err != nil {
+		return nil, kagentError(err, fmt.Sprintf("session %s", sessionID))
+	}
+	s.log.InfoContext(ctx, "session deleted", identity.LogAttr(ctx), "agent", kagent.Ref{
+		Namespace: session.GetAgent().GetNamespace(), Name: session.GetAgent().GetName(),
+	}.Tenant(), "session", session.GetId())
+	out := &SessionDelete{}
+	if out.Session, err = marshalProto(session); err != nil {
+		return nil, err
 	}
 	return out, nil
 }

@@ -54,6 +54,7 @@ func (h *REST) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST "+Prefix+"/agents/{namespace}/{name}/sessions", h.startSession)
 	mux.HandleFunc("GET "+Prefix+"/sessions/{id}", h.getSession)
 	mux.HandleFunc("GET "+Prefix+"/sessions/{id}/turns/{turn}", h.getSessionTurn)
+	mux.HandleFunc("DELETE "+Prefix+"/sessions/{id}", h.deleteSession)
 }
 
 type errorBody struct {
@@ -306,6 +307,15 @@ func queryInt(q url.Values, name string) (int, error) {
 		return 0, fmt.Errorf("%w: %s must be an integer", agents.ErrInvalid, name)
 	}
 	return n, nil
+}
+
+func (h *REST) deleteSession(w http.ResponseWriter, r *http.Request) {
+	res, err := h.svc.DeleteSession(r.Context(), r.PathValue("id"))
+	if err != nil {
+		h.writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
 }
 
 // SpecToUpdate turns a full spec into a partial update: every non-empty field

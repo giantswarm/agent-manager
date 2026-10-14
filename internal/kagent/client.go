@@ -188,6 +188,20 @@ func (c *Client) GetSession(ctx context.Context, token, sessionID string) (*apiv
 	return resp.GetSession(), nil
 }
 
+// DeleteSession is SessionService/DeleteSession: the controller ends the
+// session's runtime and answers the session in its final state.
+func (c *Client) DeleteSession(ctx context.Context, token, sessionID string) (*apiv1alpha1.Session, error) {
+	ctx, err := asCaller(ctx, token)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.sessions.DeleteSession(ctx, &apiv1alpha1.DeleteSessionRequest{SessionId: sessionID})
+	if err != nil {
+		return nil, err
+	}
+	return resp.GetSession(), nil
+}
+
 // TaskListOptions shape the tasks ListSessionTasks reads. HistoryLength nil
 // reads every task's whole history, 0 none; IncludeArtifacts adds the tasks'
 // artifacts.

@@ -56,6 +56,7 @@ MCP-server-writer half.
 | Start a session: create it (in a workspace with `workspaceGrant`), send the first message when one is given and answer once the turn is accepted; without `message` only create it | `POST /api/v1/agents/{ns}/{name}/sessions` | `start_session` | a kagent Session |
 | One session and its conversation, one turn per A2A task of its context, oldest first, within `maxBytes`: a summary per turn by default, a transcript or the raw tasks on request | `GET /api/v1/sessions/{id}[?detail=&lastTurns=&maxBytes=]` | `get_session` | no |
 | One turn of a session: its messages, paged within `maxBytes`, or one tool call whole | `GET /api/v1/sessions/{id}/turns/{turn}[?detail=&toolCall=&fromMessage=&maxBytes=]` | `get_session_turn` | no |
+| Delete one of the caller's sessions and its runtime state | `DELETE /api/v1/sessions/{id}` | `delete_session` | the kagent Session |
 | Health | `GET /healthz`, `GET /readyz` | — | no |
 
 The three writes take `dryRun` and `mode` (`apply` | `commit`, see
@@ -468,8 +469,9 @@ agentgateway JWT policy, muster) can reach.
 
 ## Sessions
 
-`list_sessions`, `get_session`, `get_session_turn` and `start_session` let a caller, a meta agent
-working through muster for instance, talk to an agent and read what it did. A
+`list_sessions`, `get_session`, `get_session_turn`, `start_session` and
+`delete_session` let a caller, a meta agent working through muster for
+instance, talk to an agent, read what it did and remove the conversation. A
 conversation is a kagent `Session` of the `Agent` (kagent 1.3, `SessionService`),
 held in the controller's database. agent-manager calls the controller's gRPC
 API through agentgateway at `--kagent-target` (`AGENT_MANAGER_KAGENT_TARGET`,
@@ -550,6 +552,13 @@ and without the caller's token a session operation is `401 unauthenticated`.
 - Both read conversations of up to 10000 turns; a longer one is `409
   conflict`, as its newest turns could not be named.
 - `list_sessions` is `SessionService/ListSessions` for one Agent.
+- `delete_session` is `SessionService/DeleteSession`: the controller ends the
+  session's runtime, removes its state and answers it in
+  `RUNTIME_STATE_DELETED`; it is gone from `list_sessions` and `get_session`
+  after. The tool is annotated destructive. kagent scopes the delete to the
+  session's creator, so a session of another person is `404 not_found`, as one
+  that does not exist; while another operation on the session runs the delete
+  is `409 conflict`, worth a retry.
 
 Session and task bodies are kagent's proto3 JSON, passed through: session
 `state` is `RUNTIME_STATE_*`, task `status.state` is `TASK_STATE_*`. The
