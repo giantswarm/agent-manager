@@ -217,6 +217,73 @@ func TestStartSessionRetryReusesTheSession(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, list.Sessions, 1, "the retry answered the session the first attempt created")
 	assert.JSONEq(t, string(list.Sessions[0]), string(started.Session))
+	var session struct {
+		ContextID string `json:"contextId"`
+	}
+	require.NoError(t, json.Unmarshal(started.Session, &session))
+	assert.Len(t, ctrl.Tasks(session.ContextID), 1, "the first message was accepted once")
+}
+
+func TestStartSessionTwiceSendsTheFirstMessageOnce(t *testing.T) {
+	svc, ctrl := newSessionFixture(t)
+	ctx := identity.ContextWithToken(t.Context(), callerToken)
+	in := StartSession{Name: "sre", Message: "hello", RequestID: "req-1"}
+
+	first, err := svc.StartSession(ctx, in)
+	require.NoError(t, err)
+	select {
+	case <-ctrl.TurnEnded():
+	case <-time.After(5 * time.Second):
+		t.Fatal("the turn's stream stayed open")
+	}
+	again, err := svc.StartSession(ctx, in)
+	require.NoError(t, err)
+
+	assert.JSONEq(t, string(first.Session), string(again.Session), "the same request id answers the same session")
+	sends := methodCalls(ctrl, "SendStreamingMessage")
+	require.Len(t, sends, 1, "the retry sent no second first message")
+	var turn, retried struct {
+		Task struct {
+			ID      string `json:"id"`
+			History []any  `json:"history"`
+			Status  struct {
+				State string `json:"state"`
+			} `json:"status"`
+		} `json:"task"`
+	}
+	require.NoError(t, json.Unmarshal(first.Turn, &turn))
+	require.NoError(t, json.Unmarshal(again.Turn, &retried))
+	assert.Equal(t, turn.Task.ID, retried.Task.ID, "the retry answers the turn the first attempt started")
+	assert.Equal(t, "TASK_STATE_COMPLETED", retried.Task.Status.State, "in its latest state")
+	assert.Empty(t, retried.Task.History, "without the conversation")
+
+	// A different request id is another start: another session and turn.
+	other, err := svc.StartSession(ctx, StartSession{Name: "sre", Message: "hello", RequestID: "req-2"})
+	require.NoError(t, err)
+	assert.NotEqual(t, string(first.Session), string(other.Session))
+	sends = methodCalls(ctrl, "SendStreamingMessage")
+	require.Len(t, sends, 2)
+	assert.NotEqual(t, sends[0].(*a2apb.SendMessageRequest).GetMessage().GetMessageId(),
+		sends[1].(*a2apb.SendMessageRequest).GetMessage().GetMessageId(), "each request id names its own first message")
+}
+
+func TestStartSessionSendsItsMessageAfterTheCallersOwnFirstTurn(t *testing.T) {
+	svc, ctrl := newSessionFixture(t)
+	ctx := identity.ContextWithToken(t.Context(), callerToken)
+	created, err := svc.StartSession(ctx, StartSession{Name: "sre", RequestID: "req-1"})
+	require.NoError(t, err)
+	var session struct {
+		ContextID string `json:"contextId"`
+	}
+	require.NoError(t, json.Unmarshal(created.Session, &session))
+	// The caller sent the first message itself; a start with a message under
+	// the same request id finds another first turn and sends its message.
+	_, err = svc.cfg.Sessions.SendMessage(ctx, callerToken, kagent.Ref{Namespace: "kagent", Name: "sre"}, session.ContextID, uuid.NewString(), "the caller's own")
+	require.NoError(t, err)
+	_, err = svc.StartSession(ctx, StartSession{Name: "sre", Message: "hello", RequestID: "req-1"})
+	require.NoError(t, err)
+	assert.Len(t, methodCalls(ctrl, "SendStreamingMessage"), 2)
+	assert.Len(t, ctrl.Tasks(session.ContextID), 2)
 }
 
 func TestStartSessionRefusedWhileTheAgentIsNotReady(t *testing.T) {
