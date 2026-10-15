@@ -103,7 +103,8 @@ func TestClaudeHarnessRefusesRequireApproval(t *testing.T) {
 	require.NoError(t, err)
 	values := BuildValues(coderSpec("preset:read-only"), st.compose)
 	values["muster"].(map[string]any)["requireApproval"] = true
-	errs := f.svc.guardClaude("claude", values, nil)
+	errs, err := f.svc.guardCoding(ctx, st, "claude", ClaudeRuntime, values, nil)
+	require.NoError(t, err)
 	require.Len(t, errs, 1)
 	assert.Contains(t, errs[0].Error(), "takes no requireApproval binding")
 	assert.Contains(t, errs[0].Error(), "no boundary against Claude Code")
@@ -121,7 +122,7 @@ func TestClaudeHarnessRefusesRequireApproval(t *testing.T) {
 	// A claude Harness agent reaches its tools through muster only.
 	extra := coderValues("preset:read-only")
 	extra["extraTools"] = []any{map[string]any{"mcp": map[string]any{"server": map[string]any{"kind": "RemoteMCPServer", "name": "github"}}}}
-	assert.Len(t, refuseApproval(extra), 1)
+	assert.Len(t, refuseApproval(ClaudeRuntime, extra), 1)
 }
 
 func TestClaudeHarnessEgressIsTheHarnessList(t *testing.T) {
@@ -227,4 +228,172 @@ func TestDeclarativeAgentsAreUnchanged(t *testing.T) {
 
 	_, err = f.svc.Update(ctx, Update{Name: "verifier", Toolset: &[]string{"preset:full"}, Egress: &[]string{"https://example.com"}})
 	require.NoError(t, err)
+}
+
+// codingFixture is the seeded namespace plus the three coding Harnesses,
+// claude, codex and omp (a byo runtime), each with its egress entry, and the
+// ModelConfigs each runtime takes.
+func codingFixture(t *testing.T) (*fixture, context.Context) {
+	t.Helper()
+	f, ctx := claudeFixture(t, nil)
+	mustCreate(t, f, f.svc.harnessGVR(), harness("kagent", "codex", CodexRuntime))
+	mustCreate(t, f, f.svc.harnessGVR(), harness("kagent", "omp", BYORuntime))
+	f.svc.cfg.HarnessEgress["codex"] = []string{"https://github.com"}
+	f.svc.cfg.HarnessEgress["omp"] = []string{"https://github.com", "https://registry.npmjs.org"}
+	responses := modelConfig("kagent", "gpt-responses", "OpenAI", "gpt-5.1-codex")
+	responses.Object["spec"].(map[string]any)["openAI"] = map[string]any{"apiFormat": "responses"}
+	mustCreate(t, f, f.svc.modelConfigGVR(), responses)
+	mustCreate(t, f, f.svc.modelConfigGVR(), modelConfig("kagent", "bedrock-gpt", "Bedrock", "gpt-oss-120b"))
+	mustCreate(t, f, f.svc.modelConfigGVR(), modelConfig("kagent", "bedrock-claude", "Bedrock", "anthropic.claude-sonnet-4-6"))
+	return f, ctx
+}
+
+// codingModel is the ModelConfig a coding Harness's runtime reaches.
+var codingModel = map[string]string{"claude": "default-model-config", "codex": "gpt-responses", "omp": "default-model-config"}
+
+// The guard follows the runtime kind: every Harness that does not run the
+// kagent runtime gets the claude Harness's refusals, takes muster write
+// tools, and has its Harness's origins written.
+func TestCodingGuardOnEveryNonKagentHarness(t *testing.T) {
+	for _, h := range []string{"claude", "codex", "omp"} {
+		t.Run(h, func(t *testing.T) {
+			f, ctx := codingFixture(t)
+			spec := coderSpec("preset:read-only", "tool:x_kubernetes_delete", "tool:x_github_create_pull_request")
+			spec.Harness, spec.ModelConfig = h, codingModel[h]
+			dry, err := f.svc.ValidateCreate(ctx, spec)
+			require.NoError(t, err)
+			assert.True(t, dry.Valid, "a muster write tool on %s: %v", h, dry.Errors)
+			_, err = f.svc.Create(ctx, spec)
+			require.NoError(t, err)
+			agentBlock := mustValues(mustGet(t, f, "coder"))["agent"].(map[string]any)
+			assert.Equal(t, toAnySlice(f.svc.cfg.HarnessEgress[h]), agentBlock["egress"], "the Harness's origins are written")
+			assert.Contains(t, agentBlock["systemMessage"], egressNoteHeading)
+
+			for field, value := range map[string]any{
+				"muster":         map[string]any{"requireApproval": true},
+				"extraTools":     []any{map[string]any{"mcp": map[string]any{"server": map[string]any{"kind": "RemoteMCPServer", "name": "github"}}}},
+				"extraAgentSpec": map[string]any{"tools": []any{map[string]any{"type": "McpServer"}}},
+			} {
+				written := coderValues("preset:read-only")
+				written["agent"].(map[string]any)["harness"] = h
+				written["modelConfig"] = map[string]any{"name": codingModel[h]}
+				written[field] = value
+				require.NoError(t, f.dyn.Resource(hrGVR).Namespace("kagent").Delete(ctx, "coder", metav1.DeleteOptions{}))
+				mustCreate(t, f, hrGVR, helmRelease("kagent", "coder", written, true, nil))
+				dryUpd, err := f.svc.ValidateUpdate(ctx, Update{Name: "coder", Description: str("tidy")})
+				require.NoError(t, err)
+				assert.False(t, dryUpd.Valid, "%s on %s", field, h)
+				assert.True(t, containsLine(dryUpd.Errors, field), "%s on %s: %v", field, h, dryUpd.Errors)
+				_, err = f.svc.Update(ctx, Update{Name: "coder", Description: str("tidy")})
+				require.ErrorIs(t, err, ErrInvalid, "%s on %s", field, h)
+			}
+		})
+	}
+}
+
+// A coding Harness added later, a fourth runtime, inherits the guard; a
+// Harness without an egress entry is refused naming what it runs.
+func TestCodingGuardInheritedByANewRuntime(t *testing.T) {
+	f, ctx := codingFixture(t)
+	mustCreate(t, f, f.svc.harnessGVR(), harness("kagent", "opencode", "opencode"))
+	spec := coderSpec("preset:read-only")
+	spec.Harness = "opencode"
+	dry, err := f.svc.ValidateCreate(ctx, spec)
+	require.NoError(t, err)
+	assert.True(t, containsLine(dry.Errors, "Harness opencode runs a coding agent (runtime opencode) but agent-manager has no egress entry for it"), dry.Errors)
+
+	spec.Harness = "codex-2"
+	mustCreate(t, f, f.svc.harnessGVR(), harness("kagent", "codex-2", CodexRuntime))
+	spec.ModelConfig = "gpt-responses"
+	dry, err = f.svc.ValidateCreate(ctx, spec)
+	require.NoError(t, err)
+	assert.True(t, containsLine(dry.Errors, "Harness codex-2 runs Codex but agent-manager has no egress entry for it"), dry.Errors)
+}
+
+// validate_agent refuses a model the runtime cannot reach, by the rules of
+// its compiler in kagent.
+func TestCodingGuardRefusesAModelTheRuntimeCannotReach(t *testing.T) {
+	f, ctx := codingFixture(t)
+	for _, c := range []struct {
+		harness, model string
+		refusal        string
+	}{
+		{"codex", "default-model-config", "speaks the OpenAI Responses API only: pick an OpenAI ModelConfig"},
+		{"codex", "qwen3-8-27b", `openAI.apiFormat is "chatCompletions", not "responses"`},
+		{"codex", "bedrock-claude", "reaches only OpenAI gpt-* models on Bedrock"},
+		{"codex", "gpt-responses", ""},
+		{"codex", "bedrock-gpt", ""},
+		{"omp", "default-model-config", ""},
+		{"claude", "default-model-config", ""},
+		{"claude", "bedrock-claude", ""},
+		{"claude", "qwen3-8-27b", "speaks the Anthropic protocol only"},
+	} {
+		spec := coderSpec("preset:read-only")
+		spec.Harness, spec.ModelConfig = c.harness, c.model
+		dry, err := f.svc.ValidateCreate(ctx, spec)
+		require.NoError(t, err)
+		if c.refusal == "" {
+			assert.True(t, dry.Valid, "%s on %s: %v", c.model, c.harness, dry.Errors)
+			continue
+		}
+		assert.True(t, containsLine(dry.Errors, "modelConfig "+c.model), "%s on %s: %v", c.model, c.harness, dry.Errors)
+		assert.True(t, containsLine(dry.Errors, c.refusal), "%s on %s: %v", c.model, c.harness, dry.Errors)
+		_, err = f.svc.Create(ctx, spec)
+		require.ErrorIs(t, err, ErrInvalid)
+	}
+
+	// An update that moves a codex agent to a model it cannot reach is refused.
+	spec := coderSpec("preset:read-only")
+	spec.Harness, spec.ModelConfig = "codex", "gpt-responses"
+	_, err := f.svc.Create(ctx, spec)
+	require.NoError(t, err)
+	_, err = f.svc.Update(ctx, Update{Name: "coder", ModelConfig: str("default-model-config")})
+	require.ErrorIs(t, err, ErrInvalid)
+	assert.Contains(t, err.Error(), "speaks the OpenAI Responses API only")
+}
+
+// One agent definition (prompt, skills, the muster toolset) passes on every
+// coding Harness; a Claude-format plugin on codex is refused with the
+// reason, an Agent Plugins one taken.
+func TestOneDefinitionOnEveryCodingHarness(t *testing.T) {
+	f, ctx := codingFixture(t)
+	for _, h := range []string{"claude", "codex", "omp"} {
+		spec := coderSpec("preset:full")
+		spec.Harness, spec.ModelConfig = h, codingModel[h]
+		spec.Skills = Skills{{Name: "runbooks", Path: "nested/runbooks", Git: &GitSkill{URL: skillsRepo, Ref: "main"}}}
+		dry, err := f.svc.ValidateCreate(ctx, spec)
+		require.NoError(t, err)
+		assert.True(t, dry.Valid, "on %s: %v", h, dry.Errors)
+	}
+
+	claudePlugin := Plugin{Path: "claude-format", Git: &GitSkill{URL: skillsRepo, Commit: tagHead}, Skills: []string{"triage"}}
+	agentPlugin := Plugin{Path: "bundles/sre", Git: &GitSkill{URL: skillsRepo, Commit: tagHead}, Skills: []string{"triage"}}
+	spec := coderSpec("preset:full")
+	spec.Harness, spec.ModelConfig = "codex", "gpt-responses"
+	spec.Plugins = Plugins{agentPlugin, claudePlugin}
+	dry, err := f.svc.ValidateCreate(ctx, spec)
+	require.NoError(t, err)
+	assert.False(t, dry.Valid)
+	assert.True(t, containsLine(dry.Errors, "plugins[1] ("+skillsRepo+") is a Claude-format plugin (.claude-plugin/plugin.json): Harness codex runs Codex, which reads the Agent Plugins format only"), dry.Errors)
+	assert.Len(t, dry.Errors, 1, "the Agent Plugins bundle is taken")
+	_, err = f.svc.Create(ctx, spec)
+	require.ErrorIs(t, err, ErrInvalid)
+
+	spec.Harness, spec.ModelConfig = "claude", "default-model-config"
+	dry, err = f.svc.ValidateCreate(ctx, spec)
+	require.NoError(t, err)
+	assert.True(t, dry.Valid, "Claude Code reads a Claude-format plugin: %v", dry.Errors)
+}
+
+// codex and omp are accepted where the namespace has them and refused, with
+// the valid names, where it has not.
+func TestCodingHarnessesByName(t *testing.T) {
+	f, ctx := claudeFixture(t, nil)
+	for _, h := range []string{"codex", "omp"} {
+		spec := coderSpec("preset:read-only")
+		spec.Harness = h
+		dry, err := f.svc.ValidateCreate(ctx, spec)
+		require.NoError(t, err)
+		assert.True(t, containsLine(dry.Errors, `harness "`+h+`" does not exist in namespace kagent; valid: claude, kagent`), dry.Errors)
+	}
 }

@@ -131,6 +131,38 @@ func (r *Resolver) GitHead(ctx context.Context, repoURL, ref string) (string, er
 	return sha, nil
 }
 
+// ClaudeFormatPlugin reports whether the plugin at path of repoURL at commit
+// is Claude-format: a .claude-plugin/plugin.json manifest and no root
+// plugin.json, the rule kagent's plugin materializer applies. A plugin with
+// neither manifest is not Claude-format.
+func (r *Resolver) ClaudeFormatPlugin(ctx context.Context, repoURL, commit, path string) (bool, error) {
+	owner, repo, err := parseRepoURL(repoURL)
+	if err != nil {
+		return false, fmt.Errorf("%w: %v", ErrUnresolvable, err)
+	}
+	for _, manifest := range []string{"plugin.json", ".claude-plugin/plugin.json"} {
+		_, err := r.gh.raw(ctx, owner, repo, joinPluginPath(path, manifest), commit)
+		var api *apiError
+		switch {
+		case err == nil:
+			return manifest != "plugin.json", nil
+		case errors.As(err, &api) && api.status == http.StatusNotFound:
+			continue
+		default:
+			return false, r.unresolvable(ctx, repoURL, "the plugin manifest at "+commit, err)
+		}
+	}
+	return false, nil
+}
+
+func joinPluginPath(dir, file string) string {
+	dir = strings.Trim(dir, "/")
+	if dir == "" {
+		return file
+	}
+	return dir + "/" + file
+}
+
 // unresolvable explains a failed GitHub lookup: a 404 is a private or missing
 // repository, which without a token cannot be told apart.
 func (r *Resolver) unresolvable(ctx context.Context, repoURL, what string, err error) error {

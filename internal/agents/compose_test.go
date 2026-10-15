@@ -72,6 +72,13 @@ func (p *fakePinner) RequireReadable(_ context.Context, repoURL, login string) e
 	return fmt.Errorf("%w: %s is private and the GitHub user %q cannot read it", skills.ErrNotReadable, repoURL, login)
 }
 
+// ClaudeFormatPlugin answers the plugin at path "claude-format" as
+// Claude-format, every other one as Agent Plugins.
+func (p *fakePinner) ClaudeFormatPlugin(_ context.Context, repoURL, commit, path string) (bool, error) {
+	p.calls = append(p.calls, "plugin "+repoURL+"@"+commit+":"+path)
+	return path == "claude-format", nil
+}
+
 func (p *fakePinner) OCIDigest(_ context.Context, ref string) (string, error) {
 	p.calls = append(p.calls, "oci "+ref)
 	if strings.HasPrefix(ref, kubectlRef) {
