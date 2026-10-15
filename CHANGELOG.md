@@ -24,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- The chart's muster `MCPServer` carries the `ui.giantswarm.io/display-name` annotation, the name the Dev Portal shows for the server (giantswarm/backstage#3012): new value `muster.mcpServer.displayName`, default `Agent Manager`. Empty renders no annotation. ([#169](https://github.com/giantswarm/agent-manager/pull/169))
 - `delete_session` (`DELETE /api/v1/sessions/{id}`): deletes one of the caller's sessions and its runtime state as the caller through `SessionService/DeleteSession`, answering the session in `RUNTIME_STATE_DELETED`; it is gone from `list_sessions` and `get_session` after. The tool is annotated destructive. kagent scopes the delete to the session's creator, so another person's session is refused as `not_found`; while another operation on the session runs the delete is refused as `conflict` with a retry hint. ([#154](https://github.com/giantswarm/agent-manager/issues/154))
 
 - `get_session_turn` (REST: `GET /api/v1/sessions/{id}/turns/{turn}`) reads one turn of a session, by its task id, its index or `last`, through `A2AService/GetTask`: its messages and then its artifacts from `fromMessage` on, as a transcript or as A2A objects (`detail=full`), paged within `maxBytes` with `nextMessage`, or with `toolCall` one tool call whole, its response unwrapped from the MCP envelopes muster nests it in; when a call does not fit, the smaller of arguments and response stays whole. ([#150](https://github.com/giantswarm/agent-manager/pull/150))

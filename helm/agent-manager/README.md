@@ -134,6 +134,7 @@ meta chart (`components.agent-manager.enabled`), which sets `kagent.namespace`,
 | muster.targetUrl | string | `""` | The muster MCP URL composed into an agent placed on a workload cluster (create_agent with organization and cluster): one those clusters reach, the installation's public muster endpoint. Empty refuses target clusters. |
 | muster.mcpServer.enabled | bool | `false` | Register this server with muster by rendering an `mcpservers.muster.giantswarm.io` CR in the release namespace. Tools then appear as `x_<name>_<tool>`. |
 | muster.mcpServer.name | string | `"agent-manager"` | MCPServer CR name (drives the tool prefix). |
+| muster.mcpServer.displayName | string | `"Agent Manager"` | Human-friendly name the Dev Portal shows for this server, rendered as the `ui.giantswarm.io/display-name` annotation. Empty renders none. |
 | muster.mcpServer.autoStart | bool | `true` | Start the server connection when muster initializes. |
 | muster.mcpServer.description | string | `"Agent lifecycle (create, update, delete, status, skills, model configs) and conversations (sessions) for the Agent Platform"` | Human-readable description shown by muster. |
 | muster.mcpServer.labels | object | `{}` | Extra labels on the MCPServer CR. |

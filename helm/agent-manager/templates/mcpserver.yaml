@@ -27,6 +27,10 @@ metadata:
     {{- $labels := dict "muster.giantswarm.io/type" "agent-manager" "agent-platform.giantswarm.io/tool-group" "agent-platform" }}
     {{- $labels = mergeOverwrite $labels (include "agent-manager.labels" . | fromYaml) (default (dict) .Values.muster.mcpServer.labels) }}
     {{- toYaml $labels | nindent 4 }}
+  {{- with .Values.muster.mcpServer.displayName }}
+  annotations:
+    ui.giantswarm.io/display-name: {{ . | quote }}
+  {{- end }}
 spec:
   autoStart: {{ .Values.muster.mcpServer.autoStart }}
   type: streamable-http
