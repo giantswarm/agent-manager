@@ -72,7 +72,7 @@ func startEnvtest(t *testing.T, helmSet ...string) *testEnv {
 		crd("api.kagent.dev", "v1alpha3", "Agent", "agents"),
 		crd("api.kagent.dev", "v1alpha3", "Harness", "harnesses"),
 		crd("api.kagent.dev", "v1alpha3", "ModelConfig", "modelconfigs"),
-		crd("ate.dev", "v1alpha1", "WorkerPool", "workerpools"),
+		workerPoolCRD(),
 	}}
 	cfg, err := env.Start()
 	require.NoError(t, err, "start envtest")
@@ -154,6 +154,19 @@ func crd(group, version, kind, plural string) *apiextensionsv1.CustomResourceDef
 			}},
 		},
 	}
+}
+
+// workerPoolCRD is the WorkerPool CRD with a defaulted spec field, so the API
+// server adds a field to every WorkerPool it stores, as the real CRD does.
+func workerPoolCRD() *apiextensionsv1.CustomResourceDefinition {
+	c := crd("ate.dev", "v1alpha1", "WorkerPool", "workerpools")
+	preserve := true
+	c.Spec.Versions[0].Schema.OpenAPIV3Schema.Properties = map[string]apiextensionsv1.JSONSchemaProps{
+		"spec": {Type: "object", XPreserveUnknownFields: &preserve, Properties: map[string]apiextensionsv1.JSONSchemaProps{
+			"sandboxClass": {Type: "string", Default: &apiextensionsv1.JSON{Raw: []byte(`"gvisor"`)}},
+		}},
+	}
+	return c
 }
 
 func stderrOf(err error) string {

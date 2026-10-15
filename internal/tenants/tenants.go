@@ -486,7 +486,7 @@ func (r *Reconciler) provision(ctx context.Context, ns string) error {
 		if pool, _, _ := unstructured.NestedString(harness.Object, "spec", "substrate", "workerPoolRef", "name"); pool != "" {
 			errs = append(errs, r.copyWorkerPool(ctx, ns, pool))
 		}
-		errs = append(errs, r.ensure(ctx, ns, ScopeAgents, copyOf(harness, ns), objectRef(harness)))
+		errs = append(errs, r.ensure(ctx, ns, ScopeAgents, copyOf(harness, ns), objectRef(harness), contains))
 	}
 	mc, err := r.platformObject(ctx, r.cfg.ModelConfigGVK, r.cfg.ModelConfigName)
 	switch {
@@ -498,14 +498,17 @@ func (r *Reconciler) provision(ctx context.Context, ns string) error {
 		if secret, _, _ := unstructured.NestedString(mc.Object, "spec", "apiKeySecret"); secret != "" {
 			errs = append(errs, r.copySecret(ctx, ns, secret))
 		}
-		errs = append(errs, r.ensure(ctx, ns, ScopeAgents, copyOf(mc, ns), objectRef(mc)))
+		errs = append(errs, r.ensure(ctx, ns, ScopeAgents, copyOf(mc, ns), objectRef(mc), contains))
 	}
 	return errors.Join(errs...)
 }
 
 // copyWorkerPool copies the platform WorkerPool with the tenant's replica
 // count and its own placement labels, and the ServiceAccount its workers run
-// as.
+// as. The copy's spec is exactly the platform spec but replicas: admission
+// (agent-platform-tenant-workerpool-copy) refuses a tenant WorkerPool with a
+// field the platform one does not have, so a field removed there is removed
+// here.
 func (r *Reconciler) copyWorkerPool(ctx context.Context, ns, name string) error {
 	src, err := r.platformObject(ctx, r.cfg.WorkerPoolGVK, name)
 	if err != nil {
@@ -527,7 +530,7 @@ func (r *Reconciler) copyWorkerPool(ctx context.Context, ns, name string) error 
 	if sa, _, _ := unstructured.NestedString(pool.Object, "spec", "template", "serviceAccountName"); sa != "" {
 		errs = append(errs, r.ensureServiceAccount(ctx, ns, sa, ScopeAgents))
 	}
-	return errors.Join(append(errs, r.ensure(ctx, ns, ScopeAgents, pool, objectRef(src)))...)
+	return errors.Join(append(errs, r.ensure(ctx, ns, ScopeAgents, pool, objectRef(src), equal))...)
 }
 
 // release removes what provision wrote, once the last agent is gone.
@@ -611,7 +614,7 @@ func (r *Reconciler) copyObject(ctx context.Context, gvk schema.GroupVersionKind
 		r.log.Warn("a platform object to copy is missing", "kind", gvk.Kind, "name", name, "platformNamespace", r.cfg.PlatformNamespace, "namespace", ns)
 		return nil
 	}
-	return r.ensure(ctx, ns, scope, copyOf(src, ns), objectRef(src))
+	return r.ensure(ctx, ns, scope, copyOf(src, ns), objectRef(src), contains)
 }
 
 // copyOf is src's spec under the same name in ns, with no metadata of src's.
@@ -665,9 +668,10 @@ func (r *Reconciler) create(ctx context.Context, obj client.Object, kind string)
 	return nil
 }
 
-// ensure creates obj, or brings the reconciler's own copy back to it. An
-// object of that name the reconciler did not write is left alone.
-func (r *Reconciler) ensure(ctx context.Context, ns, scope string, obj *unstructured.Unstructured, from string) error {
+// ensure creates obj, or brings the reconciler's own copy back to it when
+// same(copy's spec, obj's spec) is false or its labels differ. An object of that name the
+// reconciler did not write is left alone.
+func (r *Reconciler) ensure(ctx context.Context, ns, scope string, obj *unstructured.Unstructured, from string, same func(have, want any) bool) error {
 	labels := stamp(obj, ns, scope, from)
 	kind := obj.GetKind()
 	existing := object(obj.GroupVersionKind())
@@ -682,7 +686,7 @@ func (r *Reconciler) ensure(ctx context.Context, ns, scope string, obj *unstruct
 		r.log.Debug("leaving an object the reconciler did not write", "namespace", ns, "kind", kind, "name", obj.GetName())
 		return nil
 	}
-	if contains(existing.Object["spec"], obj.Object["spec"]) && existing.GetLabels()[ObjectLabel] == scope && subset(existing.GetLabels(), labels) {
+	if same(existing.Object["spec"], obj.Object["spec"]) && existing.GetLabels()[ObjectLabel] == scope && subset(existing.GetLabels(), labels) {
 		return nil
 	}
 	existing.Object["spec"] = obj.Object["spec"]
@@ -757,6 +761,11 @@ func contains(have, want any) bool {
 		return reflect.DeepEqual(have, want)
 	}
 }
+
+// equal reports whether have is want, field for field: a field have holds
+// and want does not is drift. Both are read from the API server with its
+// defaults, so the defaults are no drift.
+func equal(have, want any) bool { return reflect.DeepEqual(have, want) }
 
 func subset(have, want map[string]string) bool {
 	for k, v := range want {
