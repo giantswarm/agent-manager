@@ -485,9 +485,12 @@ namespaces, its own copies, the objects of `--kagent-namespace` it copies
 from, and of the Secrets only `--tenant-model-secret`. Outside a cluster, set
 `--tenant-leader-election-namespace`. Every kind it keeps must be served
 (Agent, Harness, ModelConfig, WorkerPool, HelmRelease, OCIRepository and the
-`--tenant-network-policy-flavor` kind): without one, the replica that holds
-the Lease stops about two minutes after it starts (it serves until then), and
-so does each replica that takes the Lease after it.
+`--tenant-network-policy-flavor` kind): without one, agent-manager does not
+start, and its error names each missing kind. When the reconciler stops at run
+time (a lost Lease, a kind no longer served), the API keeps serving: the
+replica logs the error, `get_info` reports it in `tenantReconciler` (`error`,
+`failedAt`), and a new reconciler starts 10 seconds later. It reconciles only
+once it holds the Lease, so one replica reconciles at a time.
 
 - always: the agent chart's OCIRepository, the `--helmrelease-service-account`
   ServiceAccount with a RoleBinding to `agent-platform-tenant-flux` (Secrets

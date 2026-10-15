@@ -29,14 +29,17 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"reflect"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/fields"
@@ -49,6 +52,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
+	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
@@ -153,10 +158,23 @@ func New(restCfg *rest.Config, cfg Config, log *slog.Logger) (*Reconciler, error
 		return nil, err
 	}
 	r := &Reconciler{cfg: cfg, log: log}
+	// One RESTMapper, for the check and the manager.
+	httpClient, err := rest.HTTPClientFor(restCfg)
+	if err != nil {
+		return nil, fmt.Errorf("tenant manager: %w", err)
+	}
+	mapper, err := apiutil.NewDynamicRESTMapper(restCfg, httpClient)
+	if err != nil {
+		return nil, fmt.Errorf("tenant manager: %w", err)
+	}
+	if err := r.checkServed(mapper); err != nil {
+		return nil, err
+	}
 	mgr, err := ctrl.NewManager(restCfg, manager.Options{
-		Scheme: scheme,
-		Logger: logr.FromSlogHandler(log.Handler()),
-		Cache:  r.cacheOptions(),
+		Scheme:         scheme,
+		MapperProvider: func(*rest.Config, *http.Client) (meta.RESTMapper, error) { return mapper, nil },
+		Logger:         logr.FromSlogHandler(log.Handler()),
+		Cache:          r.cacheOptions(),
 		// Unstructured reads come from the cache too, under its limits.
 		Client: client.Options{Cache: &client.CacheOptions{Unstructured: true}},
 		// The HTTP server owns the pod's ports.
@@ -175,6 +193,30 @@ func New(restCfg *rest.Config, cfg Config, log *slog.Logger) (*Reconciler, error
 		return nil, fmt.Errorf("tenant controller: %w", err)
 	}
 	return r, nil
+}
+
+// checkServed asks API discovery for every kind the controller watches
+// beyond the core ones, and names every one that is not served: the manager
+// would fail on the first, or minutes later on a watch that never syncs.
+func (r *Reconciler) checkServed(mapper meta.RESTMapper) error {
+	kinds := []schema.GroupVersionKind{r.cfg.AgentGVK, r.cfg.HarnessGVK, r.cfg.ModelConfigGVK, r.cfg.WorkerPoolGVK, r.cfg.HelmReleaseGVK, r.cfg.OCIRepositoryGVK}
+	if !r.cfg.NetworkPolicyGVK.Empty() {
+		kinds = append(kinds, r.cfg.NetworkPolicyGVK)
+	}
+	var missing []string
+	for _, gvk := range kinds {
+		_, err := mapper.RESTMapping(gvk.GroupKind(), gvk.Version)
+		switch {
+		case meta.IsNoMatchError(err):
+			missing = append(missing, gvk.GroupVersion().String()+" "+gvk.Kind)
+		case err != nil:
+			return fmt.Errorf("discovering %s: %w", gvk, err)
+		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("the API server does not serve %s, which the tenant reconciler watches", strings.Join(missing, ", "))
+	}
+	return nil
 }
 
 // cacheOptions limit what the manager caches: the labelled namespaces, the
@@ -271,8 +313,11 @@ func (r *Reconciler) setupWithManager(mgr manager.Manager) error {
 	agent := &metav1.PartialObjectMetadata{}
 	agent.SetGroupVersionKind(r.cfg.AgentGVK)
 
+	// A replaced reconciler's controller has the same name in the process.
+	skipNameValidation := true
 	b := ctrl.NewControllerManagedBy(mgr).
 		Named("tenants").
+		WithOptions(controller.Options{SkipNameValidation: &skipNameValidation}).
 		For(&corev1.Namespace{}, builder.WithPredicates(isTenant)).
 		Watches(agent, ownNamespace, builder.OnlyMetadata).
 		Watches(object(r.cfg.HelmReleaseGVK), ownNamespace, builder.WithPredicates(agentRelease)).

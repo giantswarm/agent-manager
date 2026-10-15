@@ -3,6 +3,7 @@ package agents
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -10,15 +11,18 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/giantswarm/agent-manager/internal/identity"
+	"github.com/giantswarm/agent-manager/internal/tenants"
 )
 
 // fakeTenants is the tenant reconciler as the service sees it.
 type fakeTenants struct {
 	namespaces []string
+	status     tenants.Status
 }
 
-func (f *fakeTenants) Namespaces() []string { return f.namespaces }
-func (f *fakeTenants) ModelConfig() string  { return "default-model-config" }
+func (f *fakeTenants) Namespaces() []string   { return f.namespaces }
+func (f *fakeTenants) ModelConfig() string    { return "default-model-config" }
+func (f *fakeTenants) Status() tenants.Status { return f.status }
 
 func withTenants(f *fixture, t *fakeTenants) {
 	f.svc.cfg.Tenants = t
@@ -29,8 +33,7 @@ func withTenants(f *fixture, t *fakeTenants) {
 // copied it.
 func TestTenantNamespaceIsManaged(t *testing.T) {
 	f := seeded(t)
-	tenants := &fakeTenants{namespaces: []string{"org-a"}}
-	withTenants(f, tenants)
+	withTenants(f, &fakeTenants{namespaces: []string{"org-a"}})
 	ctx := context.Background()
 
 	assert.Equal(t, []string{"kagent", "tenant", "org-a"}, f.svc.Managed())
@@ -61,6 +64,20 @@ func TestInfoListsTheCreatableNamespaces(t *testing.T) {
 	withTenants(f, &fakeTenants{namespaces: []string{"org-a", "org-b"}})
 	allowCreate(f.typed, func(ns string) bool { return ns == "org-a" })
 	assert.Equal(t, []string{"org-a"}, f.svc.Info(context.Background()).Namespaces.Managed)
+}
+
+// get_info is where an operator reads that the tenant reconciler failed
+// while the API kept serving; without tenants it says nothing about one.
+func TestInfoReportsTheTenantReconcilersFailure(t *testing.T) {
+	f := seeded(t)
+	assert.Nil(t, f.svc.Info(t.Context()).TenantReconciler)
+
+	at := time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
+	withTenants(f, &fakeTenants{status: tenants.Status{Error: "leader election lost", FailedAt: &at}})
+	got := f.svc.Info(t.Context()).TenantReconciler
+	require.NotNil(t, got)
+	assert.Equal(t, "leader election lost", got.Error)
+	assert.Equal(t, at, *got.FailedAt)
 }
 
 // The creator is recorded on create, on the HelmRelease and in the values

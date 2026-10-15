@@ -264,7 +264,7 @@ func runServe(ctx context.Context, o *serveOptions) error {
 		return err
 	}
 
-	var tenantSet *tenants.Reconciler
+	var tenantSet *tenants.Set
 	if o.multiTenant {
 		policyGVK, err := networkPolicyGVK(o.tenantNetworkPolicy)
 		if err != nil {
@@ -280,7 +280,7 @@ func runServe(ctx context.Context, o *serveOptions) error {
 		kagentGVK := func(kind string) schema.GroupVersionKind {
 			return schema.GroupVersionKind{Group: agents.KagentAPIGroup, Version: kagentVersion, Kind: kind}
 		}
-		tenantSet, err = tenants.New(clients.RESTConfig(), tenants.Config{
+		tenantSet, err = tenants.NewSet(clients.RESTConfig(), tenants.Config{
 			PlatformNamespace:  o.kagentNamespace,
 			HarnessName:        o.harnessName,
 			ModelConfigName:    o.tenantModelConfig,
@@ -303,7 +303,7 @@ func runServe(ctx context.Context, o *serveOptions) error {
 			LeaderElectionNamespace: o.tenantLeaderElectionNamespace,
 		}, log)
 		if err != nil {
-			return err
+			return fmt.Errorf("--multi-tenant: %w", err)
 		}
 	}
 
@@ -371,32 +371,22 @@ func runServe(ctx context.Context, o *serveOptions) error {
 	}
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	// The tenant manager runs beside the server and stops with it; a manager
-	// that fails (a lost leader Lease, say) stops the server too.
-	managerDone := make(chan error, 1)
-	stopManager := func() {}
+	// The tenant reconciler runs beside the server and stops with it. A
+	// failure at run time (a lost leader Lease, say) does not stop the
+	// server: the reconciler is replaced and get_info reports the failure.
+	closed := make(chan struct{})
+	close(closed)
+	var tenantsDone <-chan struct{} = closed
+	stopTenants := func() {}
 	if tenantSet != nil {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithCancel(ctx)
 		defer cancel()
-		stopManager = cancel
-		go func() {
-			err := tenantSet.Start(ctx)
-			if err != nil {
-				log.Error("tenant manager stopped", "error", err)
-			}
-			managerDone <- err
-			cancel()
-		}()
+		stopTenants = cancel
 		// The tenants are managed namespaces from the first request on.
-		if !tenantSet.WaitForCacheSync(ctx) {
-			if err := <-managerDone; err != nil {
-				return fmt.Errorf("tenant manager: %w", err)
-			}
-			return ctx.Err()
+		if tenantsDone, err = tenantSet.Run(ctx); err != nil {
+			return fmt.Errorf("tenant manager: %w", err)
 		}
-	} else {
-		managerDone <- nil
 	}
 	info := svc.Info(ctx)
 	log.Info("agent-manager starting", "version", build.Version, "commit", build.Commit, "listen", o.listen, "rest", api.Prefix, "mcp", o.mcpPath, "mcpEnabled", o.mcpEnabled,
@@ -408,10 +398,9 @@ func runServe(ctx context.Context, o *serveOptions) error {
 		go bootSecret.Run(ctx)
 	}
 	err = srv.Run(ctx)
-	stopManager()
-	if mgrErr := <-managerDone; err == nil && mgrErr != nil {
-		err = fmt.Errorf("tenant manager: %w", mgrErr)
-	}
+	// The Lease is released before the process ends.
+	stopTenants()
+	<-tenantsDone
 	return err
 }
 
@@ -451,7 +440,7 @@ func parseHarnessEgress(raw string) (map[string][]string, error) {
 }
 
 // tenantSetOrNil keeps a nil reconciler a nil interface.
-func tenantSetOrNil(r *tenants.Reconciler) agents.TenantSet {
+func tenantSetOrNil(r *tenants.Set) agents.TenantSet {
 	if r == nil {
 		return nil
 	}

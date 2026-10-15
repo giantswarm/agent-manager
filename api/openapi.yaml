@@ -715,6 +715,12 @@ components:
             refreshedAt: { type: string, format: date-time, description: When the last refresh succeeded }
             expiresAt: { type: string, format: date-time, description: When the written token expires }
             error: { type: string, description: "The last refresh's failure; absent after a success" }
+        tenantReconciler:
+          type: object
+          description: "Present when agent-manager keeps the tenants (--multi-tenant): the tenant reconciler's last failure on the replica that answered. The API keeps serving through one, and a new reconciler starts after it."
+          properties:
+            error: { type: string, description: "What stopped the reconciler last; absent: nothing since the replica started" }
+            failedAt: { type: string, format: date-time, description: When it stopped }
     GitSkill:
       type: object
       required: [url]

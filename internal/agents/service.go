@@ -22,6 +22,7 @@ import (
 	"github.com/giantswarm/agent-manager/internal/identity"
 	"github.com/giantswarm/agent-manager/internal/kube"
 	"github.com/giantswarm/agent-manager/internal/skills"
+	"github.com/giantswarm/agent-manager/internal/tenants"
 )
 
 // ChartSource is what the service needs to know about the agent chart.
@@ -72,6 +73,8 @@ type TenantSet interface {
 	Namespaces() []string
 	// ModelConfig is the ModelConfig a tenant receives with its first agent.
 	ModelConfig() string
+	// Status is the reconciler's last failure on this replica.
+	Status() tenants.Status
 }
 
 // Service is the agent lifecycle.
@@ -202,6 +205,9 @@ type InfoResponse struct {
 	// it filled with the skills GitHub App's token: the last refresh, the
 	// token's expiry and a failed refresh's error.
 	SkillsGitAuthMint *skills.BootSecretStatus `json:"skillsGitAuthMint,omitempty"`
+	// TenantReconciler is the state of the tenant reconciler when
+	// agent-manager keeps the tenants: its last failure on this replica.
+	TenantReconciler *tenants.Status `json:"tenantReconciler,omitempty"`
 }
 
 // Info reports the installation's capabilities.
@@ -250,6 +256,10 @@ func (s *Service) Info(ctx context.Context) InfoResponse {
 	if s.cfg.SkillsBootSecret != nil {
 		st := s.cfg.SkillsBootSecret.Status()
 		out.SkillsGitAuthMint = &st
+	}
+	if s.cfg.Tenants != nil {
+		st := s.cfg.Tenants.Status()
+		out.TenantReconciler = &st
 	}
 	return out
 }

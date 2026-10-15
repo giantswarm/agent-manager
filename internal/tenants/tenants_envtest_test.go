@@ -17,6 +17,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
@@ -53,12 +54,14 @@ func agentRelease(ns string) *unstructured.Unstructured {
 	})
 }
 
-// cluster is the envtest API server with the reconciler running in a
-// manager as the chart's ServiceAccount, under the chart's RBAC and
-// admission policy.
+// cluster is the envtest API server with the reconciler running as
+// agent-manager runs it, as the chart's ServiceAccount, under the chart's
+// RBAC and admission policy.
 type cluster struct {
 	*testEnv
-	r *Reconciler
+	set *Set
+	// config is the reconciler's Config.
+	config Config
 }
 
 func (c *cluster) create(t *testing.T, gvr schema.GroupVersionResource, o *unstructured.Unstructured) {
@@ -150,7 +153,7 @@ func startCluster(t *testing.T) *cluster {
 	oci.SetLabels(map[string]string{ObjectLabel: ScopeNamespace})
 	c.create(t, ociGVR, oci)
 
-	c.r, err = New(env.as(env.reconciler), Config{
+	c.config = Config{
 		PlatformNamespace:  "kagent",
 		HarnessName:        "kagent",
 		ModelConfigName:    "default-model-config",
@@ -172,16 +175,16 @@ func startCluster(t *testing.T) *cluster {
 		WorkerPoolGVK:           schema.GroupVersionKind{Group: "ate.dev", Version: "v1alpha1", Kind: "WorkerPool"},
 		SyncPeriod:              time.Hour,
 		LeaderElectionNamespace: releaseNamespace,
-	}, slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	}
+	c.set, err = NewSet(env.as(env.reconciler), c.config, slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn})))
 	require.NoError(t, err)
 	mgrCtx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() { done <- c.r.Start(mgrCtx) }()
+	done, err := c.set.Run(mgrCtx)
+	require.NoError(t, err, "the manager's cache syncs as the ServiceAccount")
 	t.Cleanup(func() {
 		cancel()
-		assert.NoError(t, <-done, "the manager stops cleanly")
+		<-done
 	})
-	require.True(t, c.r.WaitForCacheSync(ctx), "the manager's cache syncs as the ServiceAccount")
 	return c
 }
 
@@ -222,7 +225,7 @@ func TestTenantReconcilerEnvtest(t *testing.T) {
 		assert.Nil(t, c.secret(t, "org-a", keySecret))
 		assert.Nil(t, c.get(t, ociGVR, "plain", "agent"), "an unlabelled namespace is not a tenant")
 		assert.Nil(t, c.get(t, ociGVR, "kagent", "agent"), "the platform namespace is never a tenant")
-		assert.Equal(t, []string{"org-a"}, c.r.Namespaces())
+		assert.Equal(t, []string{"org-a"}, c.set.Namespaces())
 	})
 
 	t.Run("an object the reconciler did not write is left as it is, and the OCIRepository is not moved", func(t *testing.T) {
@@ -240,7 +243,7 @@ func TestTenantReconcilerEnvtest(t *testing.T) {
 		assert.True(t, isClaude, "not overwritten")
 		semver, _, _ := unstructured.NestedString(c.get(t, ociGVR, "org-c", "agent").Object, "spec", "ref", "semver")
 		assert.Equal(t, "1.x", semver)
-		assert.Equal(t, []string{"org-a", "org-c"}, c.r.Namespaces(), "a namespace labelled at run time is a tenant at once")
+		assert.Equal(t, []string{"org-a", "org-c"}, c.set.Namespaces(), "a namespace labelled at run time is a tenant at once")
 	})
 
 	t.Run("the first agent brings the Harness, a WorkerPool and the default model", func(t *testing.T) {
@@ -294,7 +297,7 @@ func TestTenantReconcilerEnvtest(t *testing.T) {
 	})
 
 	t.Run("the cache holds the labelled namespaces, the copies, the platform sources and the model key only", func(t *testing.T) {
-		cache := c.r.mgr.GetCache()
+		cache := c.set.reconciler().mgr.GetCache()
 		err := cache.Get(ctx, client.ObjectKey{Name: "plain"}, &corev1.Namespace{})
 		assert.True(t, apierrors.IsNotFound(err), "an unlabelled namespace: %v", err)
 
@@ -325,7 +328,7 @@ func TestTenantReconcilerEnvtest(t *testing.T) {
 		eventually(t, func() bool {
 			return field(c.get(t, mcGVR, "org-a", "default-model-config"), "spec", "apiKeySecret") == "other"
 		}, "the copy follows the source")
-		_, err = c.r.Reconcile(ctx, reconcile.Request{NamespacedName: types.NamespacedName{Name: "org-a"}})
+		_, err = c.set.reconciler().Reconcile(ctx, reconcile.Request{NamespacedName: types.NamespacedName{Name: "org-a"}})
 		require.ErrorContains(t, err, `the default ModelConfig's key Secret "other" is not the tenant model Secret "`+keySecret+`"`)
 		assert.Nil(t, c.secret(t, "org-a", "other"))
 
@@ -366,7 +369,7 @@ func TestTenantReconcilerEnvtest(t *testing.T) {
 		delete(ns.Labels, OrganizationLabel)
 		_, err = c.admin.CoreV1().Namespaces().Update(ctx, ns, metav1.UpdateOptions{})
 		require.NoError(t, err)
-		eventually(t, func() bool { return !slices.Contains(c.r.Namespaces(), "org-b") }, "org-b no longer a tenant")
+		eventually(t, func() bool { return !slices.Contains(c.set.Namespaces(), "org-b") }, "org-b no longer a tenant")
 		assert.NotNil(t, c.get(t, ociGVR, "org-b", "agent"), "nothing is deleted from a namespace that leaves")
 	})
 
@@ -375,5 +378,43 @@ func TestTenantReconcilerEnvtest(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, lease.Spec.HolderIdentity)
 		assert.NotEmpty(t, *lease.Spec.HolderIdentity)
+	})
+
+	t.Run("a kind the API server does not serve is refused before the manager starts, by name", func(t *testing.T) {
+		cfg := c.config
+		cfg.WorkerPoolGVK.Version = "v1beta9"
+		cfg.NetworkPolicyGVK = schema.GroupVersionKind{Group: "cilium.io", Version: "v2", Kind: "CiliumNetworkPolicy"}
+		_, err := NewSet(c.as(c.reconciler), cfg, nil)
+		require.EqualError(t, err, "the API server does not serve ate.dev/v1beta9 WorkerPool, cilium.io/v2 CiliumNetworkPolicy, which the tenant reconciler watches")
+	})
+
+	// Last: it replaces the reconciler.
+	t.Run("a lost Lease stops the reconciler but not the tenants; a new one reconciles once it holds the Lease", func(t *testing.T) {
+		leases := c.admin.CoordinationV1().Leases(releaseNamespace)
+		require.NoError(t, retry.RetryOnConflict(retry.DefaultRetry, func() error {
+			lease, err := leases.Get(ctx, LeaderElectionID, metav1.GetOptions{})
+			if err != nil {
+				return err
+			}
+			other, hour, now := "another-replica", int32(3600), metav1.NewMicroTime(time.Now())
+			lease.Spec.HolderIdentity, lease.Spec.LeaseDurationSeconds = &other, &hour
+			lease.Spec.AcquireTime, lease.Spec.RenewTime = &now, &now
+			_, err = leases.Update(ctx, lease, metav1.UpdateOptions{})
+			return err
+		}))
+		require.Eventually(t, func() bool { return c.set.Status().Error != "" }, time.Minute, 200*time.Millisecond, "the reconciler stops")
+		assert.Equal(t, "leader election lost", c.set.Status().Error)
+		assert.NotNil(t, c.set.Status().FailedAt)
+		assert.Contains(t, c.set.Namespaces(), "org-a", "the tenants are still known")
+
+		c.namespace(t, "org-d", map[string]string{OrganizationLabel: "d"})
+		require.Eventually(t, func() bool { return slices.Contains(c.set.Namespaces(), "org-d") }, time.Minute, 200*time.Millisecond,
+			"the new reconciler's cache knows a tenant labelled after the failure")
+		assert.Never(t, func() bool { return c.get(t, ociGVR, "org-d", "agent") != nil }, 3*time.Second, 200*time.Millisecond,
+			"nothing reconciles here while another replica holds the Lease")
+
+		require.NoError(t, leases.Delete(ctx, LeaderElectionID, metav1.DeleteOptions{}))
+		require.Eventually(t, func() bool { return c.get(t, ociGVR, "org-d", "agent") != nil }, time.Minute, 200*time.Millisecond,
+			"the new reconciler takes the free Lease and reconciles")
 	})
 }
