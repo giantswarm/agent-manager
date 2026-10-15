@@ -27,6 +27,14 @@ func withSkillsCredential(values map[string]any, name string) map[string]any {
 // renders in ns.
 func (c *cluster) credentialSecret(t *testing.T, ns string) {
 	t.Helper()
+	_, err := c.typed.CoreV1().Secrets(ns).Create(t.Context(), &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: skillsCredential, Namespace: ns}, Data: map[string][]byte{"token": []byte("x")}}, metav1.CreateOptions{})
+	require.NoError(t, err)
+}
+
+// emptyCredentialSecret is that Secret as the chart renders it, before
+// agent-manager fills it.
+func (c *cluster) emptyCredentialSecret(t *testing.T, ns string) {
+	t.Helper()
 	_, err := c.typed.CoreV1().Secrets(ns).Create(t.Context(), &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: skillsCredential, Namespace: ns}}, metav1.CreateOptions{})
 	require.NoError(t, err)
 }
@@ -137,4 +145,20 @@ func TestSkillsCredentialWaitsWithinTheRun(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, ActionRewritten, byRelease(res.Reports[0])["kagent/a"].Action)
 	require.Equal(t, map[string]any{"name": skillsCredential}, c.values(t, "kagent", "a")[agents.SkillsGitAuthValuesKey])
+}
+
+// A Secret of the current name without its key (the chart's render, before
+// agent-manager fills it) does not move a release: kagent would refuse it.
+func TestSkillsCredentialWaitsForTheToken(t *testing.T) {
+	ctx := t.Context()
+	values := withSkillsCredential(map[string]any{"agent": map[string]any{"name": "a"}, "modelConfig": map[string]any{"name": "default-model-config"}}, skillsCredentialPrev)
+	c := newCluster(ociRepository("kagent", v2Target), helmRelease("kagent", "a", values, "2.0.0"), agentObj("kagent", "a", "a", "kagent", true))
+	c.emptyCredentialSecret(t, "kagent")
+
+	res, err := c.runnerV2(t, renameOptions("kagent"), v2Latest).Run(ctx)
+	require.NoError(t, err)
+	rel := byRelease(res.Reports[0])["kagent/a"]
+	require.Equal(t, ActionUnchanged, rel.Action)
+	require.Contains(t, strings.Join(rel.Warnings, "\n"), "has no key token yet")
+	require.Empty(t, c.writes("kagent"))
 }

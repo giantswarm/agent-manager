@@ -245,7 +245,7 @@ Two credentials are involved, neither of them a person's token:
   `<fullname>-skills-token` is always one) lists the old names: an agent
   naming one is composed with the current name on its next update,
   `agent-manager migrate` moves every other one once the Secret of the current
-  name exists, waiting up to `--skills-git-auth-wait` for agent-manager's
+  name holds its token, waiting up to `--skills-git-auth-wait` for agent-manager's
   rollout to create it (a GitOps-owned release gets the diff), and while minting the old Secrets are rendered and filled too,
   so an agent not yet moved keeps booting.
 
