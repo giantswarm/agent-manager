@@ -39,7 +39,7 @@ func basic(token string) []byte {
 func TestBootSecretWritesTheAppTokenInBasicForm(t *testing.T) {
 	kube := fake.NewClientset(bootSecret("kagent"), bootSecret("team-a"))
 	tokens := &fakeTokens{token: "ghs_1", expires: time.Now().Add(time.Hour)}
-	b := NewBootSecret(tokens, kube, "agent-manager-skills-token", []string{"kagent", "team-a"}, nil)
+	b := NewBootSecret(tokens, kube, "agent-manager-skills-token", nil, []string{"kagent", "team-a"}, nil)
 	ctx := context.Background()
 
 	require.NoError(t, b.Refresh(ctx))
@@ -63,10 +63,30 @@ func TestBootSecretWritesTheAppTokenInBasicForm(t *testing.T) {
 	assert.Len(t, updates(kube.Actions()), 2)
 }
 
+// The Secret of a previous name gets the same token as the current one, so an
+// agent not yet moved to the current name keeps booting.
+func TestBootSecretFillsThePreviousNames(t *testing.T) {
+	current := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "tenant-credential-agent-manager-skills-token", Namespace: "kagent"}}
+	kube := fake.NewClientset(current, bootSecret("kagent"))
+	tokens := &fakeTokens{token: "ghs_1", expires: time.Now().Add(time.Hour)}
+	b := NewBootSecret(tokens, kube, current.Name, []string{"agent-manager-skills-token"}, []string{"kagent"}, nil)
+	ctx := context.Background()
+
+	require.NoError(t, b.Refresh(ctx))
+	for _, name := range []string{current.Name, "agent-manager-skills-token"} {
+		s, err := kube.CoreV1().Secrets("kagent").Get(ctx, name, metav1.GetOptions{})
+		require.NoError(t, err)
+		assert.Equal(t, basic("ghs_1"), s.Data[BootSecretKey], name)
+	}
+	st := b.Status()
+	assert.Equal(t, current.Name, st.SecretName)
+	assert.Equal(t, []string{"agent-manager-skills-token"}, st.PreviousSecretNames)
+}
+
 func TestBootSecretFailureIsReportedAndClearedOnSuccess(t *testing.T) {
 	kube := fake.NewClientset(bootSecret("kagent"))
 	tokens := &fakeTokens{err: errors.New("github app: POST returned 401")}
-	b := NewBootSecret(tokens, kube, "agent-manager-skills-token", []string{"kagent"}, nil)
+	b := NewBootSecret(tokens, kube, "agent-manager-skills-token", nil, []string{"kagent"}, nil)
 	ctx := context.Background()
 
 	require.Error(t, b.Refresh(ctx))
@@ -82,7 +102,7 @@ func TestBootSecretFailureIsReportedAndClearedOnSuccess(t *testing.T) {
 func TestBootSecretNeverCreatesTheSecret(t *testing.T) {
 	kube := fake.NewClientset()
 	tokens := &fakeTokens{token: "ghs_1", expires: time.Now().Add(time.Hour)}
-	b := NewBootSecret(tokens, kube, "agent-manager-skills-token", []string{"kagent"}, nil)
+	b := NewBootSecret(tokens, kube, "agent-manager-skills-token", nil, []string{"kagent"}, nil)
 
 	err := b.Refresh(context.Background())
 	require.Error(t, err)

@@ -41,8 +41,11 @@ type migrateOptions struct {
 	// even empty: only then does migrate change the sources' filters.
 	chartSemverFilterSet bool
 
-	skillsGitHubAPI string
-	skillsToken     string
+	skillsGitHubAPI   string
+	skillsToken       string
+	skillsGitAuth     string
+	skillsGitAuthPrev string
+	skillsGitAuthWait time.Duration
 
 	reportConfigMap string
 	dryRun          bool
@@ -75,6 +78,11 @@ chart source:
 
 A release deployed from a chart older than the path's source major is reported
 as failed and never rewritten.
+
+On either path, a release whose skillsGitAuthSecretRef names an earlier name of
+the installation's skills credential (--skills-git-auth-previous-secret-names)
+is moved to its current name (--skills-git-auth-secret-name), also when its
+values are on the target major already; a GitOps-owned release gets the diff.
 
   expand    every Generic-chart HelmRelease rendering into a managed namespace
             gets the target major's values, validated against the target
@@ -126,6 +134,9 @@ variable named next to it; flags win.`,
 	f.StringVar(&o.chartSemverFilter, "agent-chart-semver-filter", envOr("AGENT_CHART_SEMVER_FILTER", ""), "Regular expression the agent chart's tags must match before the range is evaluated, as the OCIRepository's ref.semverFilter; empty filters nothing; unset, each source keeps its own, set empty removes it (AGENT_CHART_SEMVER_FILTER)")
 	f.StringVar(&o.skillsGitHubAPI, "skills-github-api", envOr("AGENT_MANAGER_SKILLS_GITHUB_API", "https://api.github.com"), "GitHub API base URL for skill discovery and for resolving a skill's branch or tag to its head commit (AGENT_MANAGER_SKILLS_GITHUB_API)")
 	f.StringVar(&o.skillsToken, "skills-github-token", envOr("GITHUB_TOKEN", ""), "GitHub token for private skill repositories and a higher rate limit; prefer the environment (GITHUB_TOKEN)")
+	f.StringVar(&o.skillsGitAuth, "skills-git-auth-secret-name", envOr("AGENT_MANAGER_SKILLS_GIT_AUTH_SECRET_NAME", ""), "The installation's skills credential Secret, as serve takes it: every release whose skillsGitAuthSecretRef names one of --skills-git-auth-previous-secret-names is moved to it (AGENT_MANAGER_SKILLS_GIT_AUTH_SECRET_NAME)")
+	f.StringVar(&o.skillsGitAuthPrev, "skills-git-auth-previous-secret-names", envOr("AGENT_MANAGER_SKILLS_GIT_AUTH_PREVIOUS_SECRET_NAMES", ""), "Comma-separated earlier names of the installation's skills credential Secret; empty moves no release (AGENT_MANAGER_SKILLS_GIT_AUTH_PREVIOUS_SECRET_NAMES)")
+	f.DurationVar(&o.skillsGitAuthWait, "skills-git-auth-wait", envDuration("AGENT_MANAGER_SKILLS_GIT_AUTH_WAIT", 10*time.Minute), "How long the run waits, all in all, for the --skills-git-auth-secret-name Secret to appear where a release still names a previous name (agent-manager's rollout may trail the run); then such a release keeps the previous name until a later run (AGENT_MANAGER_SKILLS_GIT_AUTH_WAIT)")
 	f.StringVar(&o.reportConfigMap, "report-configmap", envOr("AGENT_MANAGER_MIGRATE_REPORT_CONFIGMAP", migrate.DefaultReportConfigMap), "Name of the report ConfigMap written in every managed namespace (AGENT_MANAGER_MIGRATE_REPORT_CONFIGMAP)")
 	f.BoolVar(&o.dryRun, "dry-run", envBool("AGENT_MANAGER_MIGRATE_DRY_RUN", false), "Print the report and the diffs; write nothing, not even the report (AGENT_MANAGER_MIGRATE_DRY_RUN)")
 	return cmd
@@ -185,12 +196,16 @@ func runMigrate(ctx context.Context, out io.Writer, o *migrateOptions) error {
 		HelmReleaseAPIVersion:   helmReleaseAPI,
 		OCIRepositoryAPIVersion: ociRepositoryAPI,
 		Version:                 build.Version,
+
+		SkillsGitAuthSecretName:          o.skillsGitAuth,
+		SkillsGitAuthPreviousSecretNames: splitList(o.skillsGitAuthPrev),
+		SkillsGitAuthWait:                o.skillsGitAuthWait,
 	}, log)
 	if err != nil {
 		return err
 	}
 	log.Info("agent-manager migrate starting", "version", build.Version, "commit", build.Commit, "namespaces", namespaces, "gitopsNamespaces", splitList(o.gitopsNamespaces),
-		"chart", o.chartOCIURL, "targetSemver", o.chartSemver, "targetMajor", major, "targetSemverFilter", o.chartSemverFilter, "targetSemverFilterSet", o.chartSemverFilterSet, "harness", o.harnessName, "kagentAPI", kagentVersion, "dryRun", o.dryRun, "report", o.reportConfigMap, "githubToken", o.skillsToken != "")
+		"chart", o.chartOCIURL, "targetSemver", o.chartSemver, "targetMajor", major, "targetSemverFilter", o.chartSemverFilter, "targetSemverFilterSet", o.chartSemverFilterSet, "harness", o.harnessName, "kagentAPI", kagentVersion, "dryRun", o.dryRun, "report", o.reportConfigMap, "githubToken", o.skillsToken != "", "skillsGitAuthSecretName", o.skillsGitAuth, "skillsGitAuthPreviousSecretNames", splitList(o.skillsGitAuthPrev))
 
 	res, runErr := runner.Run(ctx)
 	if res != nil {

@@ -68,6 +68,10 @@ tests:
       - contains:
           path: spec.template.spec.containers[0].args
           content: --skills-git-auth-secret-name=kagent-skills-token
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --skills-git-auth-previous-secret-names=
+          any: true
 
   - it: renders no skills credential by default
     asserts:
@@ -90,10 +94,23 @@ tests:
     asserts:
       - contains:
           path: spec.template.spec.containers[0].args
-          content: --skills-git-auth-secret-name=RELEASE-NAME-agent-manager-skills-token
+          content: --skills-git-auth-secret-name=tenant-credential-RELEASE-NAME-agent-manager-skills-token
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --skills-git-auth-previous-secret-names=RELEASE-NAME-agent-manager-skills-token
       - contains:
           path: spec.template.spec.containers[0].args
           content: --skills-git-auth-mint=true
+
+  - it: passes the earlier names of a provisioned skills credential
+    set:
+      skills:
+        gitAuthSecretName: tenant-credential-skills
+        previousGitAuthSecretNames: [kagent-skills-token, tenant-credential-skills]
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --skills-git-auth-previous-secret-names=kagent-skills-token
 
   - it: refuses to mint without the skills GitHub App
     set:

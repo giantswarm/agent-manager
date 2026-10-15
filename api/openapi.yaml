@@ -711,6 +711,7 @@ components:
           description: "Present when agent-manager keeps skillsGitAuthSecretName filled with the skills GitHub App's installation token"
           properties:
             secretName: { type: string }
+            previousSecretNames: { type: array, items: { type: string }, description: "The Secret's earlier names, kept filled the same way until no agent names them" }
             namespaces: { type: array, items: { type: string } }
             refreshedAt: { type: string, format: date-time, description: When the last refresh succeeded }
             expiresAt: { type: string, format: date-time, description: When the written token expires }
