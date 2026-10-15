@@ -536,7 +536,10 @@ rbac-operator) included. Whoever may create or change a HelmRelease or an
 OCIRepository in the namespace can trigger that: on a Giant Swarm management
 cluster, the organization's admins (`cluster-admin` there) and the members
 bound to `agent-platform:editor` or `agent-platform:admin`, which grant those
-writes but no Secret read.
+writes but no Secret read. This is accepted: those members can already name
+`automation` as a HelmRelease's ServiceAccount and so reach `cluster-admin` in
+the namespace without this role. The plan for giantswarm/giantswarm#36698
+tracks closing that path.
 
 Every create records the caller as `agent-platform.giantswarm.io/created-by`
 on the HelmRelease and, through the chart's `annotations` value, on the
