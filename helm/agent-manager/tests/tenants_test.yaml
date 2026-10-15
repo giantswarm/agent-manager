@@ -31,7 +31,7 @@ tests:
         template: templates/tenants-rbac.yaml
       - notContains:
           path: spec.template.spec.containers[0].args
-          content: --tenants=true
+          content: --multi-tenant=true
         template: templates/deployment.yaml
 
   - it: renders with oauth.downstream, where the ServiceAccount has no other RBAC
@@ -213,7 +213,7 @@ tests:
     asserts:
       - contains:
           path: spec.template.spec.containers[0].args
-          content: --tenants=true
+          content: --multi-tenant=true
       - contains:
           path: spec.template.spec.containers[0].args
           content: --tenant-worker-pool-replicas=2

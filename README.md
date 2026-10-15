@@ -469,7 +469,7 @@ agentgateway JWT policy, muster) can reach.
 
 ## Tenants
 
-With `--tenants` (chart `tenants.enabled`) every namespace labelled
+With `--multi-tenant` (chart `tenants.enabled`) every namespace labelled
 `giantswarm.io/organization` (an Organization's `org-<name>`; on an
 installation without Organizations the platform team labels it) is a managed
 namespace beside `--kagent-namespace` and `--managed-namespaces`, discovered at

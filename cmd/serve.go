@@ -66,7 +66,7 @@ type serveOptions struct {
 
 	kagentTarget string
 
-	tenants                  bool
+	multiTenant              bool
 	tenantModelConfig        string
 	tenantModelSecret        string
 	tenantWorkerPoolReplicas int64
@@ -138,7 +138,7 @@ environment variable named next to it; flags win over the environment.`,
 	f.BoolVar(&o.skillsGitAuthMint, "skills-git-auth-mint", envBool("AGENT_MANAGER_SKILLS_GIT_AUTH_MINT", false), "Keep the Secret --skills-git-auth-secret-name names filled with the skills GitHub App's installation token in every managed namespace, refreshed before it expires; the Secret must exist (the chart renders it) and the ServiceAccount may update it. Needs the skills GitHub App (AGENT_MANAGER_SKILLS_GIT_AUTH_MINT)")
 	f.DurationVar(&o.skillsCacheTTL, "skills-cache-ttl", envDuration("AGENT_MANAGER_SKILLS_CACHE_TTL", 5*time.Minute), "How long a repository's discovered skills are reused (AGENT_MANAGER_SKILLS_CACHE_TTL)")
 	f.StringVar(&o.kagentTarget, "kagent-target", envOr("AGENT_MANAGER_KAGENT_TARGET", ""), "The kagent controller's gRPC target through agentgateway, which list_sessions, get_session, get_session_turn, start_session and delete_session call as the caller: grpc://host:port (h2c, the in-cluster agentgateway Service) or grpcs://host[:port] (TLS). Empty: the session tools answer unsupported. Needs --enable-oauth for a caller token (AGENT_MANAGER_KAGENT_TARGET)")
-	f.BoolVar(&o.tenants, "tenants", envBool("AGENT_MANAGER_TENANTS", false), "Manage the tenant namespaces (labelled "+tenants.OrganizationLabel+") beside the configured ones, and keep in each, as the ServiceAccount, what an agent needs there: the agent chart's OCIRepository, the --helmrelease-service-account ServiceAccount bound to --tenant-flux-cluster-role, the --tenant-network-policies, and while it holds an agent copies of the platform Harness, its WorkerPool and the default ModelConfig with its key Secret, all copied from --kagent-namespace (AGENT_MANAGER_TENANTS)")
+	f.BoolVar(&o.multiTenant, "multi-tenant", envBool("AGENT_MANAGER_MULTI_TENANT", false), "Manage the tenant namespaces (labelled "+tenants.OrganizationLabel+") beside the configured ones, and keep in each, as the ServiceAccount, what an agent needs there: the agent chart's OCIRepository, the --helmrelease-service-account ServiceAccount bound to --tenant-flux-cluster-role, the --tenant-network-policies, and while it holds an agent copies of the platform Harness, its WorkerPool and the default ModelConfig with its key Secret, all copied from --kagent-namespace (AGENT_MANAGER_MULTI_TENANT)")
 	f.StringVar(&o.tenantModelConfig, "tenant-model-config", envOr("AGENT_MANAGER_TENANT_MODEL_CONFIG", "default-model-config"), "The platform's default ModelConfig a tenant receives with its first agent (AGENT_MANAGER_TENANT_MODEL_CONFIG)")
 	f.StringVar(&o.tenantModelSecret, "tenant-model-secret", envOr("AGENT_MANAGER_TENANT_MODEL_SECRET", "kagent-anthropic"), "The Secret that holds that ModelConfig's API key: the only Secret the reconciler copies (AGENT_MANAGER_TENANT_MODEL_SECRET)")
 	f.Int64Var(&o.tenantWorkerPoolReplicas, "tenant-worker-pool-replicas", envInt64("AGENT_MANAGER_TENANT_WORKER_POOL_REPLICAS", 1), "Warm workers of a tenant's WorkerPool while it holds an agent (AGENT_MANAGER_TENANT_WORKER_POOL_REPLICAS)")
@@ -263,7 +263,7 @@ func runServe(ctx context.Context, o *serveOptions) error {
 	}
 
 	var tenantSet *tenants.Reconciler
-	if o.tenants {
+	if o.multiTenant {
 		policyGVR, err := networkPolicyGVR(o.tenantNetworkPolicy)
 		if err != nil {
 			return err
@@ -368,7 +368,7 @@ func runServe(ctx context.Context, o *serveOptions) error {
 	info := svc.Info(ctx)
 	log.Info("agent-manager starting", "version", build.Version, "commit", build.Commit, "listen", o.listen, "rest", api.Prefix, "mcp", o.mcpPath, "mcpEnabled", o.mcpEnabled,
 		"oauth", o.oauthEnabled, "downstreamOAuth", o.downstreamOAuth, "commit", info.Capabilities["commit"], "identity", info.Identity,
-		"namespaces", svc.Managed(), "tenants", o.tenants, "chart", o.chartOCIURL, "chartSemver", o.chartSemver, "chartVersion", info.Chart.LatestVersion, "schemaSource", info.Chart.SchemaSource,
+		"namespaces", svc.Managed(), "multiTenant", o.multiTenant, "chart", o.chartOCIURL, "chartSemver", o.chartSemver, "chartVersion", info.Chart.LatestVersion, "schemaSource", info.Chart.SchemaSource,
 		"kagentAPI", kagentVersion, "harness", info.Harness.Name, "musterURL", info.Muster.URL, "helmReleaseAPI", helmReleaseAPI, "ociRepositoryAPI", ociRepositoryAPI, "skillsRepositories", info.SkillsRepositories, "skillsGitHubApp", o.skillsAppID, "skillsGitAuthSecretName", o.skillsGitAuth, "kagentTarget", o.kagentTarget)
 
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
