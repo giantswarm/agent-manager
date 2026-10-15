@@ -490,8 +490,8 @@ the Lease stops about two minutes after it starts (it serves until then), and
 so does each replica that takes the Lease after it.
 
 - always: the agent chart's OCIRepository, the `--helmrelease-service-account`
-  ServiceAccount with a RoleBinding to `agent-platform-tenant-flux` (Secrets,
-  see below, `agents` and `remotemcpservers`), and the network policies
+  ServiceAccount with a RoleBinding to `agent-platform-tenant-flux` (Secrets
+  (see below), `agents` and `remotemcpservers`), and the network policies
   `--tenant-network-policies` names, copied from `--kagent-namespace`;
 - while the namespace holds an agent (an Agent, or a HelmRelease of the agent
   chart that runs on this cluster): copies of the platform Harness, its
@@ -520,7 +520,7 @@ ValidatingAdmissionPolicy that refuses the ServiceAccount's writes of those
 kinds outside labelled namespaces, a RoleBinding to any other role or
 subject than the agents' Flux ServiceAccount, and any other Secret: RBAC cannot select namespaces by label.
 
-The agents' Flux identity reads every Secret of the tenant.
+The agents' Flux identity can read and write every Secret of the tenant.
 helm-controller keeps an agent's Helm release Secrets
 (`sh.helm.release.v1.<release>.v<N>`) in the HelmRelease's namespace, and
 Helm's Secret storage driver calls `get`, `list`, `create`, `update` and
@@ -528,7 +528,11 @@ Helm's Secret storage driver calls `get`, `list`, `create`, `update` and
 RBAC cannot narrow a `list`, so that identity can read every Secret of an
 organization namespace, the CAPI cluster kubeconfigs included, and a chart
 rendered through it can copy such a Secret with Helm `lookup` into an object
-it renders. Whoever may create or change a HelmRelease or an OCIRepository in
+it renders. With `create`, `update` and `delete` such a chart can also
+overwrite or delete any Secret there, and get the token of any ServiceAccount
+there (a `kubernetes.io/service-account-token` Secret it renders, read back
+with `lookup`), `automation` (`cluster-admin` in an org namespace, from
+rbac-operator) included. Whoever may create or change a HelmRelease or an OCIRepository in
 the namespace can trigger that: on a Giant Swarm management cluster, the
 organization's admins (`cluster-admin` there, from rbac-operator) and the
 members bound to `agent-platform:editor` or `agent-platform:admin`, which

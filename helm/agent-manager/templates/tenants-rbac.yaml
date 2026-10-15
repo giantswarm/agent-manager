@@ -37,8 +37,8 @@ written here.
 {{- $platform := .Values.kagent.namespace }}
 ---
 # What the agents' HelmReleases run as in a tenant namespace (helm-controller
-# impersonates the release's ServiceAccount): the Helm release Secrets and the
-# two kinds the Generic agent chart 2.x renders, an Agent and its
+# impersonates the release's ServiceAccount): Secrets (Helm's release storage,
+# see the rule) and the two kinds the Generic agent chart 2.x renders, an Agent and its
 # RemoteMCPServer.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
@@ -53,9 +53,13 @@ rules:
   # list (a label selector is no resourceNames), so this identity can read
   # every Secret of an organization namespace, CAPI cluster kubeconfigs
   # included, and a chart rendered through it can copy one with Helm `lookup`
-  # into an object it renders. Whoever may create or change a HelmRelease or
-  # an OCIRepository there can trigger that: the organization's admins and the
-  # members bound to agent-platform:editor or agent-platform:admin.
+  # into an object it renders. With create, update and delete such a chart can
+  # also overwrite or delete any Secret there, and get the token of any
+  # ServiceAccount there (a service-account-token Secret it renders, read back
+  # with `lookup`), `automation` (cluster-admin in an org namespace) included.
+  # Whoever may create or change a HelmRelease or an OCIRepository there can
+  # trigger that: the organization's admins and the members bound to
+  # agent-platform:editor or agent-platform:admin.
   - apiGroups: [""]
     resources: ["secrets"]
     verbs: ["get", "list", "create", "update", "delete"]
