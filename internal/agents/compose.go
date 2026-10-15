@@ -213,16 +213,62 @@ func BuildHelmRelease(name, namespace string, values map[string]any, cfg Compose
 		"namespace": namespace,
 	}
 	spec["values"] = values
+	metadata := map[string]any{
+		"name":      name,
+		"namespace": namespace,
+		"labels":    map[string]any{ManagedByLabel: ManagedByValue},
+	}
+	if creator := creatorOf(values); creator != "" {
+		metadata["annotations"] = map[string]any{CreatedByAnnotation: creator}
+	}
 	return &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": orDefault(cfg.HelmReleaseAPIVersion, DefaultHelmReleaseAPIVersion),
 		"kind":       "HelmRelease",
-		"metadata": map[string]any{
-			"name":      name,
-			"namespace": namespace,
-			"labels":    map[string]any{ManagedByLabel: ManagedByValue},
-		},
-		"spec": spec,
+		"metadata":   metadata,
+		"spec":       spec,
 	}}
+}
+
+// creatorOf reads the creator from the chart's annotations value.
+func creatorOf(values map[string]any) string {
+	annotations, _ := values["annotations"].(map[string]any)
+	creator, _ := annotations[CreatedByAnnotation].(string)
+	return creator
+}
+
+// setCreator records the creator in the chart's annotations value, which
+// the chart puts on the Agent object; BuildHelmRelease copies it onto the
+// HelmRelease. No caller (a server without OAuth) records nothing.
+func setCreator(values map[string]any, creator string) {
+	if creator == "" {
+		return
+	}
+	annotations, _ := values["annotations"].(map[string]any)
+	if annotations == nil {
+		annotations = map[string]any{}
+	}
+	annotations[CreatedByAnnotation] = creator
+	values["annotations"] = annotations
+}
+
+// keepCreator carries the creator of before into after: an update never
+// changes it. A change asked for is refused.
+func keepCreator(before, after map[string]any, requested map[string]string) error {
+	creator := creatorOf(before)
+	if v, ok := requested[CreatedByAnnotation]; ok && v != creator {
+		return invalidf("annotation %s records who created the agent and cannot be changed", CreatedByAnnotation)
+	}
+	if creator == "" {
+		if annotations, _ := after["annotations"].(map[string]any); annotations != nil {
+			delete(annotations, CreatedByAnnotation)
+			if len(annotations) == 0 {
+				delete(after, "annotations")
+			}
+		}
+		return nil
+	}
+	setCreator(after, creator)
+	return nil
 }
 
 // BuildOCIRepository composes the shared chart source of a namespace.

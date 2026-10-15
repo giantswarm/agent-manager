@@ -7,6 +7,10 @@
 #     from the values — the trusted audiences above all). Not reachable from
 #     `make test`: the unittest plugin is not in the architect go image, so the
 #     job runs in a plain container with a pinned helm.
+#   - test-envtest: `make test-envtest`, the Go tests that need a real
+#     kube-apiserver (the tenant ValidatingAdmissionPolicy). The go-build job's
+#     `make test` skips them without KUBEBUILDER_ASSETS; this job downloads one
+#     with setup-envtest. The architect image carries Go and helm.
 version: 2.1
 
 jobs:
@@ -29,6 +33,18 @@ jobs:
           name: Run chart tests
           command: make helm-test
 
+  test-envtest:
+    executor: architect/architect
+    resource_class: medium
+    steps:
+      - checkout
+      - architect/tools-info
+      - architect/go-cache-restore
+      - run:
+          name: Run envtest-backed tests
+          command: make test-envtest
+      - architect/go-cache-save
+
 workflows:
   build:
     jobs:
@@ -36,6 +52,13 @@ workflows:
     # on the Go build, and a Go-only PR still proves the chart renders. Same
     # tag filter as the other test jobs.
     - chart-test:
+        filters:
+          tags:
+            only: /^v.*/
+    - test-envtest:
+        context: architect
+        requires:
+          - go-build
         filters:
           tags:
             only: /^v.*/

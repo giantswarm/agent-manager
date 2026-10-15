@@ -252,9 +252,10 @@ oauth:
     # permissions: the chart renders none of its Roles (`rbac.create` is
     # moot) and the token stays mounted only for the in-cluster API address
     # and CA plus API discovery at startup, which every authenticated
-    # principal may read. agent-manager has no background work, so nothing is
-    # lost: a request without a token is refused with 401 instead of running
-    # as the ServiceAccount.
+    # principal may read. Requests have no other identity: a request without
+    # a token is refused with 401 instead of running as the ServiceAccount.
+    # Background work keeps its own RBAC (`tenants.enabled`,
+    # `skills.mintGitAuthSecret`).
     enabled: false
 
 github:
@@ -391,6 +392,60 @@ rbac:
   # ServiceAccount's own permissions. Ignored with `oauth.downstream.enabled`:
   # the ServiceAccount then gets no RBAC at all, the caller's RBAC governs.
   create: true
+
+tenants:
+  # -- Manage the tenant namespaces: every namespace labelled
+  # `giantswarm.io/organization` (an Organization's `org-<name>`) except
+  # `kagent.namespace`, discovered at run time beside `kagent.namespace` and
+  # `kagent.additionalNamespaces`. agent-manager keeps in each, as its own
+  # ServiceAccount: the agent chart's OCIRepository, the
+  # `flux.helmReleaseServiceAccount` ServiceAccount bound to the ClusterRole
+  # `agent-platform-tenant-flux` (rendered here), the network policies below,
+  # and while the namespace holds an agent copies of the platform Harness
+  # (`harness.name`), its WorkerPool and the pool's ServiceAccount, and the
+  # default ModelConfig with its key Secret, all copied from
+  # `kagent.namespace`. Renders the ServiceAccount's ClusterRole for that work
+  # (whatever `rbac.create` says) and a ValidatingAdmissionPolicy that refuses
+  # its writes outside labelled namespaces (Kubernetes 1.30 or later). Needs
+  # `oauth.downstream.enabled` (a request in a tenant runs as the caller) and
+  # `flux.helmReleaseServiceAccount`. An agent in a tenant gets no
+  # installation skills credential (`skills.gitAuthSecretName`,
+  # `skills.mintGitAuthSecret`): it names its own. Read before you enable it:
+  # Helm keeps its release Secrets in the tenant and must `list` them, so
+  # `agent-platform-tenant-flux` can read every Secret of an organization
+  # namespace, CAPI cluster kubeconfigs included. A chart rendered through
+  # it can copy such a Secret with Helm `lookup` into an object it renders,
+  # overwrite or delete any Secret there, and get the token of any
+  # ServiceAccount there (`automation`, cluster-admin in an org namespace,
+  # included). Whoever may create or change a HelmRelease or an
+  # OCIRepository in the namespace can trigger that: on a Giant Swarm
+  # management cluster the organization's admins and the members bound to
+  # `agent-platform:editor` or `agent-platform:admin`.
+  enabled: false
+  modelConfig:
+    # -- The platform's default ModelConfig a tenant receives with its first
+    # agent.
+    name: default-model-config
+    # -- The Secret in `kagent.namespace` that holds that ModelConfig's API
+    # key (its `apiKeySecret`): the only Secret agent-manager may read and
+    # copy.
+    apiKeySecretName: kagent-anthropic
+  # -- Warm workers of a tenant's WorkerPool while it holds an agent.
+  workerPoolReplicas: 1
+  networkPolicy:
+    # -- Kind of the network policies copied into every tenant: `kubernetes`
+    # (NetworkPolicy) or `cilium` (CiliumNetworkPolicy). Empty copies none.
+    flavor: ""
+    # -- Names of the network policies in `kagent.namespace` copied into
+    # every tenant (the platform's worker policy, `substrate-workers` with
+    # Cilium).
+    names: []  # @schema item: string
+  # -- How often every tenant is reconciled without a change. A change to a
+  # tenant namespace, an agent in it, one of its copies or a platform object
+  # they are copied from reconciles it at once; the replicas elect the one
+  # that reconciles with the Lease `agent-manager-tenants` in the release
+  # namespace.
+  interval: 10m
 
 # -- Annotations on the pod.
 podAnnotations: {}  # @schema additionalProperties: true
