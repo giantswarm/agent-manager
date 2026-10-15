@@ -181,6 +181,7 @@ func startCluster(t *testing.T) *cluster {
 	mgrCtx, cancel := context.WithCancel(context.Background())
 	done, err := c.set.Run(mgrCtx)
 	require.NoError(t, err, "the manager's cache syncs as the ServiceAccount")
+	require.True(t, c.set.Status().Running)
 	t.Cleanup(func() {
 		cancel()
 		<-done
@@ -405,11 +406,14 @@ func TestTenantReconcilerEnvtest(t *testing.T) {
 		require.Eventually(t, func() bool { return c.set.Status().Error != "" }, time.Minute, 200*time.Millisecond, "the reconciler stops")
 		assert.Equal(t, "leader election lost", c.set.Status().Error)
 		assert.NotNil(t, c.set.Status().FailedAt)
+		assert.False(t, c.set.Status().Running)
 		assert.Contains(t, c.set.Namespaces(), "org-a", "the tenants are still known")
 
 		c.namespace(t, "org-d", map[string]string{OrganizationLabel: "d"})
 		require.Eventually(t, func() bool { return slices.Contains(c.set.Namespaces(), "org-d") }, time.Minute, 200*time.Millisecond,
 			"the new reconciler's cache knows a tenant labelled after the failure")
+		assert.True(t, c.set.Status().Running, "a new reconciler runs")
+		assert.Equal(t, "leader election lost", c.set.Status().Error, "the last failure stays")
 		assert.Never(t, func() bool { return c.get(t, ociGVR, "org-d", "agent") != nil }, 3*time.Second, 200*time.Millisecond,
 			"nothing reconciles here while another replica holds the Lease")
 

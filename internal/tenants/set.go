@@ -10,22 +10,30 @@ import (
 	"k8s.io/client-go/rest"
 )
 
-// restartDelay is how long a stopped reconciler waits before a new one
-// starts.
-const restartDelay = 10 * time.Second
+// After a reconciler stops, a new one starts after firstRestartDelay; the
+// delay doubles, up to maxRestartDelay, while new ones fail before their
+// cache syncs (a kind no longer served, say).
+const (
+	firstRestartDelay = 10 * time.Second
+	maxRestartDelay   = 5 * time.Minute
+)
 
 // Status is the tenant reconciler's state, reported by get_info.
 type Status struct {
-	// Error is the last failure that stopped the reconciler on this replica,
-	// FailedAt when it happened; a new reconciler was started after it.
-	// Empty: none since the replica started.
+	// Running: a reconciler runs on this replica and its cache follows the
+	// tenant namespaces (it reconciles only while it holds the Lease).
+	// False after a failure until a new one has synced; meanwhile the tenant
+	// namespaces are the stopped one's last view of them.
+	Running bool `json:"running"`
+	// Error is the last failure that stopped a reconciler on this replica,
+	// FailedAt when it happened. Empty: none since the replica started.
 	Error    string     `json:"error,omitempty"`
 	FailedAt *time.Time `json:"failedAt,omitempty"`
 }
 
 // Set is the tenant reconciler as agent-manager runs it beside its API: a
-// reconciler that stops with an error (a lost Lease, a kind no longer
-// served) is replaced by a new one, and the API keeps serving meanwhile. A
+// reconciler that stops with an error (a lost Lease, say) is replaced by a
+// new one, and the API keeps serving meanwhile. A
 // controller-runtime manager runs once, so each restart builds a new
 // Reconciler, which again checks that its kinds are served and must win the
 // Lease before it reconciles; the stopped one's reconciles end with its
@@ -51,7 +59,7 @@ func NewSet(restCfg *rest.Config, cfg Config, log *slog.Logger) (*Set, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Set{restCfg: restCfg, cfg: cfg, log: log, r: r}, nil
+	return &Set{restCfg: restCfg, cfg: cfg, log: log, r: r, status: Status{Running: true}}, nil
 }
 
 // Run starts the reconciler and returns once its cache holds the tenant
@@ -76,6 +84,7 @@ func (s *Set) Run(ctx context.Context) (done <-chan struct{}, err error) {
 
 // keep replaces each reconciler that stops before ctx ends.
 func (s *Set) keep(ctx context.Context, stopped <-chan error) {
+	delay := firstRestartDelay
 	for {
 		err := <-stopped
 		if ctx.Err() != nil {
@@ -84,12 +93,13 @@ func (s *Set) keep(ctx context.Context, stopped <-chan error) {
 		if err == nil {
 			err = errors.New("the manager stopped")
 		}
-		s.failed(err)
+		s.failed(err, delay)
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(restartDelay):
+		case <-time.After(delay):
 		}
+		delay = min(2*delay, maxRestartDelay)
 		r, err := New(s.restCfg, s.cfg, s.log)
 		if err != nil {
 			failed := make(chan error, 1)
@@ -100,8 +110,10 @@ func (s *Set) keep(ctx context.Context, stopped <-chan error) {
 		var synced bool
 		if stopped, synced = start(ctx, r); synced {
 			s.mu.Lock()
-			s.r = r
+			s.r, s.status.Running = r, true
 			s.mu.Unlock()
+			s.log.Info("tenant reconciler restarted")
+			delay = firstRestartDelay
 		}
 	}
 }
@@ -120,12 +132,12 @@ func start(ctx context.Context, r *Reconciler) (stopped <-chan error, synced boo
 	return errc, r.WaitForCacheSync(syncCtx)
 }
 
-func (s *Set) failed(err error) {
+func (s *Set) failed(err error, delay time.Duration) {
 	now := time.Now().UTC()
 	s.mu.Lock()
 	s.status = Status{Error: err.Error(), FailedAt: &now}
 	s.mu.Unlock()
-	s.log.Error("tenant reconciler stopped; the API keeps serving and a new reconciler starts", "error", err, "in", restartDelay)
+	s.log.Error("tenant reconciler stopped; the API keeps serving and a new reconciler starts", "error", err, "in", delay)
 }
 
 func (s *Set) reconciler() *Reconciler {
@@ -140,7 +152,8 @@ func (s *Set) Namespaces() []string { return s.reconciler().Namespaces() }
 // ModelConfig is the ModelConfig a tenant receives with its first agent.
 func (s *Set) ModelConfig() string { return s.cfg.ModelConfigName }
 
-// Status reports the reconciler's last failure on this replica.
+// Status reports whether a reconciler runs on this replica and its last
+// failure.
 func (s *Set) Status() Status {
 	s.mu.Lock()
 	defer s.mu.Unlock()

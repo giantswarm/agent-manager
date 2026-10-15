@@ -73,9 +73,10 @@ func TestInfoReportsTheTenantReconcilersFailure(t *testing.T) {
 	assert.Nil(t, f.svc.Info(t.Context()).TenantReconciler)
 
 	at := time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
-	withTenants(f, &fakeTenants{status: tenants.Status{Error: "leader election lost", FailedAt: &at}})
+	withTenants(f, &fakeTenants{status: tenants.Status{Running: false, Error: "leader election lost", FailedAt: &at}})
 	got := f.svc.Info(t.Context()).TenantReconciler
 	require.NotNil(t, got)
+	assert.False(t, got.Running)
 	assert.Equal(t, "leader election lost", got.Error)
 	assert.Equal(t, at, *got.FailedAt)
 }

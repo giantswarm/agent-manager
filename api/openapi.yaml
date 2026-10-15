@@ -717,8 +717,9 @@ components:
             error: { type: string, description: "The last refresh's failure; absent after a success" }
         tenantReconciler:
           type: object
-          description: "Present when agent-manager keeps the tenants (--multi-tenant): the tenant reconciler's last failure on the replica that answered. The API keeps serving through one, and a new reconciler starts after it."
+          description: "Present when agent-manager keeps the tenants (--multi-tenant): the tenant reconciler on the replica that answered. The API keeps serving through a failure, and a new reconciler starts after it."
           properties:
+            running: { type: boolean, description: "A reconciler runs and follows the tenant namespaces (it reconciles while it holds the Lease). False after a failure until a new one has started; meanwhile the tenant namespaces are the ones known at the failure" }
             error: { type: string, description: "What stopped the reconciler last; absent: nothing since the replica started" }
             failedAt: { type: string, format: date-time, description: When it stopped }
     GitSkill:

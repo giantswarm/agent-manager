@@ -487,10 +487,12 @@ from, and of the Secrets only `--tenant-model-secret`. Outside a cluster, set
 (Agent, Harness, ModelConfig, WorkerPool, HelmRelease, OCIRepository and the
 `--tenant-network-policy-flavor` kind): without one, agent-manager does not
 start, and its error names each missing kind. When the reconciler stops at run
-time (a lost Lease, a kind no longer served), the API keeps serving: the
-replica logs the error, `get_info` reports it in `tenantReconciler` (`error`,
-`failedAt`), and a new reconciler starts 10 seconds later. It reconciles only
-once it holds the Lease, so one replica reconciles at a time.
+time (a lost Lease, say), the API keeps serving: the replica logs the error,
+`get_info` reports it in `tenantReconciler` (`running`, `error`, `failedAt`),
+and a new reconciler starts after 10 seconds (the delay doubles, up to 5
+minutes, while new ones fail). Until it starts, that replica's API uses the
+tenant namespaces known at the failure. A new reconciler reconciles only once
+it holds the Lease, so one replica reconciles at a time.
 
 - always: the agent chart's OCIRepository, the `--helmrelease-service-account`
   ServiceAccount with a RoleBinding to `agent-platform-tenant-flux` (Secrets

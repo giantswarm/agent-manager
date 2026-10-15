@@ -73,7 +73,8 @@ type TenantSet interface {
 	Namespaces() []string
 	// ModelConfig is the ModelConfig a tenant receives with its first agent.
 	ModelConfig() string
-	// Status is the reconciler's last failure on this replica.
+	// Status is whether the reconciler runs on this replica, and its last
+	// failure.
 	Status() tenants.Status
 }
 
@@ -206,7 +207,8 @@ type InfoResponse struct {
 	// token's expiry and a failed refresh's error.
 	SkillsGitAuthMint *skills.BootSecretStatus `json:"skillsGitAuthMint,omitempty"`
 	// TenantReconciler is the state of the tenant reconciler when
-	// agent-manager keeps the tenants: its last failure on this replica.
+	// agent-manager keeps the tenants: whether it runs on this replica, and
+	// its last failure.
 	TenantReconciler *tenants.Status `json:"tenantReconciler,omitempty"`
 }
 
