@@ -485,8 +485,9 @@ namespaces, its own copies, the objects of `--kagent-namespace` it copies
 from, and of the Secrets only `--tenant-model-secret`. Outside a cluster, set
 `--tenant-leader-election-namespace`. Every kind it keeps must be served
 (Agent, Harness, ModelConfig, WorkerPool, HelmRelease, OCIRepository and the
-`--tenant-network-policy-flavor` kind): without one, agent-manager stops at
-start.
+`--tenant-network-policy-flavor` kind): without one, the replica that holds
+the Lease stops about two minutes after it starts (it serves until then), and
+so does each replica that takes the Lease after it.
 
 - always: the agent chart's OCIRepository, the `--helmrelease-service-account`
   ServiceAccount with a RoleBinding to `agent-platform-tenant-flux` (the Helm
