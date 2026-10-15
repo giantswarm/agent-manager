@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	skillsCredential     = "tenant-credential-agent-manager-skills-token"
+	skillsCredential     = "tenant-credential-agent-manager-skills-token" // #nosec G101 -- a Secret name, not a credential
 	skillsCredentialPrev = "agent-manager-skills-token"
 )
 
