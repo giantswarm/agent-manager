@@ -557,6 +557,41 @@ func TestValidateCreateIsADryRun(t *testing.T) {
 	assert.Len(t, hrs.Items, 1, "validate writes nothing")
 }
 
+func TestCreateChecksCreateAccessBeforeTheName(t *testing.T) {
+	ctx := t.Context()
+	spec := func(name string) Spec {
+		return Spec{Name: name, ModelConfig: "default-model-config", Toolset: []string{"preset:read-only"}}
+	}
+
+	// A caller with create still hears that the name is taken.
+	f := seeded(t)
+	_, err := f.svc.Create(ctx, spec("verifier"))
+	require.ErrorIs(t, err, ErrConflict)
+
+	// A caller who may read but not create gets 403 for a taken name and a
+	// free one alike, and the review answers the same without naming the clash.
+	f = seeded(t)
+	allowCreate(f.typed, func(string) bool { return false })
+	for _, name := range []string{"verifier", "fresh"} {
+		_, err := f.svc.Create(ctx, spec(name))
+		require.ErrorIs(t, err, ErrForbidden, name)
+		assert.NotErrorIs(t, err, ErrConflict, name)
+		assert.Contains(t, err.Error(), "may not create HelmReleases in namespace kagent", name)
+
+		res, err := f.svc.ValidateCreate(ctx, spec(name))
+		require.NoError(t, err, name)
+		assert.False(t, res.Valid, name)
+		joined := strings.Join(res.Errors, "\n")
+		assert.Contains(t, joined, "may not create HelmReleases in namespace kagent", name)
+		assert.NotContains(t, joined, "already exists", name)
+		assert.Empty(t, res.Notes, name)
+		assert.Contains(t, res.Manifests.HelmRelease, "kind: HelmRelease", name)
+	}
+	hrs, err := f.dyn.Resource(hrGVR).Namespace("kagent").List(ctx, metav1.ListOptions{})
+	require.NoError(t, err)
+	assert.Len(t, hrs.Items, 1, "nothing was written")
+}
+
 func TestValidateCreateChecksTheName(t *testing.T) {
 	f := seeded(t)
 	ctx := t.Context()

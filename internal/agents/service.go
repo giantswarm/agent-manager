@@ -776,16 +776,30 @@ func (s *Service) ValidateCreate(ctx context.Context, spec Spec) (*ValidateResul
 	if err := rejectRemoved(spec.removed()...); err != nil {
 		return nil, err
 	}
-	if _, err := s.checkMode(spec.WriteOptions); err != nil {
+	mode, err := s.checkMode(spec.WriteOptions)
+	if err != nil {
 		return nil, err
 	}
 	st, err := s.site(ctx, spec.Location)
 	if err != nil {
 		return nil, err
 	}
+	// A caller who may not create is told so as a violation, with the
+	// manifests the review page shows, and nothing about the name.
+	var refused error
+	if mode == ModeApply {
+		if err := s.requireCreate(ctx, st, spec.Name); errorsIs(err, ErrForbidden) {
+			refused = err
+		} else if err != nil {
+			return nil, err
+		}
+	}
 	ns := st.ns()
 	spec.Namespace = ns
 	res := &ValidateResult{Mode: "create"}
+	if refused != nil {
+		res.addError(refused)
+	}
 	for _, e := range checkSpec(spec) {
 		res.addError(e)
 	}
@@ -805,12 +819,16 @@ func (s *Service) ValidateCreate(ctx context.Context, spec Spec) (*ValidateResul
 		}
 		res.addError(err)
 	}
-	if err := s.requireFreeName(ctx, st, spec.Name); errorsIs(err, ErrConflict) {
-		res.addError(err)
-	} else if err != nil {
-		// A read the caller may not make, or a transient one, leaves the
-		// name unchecked; create_agent still refuses a taken name.
-		res.Notes = append(res.Notes, fmt.Sprintf("the name %q could not be checked for a clash: %v", spec.Name, err))
+	// Without create the name stays unchecked: the answer must not tell
+	// whether it is taken.
+	if refused == nil {
+		if err := s.requireFreeName(ctx, st, spec.Name); errorsIs(err, ErrConflict) {
+			res.addError(err)
+		} else if err != nil {
+			// A read the caller may not make, or a transient one, leaves the
+			// name unchecked; create_agent still refuses a taken name.
+			res.Notes = append(res.Notes, fmt.Sprintf("the name %q could not be checked for a clash: %v", spec.Name, err))
+		}
 	}
 	if err := requireReadableSkills(ctx, s.pinner, spec.Skills); err != nil {
 		res.addError(err)
@@ -837,6 +855,26 @@ func (s *Service) ValidateCreate(ctx context.Context, spec Spec) (*ValidateResul
 	res.Manifests = st.manifests(spec.Name, values)
 	res.Valid = len(res.Errors) == 0
 	return res, nil
+}
+
+// requireCreate fails with forbidden unless the caller may create a
+// HelmRelease in the site's Flux namespace, asked with a
+// SelfSubjectAccessReview. It runs before requireFreeName: a caller who may
+// read the namespace but not create in it gets 403 whether or not the name is
+// taken, never a 409 that names an existing release.
+func (s *Service) requireCreate(ctx context.Context, st *site, name string) error {
+	gvr := s.helmReleaseGVR()
+	review := &authorizationv1.SelfSubjectAccessReview{Spec: authorizationv1.SelfSubjectAccessReviewSpec{
+		ResourceAttributes: &authorizationv1.ResourceAttributes{Namespace: st.fluxNS, Verb: "create", Group: gvr.Group, Resource: gvr.Resource},
+	}}
+	res, err := st.fluxClient.Typed().AuthorizationV1().SelfSubjectAccessReviews().Create(ctx, review, metav1.CreateOptions{})
+	if err != nil {
+		return wrapKube(err, fmt.Sprintf("review create access to HelmReleases in %s", st.fluxNS))
+	}
+	if !res.Status.Allowed {
+		return forbiddenf("the caller may not create HelmReleases in namespace %s, so may not create agent %s", st.fluxNS, st.describe(name))
+	}
+	return nil
 }
 
 // requireFreeName fails when a HelmRelease or an Agent object of that name
@@ -955,6 +993,12 @@ func (s *Service) Create(ctx context.Context, spec Spec) (*CreateResult, error) 
 	}
 	if err := s.requireTargetMuster(st); err != nil {
 		return nil, err
+	}
+	// Mode commit writes as the caller in git, where the repository decides.
+	if mode == ModeApply {
+		if err := s.requireCreate(ctx, st, spec.Name); err != nil {
+			return nil, err
+		}
 	}
 	if err := s.requireFreeName(ctx, st, spec.Name); err != nil {
 		return nil, err

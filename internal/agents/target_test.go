@@ -48,6 +48,7 @@ func newTargetFixture(t *testing.T, targetMusterURL string) *targetFixture {
 		Data:       map[string][]byte{KubeconfigSecretKey: []byte(wcKubeconfig)},
 	}
 	mcTyped := kubefake.NewClientset(secret)
+	allowCreate(mcTyped, func(ns string) bool { return ns == "org-acme" })
 	wcTyped := kubefake.NewClientset()
 	mc := kube.FromInterfaces(f.mc, mcTyped, mcTyped.Discovery())
 	wc := kube.FromInterfaces(f.wc, wcTyped, wcTyped.Discovery())
