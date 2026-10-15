@@ -246,7 +246,7 @@ Two credentials are involved, neither of them a person's token:
   naming one is composed with the current name on its next update,
   `agent-manager migrate` moves every other one once the Secret of the current
   name holds its token, waiting up to `--skills-git-auth-wait` for agent-manager's
-  rollout to create it (a GitOps-owned release gets the diff), and while minting the old Secrets are rendered and filled too,
+  rollout to create and fill it (a GitOps-owned release gets the diff), and while minting the old Secrets are rendered and filled too,
   so an agent not yet moved keeps booting.
 
 A private repository is only for the people who can read it themselves:
