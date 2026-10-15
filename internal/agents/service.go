@@ -1494,13 +1494,24 @@ func (s *Service) Delete(ctx context.Context, loc Location, name string, force b
 
 // sourceToRemove is the shared chart source a delete of hr takes with it —
 // the OCIRepository it renders from when no other release of its namespace
-// references it — or, empty, why it stays.
+// references it and the tenant reconciler does not keep it — or, empty, why
+// it stays.
 func (s *Service) sourceToRemove(ctx context.Context, dyn dynamic.Interface, hr *unstructured.Unstructured) (name, kept string) {
 	ref := chartRefOf(hr)
 	if ref == nil || ref.Kind != kindOCIRepository {
 		return "", "the HelmRelease does not render from an OCIRepository"
 	}
-	others, err := s.otherReferences(ctx, dyn, orDefault(ref.Namespace, hr.GetNamespace()), ref.Name, hr.GetName())
+	sourceNs := orDefault(ref.Namespace, hr.GetNamespace())
+	source, err := dyn.Resource(s.ociRepositoryGVR()).Namespace(sourceNs).Get(ctx, ref.Name, metav1.GetOptions{})
+	if err != nil && !apierrors.IsNotFound(err) {
+		return "", "could not read the OCIRepository: " + err.Error()
+	}
+	if source != nil {
+		if _, ok := source.GetLabels()[tenants.ObjectLabel]; ok {
+			return "", "the tenant reconciler keeps it while the namespace is an organization's"
+		}
+	}
+	others, err := s.otherReferences(ctx, dyn, sourceNs, ref.Name, hr.GetName())
 	if err != nil {
 		return "", "could not list the other HelmReleases of the namespace: " + err.Error()
 	}
