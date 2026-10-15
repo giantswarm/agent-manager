@@ -73,6 +73,31 @@ tests:
           path: metadata.labels["muster.giantswarm.io/type"]
           value: agent-manager
 
+  - it: carries the display name the Dev Portal shows
+    asserts:
+      - equal:
+          path: metadata.annotations["ui.giantswarm.io/display-name"]
+          value: Agent Manager
+
+  - it: takes the display name from muster.mcpServer.displayName
+    set:
+      muster:
+        mcpServer:
+          displayName: Agents
+    asserts:
+      - equal:
+          path: metadata.annotations["ui.giantswarm.io/display-name"]
+          value: Agents
+
+  - it: renders no annotations with an empty display name
+    set:
+      muster:
+        mcpServer:
+          displayName: ""
+    asserts:
+      - notExists:
+          path: metadata.annotations
+
   - it: pins the GitHub App and forwards the identity with github.enabled
     set:
       github:
