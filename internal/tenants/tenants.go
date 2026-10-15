@@ -669,7 +669,7 @@ func (r *Reconciler) create(ctx context.Context, obj client.Object, kind string)
 }
 
 // ensure creates obj, or brings the reconciler's own copy back to it when
-// same(copy's spec, obj's spec) is false. An object of that name the
+// same(copy's spec, obj's spec) is false or its labels differ. An object of that name the
 // reconciler did not write is left alone.
 func (r *Reconciler) ensure(ctx context.Context, ns, scope string, obj *unstructured.Unstructured, from string, same func(have, want any) bool) error {
 	labels := stamp(obj, ns, scope, from)

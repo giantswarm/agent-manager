@@ -319,7 +319,7 @@ func TestTenantReconcilerEnvtest(t *testing.T) {
 			// What agent-platform-tenant-workerpool-copy admits: the spec of
 			// the platform pool, the server's defaults included, but replicas.
 			want := c.get(t, poolGVR, "kagent", "kagent-default").Object["spec"].(map[string]any)
-			want["replicas"] = int64(1)
+			want["replicas"] = c.config.WorkerPoolReplicas
 			assert.Equal(t, want, c.get(t, poolGVR, ns, "kagent-default").Object["spec"])
 		}
 	})
