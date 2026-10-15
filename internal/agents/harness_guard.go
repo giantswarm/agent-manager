@@ -1,35 +1,77 @@
 package agents
 
 import (
+	"context"
+	"fmt"
 	"slices"
 	"strings"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
-// An agent on a Harness whose runtime is `claude` (spec.claude) runs Claude
-// Code with Bash in a sandbox: its network is the platform's list for its
-// toolchain. agent-manager writes that list at write time, on create_agent,
-// update_agent and validate_agent, on the values it writes: a HelmRelease
-// applied directly bypasses it. Which muster tools the agent reaches is its
-// toolset, the person's choice as on any other agent. An agent on any other
-// Harness is not touched.
+// An agent on a Harness that does not run the `kagent` runtime (spec.claude,
+// spec.codex, spec.byo, or any runtime added later) is a coding agent: it
+// runs a coding CLI with a shell in a sandbox, and its network is the
+// platform's list for its Harness. agent-manager writes that list at write
+// time, on create_agent, update_agent and validate_agent, on the values it
+// writes: a HelmRelease applied directly bypasses it. Which muster tools the
+// agent reaches is its toolset, the person's choice as on any other agent. An
+// agent on a kagent Harness is not touched.
 
-// ClaudeRuntime is the Harness spec field that marks Claude Code.
-const ClaudeRuntime = "claude"
+// The runtimes of a Harness: the one key of its spec besides the workload,
+// the environment and the Substrate policy.
+const (
+	KagentRuntime = "kagent"
+	ClaudeRuntime = "claude"
+	CodexRuntime  = "codex"
+	BYORuntime    = "byo"
+)
+
+// harnessSpecFields are the Harness spec fields that are no runtime.
+var harnessSpecFields = map[string]bool{"workload": true, "env": true, "substrate": true}
 
 // egressNoteHeading opens the egress note agent-manager composes into a
-// claude Harness agent's system prompt; everything from it on is the
-// platform's and is rewritten on every write.
+// coding agent's system prompt; everything from it on is the platform's and
+// is rewritten on every write.
 const egressNoteHeading = "## Network access (set by the platform)"
 
-// isClaudeHarness reports whether a Harness object runs Claude Code.
-func isClaudeHarness(h *unstructured.Unstructured) bool {
+// harnessRuntime is the runtime a Harness object runs, empty for none (the
+// platform Harness absent).
+func harnessRuntime(h *unstructured.Unstructured) string {
 	if h == nil {
-		return false
+		return ""
 	}
-	_, found, _ := unstructured.NestedMap(h.Object, "spec", ClaudeRuntime)
-	return found
+	spec, _, _ := unstructured.NestedMap(h.Object, "spec")
+	keys := make([]string, 0, 1)
+	for key := range spec {
+		if !harnessSpecFields[key] {
+			keys = append(keys, key)
+		}
+	}
+	slices.Sort(keys)
+	if len(keys) == 0 {
+		return ""
+	}
+	return keys[0]
+}
+
+// isCodingRuntime reports whether a Harness runtime runs a coding CLI: every
+// runtime but kagent's.
+func isCodingRuntime(runtime string) bool {
+	return runtime != "" && runtime != KagentRuntime
+}
+
+// runtimeLabel names what a coding runtime runs, in messages.
+func runtimeLabel(runtime string) string {
+	switch runtime {
+	case ClaudeRuntime:
+		return "Claude Code"
+	case CodexRuntime:
+		return "Codex"
+	case BYORuntime:
+		return "a coding agent of its own image (byo)"
+	}
+	return "a coding agent (runtime " + runtime + ")"
 }
 
 // harnessEgress is the platform's origin list for a Harness: what a coding
@@ -41,14 +83,14 @@ func (s *Service) harnessEgress(harness string) (origins []string, listed bool) 
 	return slices.Clone(origins), listed
 }
 
-// guardClaude checks and completes the values of an agent on a claude
+// guardCoding checks and completes the values of an agent on a coding
 // Harness: the egress becomes the Harness's list (requested origins outside
-// it are refused) and the system prompt carries the egress note. requested is
-// the egress the caller asked for, nil when the write leaves it alone. A
-// Harness the platform has no origin entry for is refused: its agents would
-// silently reach nothing. Every refusal is returned; values are completed even
-// when one is.
-func (s *Service) guardClaude(harness string, values map[string]any, requested []string) []error {
+// it are refused), the system prompt carries the egress note, and the model
+// and plugins are ones the runtime takes. requested is the egress the caller
+// asked for, nil when the write leaves it alone. A Harness the platform has
+// no origin entry for is refused: its agents would silently reach nothing.
+// Every refusal is returned; values are completed even when one is.
+func (s *Service) guardCoding(ctx context.Context, st *site, harness, runtime string, values map[string]any, requested []string) ([]error, error) {
 	var errs []error
 	agentBlock, _ := values["agent"].(map[string]any)
 	if agentBlock == nil {
@@ -58,11 +100,11 @@ func (s *Service) guardClaude(harness string, values map[string]any, requested [
 
 	allowed, listed := s.harnessEgress(harness)
 	if !listed {
-		errs = append(errs, invalidf("Harness %s runs Claude Code but agent-manager has no egress entry for it (chart harness.egress.%s, --harness-egress): an agent on it would reach no origin; the platform adds the entry, an empty list when it should reach none", harness, harness))
+		errs = append(errs, invalidf("Harness %s runs %s but agent-manager has no egress entry for it (chart harness.egress.%s, --harness-egress): an agent on it would reach no origin; the platform adds the entry, an empty list when it should reach none", harness, runtimeLabel(runtime), harness))
 	}
 	for _, origin := range requested {
 		if !slices.Contains(allowed, origin) {
-			errs = append(errs, invalidf("egress origin %q is not one of Harness %s's origins (%s): a claude Harness agent reaches its toolchain's origins only, which the platform sets", origin, harness, listOrNone(allowed)))
+			errs = append(errs, invalidf("egress origin %q is not one of Harness %s's origins (%s): a coding agent reaches its Harness's origins only, which the platform sets", origin, harness, listOrNone(allowed)))
 		}
 	}
 	if len(allowed) > 0 {
@@ -77,22 +119,119 @@ func (s *Service) guardClaude(harness string, values map[string]any, requested [
 		errs = append(errs, invalidf("systemMessage with the platform's egress note: %v", err))
 	}
 
-	return append(errs, refuseApproval(values)...)
+	errs = append(errs, refuseApproval(runtime, values)...)
+	if err := s.checkModelProtocol(ctx, st, harness, runtime, values); err != nil {
+		if !isDomainError(err) {
+			return nil, err
+		}
+		errs = append(errs, err)
+	}
+	return append(errs, s.checkPlugins(ctx, harness, runtime, values)...), nil
 }
 
 // refuseApproval refuses a requireApproval binding and tool bindings beside
-// muster's: a claude Harness agent reaches its tools through muster only, and
-// a process Claude Code starts can answer an approval itself.
-func refuseApproval(values map[string]any) []error {
+// muster's: a coding agent reaches its tools through muster only, and a
+// process its CLI starts can answer an approval itself.
+func refuseApproval(runtime string, values map[string]any) []error {
 	var errs []error
 	if on, _, _ := unstructured.NestedBool(values, "muster", "requireApproval"); on {
-		errs = append(errs, invalidf("muster.requireApproval: a claude Harness agent takes no requireApproval binding: approval is no boundary against Claude Code, which can answer it from its own sandbox; the agent reaches its tools through muster only, which authorizes every call as the person"))
+		errs = append(errs, invalidf("muster.requireApproval: a coding agent takes no requireApproval binding: approval is no boundary against %s, which can answer it from its own sandbox; the agent reaches its tools through muster only, which authorizes every call as the person", runtimeLabel(runtime)))
 	}
 	if extra, _ := values["extraTools"].([]any); len(extra) > 0 {
-		errs = append(errs, invalidf("extraTools: a claude Harness agent reaches tools through muster only (its toolset); drop the %d extra binding(s)", len(extra)))
+		errs = append(errs, invalidf("extraTools: a coding agent reaches tools through muster only (its toolset); drop the %d extra binding(s)", len(extra)))
 	}
 	if tools, found, _ := unstructured.NestedFieldNoCopy(values, "extraAgentSpec", "tools"); found && tools != nil {
-		errs = append(errs, invalidf("extraAgentSpec.tools: a claude Harness agent reaches tools through muster only (its toolset)"))
+		errs = append(errs, invalidf("extraAgentSpec.tools: a coding agent reaches tools through muster only (its toolset)"))
+	}
+	return errs
+}
+
+// The ModelConfig providers and the OpenAI API format the runtimes' compilers
+// accept.
+const (
+	providerAnthropic         = "Anthropic"
+	providerAnthropicVertexAI = "AnthropicVertexAI"
+	providerBedrock           = "Bedrock"
+	providerOpenAI            = "OpenAI"
+	openAIAPIFormatResponses  = "responses"
+)
+
+// checkModelProtocol refuses a ModelConfig the Harness's runtime cannot
+// reach, by the rules its compiler in kagent enforces: claude speaks the
+// Anthropic protocol (Anthropic, Bedrock, AnthropicVertexAI); codex the
+// OpenAI Responses API (OpenAI with apiFormat responses, Bedrock gpt-*
+// models). A byo runtime's protocol is its image's, unchecked here. A
+// ModelConfig that is not there is requireModelConfig's to report.
+func (s *Service) checkModelProtocol(ctx context.Context, st *site, harness, runtime string, values map[string]any) error {
+	if runtime != ClaudeRuntime && runtime != CodexRuntime {
+		return nil
+	}
+	name, _, _ := unstructured.NestedString(values, "modelConfig", "name")
+	if name == "" {
+		return nil
+	}
+	mc, err := s.getObject(ctx, st.agent, s.modelConfigGVR(), st.ns(), name, "modelconfig")
+	if err != nil || mc == nil {
+		return err
+	}
+	provider, _, _ := unstructured.NestedString(mc.Object, "spec", "provider")
+	model, _, _ := unstructured.NestedString(mc.Object, "spec", "model")
+	refuse := func(reason string) error {
+		return invalidf("modelConfig %s (provider %s, model %s): Harness %s runs %s, which %s", name, provider, model, harness, runtimeLabel(runtime), reason)
+	}
+	switch runtime {
+	case ClaudeRuntime:
+		switch provider {
+		case providerAnthropic, providerBedrock, providerAnthropicVertexAI:
+			return nil
+		}
+		return refuse("speaks the Anthropic protocol only: pick an Anthropic, Bedrock or AnthropicVertexAI ModelConfig")
+	default: // codex
+		switch provider {
+		case providerOpenAI:
+			if format, _, _ := unstructured.NestedString(mc.Object, "spec", "openAI", "apiFormat"); format != openAIAPIFormatResponses {
+				return refuse(fmt.Sprintf("speaks the OpenAI Responses API only: the ModelConfig's openAI.apiFormat is %q, not %q", orDefault(format, "chatCompletions"), openAIAPIFormatResponses))
+			}
+			return nil
+		case providerBedrock:
+			if !strings.HasPrefix(model, "gpt-") {
+				return refuse("reaches only OpenAI gpt-* models on Bedrock")
+			}
+			return nil
+		}
+		return refuse("speaks the OpenAI Responses API only: pick an OpenAI ModelConfig with openAI.apiFormat responses, or a Bedrock gpt-* one")
+	}
+}
+
+// PluginFormats tells a Claude-format plugin (a .claude-plugin/plugin.json
+// manifest and no root plugin.json) from an Agent Plugins one. The skills
+// resolver implements it for git sources.
+type PluginFormats interface {
+	// ClaudeFormatPlugin reports whether the plugin at path of repoURL at
+	// commit is Claude-format.
+	ClaudeFormatPlugin(ctx context.Context, repoURL, commit, path string) (bool, error)
+}
+
+// checkPlugins refuses a Claude-format plugin on codex, which reads Agent
+// Plugins only and fails such an agent at boot; it is never converted. An OCI
+// plugin's format is known only once pulled: the runtime reports it.
+func (s *Service) checkPlugins(ctx context.Context, harness, runtime string, values map[string]any) []error {
+	formats, ok := s.pinner.(PluginFormats)
+	if runtime != CodexRuntime || !ok {
+		return nil
+	}
+	var errs []error
+	for i, p := range pluginsFromValues(values) {
+		if p.Git == nil {
+			continue
+		}
+		claude, err := formats.ClaudeFormatPlugin(ctx, p.Git.URL, p.Git.Commit, p.Path)
+		switch {
+		case err != nil:
+			errs = append(errs, invalidf("plugins[%d] (%s): its format could not be checked for Harness %s, which reads Agent Plugins only: %v", i, p.Git.URL, harness, err))
+		case claude:
+			errs = append(errs, invalidf("plugins[%d] (%s) is a Claude-format plugin (.claude-plugin/plugin.json): Harness %s runs Codex, which reads the Agent Plugins format only (plugin.json at the plugin root); drop it or use its skills as skills", i, p.Git.URL, harness))
+		}
 	}
 	return errs
 }

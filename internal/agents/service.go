@@ -58,10 +58,10 @@ type Config struct {
 	// Sessions is the kagent controller the session operations call through
 	// agentgateway as the caller. Nil: they are refused as unsupported.
 	Sessions SessionClient
-	// HarnessEgress is the platform's origin list per claude Harness, by
-	// Harness name: written into a coding agent's egress, and the only
-	// origins it may name. A claude Harness without an entry is refused; an
-	// empty list reaches none.
+	// HarnessEgress is the platform's origin list per coding Harness (any
+	// runtime but kagent), by Harness name: written into a coding agent's
+	// egress, and the only origins it may name. A coding Harness without an
+	// entry is refused; an empty list reaches none.
 	HarnessEgress map[string][]string
 	// Tenants are the tenant namespaces the tenant reconciler keeps, managed
 	// beside ManagedNamespaces. Nil: no tenants.
@@ -728,45 +728,45 @@ func checkSpec(spec Spec) []error {
 	return errs
 }
 
-// requireHarness checks the Harness a create names and returns it, with
-// whether it runs Claude Code.
-func (s *Service) requireHarness(ctx context.Context, dyn dynamic.Interface, ns string, spec Spec) (string, bool, error) {
+// requireHarness checks the Harness a create names and returns it, with its
+// runtime.
+func (s *Service) requireHarness(ctx context.Context, dyn dynamic.Interface, ns string, spec Spec) (string, string, error) {
 	harness, obj, err := s.harnessFor(ctx, dyn, ns, spec.Harness)
-	return harness, isClaudeHarness(obj), err
+	return harness, harnessRuntime(obj), err
 }
 
 // releaseHarness is the Harness an existing release runs on (its
-// agent.harness value, else the platform's), with whether it runs Claude
-// Code. A Harness the release names that is gone is refused: whether its
-// guards apply cannot be told.
-func (s *Service) releaseHarness(ctx context.Context, st *site, values map[string]any) (string, bool, error) {
+// agent.harness value, else the platform's), with its runtime. A Harness the
+// release names that is gone is refused: whether its guards apply cannot be
+// told.
+func (s *Service) releaseHarness(ctx context.Context, st *site, values map[string]any) (string, string, error) {
 	agentBlock, _ := values["agent"].(map[string]any)
 	name, _ := agentBlock["harness"].(string)
 	if name == s.cfg.Compose.HarnessName {
 		name = ""
 	}
 	harness, obj, err := s.harnessFor(ctx, st.agent, st.ns(), name)
-	return harness, isClaudeHarness(obj), err
+	return harness, harnessRuntime(obj), err
 }
 
-// guardUpdate applies the claude Harness guards to an update's merged values;
-// nil for an agent on any other Harness.
+// guardUpdate applies the coding-agent guards to an update's merged values;
+// nil for an agent on a kagent Harness.
 func (s *Service) guardUpdate(ctx context.Context, st *site, upd Update, after map[string]any) ([]error, error) {
-	harness, claude, err := s.releaseHarness(ctx, st, after)
+	harness, runtime, err := s.releaseHarness(ctx, st, after)
 	if err != nil {
 		if isDomainError(err) {
 			return []error{err}, nil
 		}
 		return nil, err
 	}
-	if !claude {
+	if !isCodingRuntime(runtime) {
 		return nil, nil
 	}
 	var requested []string
 	if upd.Egress != nil {
 		requested = *upd.Egress
 	}
-	return s.guardClaude(harness, after, requested), nil
+	return s.guardCoding(ctx, st, harness, runtime, after, requested)
 }
 
 // ValidateCreate is create_agent without the write. It takes the write's mode
@@ -798,7 +798,7 @@ func (s *Service) ValidateCreate(ctx context.Context, spec Spec) (*ValidateResul
 		}
 		res.addError(err)
 	}
-	harness, claude, err := s.requireHarness(ctx, st.agent, ns, spec)
+	harness, runtime, err := s.requireHarness(ctx, st.agent, ns, spec)
 	if err != nil {
 		if !isDomainError(err) {
 			return nil, err
@@ -822,8 +822,12 @@ func (s *Service) ValidateCreate(ctx context.Context, spec Spec) (*ValidateResul
 	}
 	values := BuildValues(spec, st.compose)
 	setCreator(values, identity.Caller(ctx))
-	if claude {
-		for _, e := range s.guardClaude(harness, values, spec.Egress) {
+	if isCodingRuntime(runtime) {
+		errs, err := s.guardCoding(ctx, st, harness, runtime, values, spec.Egress)
+		if err != nil {
+			return nil, err
+		}
+		for _, e := range errs {
 			res.addError(e)
 		}
 	}
@@ -958,7 +962,7 @@ func (s *Service) Create(ctx context.Context, spec Spec) (*CreateResult, error) 
 	if err := s.requireModelConfig(ctx, st, spec.ModelConfig); err != nil {
 		return nil, err
 	}
-	harness, claude, err := s.requireHarness(ctx, st.agent, ns, spec)
+	harness, runtime, err := s.requireHarness(ctx, st.agent, ns, spec)
 	if err != nil {
 		return nil, err
 	}
@@ -970,8 +974,12 @@ func (s *Service) Create(ctx context.Context, spec Spec) (*CreateResult, error) 
 	}
 	values := BuildValues(spec, st.compose)
 	setCreator(values, identity.Caller(ctx))
-	if claude {
-		if errs := s.guardClaude(harness, values, spec.Egress); len(errs) > 0 {
+	if isCodingRuntime(runtime) {
+		errs, err := s.guardCoding(ctx, st, harness, runtime, values, spec.Egress)
+		if err != nil {
+			return nil, err
+		}
+		if len(errs) > 0 {
 			return nil, errs[0]
 		}
 	}

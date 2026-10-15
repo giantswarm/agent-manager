@@ -130,35 +130,46 @@ platform-admin owned: agent-manager only reads them.
 An agent runs on the platform Harness (`kagent`, the Go ADK) unless
 `create_agent` names another Harness of the namespace in `harness`; the name
 must be a Harness that exists there (the refusal lists the ones that do) and
-it is fixed at create. `claude` is a Harness whose runtime is Claude Code: the
-agent then runs as a Claude Code session and its skills and plugins are
-Claude Code skills and plugins. Per-turn bounds (a budget, a turn cap) are the
-Harness's (`Harness.spec.claude.limits`, platform-admin owned), not the
-agent's.
+it is fixed at create. A Harness's runtime is the one key of its spec:
+`kagent` (the Go ADK), `claude` (Claude Code), `codex` (Codex) or `byo` (an
+image of its own, such as omp). On every runtime but `kagent` the agent is a
+coding agent: it runs a coding CLI as a session, and its skills and plugins
+are that CLI's.
 
-### Guards on a claude Harness
+### Guards on a coding Harness
 
-A coding agent runs Claude Code with Bash in its sandbox, so
+A coding agent runs a coding CLI with a shell in its sandbox, so
 `validate_agent`, `create_agent` and `update_agent` hold an agent on a
-Harness with `spec.claude` to these rules (an agent on any other Harness is
-not touched). Its toolset is the person's choice, as on any other agent: any
-muster tool, preset, server or workflow, and muster authorizes every call as
-the person.
+Harness whose runtime is not `kagent` to these rules, so a Harness added later
+inherits them (an agent on a kagent Harness is not touched). Its toolset is
+the person's choice, as on any other agent: any muster tool, preset, server or
+workflow, write tools included, and muster authorizes every call as the
+person.
 
 - **No `requireApproval` and no bindings beside muster's**
   (`muster.requireApproval`, `extraTools`, `extraAgentSpec.tools`): it
   reaches its tools through muster only, and approval is no boundary
-  against Claude Code, which can answer it from its own sandbox.
+  against a coding CLI, which can answer it from its own sandbox.
 - **The platform's egress.** `--harness-egress` (chart `harness.egress`)
-  lists the origins per claude Harness, the installation's forge and git hosts
+  lists the origins per coding Harness, the installation's forge and git hosts
   and the toolchain's registries. agent-manager writes that list into
   `agent.egress` (the Agent's `spec.egress`) on every write and refuses any
-  other origin. A claude Harness without an entry is refused with a message
+  other origin. A coding Harness without an entry is refused with a message
   naming the missing entry; an empty list is how it reaches no origin.
 - **The egress note.** The system prompt ends with a short section, from its
   heading `## Network access (set by the platform)` on, naming those origins
   and saying that a denied request is policy, not an outage; it is rewritten
   on every write.
+- **A model the runtime reaches**, by the rules kagent's compiler for it
+  enforces: on `claude` an Anthropic, Bedrock or AnthropicVertexAI
+  ModelConfig; on `codex` an OpenAI ModelConfig with `openAI.apiFormat:
+  responses` or a Bedrock `gpt-*` one. A `byo` runtime's model is its image's
+  to check (omp takes the Anthropic-protocol ModelConfig claude uses).
+- **No Claude-format plugin on `codex`**: a git plugin with a
+  `.claude-plugin/plugin.json` manifest and no root `plugin.json` is refused,
+  never converted; Codex reads the Agent Plugins format only. An OCI plugin's
+  format is reported by the runtime. MCP servers on `codex` speak Streamable
+  HTTP only; a coding agent binds none but muster's.
 
 The guards are write-time: a HelmRelease applied directly bypasses them.
 
