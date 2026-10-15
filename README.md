@@ -147,12 +147,14 @@ the person.
 
 - **No `requireApproval` and no bindings beside muster's**
   (`muster.requireApproval`, `extraTools`, `extraAgentSpec.tools`): it
-  reaches its tools through muster only.
+  reaches its tools through muster only, and approval is no boundary
+  against Claude Code, which can answer it from its own sandbox.
 - **The platform's egress.** `--harness-egress` (chart `harness.egress`)
   lists the origins per claude Harness, the installation's forge and git hosts
   and the toolchain's registries. agent-manager writes that list into
   `agent.egress` (the Agent's `spec.egress`) on every write and refuses any
-  other origin; a claude Harness without an entry reaches none.
+  other origin. A claude Harness without an entry is refused with a message
+  naming the missing entry; an empty list is how it reaches no origin.
 - **The egress note.** The system prompt ends with a short section, from its
   heading `## Network access (set by the platform)` on, naming those origins
   and saying that a denied request is policy, not an outage; it is rewritten

@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `create_agent`, `update_agent` and `validate_agent` refuse an agent on a claude Harness that `--harness-egress` (chart `harness.egress`) has no entry for, naming the missing entry, instead of silently giving it no origins; an empty list still means no origin. The Helm test covers every default origin of `claude-go` (`sum.golang.org` included) and `claude-node`. The `requireApproval` refusal says why: approval is no boundary against Claude Code. A test proves kagent's Sandbox tools pass the guard. ([#148](https://github.com/giantswarm/agent-manager/issues/148), [#149](https://github.com/giantswarm/agent-manager/issues/149))
 - `start_session` sends a session's first message once per `requestId`: the message id is derived from the `requestId`, and a retry whose session's first turn already carries it answers that turn's latest state as `turn` (without its history) and sends nothing, so a retry after a lost answer starts no second, paid turn. ([#136](https://github.com/giantswarm/agent-manager/issues/136))
 - The MCP endpoint refuses a request body larger than 1 MiB, the REST API's bound, before mcp-go reads it whole (CVE-2026-108859, no fixed mcp-go release yet; the scan ignores it until 2026-11-12). ([#139](https://github.com/giantswarm/agent-manager/issues/139))
 

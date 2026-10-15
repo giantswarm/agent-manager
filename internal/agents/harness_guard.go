@@ -33,16 +33,21 @@ func isClaudeHarness(h *unstructured.Unstructured) bool {
 }
 
 // harnessEgress is the platform's origin list for a Harness: what a coding
-// agent on it may reach besides what its revision compiles.
-func (s *Service) harnessEgress(harness string) []string {
-	return slices.Clone(s.cfg.HarnessEgress[harness])
+// agent on it may reach besides what its revision compiles. listed is false
+// when the platform has no entry for the Harness at all, which an empty list
+// (no origin on purpose) is not.
+func (s *Service) harnessEgress(harness string) (origins []string, listed bool) {
+	origins, listed = s.cfg.HarnessEgress[harness]
+	return slices.Clone(origins), listed
 }
 
 // guardClaude checks and completes the values of an agent on a claude
 // Harness: the egress becomes the Harness's list (requested origins outside
 // it are refused) and the system prompt carries the egress note. requested is
-// the egress the caller asked for, nil when the write leaves it alone. Every
-// refusal is returned; values are completed even when one is.
+// the egress the caller asked for, nil when the write leaves it alone. A
+// Harness the platform has no origin entry for is refused: its agents would
+// silently reach nothing. Every refusal is returned; values are completed even
+// when one is.
 func (s *Service) guardClaude(harness string, values map[string]any, requested []string) []error {
 	var errs []error
 	agentBlock, _ := values["agent"].(map[string]any)
@@ -51,7 +56,10 @@ func (s *Service) guardClaude(harness string, values map[string]any, requested [
 		values["agent"] = agentBlock
 	}
 
-	allowed := s.harnessEgress(harness)
+	allowed, listed := s.harnessEgress(harness)
+	if !listed {
+		errs = append(errs, invalidf("Harness %s runs Claude Code but agent-manager has no egress entry for it (chart harness.egress.%s, --harness-egress): an agent on it would reach no origin; the platform adds the entry, an empty list when it should reach none", harness, harness))
+	}
 	for _, origin := range requested {
 		if !slices.Contains(allowed, origin) {
 			errs = append(errs, invalidf("egress origin %q is not one of Harness %s's origins (%s): a claude Harness agent reaches its toolchain's origins only, which the platform sets", origin, harness, listOrNone(allowed)))
@@ -73,11 +81,12 @@ func (s *Service) guardClaude(harness string, values map[string]any, requested [
 }
 
 // refuseApproval refuses a requireApproval binding and tool bindings beside
-// muster's: a claude Harness agent reaches its tools through muster only.
+// muster's: a claude Harness agent reaches its tools through muster only, and
+// a process Claude Code starts can answer an approval itself.
 func refuseApproval(values map[string]any) []error {
 	var errs []error
 	if on, _, _ := unstructured.NestedBool(values, "muster", "requireApproval"); on {
-		errs = append(errs, invalidf("muster.requireApproval: a claude Harness agent takes no requireApproval binding: it reaches its tools through muster only"))
+		errs = append(errs, invalidf("muster.requireApproval: a claude Harness agent takes no requireApproval binding: approval is no boundary against Claude Code, which can answer it from its own sandbox; the agent reaches its tools through muster only, which authorizes every call as the person"))
 	}
 	if extra, _ := values["extraTools"].([]any); len(extra) > 0 {
 		errs = append(errs, invalidf("extraTools: a claude Harness agent reaches tools through muster only (its toolset); drop the %d extra binding(s)", len(extra)))

@@ -66,6 +66,9 @@ func TestClaudeHarnessTakesAnyToolset(t *testing.T) {
 		{"preset:agent-platform"},
 		{"preset:read-only", "tool:x_kubernetes_delete"},
 		{"tool:x_agent-manager_create_agent", "tool:x_kagent_invoke_agent_instance"},
+		// kagent's Sandbox tools, none of which carries readOnlyHint.
+		{"tool:x_kagent_list_sandbox_templates", "tool:x_kagent_create_sandbox", "tool:x_kagent_write_sandbox_file", "tool:x_kagent_start_sandbox_process", "tool:x_kagent_get_sandbox_process", "tool:x_kagent_read_sandbox_outputs", "tool:x_kagent_read_sandbox_file", "tool:x_kagent_suspend_sandbox", "tool:x_kagent_resume_sandbox", "tool:x_kagent_delete_sandbox"},
+		{"server:kagent"},
 		{"server:github", "workflow:incident-triage"},
 	} {
 		t.Run(strings.Join(toolset, ","), func(t *testing.T) {
@@ -103,6 +106,7 @@ func TestClaudeHarnessRefusesRequireApproval(t *testing.T) {
 	errs := f.svc.guardClaude("claude", values, nil)
 	require.Len(t, errs, 1)
 	assert.Contains(t, errs[0].Error(), "takes no requireApproval binding")
+	assert.Contains(t, errs[0].Error(), "no boundary against Claude Code")
 
 	withApproval := coderValues("preset:read-only")
 	withApproval["muster"] = map[string]any{"requireApproval": true}
@@ -147,13 +151,44 @@ func TestClaudeHarnessEgressIsTheHarnessList(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []any{"https://github.com", "https://*.githubusercontent.com"}, res.After["agent"].(map[string]any)["egress"])
 
-	// A claude Harness the platform lists no origins for reaches none.
-	mustCreate(t, f, f.svc.harnessGVR(), harness("kagent", "claude-go", "claude"))
+	// A claude Harness the platform lists an empty list for reaches none.
+	f.svc.cfg.HarnessEgress["claude-offline"] = []string{}
+	mustCreate(t, f, f.svc.harnessGVR(), harness("kagent", "claude-offline", "claude"))
 	spec = coderSpec("preset:read-only")
-	spec.Name, spec.Harness, spec.Egress = "gopher", "claude-go", []string{"https://proxy.golang.org"}
+	spec.Name, spec.Harness = "hermit", "claude-offline"
+	_, err = f.svc.Create(ctx, spec)
+	require.NoError(t, err)
+	assert.NotContains(t, mustValues(mustGet(t, f, "hermit"))["agent"].(map[string]any), "egress")
+	spec.Name, spec.Egress = "hermit-2", []string{"https://proxy.golang.org"}
 	dry, err = f.svc.ValidateCreate(ctx, spec)
 	require.NoError(t, err)
-	assert.True(t, containsLine(dry.Errors, "is not one of Harness claude-go's origins (none)"), dry.Errors)
+	assert.True(t, containsLine(dry.Errors, "is not one of Harness claude-offline's origins (none)"), dry.Errors)
+}
+
+// A claude Harness the platform has no egress entry for is refused with a
+// message naming the missing entry, never silently given no origins.
+func TestClaudeHarnessWithoutEgressEntryIsRefused(t *testing.T) {
+	const missing = "Harness claude-go runs Claude Code but agent-manager has no egress entry for it (chart harness.egress.claude-go"
+	f, ctx := claudeFixture(t, nil)
+	mustCreate(t, f, f.svc.harnessGVR(), harness("kagent", "claude-go", "claude"))
+	spec := coderSpec("preset:read-only")
+	spec.Name, spec.Harness = "gopher", "claude-go"
+
+	dry, err := f.svc.ValidateCreate(ctx, spec)
+	require.NoError(t, err)
+	assert.False(t, dry.Valid)
+	assert.True(t, containsLine(dry.Errors, missing), dry.Errors)
+	_, err = f.svc.Create(ctx, spec)
+	require.ErrorIs(t, err, ErrInvalid)
+	assert.Contains(t, err.Error(), missing)
+
+	// A release written elsewhere meets the refusal on update.
+	onGo := coderValues("preset:read-only")
+	onGo["agent"].(map[string]any)["harness"] = "claude-go"
+	mustCreate(t, f, hrGVR, helmRelease("kagent", "coder", onGo, true, nil))
+	_, err = f.svc.Update(ctx, Update{Name: "coder", Description: str("tidy")})
+	require.ErrorIs(t, err, ErrInvalid)
+	assert.Contains(t, err.Error(), missing)
 }
 
 func TestClaudeHarnessSystemPromptCarriesTheEgressNote(t *testing.T) {
