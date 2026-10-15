@@ -3,8 +3,11 @@ package tenants
 import (
 	"context"
 	"log/slog"
+	"net/http"
 	"os"
 	"slices"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -62,6 +65,10 @@ type cluster struct {
 	set *Set
 	// config is the reconciler's Config.
 	config Config
+	// poolUpdates counts the reconciler's update requests of WorkerPools,
+	// no-op updates included (the API server stores those without a new
+	// resourceVersion).
+	poolUpdates atomic.Int64
 }
 
 func (c *cluster) create(t *testing.T, gvr schema.GroupVersionResource, o *unstructured.Unstructured) {
@@ -176,7 +183,16 @@ func startCluster(t *testing.T) *cluster {
 		SyncPeriod:              time.Hour,
 		LeaderElectionNamespace: releaseNamespace,
 	}
-	c.set, err = NewSet(env.as(env.reconciler), c.config, slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	restCfg := env.as(env.reconciler)
+	restCfg.WrapTransport = func(rt http.RoundTripper) http.RoundTripper {
+		return roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			if req.Method == http.MethodPut && strings.Contains(req.URL.Path, "/workerpools/") {
+				c.poolUpdates.Add(1)
+			}
+			return rt.RoundTrip(req)
+		})
+	}
+	c.set, err = NewSet(restCfg, c.config, slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn})))
 	require.NoError(t, err)
 	mgrCtx, cancel := context.WithCancel(context.Background())
 	done, err := c.set.Run(mgrCtx)
@@ -188,6 +204,10 @@ func startCluster(t *testing.T) *cluster {
 	})
 	return c
 }
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
 
 // TestTenantReconcilerEnvtest runs the reconciler on a real kube-apiserver
 // as the chart's ServiceAccount, so every read, watch and write also passes
@@ -268,6 +288,49 @@ func TestTenantReconcilerEnvtest(t *testing.T) {
 		eventually(t, func() bool { return c.serviceAccount(t, "org-a", "kagent-default") }, "the workers' ServiceAccount")
 		eventually(t, func() bool { return c.get(t, mcGVR, "org-a", "default-model-config") != nil }, "the ModelConfig")
 		assert.Equal(t, []byte("sk"), c.secret(t, "org-a", keySecret).Data["ANTHROPIC_API_KEY"])
+	})
+
+	t.Run("a WorkerPool copy is the platform spec but replicas: a field removed there leaves every copy", func(t *testing.T) {
+		pools := c.dyn.Resource(poolGVR).Namespace("kagent")
+		setPlatformPool := func(edit func(spec map[string]any)) {
+			t.Helper()
+			require.NoError(t, retry.RetryOnConflict(retry.DefaultRetry, func() error {
+				pool, err := pools.Get(ctx, "kagent-default", metav1.GetOptions{})
+				if err != nil {
+					return err
+				}
+				edit(pool.Object["spec"].(map[string]any))
+				_, err = pools.Update(ctx, pool, metav1.UpdateOptions{})
+				return err
+			}))
+		}
+		setPlatformPool(func(spec map[string]any) { spec["nodeSelector"] = map[string]any{"pool": "old"} })
+		for _, ns := range []string{"org-a", "org-c"} {
+			eventually(t, func() bool {
+				return field(c.get(t, poolGVR, ns, "kagent-default"), "spec", "nodeSelector", "pool") == "old"
+			}, ns+"'s copy gets the new field")
+		}
+		setPlatformPool(func(spec map[string]any) { delete(spec, "nodeSelector") })
+		for _, ns := range []string{"org-a", "org-c"} {
+			eventually(t, func() bool {
+				_, found, _ := unstructured.NestedFieldNoCopy(c.get(t, poolGVR, ns, "kagent-default").Object, "spec", "nodeSelector")
+				return !found
+			}, ns+"'s copy loses the removed field")
+			// What agent-platform-tenant-workerpool-copy admits: the spec of
+			// the platform pool, the server's defaults included, but replicas.
+			want := c.get(t, poolGVR, "kagent", "kagent-default").Object["spec"].(map[string]any)
+			want["replicas"] = int64(1)
+			assert.Equal(t, want, c.get(t, poolGVR, ns, "kagent-default").Object["spec"])
+		}
+	})
+
+	t.Run("an unchanged platform WorkerPool writes no copy again", func(t *testing.T) {
+		before := c.poolUpdates.Load()
+		for range 3 {
+			_, err := c.set.reconciler().Reconcile(ctx, reconcile.Request{NamespacedName: types.NamespacedName{Name: "org-a"}})
+			require.NoError(t, err)
+		}
+		assert.Equal(t, before, c.poolUpdates.Load(), "the copy and the platform pool both carry the server's defaults")
 	})
 
 	t.Run("a copy that drifts is brought back at once", func(t *testing.T) {
