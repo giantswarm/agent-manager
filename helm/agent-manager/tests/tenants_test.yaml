@@ -38,7 +38,7 @@ tests:
     template: templates/tenants-rbac.yaml
     asserts:
       - hasDocuments:
-          count: 5
+          count: 7
 
   - it: needs oauth.downstream, since a request in a tenant runs as the caller
     template: templates/tenants-rbac.yaml
@@ -97,7 +97,7 @@ tests:
             apiGroups: [""]
             resources: ["secrets"]
             resourceNames: ["kagent-anthropic"]
-            verbs: ["get", "update", "delete"]
+            verbs: ["get", "list", "watch", "update", "delete"]
       - notMatchRegex:
           path: rules[*].verbs[*]
           pattern: ^(escalate|impersonate|\*)$
@@ -106,7 +106,7 @@ tests:
           content:
             apiGroups: ["cilium.io"]
             resources: ["ciliumnetworkpolicies"]
-            verbs: ["get", "create", "update"]
+            verbs: ["get", "list", "watch", "create", "update"]
 
   - it: binds the ClusterRole to the ServiceAccount
     template: templates/tenants-rbac.yaml
@@ -167,6 +167,31 @@ tests:
           path: spec.validationActions
           value: ["Deny"]
 
+  - it: lets the ServiceAccount hold the leader Lease agent-manager-tenants in the release namespace, and no other
+    template: templates/tenants-rbac.yaml
+    release:
+      namespace: agent-platform
+    documentIndex: 5
+    asserts:
+      - isKind:
+          of: Role
+      - equal:
+          path: metadata.namespace
+          value: agent-platform
+      - equal:
+          path: rules
+          value:
+            - apiGroups: ["coordination.k8s.io"]
+              resources: ["leases"]
+              verbs: ["create"]
+            - apiGroups: ["coordination.k8s.io"]
+              resources: ["leases"]
+              resourceNames: ["agent-manager-tenants"]
+              verbs: ["get", "update"]
+            - apiGroups: [""]
+              resources: ["events"]
+              verbs: ["create", "patch"]
+
   - it: names the network policy kind of the flavor in the role and the policy
     template: templates/tenants-rbac.yaml
     set:
@@ -180,7 +205,7 @@ tests:
           content:
             apiGroups: ["cilium.io"]
             resources: ["ciliumnetworkpolicies"]
-            verbs: ["get", "create", "update"]
+            verbs: ["get", "list", "watch", "create", "update"]
         documentIndex: 1
       - contains:
           path: spec.matchConstraints.resourceRules

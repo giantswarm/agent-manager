@@ -145,7 +145,7 @@ environment variable named next to it; flags win over the environment.`,
 	f.StringVar(&o.tenantFluxClusterRole, "tenant-flux-cluster-role", envOr("AGENT_MANAGER_TENANT_FLUX_CLUSTER_ROLE", "agent-platform-tenant-flux"), "ClusterRole bound to the agents' Flux ServiceAccount in a tenant (AGENT_MANAGER_TENANT_FLUX_CLUSTER_ROLE)")
 	f.StringVar(&o.tenantNetworkPolicy, "tenant-network-policy-flavor", envOr("AGENT_MANAGER_TENANT_NETWORK_POLICY_FLAVOR", ""), "Kind of the network policies copied into a tenant: kubernetes (NetworkPolicy) or cilium (CiliumNetworkPolicy); empty copies none (AGENT_MANAGER_TENANT_NETWORK_POLICY_FLAVOR)")
 	f.StringVar(&o.tenantNetworkPolicies, "tenant-network-policies", envOr("AGENT_MANAGER_TENANT_NETWORK_POLICIES", ""), "Comma-separated names of the network policies copied from --kagent-namespace into every tenant (AGENT_MANAGER_TENANT_NETWORK_POLICIES)")
-	f.DurationVar(&o.tenantInterval, "tenant-interval", envDuration("AGENT_MANAGER_TENANT_INTERVAL", time.Minute), "How often every tenant is reconciled; a create in a tenant reconciles it at once (AGENT_MANAGER_TENANT_INTERVAL)")
+	f.DurationVar(&o.tenantInterval, "tenant-interval", envDuration("AGENT_MANAGER_TENANT_INTERVAL", 10*time.Minute), "How often every tenant is reconciled without a change; a change to a tenant, its agents, its copies or their platform sources reconciles it at once (AGENT_MANAGER_TENANT_INTERVAL)")
 	f.BoolVar(&o.mcpEnabled, "mcp-enabled", envBool("AGENT_MANAGER_MCP_ENABLED", true), "Serve the MCP streamable-HTTP endpoint (AGENT_MANAGER_MCP_ENABLED)")
 	f.StringVar(&o.mcpPath, "mcp-path", envOr("AGENT_MANAGER_MCP_PATH", "/mcp"), "MCP endpoint path (AGENT_MANAGER_MCP_PATH)")
 	f.BoolVar(&o.oauthEnabled, "enable-oauth", envBool("AGENT_MANAGER_OAUTH_ENABLED", false), "Require an OAuth 2.1 bearer token on the MCP endpoint and the REST API, validated against the platform IdP (mcp-oauth); the caller's identity travels with every request (AGENT_MANAGER_OAUTH_ENABLED)")
@@ -264,7 +264,7 @@ func runServe(ctx context.Context, o *serveOptions) error {
 
 	var tenantSet *tenants.Reconciler
 	if o.multiTenant {
-		policyGVR, err := networkPolicyGVR(o.tenantNetworkPolicy)
+		policyGVK, err := networkPolicyGVK(o.tenantNetworkPolicy)
 		if err != nil {
 			return err
 		}
@@ -275,10 +275,10 @@ func runServe(ctx context.Context, o *serveOptions) error {
 		}
 		compose := agents.ComposeConfig{ChartOCIURL: o.chartOCIURL, ChartName: resolver.Name(), ChartSemver: o.chartSemver, ChartSemverFilter: o.chartSemverFilter,
 			OCIRepositoryInterval: o.ociRepositoryInterval, OCIRepositoryAPIVersion: ociRepositoryAPI}
-		kagentGVR := func(resource string) schema.GroupVersionResource {
-			return schema.GroupVersionResource{Group: agents.KagentAPIGroup, Version: kagentVersion, Resource: resource}
+		kagentGVK := func(kind string) schema.GroupVersionKind {
+			return schema.GroupVersionKind{Group: agents.KagentAPIGroup, Version: kagentVersion, Kind: kind}
 		}
-		tenantSet = tenants.New(clients, tenants.Config{
+		tenantSet, err = tenants.New(clients.RESTConfig(), tenants.Config{
 			PlatformNamespace:  o.kagentNamespace,
 			HarnessName:        o.harnessName,
 			ModelConfigName:    o.tenantModelConfig,
@@ -287,20 +287,20 @@ func runServe(ctx context.Context, o *serveOptions) error {
 			FluxServiceAccount: o.helmReleaseSA,
 			FluxClusterRole:    o.tenantFluxClusterRole,
 			NetworkPolicies:    splitList(o.tenantNetworkPolicies),
-			NetworkPolicyGVR:   policyGVR,
+			NetworkPolicyGVK:   policyGVK,
 			OCIRepository:      func(ns string) *unstructured.Unstructured { return agents.BuildOCIRepository(ns, compose) },
 			ChartName:          resolver.Name(),
-			HelmReleaseGVR:     gvrOf(helmReleaseAPI, "helmreleases"),
-			OCIRepositoryGVR:   gvrOf(ociRepositoryAPI, "ocirepositories"),
-			AgentGVR:           kagentGVR("agents"),
-			HarnessGVR:         kagentGVR("harnesses"),
-			ModelConfigGVR:     kagentGVR("modelconfigs"),
-			WorkerPoolGVR:      schema.GroupVersionResource{Group: "ate.dev", Version: poolVersion, Resource: "workerpools"},
-			Interval:           o.tenantInterval,
+			HelmReleaseGVK:     schema.FromAPIVersionAndKind(helmReleaseAPI, "HelmRelease"),
+			OCIRepositoryGVK:   schema.FromAPIVersionAndKind(ociRepositoryAPI, "OCIRepository"),
+			AgentGVK:           kagentGVK("Agent"),
+			HarnessGVK:         kagentGVK("Harness"),
+			ModelConfigGVK:     kagentGVK("ModelConfig"),
+			WorkerPoolGVK:      schema.GroupVersionKind{Group: "ate.dev", Version: poolVersion, Kind: "WorkerPool"},
+			SyncPeriod:         o.tenantInterval,
 		}, log)
-		// The tenants are managed namespaces from the first request on; Run
-		// reconciles them.
-		tenantSet.Discover(ctx)
+		if err != nil {
+			return err
+		}
 	}
 
 	var sessions agents.SessionClient
@@ -365,21 +365,47 @@ func runServe(ctx context.Context, o *serveOptions) error {
 	if err != nil {
 		return err
 	}
+	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	// The tenant manager runs beside the server and stops with it; a manager
+	// that fails (a lost leader Lease, say) stops the server too.
+	managerDone := make(chan error, 1)
+	if tenantSet != nil {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithCancel(ctx)
+		defer cancel()
+		go func() {
+			err := tenantSet.Start(ctx)
+			if err != nil {
+				log.Error("tenant manager stopped", "error", err)
+			}
+			managerDone <- err
+			cancel()
+		}()
+		// The tenants are managed namespaces from the first request on.
+		if !tenantSet.WaitForCacheSync(ctx) {
+			if err := <-managerDone; err != nil {
+				return fmt.Errorf("tenant manager: %w", err)
+			}
+			return ctx.Err()
+		}
+	} else {
+		managerDone <- nil
+	}
 	info := svc.Info(ctx)
 	log.Info("agent-manager starting", "version", build.Version, "commit", build.Commit, "listen", o.listen, "rest", api.Prefix, "mcp", o.mcpPath, "mcpEnabled", o.mcpEnabled,
 		"oauth", o.oauthEnabled, "downstreamOAuth", o.downstreamOAuth, "commit", info.Capabilities["commit"], "identity", info.Identity,
 		"namespaces", svc.Managed(), "multiTenant", o.multiTenant, "chart", o.chartOCIURL, "chartSemver", o.chartSemver, "chartVersion", info.Chart.LatestVersion, "schemaSource", info.Chart.SchemaSource,
 		"kagentAPI", kagentVersion, "harness", info.Harness.Name, "musterURL", info.Muster.URL, "helmReleaseAPI", helmReleaseAPI, "ociRepositoryAPI", ociRepositoryAPI, "skillsRepositories", info.SkillsRepositories, "skillsGitHubApp", o.skillsAppID, "skillsGitAuthSecretName", o.skillsGitAuth, "kagentTarget", o.kagentTarget)
 
-	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
-	defer stop()
 	if bootSecret != nil {
 		go bootSecret.Run(ctx)
 	}
-	if tenantSet != nil {
-		go tenantSet.Run(ctx)
+	err = srv.Run(ctx)
+	if mgrErr := <-managerDone; err == nil && mgrErr != nil {
+		err = fmt.Errorf("tenant manager: %w", mgrErr)
 	}
-	return srv.Run(ctx)
+	return err
 }
 
 // discoverGroupVersion resolves "auto" against the API server, else validates
@@ -425,23 +451,17 @@ func tenantSetOrNil(r *tenants.Reconciler) agents.TenantSet {
 	return r
 }
 
-// networkPolicyGVR is the kind of network policy a flavor copies.
-func networkPolicyGVR(flavor string) (schema.GroupVersionResource, error) {
+// networkPolicyGVK is the kind of network policy a flavor copies.
+func networkPolicyGVK(flavor string) (schema.GroupVersionKind, error) {
 	switch flavor {
 	case "":
-		return schema.GroupVersionResource{}, nil
+		return schema.GroupVersionKind{}, nil
 	case "kubernetes":
-		return schema.GroupVersionResource{Group: "networking.k8s.io", Version: "v1", Resource: "networkpolicies"}, nil
+		return schema.GroupVersionKind{Group: "networking.k8s.io", Version: "v1", Kind: "NetworkPolicy"}, nil
 	case "cilium":
-		return schema.GroupVersionResource{Group: "cilium.io", Version: "v2", Resource: "ciliumnetworkpolicies"}, nil
+		return schema.GroupVersionKind{Group: "cilium.io", Version: "v2", Kind: "CiliumNetworkPolicy"}, nil
 	}
-	return schema.GroupVersionResource{}, fmt.Errorf("--tenant-network-policy-flavor %q: kubernetes, cilium or empty", flavor)
-}
-
-// gvrOf is the resource of a group/version string.
-func gvrOf(groupVersion, resource string) schema.GroupVersionResource {
-	gv, _ := schema.ParseGroupVersion(groupVersion)
-	return gv.WithResource(resource)
+	return schema.GroupVersionKind{}, fmt.Errorf("--tenant-network-policy-flavor %q: kubernetes, cilium or empty", flavor)
 }
 
 func splitList(s string) []string {

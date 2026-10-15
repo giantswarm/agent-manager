@@ -87,6 +87,10 @@ func (c *Clients) Typed() kubernetes.Interface { return c.typed }
 // Discovery implements Client.
 func (c *Clients) Discovery() discovery.DiscoveryInterface { return c.discovery }
 
+// RESTConfig is the rest.Config the clients were built from; nil for
+// clients wrapped with FromInterfaces.
+func (c *Clients) RESTConfig() *rest.Config { return c.restCfg }
+
 // FromInterfaces wraps existing clients (tests use the fakes).
 func FromInterfaces(dyn dynamic.Interface, typed kubernetes.Interface, disc discovery.DiscoveryInterface) *Clients {
 	return &Clients{dynamic: dyn, typed: typed, discovery: disc}

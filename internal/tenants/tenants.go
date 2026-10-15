@@ -14,10 +14,14 @@
 //     API key Secret. They go again with the last agent, so an organization
 //     without agents runs no workers.
 //
-// The reconciler is background work and runs as agent-manager's own
-// ServiceAccount. It writes only objects it labels as its own and never
-// changes or deletes one it did not create (a tenant's own ModelConfig, say).
-// It never writes memberships: who may use a tenant is declared.
+// The reconciler is a controller-runtime controller whose work-queue key is a
+// tenant namespace: a change to the namespace, to an agent in it, to one of
+// its copies or to a platform object they are copied from reconciles the
+// namespaces it concerns. It is background work and runs as agent-manager's
+// own ServiceAccount, on the replica that holds the leader Lease. It writes
+// only objects it labels as its own and never changes or deletes one it did
+// not create (a tenant's own ModelConfig, say). It never writes memberships:
+// who may use a tenant is declared.
 package tenants
 
 import (
@@ -27,20 +31,30 @@ import (
 	"log/slog"
 	"reflect"
 	"slices"
-	"sync"
 	"time"
 
+	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/fields"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/client-go/dynamic"
-	"k8s.io/client-go/kubernetes"
-
-	"github.com/giantswarm/agent-manager/internal/kube"
+	"k8s.io/apimachinery/pkg/selection"
+	"k8s.io/client-go/rest"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
+	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
 const (
@@ -54,6 +68,9 @@ const (
 	ScopeAgents    = "agents"
 	// CopiedFromAnnotation names the platform object a copy was made from.
 	CopiedFromAnnotation = "agent-manager.giantswarm.io/copied-from"
+	// LeaderElectionID names the Lease the replicas elect the reconciler's
+	// leader with.
+	LeaderElectionID = "agent-manager-tenants"
 	// managedByLabel / managedByValue: the platform's managed-by marker,
 	// the value agent-manager stamps on everything it writes.
 	managedByLabel = "app.kubernetes.io/managed-by"
@@ -86,97 +103,237 @@ type Config struct {
 	FluxServiceAccount string
 	FluxClusterRole    string
 	// NetworkPolicies are the names of the network policies copied from the
-	// platform namespace, of the kind NetworkPolicyGVR names (empty: none).
+	// platform namespace, of the kind NetworkPolicyGVK names (empty: none).
 	NetworkPolicies  []string
-	NetworkPolicyGVR schema.GroupVersionResource
+	NetworkPolicyGVK schema.GroupVersionKind
 	// OCIRepository composes the agent chart's source for a namespace;
 	// ChartName is its name, which an agent's HelmRelease references.
 	OCIRepository func(namespace string) *unstructured.Unstructured
 	ChartName     string
 	// The served versions of what the reconciler reads and writes.
-	HelmReleaseGVR   schema.GroupVersionResource
-	OCIRepositoryGVR schema.GroupVersionResource
-	AgentGVR         schema.GroupVersionResource
-	HarnessGVR       schema.GroupVersionResource
-	ModelConfigGVR   schema.GroupVersionResource
-	WorkerPoolGVR    schema.GroupVersionResource
-	// Interval is how often every tenant is reconciled.
-	Interval time.Duration
+	HelmReleaseGVK   schema.GroupVersionKind
+	OCIRepositoryGVK schema.GroupVersionKind
+	AgentGVK         schema.GroupVersionKind
+	HarnessGVK       schema.GroupVersionKind
+	ModelConfigGVK   schema.GroupVersionKind
+	WorkerPoolGVK    schema.GroupVersionKind
+	// SyncPeriod is how often every tenant is reconciled without a change:
+	// the safety net under the watches.
+	SyncPeriod time.Duration
+	// LeaderElectionNamespace holds the leader Lease; empty is the
+	// namespace of the pod's ServiceAccount.
+	LeaderElectionNamespace string
 }
 
 // Reconciler keeps the tenant namespaces.
 type Reconciler struct {
-	dyn   dynamic.Interface
-	typed kubernetes.Interface
-	cfg   Config
-	log   *slog.Logger
-	kick  chan string
-
-	mu         sync.RWMutex
-	namespaces []string
+	mgr    manager.Manager
+	client client.Client
+	cfg    Config
+	log    *slog.Logger
 }
 
-// New builds the reconciler on the ServiceAccount's client.
-func New(c kube.Client, cfg Config, log *slog.Logger) *Reconciler {
+// New builds the reconciler and its manager on the ServiceAccount's
+// rest.Config. Start runs it.
+func New(restCfg *rest.Config, cfg Config, log *slog.Logger) (*Reconciler, error) {
 	if log == nil {
 		log = slog.Default()
 	}
-	if cfg.Interval <= 0 {
-		cfg.Interval = time.Minute
+	if cfg.SyncPeriod <= 0 {
+		cfg.SyncPeriod = 10 * time.Minute
 	}
 	if cfg.WorkerPoolReplicas < 0 {
 		cfg.WorkerPoolReplicas = 0
 	}
-	return &Reconciler{dyn: c.Dynamic(), typed: c.Typed(), cfg: cfg, log: log, kick: make(chan string, 16)}
-}
-
-// Namespaces are the tenant namespaces found by the last pass, sorted.
-func (r *Reconciler) Namespaces() []string {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return slices.Clone(r.namespaces)
-}
-
-// ModelConfig is the ModelConfig a tenant receives with its first agent.
-func (r *Reconciler) ModelConfig() string { return r.cfg.ModelConfigName }
-
-// Kick asks for namespace to be reconciled now, without waiting for the
-// next pass: a create there gets its Harness and ModelConfig at once. It
-// never blocks; a kick that finds the queue full waits for the next pass.
-func (r *Reconciler) Kick(namespace string) {
-	select {
-	case r.kick <- namespace:
-	default:
+	scheme := runtime.NewScheme()
+	if err := corev1.AddToScheme(scheme); err != nil {
+		return nil, err
 	}
+	if err := rbacv1.AddToScheme(scheme); err != nil {
+		return nil, err
+	}
+	r := &Reconciler{cfg: cfg, log: log}
+	mgr, err := ctrl.NewManager(restCfg, manager.Options{
+		Scheme: scheme,
+		Logger: logr.FromSlogHandler(log.Handler()),
+		Cache:  r.cacheOptions(),
+		// Unstructured reads come from the cache too, under its limits.
+		Client: client.Options{Cache: &client.CacheOptions{Unstructured: true}},
+		// The HTTP server owns the pod's ports.
+		Metrics:                       metricsserver.Options{BindAddress: "0"},
+		HealthProbeBindAddress:        "0",
+		LeaderElection:                true,
+		LeaderElectionID:              LeaderElectionID,
+		LeaderElectionNamespace:       cfg.LeaderElectionNamespace,
+		LeaderElectionReleaseOnCancel: true,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("tenant manager: %w", err)
+	}
+	r.mgr, r.client = mgr, mgr.GetClient()
+	if err := r.setupWithManager(mgr); err != nil {
+		return nil, fmt.Errorf("tenant controller: %w", err)
+	}
+	return r, nil
 }
 
-// Run reconciles every tenant at once and then on each interval, and a
-// kicked namespace at once, until ctx ends.
-func (r *Reconciler) Run(ctx context.Context) {
-	r.ReconcileAll(ctx)
-	t := time.NewTicker(r.cfg.Interval)
-	defer t.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
-			r.ReconcileAll(ctx)
-		case ns := <-r.kick:
-			if err := r.ReconcileNamespace(ctx, ns); err != nil {
-				r.log.Warn("tenant reconcile failed", "namespace", ns, "error", err)
-			}
+// cacheOptions limit what the manager caches: the labelled namespaces, the
+// reconciler's own copies, the platform namespace's sources, and of the
+// Secrets the model key alone.
+func (r *Reconciler) cacheOptions() cache.Options {
+	copies := hasLabel(ObjectLabel)
+	// Sources live in the platform namespace; copies everywhere else.
+	sourcesAndCopies := cache.ByObject{Namespaces: map[string]cache.Config{
+		r.cfg.PlatformNamespace: {},
+		cache.AllNamespaces:     {LabelSelector: copies},
+	}}
+	keyName := fields.OneTermEqualSelector("metadata.name", r.cfg.ModelSecretName)
+	byObject := map[client.Object]cache.ByObject{
+		&corev1.Namespace{}:      {Label: hasLabel(OrganizationLabel)},
+		&corev1.ServiceAccount{}: {Label: copies},
+		&rbacv1.RoleBinding{}:    {Label: copies},
+		&corev1.Secret{}: {Namespaces: map[string]cache.Config{
+			r.cfg.PlatformNamespace: {FieldSelector: keyName},
+			cache.AllNamespaces:     {FieldSelector: keyName, LabelSelector: copies},
+		}},
+		object(r.cfg.OCIRepositoryGVK): {Label: copies},
+		object(r.cfg.HarnessGVK):       sourcesAndCopies,
+		object(r.cfg.ModelConfigGVK):   sourcesAndCopies,
+		object(r.cfg.WorkerPoolGVK):    sourcesAndCopies,
+		// Every HelmRelease is watched; only what tells an agent's apart is
+		// kept.
+		object(r.cfg.HelmReleaseGVK): {Transform: trimHelmRelease},
+	}
+	if !r.cfg.NetworkPolicyGVK.Empty() {
+		byObject[object(r.cfg.NetworkPolicyGVK)] = sourcesAndCopies
+	}
+	return cache.Options{SyncPeriod: &r.cfg.SyncPeriod, ByObject: byObject}
+}
+
+// hasLabel selects the objects that carry key.
+func hasLabel(key string) labels.Selector {
+	req, err := labels.NewRequirement(key, selection.Exists, nil)
+	if err != nil {
+		panic(err) // the keys are constants
+	}
+	return labels.NewSelector().Add(*req)
+}
+
+// trimHelmRelease keeps of a HelmRelease its identity and the fields
+// holdsAgents reads.
+func trimHelmRelease(obj any) (any, error) {
+	u, ok := obj.(*unstructured.Unstructured)
+	if !ok {
+		return obj, nil
+	}
+	trimmed := &unstructured.Unstructured{Object: map[string]any{"apiVersion": u.GetAPIVersion(), "kind": u.GetKind()}}
+	trimmed.SetName(u.GetName())
+	trimmed.SetNamespace(u.GetNamespace())
+	trimmed.SetUID(u.GetUID())
+	trimmed.SetResourceVersion(u.GetResourceVersion())
+	trimmed.SetGeneration(u.GetGeneration())
+	trimmed.SetDeletionTimestamp(u.GetDeletionTimestamp())
+	spec := map[string]any{}
+	for _, field := range []string{"chartRef", "kubeConfig"} {
+		if v, ok := u.Object["spec"].(map[string]any)[field]; ok {
+			spec[field] = runtime.DeepCopyJSONValue(v)
 		}
 	}
+	trimmed.Object["spec"] = spec
+	return trimmed, nil
 }
 
-// Discover lists the tenant namespaces and keeps them as the known set; on
-// a failed list the last set stays.
-func (r *Reconciler) Discover(ctx context.Context) []string {
-	list, err := r.typed.CoreV1().Namespaces().List(ctx, metav1.ListOptions{LabelSelector: OrganizationLabel})
-	if err != nil {
-		r.log.Warn("listing the tenant namespaces failed; keeping the last set", "error", err)
-		return r.Namespaces()
+// setupWithManager registers the controller: one work item per tenant
+// namespace.
+func (r *Reconciler) setupWithManager(mgr manager.Manager) error {
+	ownNamespace := handler.EnqueueRequestsFromMapFunc(r.namespaceOf)
+	isCopy := predicate.NewPredicateFuncs(func(o client.Object) bool {
+		_, ok := o.GetLabels()[ObjectLabel]
+		return ok
+	})
+	isTenant := predicate.NewPredicateFuncs(func(o client.Object) bool {
+		_, ok := o.GetLabels()[OrganizationLabel]
+		return ok
+	})
+	// An agent-chart HelmRelease, before or after a change of its spec.
+	agentRelease := predicate.Funcs{
+		CreateFunc:  func(e event.CreateEvent) bool { return r.isAgentChart(e.Object) },
+		DeleteFunc:  func(e event.DeleteEvent) bool { return r.isAgentChart(e.Object) },
+		GenericFunc: func(e event.GenericEvent) bool { return r.isAgentChart(e.Object) },
+		UpdateFunc: func(e event.UpdateEvent) bool {
+			return e.ObjectOld.GetGeneration() != e.ObjectNew.GetGeneration() && (r.isAgentChart(e.ObjectOld) || r.isAgentChart(e.ObjectNew))
+		},
+	}
+	agent := &metav1.PartialObjectMetadata{}
+	agent.SetGroupVersionKind(r.cfg.AgentGVK)
+
+	b := ctrl.NewControllerManagedBy(mgr).
+		Named("tenants").
+		For(&corev1.Namespace{}, builder.WithPredicates(isTenant)).
+		Watches(agent, ownNamespace, builder.OnlyMetadata).
+		Watches(object(r.cfg.HelmReleaseGVK), ownNamespace, builder.WithPredicates(agentRelease)).
+		Watches(&corev1.ServiceAccount{}, ownNamespace, builder.WithPredicates(isCopy)).
+		Watches(&rbacv1.RoleBinding{}, ownNamespace, builder.WithPredicates(isCopy)).
+		Watches(object(r.cfg.OCIRepositoryGVK), ownNamespace, builder.WithPredicates(isCopy))
+	// A copy reconciles its namespace; a source every tenant.
+	for _, o := range []client.Object{&corev1.Secret{}, object(r.cfg.HarnessGVK), object(r.cfg.ModelConfigGVK), object(r.cfg.WorkerPoolGVK)} {
+		b = b.Watches(o, handler.EnqueueRequestsFromMapFunc(r.copyOrSource))
+	}
+	if !r.cfg.NetworkPolicyGVK.Empty() {
+		b = b.Watches(object(r.cfg.NetworkPolicyGVK), handler.EnqueueRequestsFromMapFunc(r.copyOrSource))
+	}
+	return b.Complete(r)
+}
+
+func (r *Reconciler) namespaceOf(_ context.Context, o client.Object) []reconcile.Request {
+	return []reconcile.Request{{NamespacedName: client.ObjectKey{Name: o.GetNamespace()}}}
+}
+
+// copyOrSource maps a platform-namespace object to every tenant, a labelled
+// copy to its namespace, and anything else to nothing.
+func (r *Reconciler) copyOrSource(ctx context.Context, o client.Object) []reconcile.Request {
+	if o.GetNamespace() == r.cfg.PlatformNamespace {
+		var reqs []reconcile.Request
+		for _, ns := range r.Namespaces() {
+			reqs = append(reqs, reconcile.Request{NamespacedName: client.ObjectKey{Name: ns}})
+		}
+		return reqs
+	}
+	if _, ok := o.GetLabels()[ObjectLabel]; ok {
+		return r.namespaceOf(ctx, o)
+	}
+	return nil
+}
+
+func (r *Reconciler) isAgentChart(o client.Object) bool {
+	u, ok := o.(*unstructured.Unstructured)
+	if !ok {
+		return false
+	}
+	kind, _, _ := unstructured.NestedString(u.Object, "spec", "chartRef", "kind")
+	name, _, _ := unstructured.NestedString(u.Object, "spec", "chartRef", "name")
+	return kind == "OCIRepository" && name == r.cfg.ChartName
+}
+
+// Start runs the manager until ctx ends: the cache on every replica, the
+// controller on the leader.
+func (r *Reconciler) Start(ctx context.Context) error { return r.mgr.Start(ctx) }
+
+// WaitForCacheSync waits until the tenant namespaces are known, so the first
+// request sees them; false when ctx ends first.
+func (r *Reconciler) WaitForCacheSync(ctx context.Context) bool {
+	if _, err := r.mgr.GetCache().GetInformer(ctx, &corev1.Namespace{}); err != nil {
+		return false
+	}
+	return r.mgr.GetCache().WaitForCacheSync(ctx)
+}
+
+// Namespaces are the tenant namespaces, sorted.
+func (r *Reconciler) Namespaces() []string {
+	list := &corev1.NamespaceList{}
+	if err := r.client.List(context.Background(), list, client.HasLabels{OrganizationLabel}); err != nil {
+		r.log.Warn("listing the tenant namespaces failed", "error", err)
+		return nil
 	}
 	var found []string
 	for i := range list.Items {
@@ -185,42 +342,22 @@ func (r *Reconciler) Discover(ctx context.Context) []string {
 		}
 	}
 	slices.Sort(found)
-	r.mu.Lock()
-	r.namespaces = found
-	r.mu.Unlock()
-	return slices.Clone(found)
+	return found
 }
 
-// ReconcileAll discovers the tenants and reconciles each. A namespace that
-// fails is logged and retried on the next pass; the others go on.
-func (r *Reconciler) ReconcileAll(ctx context.Context) {
-	for _, ns := range r.Discover(ctx) {
-		if err := r.reconcile(ctx, ns); err != nil {
-			r.log.Warn("tenant reconcile failed", "namespace", ns, "error", err)
-		}
-	}
-}
+// ModelConfig is the ModelConfig a tenant receives with its first agent.
+func (r *Reconciler) ModelConfig() string { return r.cfg.ModelConfigName }
 
-// ReconcileNamespace reconciles one namespace if it is a tenant, and adds it
-// to the known set.
-func (r *Reconciler) ReconcileNamespace(ctx context.Context, name string) error {
-	ns, err := r.typed.CoreV1().Namespaces().Get(ctx, name, metav1.GetOptions{})
-	if apierrors.IsNotFound(err) {
-		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("get namespace %s: %w", name, err)
+// Reconcile keeps the namespace req names, if it is a tenant.
+func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
+	ns := &corev1.Namespace{}
+	if err := r.client.Get(ctx, client.ObjectKey{Name: req.Name}, ns); err != nil {
+		return reconcile.Result{}, client.IgnoreNotFound(err)
 	}
 	if !r.isTenant(ns) {
-		return nil
+		return reconcile.Result{}, nil
 	}
-	r.mu.Lock()
-	if !slices.Contains(r.namespaces, name) {
-		r.namespaces = append(r.namespaces, name)
-		slices.Sort(r.namespaces)
-	}
-	r.mu.Unlock()
-	return r.reconcile(ctx, name)
+	return reconcile.Result{}, r.reconcile(ctx, ns.Name)
 }
 
 // isTenant: labelled, not the platform namespace, not going away.
@@ -235,14 +372,14 @@ func (r *Reconciler) isTenant(ns *corev1.Namespace) bool {
 func (r *Reconciler) reconcile(ctx context.Context, ns string) error {
 	var errs []error
 	if r.cfg.OCIRepository != nil {
-		errs = append(errs, r.ensureExists(ctx, r.cfg.OCIRepositoryGVR, ns, ScopeNamespace, r.cfg.OCIRepository(ns)))
+		errs = append(errs, r.ensureExists(ctx, ns, ScopeNamespace, r.cfg.OCIRepository(ns)))
 	}
 	if sa := r.cfg.FluxServiceAccount; sa != "" {
 		errs = append(errs, r.ensureServiceAccount(ctx, ns, sa, ScopeNamespace), r.ensureFluxRoleBinding(ctx, ns))
 	}
-	if !r.cfg.NetworkPolicyGVR.Empty() {
+	if !r.cfg.NetworkPolicyGVK.Empty() {
 		for _, name := range r.cfg.NetworkPolicies {
-			errs = append(errs, r.copyObject(ctx, r.cfg.NetworkPolicyGVR, name, ns, ScopeNamespace))
+			errs = append(errs, r.copyObject(ctx, r.cfg.NetworkPolicyGVK, name, ns, ScopeNamespace))
 		}
 	}
 	holds, err := r.holdsAgents(ctx, ns)
@@ -262,23 +399,22 @@ func (r *Reconciler) reconcile(ctx context.Context, ns string) error {
 // on this cluster (one placed on a workload cluster runs there, with that
 // cluster's Harness).
 func (r *Reconciler) holdsAgents(ctx context.Context, ns string) (bool, error) {
-	agents, err := r.dyn.Resource(r.cfg.AgentGVR).Namespace(ns).List(ctx, metav1.ListOptions{Limit: 1})
-	if err != nil {
+	agents := &metav1.PartialObjectMetadataList{}
+	agents.SetGroupVersionKind(r.cfg.AgentGVK.GroupVersion().WithKind(r.cfg.AgentGVK.Kind + "List"))
+	if err := r.client.List(ctx, agents, client.InNamespace(ns)); err != nil {
 		return false, fmt.Errorf("list agents in %s: %w", ns, err)
 	}
 	if len(agents.Items) > 0 {
 		return true, nil
 	}
-	hrs, err := r.dyn.Resource(r.cfg.HelmReleaseGVR).Namespace(ns).List(ctx, metav1.ListOptions{})
+	hrs, err := r.list(ctx, r.cfg.HelmReleaseGVK, client.InNamespace(ns))
 	if err != nil {
 		return false, fmt.Errorf("list helmreleases in %s: %w", ns, err)
 	}
 	for i := range hrs.Items {
 		hr := &hrs.Items[i]
-		kind, _, _ := unstructured.NestedString(hr.Object, "spec", "chartRef", "kind")
-		name, _, _ := unstructured.NestedString(hr.Object, "spec", "chartRef", "name")
 		_, remote, _ := unstructured.NestedMap(hr.Object, "spec", "kubeConfig")
-		if kind == "OCIRepository" && name == r.cfg.ChartName && !remote {
+		if r.isAgentChart(hr) && !remote {
 			return true, nil
 		}
 	}
@@ -289,7 +425,7 @@ func (r *Reconciler) holdsAgents(ctx context.Context, ns string) (bool, error) {
 // ServiceAccount, and the default ModelConfig with its key Secret.
 func (r *Reconciler) provision(ctx context.Context, ns string) error {
 	var errs []error
-	harness, err := r.platformObject(ctx, r.cfg.HarnessGVR, r.cfg.HarnessName)
+	harness, err := r.platformObject(ctx, r.cfg.HarnessGVK, r.cfg.HarnessName)
 	switch {
 	case err != nil:
 		errs = append(errs, err)
@@ -299,9 +435,9 @@ func (r *Reconciler) provision(ctx context.Context, ns string) error {
 		if pool, _, _ := unstructured.NestedString(harness.Object, "spec", "substrate", "workerPoolRef", "name"); pool != "" {
 			errs = append(errs, r.copyWorkerPool(ctx, ns, pool))
 		}
-		errs = append(errs, r.ensure(ctx, r.cfg.HarnessGVR, ns, ScopeAgents, copyOf(harness, ns), objectRef(harness)))
+		errs = append(errs, r.ensure(ctx, ns, ScopeAgents, copyOf(harness, ns), objectRef(harness)))
 	}
-	mc, err := r.platformObject(ctx, r.cfg.ModelConfigGVR, r.cfg.ModelConfigName)
+	mc, err := r.platformObject(ctx, r.cfg.ModelConfigGVK, r.cfg.ModelConfigName)
 	switch {
 	case err != nil:
 		errs = append(errs, err)
@@ -311,7 +447,7 @@ func (r *Reconciler) provision(ctx context.Context, ns string) error {
 		if secret, _, _ := unstructured.NestedString(mc.Object, "spec", "apiKeySecret"); secret != "" {
 			errs = append(errs, r.copySecret(ctx, ns, secret))
 		}
-		errs = append(errs, r.ensure(ctx, r.cfg.ModelConfigGVR, ns, ScopeAgents, copyOf(mc, ns), objectRef(mc)))
+		errs = append(errs, r.ensure(ctx, ns, ScopeAgents, copyOf(mc, ns), objectRef(mc)))
 	}
 	return errors.Join(errs...)
 }
@@ -320,7 +456,7 @@ func (r *Reconciler) provision(ctx context.Context, ns string) error {
 // count and its own placement labels, and the ServiceAccount its workers run
 // as.
 func (r *Reconciler) copyWorkerPool(ctx context.Context, ns, name string) error {
-	src, err := r.platformObject(ctx, r.cfg.WorkerPoolGVR, name)
+	src, err := r.platformObject(ctx, r.cfg.WorkerPoolGVK, name)
 	if err != nil {
 		return err
 	}
@@ -340,33 +476,40 @@ func (r *Reconciler) copyWorkerPool(ctx context.Context, ns, name string) error 
 	if sa, _, _ := unstructured.NestedString(pool.Object, "spec", "template", "serviceAccountName"); sa != "" {
 		errs = append(errs, r.ensureServiceAccount(ctx, ns, sa, ScopeAgents))
 	}
-	return errors.Join(append(errs, r.ensure(ctx, r.cfg.WorkerPoolGVR, ns, ScopeAgents, pool, objectRef(src)))...)
+	return errors.Join(append(errs, r.ensure(ctx, ns, ScopeAgents, pool, objectRef(src)))...)
 }
 
 // release removes what provision wrote, once the last agent is gone.
 func (r *Reconciler) release(ctx context.Context, ns string) error {
 	var errs []error
-	selector := metav1.ListOptions{LabelSelector: ObjectLabel + "=" + ScopeAgents}
-	pools, err := r.dyn.Resource(r.cfg.WorkerPoolGVR).Namespace(ns).List(ctx, selector)
-	if err != nil && !apierrors.IsNotFound(err) {
+	selector := []client.ListOption{client.InNamespace(ns), client.MatchingLabels{ObjectLabel: ScopeAgents}}
+	pools, err := r.list(ctx, r.cfg.WorkerPoolGVK, selector...)
+	if err != nil {
 		errs = append(errs, fmt.Errorf("list workerpools in %s: %w", ns, err))
-	} else if pools != nil {
+	} else {
 		for i := range pools.Items {
 			pool := &pools.Items[i]
-			errs = append(errs, r.delete(ctx, r.cfg.WorkerPoolGVR, ns, pool.GetName()))
+			errs = append(errs, r.delete(ctx, pool))
 			if sa, _, _ := unstructured.NestedString(pool.Object, "spec", "template", "serviceAccountName"); sa != "" {
 				errs = append(errs, r.deleteServiceAccount(ctx, ns, sa))
 			}
 		}
 	}
-	errs = append(errs, r.deleteAll(ctx, r.cfg.HarnessGVR, ns, selector))
-	mcs, err := r.dyn.Resource(r.cfg.ModelConfigGVR).Namespace(ns).List(ctx, selector)
-	if err != nil && !apierrors.IsNotFound(err) {
+	harnesses, err := r.list(ctx, r.cfg.HarnessGVK, selector...)
+	if err != nil {
+		errs = append(errs, fmt.Errorf("list harnesses in %s: %w", ns, err))
+	} else {
+		for i := range harnesses.Items {
+			errs = append(errs, r.delete(ctx, &harnesses.Items[i]))
+		}
+	}
+	mcs, err := r.list(ctx, r.cfg.ModelConfigGVK, selector...)
+	if err != nil {
 		errs = append(errs, fmt.Errorf("list modelconfigs in %s: %w", ns, err))
-	} else if mcs != nil {
+	} else {
 		for i := range mcs.Items {
 			mc := &mcs.Items[i]
-			errs = append(errs, r.delete(ctx, r.cfg.ModelConfigGVR, ns, mc.GetName()))
+			errs = append(errs, r.delete(ctx, mc))
 			if secret, _, _ := unstructured.NestedString(mc.Object, "spec", "apiKeySecret"); secret == r.cfg.ModelSecretName && secret != "" {
 				errs = append(errs, r.deleteSecret(ctx, ns, secret))
 			}
@@ -377,30 +520,47 @@ func (r *Reconciler) release(ctx context.Context, ns string) error {
 
 // ---- unstructured objects -------------------------------------------------
 
+// object is an empty object of gvk.
+func object(gvk schema.GroupVersionKind) *unstructured.Unstructured {
+	u := &unstructured.Unstructured{}
+	u.SetGroupVersionKind(gvk)
+	return u
+}
+
+func (r *Reconciler) list(ctx context.Context, gvk schema.GroupVersionKind, opts ...client.ListOption) (*unstructured.UnstructuredList, error) {
+	list := &unstructured.UnstructuredList{}
+	list.SetGroupVersionKind(gvk.GroupVersion().WithKind(gvk.Kind + "List"))
+	if err := r.client.List(ctx, list, opts...); err != nil {
+		return nil, err
+	}
+	return list, nil
+}
+
 // platformObject reads an object of the platform namespace; nil when absent.
-func (r *Reconciler) platformObject(ctx context.Context, gvr schema.GroupVersionResource, name string) (*unstructured.Unstructured, error) {
-	obj, err := r.dyn.Resource(gvr).Namespace(r.cfg.PlatformNamespace).Get(ctx, name, metav1.GetOptions{})
+func (r *Reconciler) platformObject(ctx context.Context, gvk schema.GroupVersionKind, name string) (*unstructured.Unstructured, error) {
+	obj := object(gvk)
+	err := r.client.Get(ctx, client.ObjectKey{Namespace: r.cfg.PlatformNamespace, Name: name}, obj)
 	if apierrors.IsNotFound(err) {
 		return nil, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("get %s %s/%s: %w", gvr.Resource, r.cfg.PlatformNamespace, name, err)
+		return nil, fmt.Errorf("get %s %s/%s: %w", gvk.Kind, r.cfg.PlatformNamespace, name, err)
 	}
 	return obj, nil
 }
 
-// copyObject copies a platform object of gvr into ns; a missing source is
+// copyObject copies a platform object of gvk into ns; a missing source is
 // logged and skipped.
-func (r *Reconciler) copyObject(ctx context.Context, gvr schema.GroupVersionResource, name, ns, scope string) error {
-	src, err := r.platformObject(ctx, gvr, name)
+func (r *Reconciler) copyObject(ctx context.Context, gvk schema.GroupVersionKind, name, ns, scope string) error {
+	src, err := r.platformObject(ctx, gvk, name)
 	if err != nil {
 		return err
 	}
 	if src == nil {
-		r.log.Warn("a platform object to copy is missing", "resource", gvr.Resource, "name", name, "platformNamespace", r.cfg.PlatformNamespace, "namespace", ns)
+		r.log.Warn("a platform object to copy is missing", "kind", gvk.Kind, "name", name, "platformNamespace", r.cfg.PlatformNamespace, "namespace", ns)
 		return nil
 	}
-	return r.ensure(ctx, gvr, ns, scope, copyOf(src, ns), objectRef(src))
+	return r.ensure(ctx, ns, scope, copyOf(src, ns), objectRef(src))
 }
 
 // copyOf is src's spec under the same name in ns, with no metadata of src's.
@@ -421,9 +581,8 @@ func objectRef(src *unstructured.Unstructured) string {
 	return src.GetNamespace() + "/" + src.GetName()
 }
 
-// ensure creates obj, or brings the reconciler's own copy back to it. An
-// object of that name the reconciler did not write is left alone.
-func (r *Reconciler) ensure(ctx context.Context, gvr schema.GroupVersionResource, ns, scope string, obj *unstructured.Unstructured, from string) error {
+// stamp marks obj as the reconciler's own, in ns.
+func stamp(obj *unstructured.Unstructured, ns, scope, from string) map[string]string {
 	labels := obj.GetLabels()
 	if labels == nil {
 		labels = map[string]string{}
@@ -435,20 +594,41 @@ func (r *Reconciler) ensure(ctx context.Context, gvr schema.GroupVersionResource
 		obj.SetAnnotations(map[string]string{CopiedFromAnnotation: from})
 	}
 	obj.SetNamespace(ns)
-	client := r.dyn.Resource(gvr).Namespace(ns)
-	existing, err := client.Get(ctx, obj.GetName(), metav1.GetOptions{})
-	if apierrors.IsNotFound(err) {
-		if _, err := client.Create(ctx, obj, metav1.CreateOptions{FieldManager: fieldManager}); err != nil {
-			return fmt.Errorf("create %s %s/%s: %w", gvr.Resource, ns, obj.GetName(), err)
-		}
-		r.log.Info("tenant object created", "namespace", ns, "resource", gvr.Resource, "name", obj.GetName())
+	return labels
+}
+
+// create writes obj. An object of that name that exists already is left as
+// it is: the cache holds only the reconciler's own objects, so one it does
+// not show is another writer's (or the reconciler's own the cache has not
+// seen yet, whose event reconciles the namespace again).
+func (r *Reconciler) create(ctx context.Context, obj client.Object, kind string) error {
+	err := r.client.Create(ctx, obj, client.FieldOwner(fieldManager))
+	switch {
+	case apierrors.IsAlreadyExists(err):
+		r.log.Debug("leaving an object the reconciler did not write", "namespace", obj.GetNamespace(), "kind", kind, "name", obj.GetName())
 		return nil
+	case err != nil:
+		return fmt.Errorf("create %s %s/%s: %w", kind, obj.GetNamespace(), obj.GetName(), err)
+	}
+	r.log.Info("tenant object created", "namespace", obj.GetNamespace(), "kind", kind, "name", obj.GetName())
+	return nil
+}
+
+// ensure creates obj, or brings the reconciler's own copy back to it. An
+// object of that name the reconciler did not write is left alone.
+func (r *Reconciler) ensure(ctx context.Context, ns, scope string, obj *unstructured.Unstructured, from string) error {
+	labels := stamp(obj, ns, scope, from)
+	kind := obj.GetKind()
+	existing := object(obj.GroupVersionKind())
+	err := r.client.Get(ctx, client.ObjectKeyFromObject(obj), existing)
+	if apierrors.IsNotFound(err) {
+		return r.create(ctx, obj, kind)
 	}
 	if err != nil {
-		return fmt.Errorf("get %s %s/%s: %w", gvr.Resource, ns, obj.GetName(), err)
+		return fmt.Errorf("get %s %s/%s: %w", kind, ns, obj.GetName(), err)
 	}
 	if existing.GetLabels()[ObjectLabel] == "" {
-		r.log.Debug("leaving an object the reconciler did not write", "namespace", ns, "resource", gvr.Resource, "name", obj.GetName())
+		r.log.Debug("leaving an object the reconciler did not write", "namespace", ns, "kind", kind, "name", obj.GetName())
 		return nil
 	}
 	if contains(existing.Object["spec"], obj.Object["spec"]) && existing.GetLabels()[ObjectLabel] == scope && subset(existing.GetLabels(), labels) {
@@ -460,61 +640,39 @@ func (r *Reconciler) ensure(ctx context.Context, gvr schema.GroupVersionResource
 		merged[k] = v
 	}
 	existing.SetLabels(merged)
-	if _, err := client.Update(ctx, existing, metav1.UpdateOptions{FieldManager: fieldManager}); err != nil {
-		return fmt.Errorf("update %s %s/%s: %w", gvr.Resource, ns, obj.GetName(), err)
+	if err := r.client.Update(ctx, existing, client.FieldOwner(fieldManager)); err != nil {
+		return fmt.Errorf("update %s %s/%s: %w", kind, ns, obj.GetName(), err)
 	}
-	r.log.Info("tenant object updated", "namespace", ns, "resource", gvr.Resource, "name", obj.GetName())
+	r.log.Info("tenant object updated", "namespace", ns, "kind", kind, "name", obj.GetName())
 	return nil
 }
 
 // ensureExists creates obj when nothing of its name exists and never
 // changes it after: the agent chart's source moves to another range only
 // through the migrate command, as in the configured namespaces.
-func (r *Reconciler) ensureExists(ctx context.Context, gvr schema.GroupVersionResource, ns, scope string, obj *unstructured.Unstructured) error {
-	client := r.dyn.Resource(gvr).Namespace(ns)
-	_, err := client.Get(ctx, obj.GetName(), metav1.GetOptions{})
+func (r *Reconciler) ensureExists(ctx context.Context, ns, scope string, obj *unstructured.Unstructured) error {
+	stamp(obj, ns, scope, "")
+	err := r.client.Get(ctx, client.ObjectKeyFromObject(obj), object(obj.GroupVersionKind()))
 	if err == nil {
 		return nil
 	}
 	if !apierrors.IsNotFound(err) {
-		return fmt.Errorf("get %s %s/%s: %w", gvr.Resource, ns, obj.GetName(), err)
+		return fmt.Errorf("get %s %s/%s: %w", obj.GetKind(), ns, obj.GetName(), err)
 	}
-	return r.ensure(ctx, gvr, ns, scope, obj, "")
+	return r.create(ctx, obj, obj.GetKind())
 }
 
-// delete removes the reconciler's own object of that name.
-func (r *Reconciler) delete(ctx context.Context, gvr schema.GroupVersionResource, ns, name string) error {
-	client := r.dyn.Resource(gvr).Namespace(ns)
-	existing, err := client.Get(ctx, name, metav1.GetOptions{})
-	if apierrors.IsNotFound(err) {
+// delete removes one of the reconciler's own objects.
+func (r *Reconciler) delete(ctx context.Context, obj client.Object) error {
+	if obj.GetLabels()[ObjectLabel] == "" {
 		return nil
 	}
-	if err != nil {
-		return fmt.Errorf("get %s %s/%s: %w", gvr.Resource, ns, name, err)
+	kind := obj.GetObjectKind().GroupVersionKind().Kind
+	if err := r.client.Delete(ctx, obj); client.IgnoreNotFound(err) != nil {
+		return fmt.Errorf("delete %s %s/%s: %w", kind, obj.GetNamespace(), obj.GetName(), err)
 	}
-	if existing.GetLabels()[ObjectLabel] == "" {
-		return nil
-	}
-	if err := client.Delete(ctx, name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
-		return fmt.Errorf("delete %s %s/%s: %w", gvr.Resource, ns, name, err)
-	}
-	r.log.Info("tenant object deleted", "namespace", ns, "resource", gvr.Resource, "name", name)
+	r.log.Info("tenant object deleted", "namespace", obj.GetNamespace(), "kind", kind, "name", obj.GetName())
 	return nil
-}
-
-func (r *Reconciler) deleteAll(ctx context.Context, gvr schema.GroupVersionResource, ns string, selector metav1.ListOptions) error {
-	list, err := r.dyn.Resource(gvr).Namespace(ns).List(ctx, selector)
-	if apierrors.IsNotFound(err) {
-		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("list %s in %s: %w", gvr.Resource, ns, err)
-	}
-	var errs []error
-	for i := range list.Items {
-		errs = append(errs, r.delete(ctx, gvr, ns, list.Items[i].GetName()))
-	}
-	return errors.Join(errs...)
 }
 
 // contains reports whether every field of want is in have with the same
@@ -567,39 +725,29 @@ func (r *Reconciler) labels(scope string) map[string]string {
 // ensureServiceAccount creates the ServiceAccount; one that exists is kept
 // as it is (a ServiceAccount has nothing to drift).
 func (r *Reconciler) ensureServiceAccount(ctx context.Context, ns, name, scope string) error {
-	client := r.typed.CoreV1().ServiceAccounts(ns)
-	_, err := client.Get(ctx, name, metav1.GetOptions{})
+	err := r.client.Get(ctx, client.ObjectKey{Namespace: ns, Name: name}, &corev1.ServiceAccount{})
 	if err == nil {
 		return nil
 	}
 	if !apierrors.IsNotFound(err) {
-		return fmt.Errorf("get serviceaccount %s/%s: %w", ns, name, err)
+		return fmt.Errorf("get ServiceAccount %s/%s: %w", ns, name, err)
 	}
-	sa := &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns, Labels: r.labels(scope)}}
-	if _, err := client.Create(ctx, sa, metav1.CreateOptions{FieldManager: fieldManager}); err != nil && !apierrors.IsAlreadyExists(err) {
-		return fmt.Errorf("create serviceaccount %s/%s: %w", ns, name, err)
-	}
-	r.log.Info("tenant object created", "namespace", ns, "resource", "serviceaccounts", "name", name)
-	return nil
+	return r.create(ctx, &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns, Labels: r.labels(scope)}}, "ServiceAccount")
 }
 
 func (r *Reconciler) deleteServiceAccount(ctx context.Context, ns, name string) error {
-	client := r.typed.CoreV1().ServiceAccounts(ns)
-	sa, err := client.Get(ctx, name, metav1.GetOptions{})
-	if apierrors.IsNotFound(err) {
-		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("get serviceaccount %s/%s: %w", ns, name, err)
+	sa := &corev1.ServiceAccount{}
+	if err := r.client.Get(ctx, client.ObjectKey{Namespace: ns, Name: name}, sa); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("get ServiceAccount %s/%s: %w", ns, name, err)
 	}
 	if sa.Labels[ObjectLabel] != ScopeAgents {
 		return nil
 	}
-	if err := client.Delete(ctx, name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
-		return fmt.Errorf("delete serviceaccount %s/%s: %w", ns, name, err)
-	}
-	r.log.Info("tenant object deleted", "namespace", ns, "resource", "serviceaccounts", "name", name)
-	return nil
+	sa.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind("ServiceAccount"))
+	return r.delete(ctx, sa)
 }
 
 // ensureFluxRoleBinding binds the tenant Flux ClusterRole to the agents'
@@ -612,32 +760,28 @@ func (r *Reconciler) ensureFluxRoleBinding(ctx context.Context, ns string) error
 		RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: r.cfg.FluxClusterRole},
 		Subjects:   []rbacv1.Subject{{Kind: rbacv1.ServiceAccountKind, Name: name, Namespace: ns}},
 	}
-	client := r.typed.RbacV1().RoleBindings(ns)
-	existing, err := client.Get(ctx, name, metav1.GetOptions{})
+	existing := &rbacv1.RoleBinding{}
+	err := r.client.Get(ctx, client.ObjectKey{Namespace: ns, Name: name}, existing)
 	switch {
 	case apierrors.IsNotFound(err):
 	case err != nil:
-		return fmt.Errorf("get rolebinding %s/%s: %w", ns, name, err)
+		return fmt.Errorf("get RoleBinding %s/%s: %w", ns, name, err)
 	case existing.Labels[ObjectLabel] == "":
 		return nil
 	case existing.RoleRef == want.RoleRef && reflect.DeepEqual(existing.Subjects, want.Subjects):
 		return nil
 	case existing.RoleRef == want.RoleRef:
 		existing.Subjects = want.Subjects
-		if _, err := client.Update(ctx, existing, metav1.UpdateOptions{FieldManager: fieldManager}); err != nil {
-			return fmt.Errorf("update rolebinding %s/%s: %w", ns, name, err)
+		if err := r.client.Update(ctx, existing, client.FieldOwner(fieldManager)); err != nil {
+			return fmt.Errorf("update RoleBinding %s/%s: %w", ns, name, err)
 		}
 		return nil
 	default:
-		if err := client.Delete(ctx, name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
-			return fmt.Errorf("replace rolebinding %s/%s: %w", ns, name, err)
+		if err := r.client.Delete(ctx, existing); client.IgnoreNotFound(err) != nil {
+			return fmt.Errorf("replace RoleBinding %s/%s: %w", ns, name, err)
 		}
 	}
-	if _, err := client.Create(ctx, want, metav1.CreateOptions{FieldManager: fieldManager}); err != nil {
-		return fmt.Errorf("create rolebinding %s/%s: %w", ns, name, err)
-	}
-	r.log.Info("tenant object created", "namespace", ns, "resource", "rolebindings", "name", name)
-	return nil
+	return r.create(ctx, want, "RoleBinding")
 }
 
 // copySecret copies the default ModelConfig's API key Secret. Only the
@@ -647,59 +791,50 @@ func (r *Reconciler) copySecret(ctx context.Context, ns, name string) error {
 	if name != r.cfg.ModelSecretName {
 		return fmt.Errorf("the default ModelConfig's key Secret %q is not the tenant model Secret %q the reconciler may copy; set it to %q", name, r.cfg.ModelSecretName, name)
 	}
-	src, err := r.typed.CoreV1().Secrets(r.cfg.PlatformNamespace).Get(ctx, name, metav1.GetOptions{})
-	if apierrors.IsNotFound(err) {
-		r.log.Warn("the default ModelConfig's key Secret is missing", "secret", name, "platformNamespace", r.cfg.PlatformNamespace, "namespace", ns)
-		return nil
+	src := &corev1.Secret{}
+	if err := r.client.Get(ctx, client.ObjectKey{Namespace: r.cfg.PlatformNamespace, Name: name}, src); err != nil {
+		if apierrors.IsNotFound(err) {
+			r.log.Warn("the default ModelConfig's key Secret is missing", "secret", name, "platformNamespace", r.cfg.PlatformNamespace, "namespace", ns)
+			return nil
+		}
+		return fmt.Errorf("get Secret %s/%s: %w", r.cfg.PlatformNamespace, name, err)
 	}
-	if err != nil {
-		return fmt.Errorf("get secret %s/%s: %w", r.cfg.PlatformNamespace, name, err)
-	}
-	client := r.typed.CoreV1().Secrets(ns)
-	existing, err := client.Get(ctx, name, metav1.GetOptions{})
+	existing := &corev1.Secret{}
+	err := r.client.Get(ctx, client.ObjectKey{Namespace: ns, Name: name}, existing)
 	switch {
 	case apierrors.IsNotFound(err):
-		secret := &corev1.Secret{
+		return r.create(ctx, &corev1.Secret{
 			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns, Labels: r.labels(ScopeAgents),
 				Annotations: map[string]string{CopiedFromAnnotation: r.cfg.PlatformNamespace + "/" + name}},
 			Type: src.Type,
 			Data: src.Data,
-		}
-		if _, err := client.Create(ctx, secret, metav1.CreateOptions{FieldManager: fieldManager}); err != nil {
-			return fmt.Errorf("create secret %s/%s: %w", ns, name, err)
-		}
-		r.log.Info("tenant object created", "namespace", ns, "resource", "secrets", "name", name)
-		return nil
+		}, "Secret")
 	case err != nil:
-		return fmt.Errorf("get secret %s/%s: %w", ns, name, err)
+		return fmt.Errorf("get Secret %s/%s: %w", ns, name, err)
 	case existing.Labels[ObjectLabel] == "":
 		return nil
 	case reflect.DeepEqual(existing.Data, src.Data):
 		return nil
 	}
 	existing.Data = src.Data
-	if _, err := client.Update(ctx, existing, metav1.UpdateOptions{FieldManager: fieldManager}); err != nil {
-		return fmt.Errorf("update secret %s/%s: %w", ns, name, err)
+	if err := r.client.Update(ctx, existing, client.FieldOwner(fieldManager)); err != nil {
+		return fmt.Errorf("update Secret %s/%s: %w", ns, name, err)
 	}
-	r.log.Info("tenant object updated", "namespace", ns, "resource", "secrets", "name", name)
+	r.log.Info("tenant object updated", "namespace", ns, "kind", "Secret", "name", name)
 	return nil
 }
 
 func (r *Reconciler) deleteSecret(ctx context.Context, ns, name string) error {
-	client := r.typed.CoreV1().Secrets(ns)
-	secret, err := client.Get(ctx, name, metav1.GetOptions{})
-	if apierrors.IsNotFound(err) {
-		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("get secret %s/%s: %w", ns, name, err)
+	secret := &corev1.Secret{}
+	if err := r.client.Get(ctx, client.ObjectKey{Namespace: ns, Name: name}, secret); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("get Secret %s/%s: %w", ns, name, err)
 	}
 	if secret.Labels[ObjectLabel] != ScopeAgents {
 		return nil
 	}
-	if err := client.Delete(ctx, name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
-		return fmt.Errorf("delete secret %s/%s: %w", ns, name, err)
-	}
-	r.log.Info("tenant object deleted", "namespace", ns, "resource", "secrets", "name", name)
-	return nil
+	secret.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind("Secret"))
+	return r.delete(ctx, secret)
 }

@@ -430,9 +430,12 @@ tenants:
     # every tenant (the platform's worker policy, `substrate-workers` with
     # Cilium).
     names: []  # @schema item: string
-  # -- How often every tenant is reconciled; a create in a tenant reconciles
-  # it at once.
-  interval: 1m
+  # -- How often every tenant is reconciled without a change. A change to a
+  # tenant namespace, an agent in it, one of its copies or a platform object
+  # they are copied from reconciles it at once; the replicas elect the one
+  # that reconciles with the Lease `agent-manager-tenants` in the release
+  # namespace.
+  interval: 10m
 
 # -- Annotations on the pod.
 podAnnotations: {}  # @schema additionalProperties: true

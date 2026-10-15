@@ -159,7 +159,7 @@ meta chart (`components.agent-manager.enabled`), which sets `kagent.namespace`,
 | tenants.workerPoolReplicas | int | `1` | Warm workers of a tenant's WorkerPool while it holds an agent. |
 | tenants.networkPolicy.flavor | string | `""` | Kind of the network policies copied into every tenant: `kubernetes` (NetworkPolicy) or `cilium` (CiliumNetworkPolicy). Empty copies none. |
 | tenants.networkPolicy.names | list | `[]` | Names of the network policies in `kagent.namespace` copied into every tenant (the platform's worker policy, `substrate-workers` with Cilium). |
-| tenants.interval | string | `"1m"` | How often every tenant is reconciled; a create in a tenant reconciles it at once. |
+| tenants.interval | string | `"10m"` | How often every tenant is reconciled without a change. A change to a tenant namespace, an agent in it, one of its copies or a platform object they are copied from reconciles it at once; the replicas elect the one that reconciles with the Lease `agent-manager-tenants` in the release namespace. |
 | podAnnotations | object | `{}` | Annotations on the pod. |
 | podLabels | object | `{}` | Labels on the pod. |
 | podSecurityContext | object | `{"fsGroup":1000,"runAsGroup":1000,"runAsNonRoot":true,"runAsUser":1000,"seccompProfile":{"type":"RuntimeDefault"}}` | Pod security context. |

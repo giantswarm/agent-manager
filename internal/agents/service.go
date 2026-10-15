@@ -72,8 +72,6 @@ type TenantSet interface {
 	Namespaces() []string
 	// ModelConfig is the ModelConfig a tenant receives with its first agent.
 	ModelConfig() string
-	// Kick asks for a namespace to be reconciled now.
-	Kick(namespace string)
 }
 
 // Service is the agent lifecycle.
@@ -1013,10 +1011,6 @@ func (s *Service) Create(ctx context.Context, spec Spec) (*CreateResult, error) 
 		return nil, wrapKube(err, fmt.Sprintf("create HelmRelease %s/%s", fluxNS, hr.GetName()))
 	}
 	res.Created.HelmRelease = true
-	if !spec.IsSet() && s.isTenant(ns) {
-		// The tenant's Harness and ModelConfig come with its first agent.
-		s.cfg.Tenants.Kick(ns)
-	}
 	agent := Agent{Name: spec.Name, Namespace: ns, Target: spec.Target, Managed: ManagedHelmRelease}
 	applyHelmRelease(&agent, created)
 	res.Agent = agent

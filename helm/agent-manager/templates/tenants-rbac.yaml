@@ -13,6 +13,13 @@ ModelConfig's key. Without it, two calls (bind agent-platform-tenant-flux to
 itself in kube-system, then read) would give the ServiceAccount every Secret
 there.
 
+The reconciler is a controller: it watches what it reads (list and watch),
+and its replicas elect a leader with the Lease agent-manager-tenants in the
+release namespace (the Role below). Its cache holds the labelled namespaces,
+its own labelled copies, the platform namespace's sources and, of the
+Secrets, the model key alone: list and watch on Secrets are held to that name
+too.
+
 The reconciler binds agent-platform-tenant-flux and nothing else: `bind` on
 that one name, no `escalate`. The roles people are bound to and the platform
 tenant's bindings belong to agent-platform; memberships are declared, never
@@ -56,46 +63,47 @@ metadata:
 rules:
   - apiGroups: [""]
     resources: ["namespaces"]
-    verbs: ["get", "list"]
+    verbs: ["get", "list", "watch"]
   # Whether a tenant holds an agent.
   - apiGroups: ["api.kagent.dev"]
     resources: ["agents"]
-    verbs: ["list"]
+    verbs: ["list", "watch"]
   - apiGroups: ["helm.toolkit.fluxcd.io"]
     resources: ["helmreleases"]
-    verbs: ["list"]
+    verbs: ["list", "watch"]
   # The copies: read in kagent.namespace, written in the tenants.
   - apiGroups: ["api.kagent.dev"]
     resources: ["harnesses", "modelconfigs"]
-    verbs: ["get", "list", "create", "update", "delete"]
+    verbs: ["get", "list", "watch", "create", "update", "delete"]
   - apiGroups: ["ate.dev"]
     resources: ["workerpools"]
-    verbs: ["get", "list", "create", "update", "delete"]
+    verbs: ["get", "list", "watch", "create", "update", "delete"]
   {{- with $netpol.resource }}
   - apiGroups: [{{ $netpol.group | quote }}]
     resources: [{{ . | quote }}]
-    verbs: ["get", "create", "update"]
+    verbs: ["get", "list", "watch", "create", "update"]
   {{- end }}
   - apiGroups: ["source.toolkit.fluxcd.io"]
     resources: ["ocirepositories"]
-    verbs: ["get", "create", "update"]
+    verbs: ["get", "list", "watch", "create", "update"]
   - apiGroups: [""]
     resources: ["serviceaccounts"]
-    verbs: ["get", "create", "delete"]
+    verbs: ["get", "list", "watch", "create", "delete"]
   - apiGroups: ["rbac.authorization.k8s.io"]
     resources: ["rolebindings"]
-    verbs: ["get", "create", "update", "delete"]
+    verbs: ["get", "list", "watch", "create", "update", "delete"]
   - apiGroups: ["rbac.authorization.k8s.io"]
     resources: ["clusterroles"]
     resourceNames: [{{ $flux | quote }}]
     verbs: ["bind"]
   # The default ModelConfig's key: read in kagent.namespace, copied into the
-  # tenants. RBAC cannot name the object of a create; the admission policy
-  # holds creates to this name.
+  # tenants. A list or watch is allowed only with a metadata.name field
+  # selector of this name. RBAC cannot name the object of a create; the
+  # admission policy holds creates to this name.
   - apiGroups: [""]
     resources: ["secrets"]
     resourceNames: [{{ $secret | quote }}]
-    verbs: ["get", "update", "delete"]
+    verbs: ["get", "list", "watch", "update", "delete"]
   - apiGroups: [""]
     resources: ["secrets"]
     verbs: ["create"]
@@ -184,4 +192,41 @@ metadata:
 spec:
   policyName: {{ include "agent-manager.fullname" . }}-tenants
   validationActions: ["Deny"]
+---
+# The leader Lease of the reconciler's replicas, and the events leader
+# election records, in the release namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "agent-manager.fullname" . }}-tenants-leader
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "agent-manager.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["create"]
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    resourceNames: ["agent-manager-tenants"]
+    verbs: ["get", "update"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "agent-manager.fullname" . }}-tenants-leader
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "agent-manager.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "agent-manager.fullname" . }}-tenants-leader
+subjects:
+  - kind: ServiceAccount
+    name: {{ $sa }}
+    namespace: {{ .Release.Namespace }}
 {{- end }}

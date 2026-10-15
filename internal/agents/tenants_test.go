@@ -15,12 +15,10 @@ import (
 // fakeTenants is the tenant reconciler as the service sees it.
 type fakeTenants struct {
 	namespaces []string
-	kicked     []string
 }
 
 func (f *fakeTenants) Namespaces() []string { return f.namespaces }
 func (f *fakeTenants) ModelConfig() string  { return "default-model-config" }
-func (f *fakeTenants) Kick(ns string)       { f.kicked = append(f.kicked, ns) }
 
 func withTenants(f *fixture, t *fakeTenants) {
 	f.svc.cfg.Tenants = t
@@ -28,7 +26,7 @@ func withTenants(f *fixture, t *fakeTenants) {
 
 // A tenant namespace is managed beside the configured ones, and its first
 // agent may name the platform's default ModelConfig before the reconciler
-// copied it; the create asks for the tenant to be reconciled at once.
+// copied it.
 func TestTenantNamespaceIsManaged(t *testing.T) {
 	f := seeded(t)
 	tenants := &fakeTenants{namespaces: []string{"org-a"}}
@@ -48,15 +46,13 @@ func TestTenantNamespaceIsManaged(t *testing.T) {
 	assert.True(t, v.Valid, "%v", v.Errors)
 	_, err = f.svc.Create(ctx, spec)
 	require.NoError(t, err)
-	assert.Equal(t, []string{"org-a"}, tenants.kicked)
 
 	// Any other ModelConfig must exist there.
 	_, err = f.svc.Create(ctx, Spec{Location: In("org-a"), Name: "other", ModelConfig: "qwen3-8-27b", Toolset: []string{"preset:read-only"}})
 	assert.ErrorIs(t, err, ErrInvalid)
-	// A configured namespace is not a tenant: nothing to kick, no fallback.
+	// A configured namespace is not a tenant: no fallback.
 	_, err = f.svc.Create(ctx, Spec{Location: In("tenant"), Name: "sre", ModelConfig: "default-model-config", Toolset: []string{"preset:read-only"}})
 	assert.ErrorIs(t, err, ErrInvalid)
-	assert.Equal(t, []string{"org-a"}, tenants.kicked)
 }
 
 // get_info lists the managed namespaces in which the caller may create.

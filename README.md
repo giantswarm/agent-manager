@@ -474,8 +474,15 @@ With `--multi-tenant` (chart `tenants.enabled`) every namespace labelled
 installation without Organizations the platform team labels it) is a managed
 namespace beside `--kagent-namespace` and `--managed-namespaces`, discovered at
 run time; `--kagent-namespace` itself never is one. The tenant reconciler
-(`internal/tenants`) runs as the ServiceAccount every `--tenant-interval`, and
-at once for a namespace a create writes into, and keeps in each tenant:
+(`internal/tenants`, a controller-runtime controller in the same process) runs
+as the ServiceAccount and keeps in each tenant what follows. It reconciles a
+tenant at once when the namespace, an agent in it, one of its copies or a
+platform object they are copied from changes, and every tenant every
+`--tenant-interval` (default 10m) as a safety net. Of several replicas, the
+one that holds the Lease `agent-manager-tenants` in the pod's namespace
+reconciles; every replica knows the tenants. Its cache holds the labelled
+namespaces, its own copies, the objects of `--kagent-namespace` it copies
+from, and of the Secrets only `--tenant-model-secret`.
 
 - always: the agent chart's OCIRepository, the `--helmrelease-service-account`
   ServiceAccount with a RoleBinding to `agent-platform-tenant-flux` (the Helm
