@@ -66,14 +66,15 @@ type serveOptions struct {
 
 	kagentTarget string
 
-	multiTenant              bool
-	tenantModelConfig        string
-	tenantModelSecret        string
-	tenantWorkerPoolReplicas int64
-	tenantFluxClusterRole    string
-	tenantNetworkPolicy      string
-	tenantNetworkPolicies    string
-	tenantInterval           time.Duration
+	multiTenant                   bool
+	tenantModelConfig             string
+	tenantModelSecret             string
+	tenantWorkerPoolReplicas      int64
+	tenantFluxClusterRole         string
+	tenantNetworkPolicy           string
+	tenantNetworkPolicies         string
+	tenantInterval                time.Duration
+	tenantLeaderElectionNamespace string
 
 	mcpEnabled bool
 	mcpPath    string
@@ -146,6 +147,7 @@ environment variable named next to it; flags win over the environment.`,
 	f.StringVar(&o.tenantNetworkPolicy, "tenant-network-policy-flavor", envOr("AGENT_MANAGER_TENANT_NETWORK_POLICY_FLAVOR", ""), "Kind of the network policies copied into a tenant: kubernetes (NetworkPolicy) or cilium (CiliumNetworkPolicy); empty copies none (AGENT_MANAGER_TENANT_NETWORK_POLICY_FLAVOR)")
 	f.StringVar(&o.tenantNetworkPolicies, "tenant-network-policies", envOr("AGENT_MANAGER_TENANT_NETWORK_POLICIES", ""), "Comma-separated names of the network policies copied from --kagent-namespace into every tenant (AGENT_MANAGER_TENANT_NETWORK_POLICIES)")
 	f.DurationVar(&o.tenantInterval, "tenant-interval", envDuration("AGENT_MANAGER_TENANT_INTERVAL", 10*time.Minute), "How often every tenant is reconciled without a change; a change to a tenant, its agents, its copies or their platform sources reconciles it at once (AGENT_MANAGER_TENANT_INTERVAL)")
+	f.StringVar(&o.tenantLeaderElectionNamespace, "tenant-leader-election-namespace", envOr("AGENT_MANAGER_TENANT_LEADER_ELECTION_NAMESPACE", ""), "Namespace of the Lease "+tenants.LeaderElectionID+" the replicas elect the tenant reconciler's leader with; empty is the pod's namespace, so a run outside a cluster with --multi-tenant must set it (AGENT_MANAGER_TENANT_LEADER_ELECTION_NAMESPACE)")
 	f.BoolVar(&o.mcpEnabled, "mcp-enabled", envBool("AGENT_MANAGER_MCP_ENABLED", true), "Serve the MCP streamable-HTTP endpoint (AGENT_MANAGER_MCP_ENABLED)")
 	f.StringVar(&o.mcpPath, "mcp-path", envOr("AGENT_MANAGER_MCP_PATH", "/mcp"), "MCP endpoint path (AGENT_MANAGER_MCP_PATH)")
 	f.BoolVar(&o.oauthEnabled, "enable-oauth", envBool("AGENT_MANAGER_OAUTH_ENABLED", false), "Require an OAuth 2.1 bearer token on the MCP endpoint and the REST API, validated against the platform IdP (mcp-oauth); the caller's identity travels with every request (AGENT_MANAGER_OAUTH_ENABLED)")
@@ -297,6 +299,8 @@ func runServe(ctx context.Context, o *serveOptions) error {
 			ModelConfigGVK:     kagentGVK("ModelConfig"),
 			WorkerPoolGVK:      schema.GroupVersionKind{Group: "ate.dev", Version: poolVersion, Kind: "WorkerPool"},
 			SyncPeriod:         o.tenantInterval,
+			// Empty: the pod's namespace.
+			LeaderElectionNamespace: o.tenantLeaderElectionNamespace,
 		}, log)
 		if err != nil {
 			return err
@@ -370,10 +374,12 @@ func runServe(ctx context.Context, o *serveOptions) error {
 	// The tenant manager runs beside the server and stops with it; a manager
 	// that fails (a lost leader Lease, say) stops the server too.
 	managerDone := make(chan error, 1)
+	stopManager := func() {}
 	if tenantSet != nil {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithCancel(ctx)
 		defer cancel()
+		stopManager = cancel
 		go func() {
 			err := tenantSet.Start(ctx)
 			if err != nil {
@@ -402,6 +408,7 @@ func runServe(ctx context.Context, o *serveOptions) error {
 		go bootSecret.Run(ctx)
 	}
 	err = srv.Run(ctx)
+	stopManager()
 	if mgrErr := <-managerDone; err == nil && mgrErr != nil {
 		err = fmt.Errorf("tenant manager: %w", mgrErr)
 	}

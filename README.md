@@ -482,7 +482,11 @@ platform object they are copied from changes, and every tenant every
 one that holds the Lease `agent-manager-tenants` in the pod's namespace
 reconciles; every replica knows the tenants. Its cache holds the labelled
 namespaces, its own copies, the objects of `--kagent-namespace` it copies
-from, and of the Secrets only `--tenant-model-secret`.
+from, and of the Secrets only `--tenant-model-secret`. Outside a cluster, set
+`--tenant-leader-election-namespace`. Every kind it keeps must be served
+(Agent, Harness, ModelConfig, WorkerPool, HelmRelease, OCIRepository and the
+`--tenant-network-policy-flavor` kind): without one, agent-manager stops at
+start.
 
 - always: the agent chart's OCIRepository, the `--helmrelease-service-account`
   ServiceAccount with a RoleBinding to `agent-platform-tenant-flux` (the Helm

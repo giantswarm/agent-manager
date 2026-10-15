@@ -233,9 +233,10 @@ func trimHelmRelease(obj any) (any, error) {
 	trimmed.SetResourceVersion(u.GetResourceVersion())
 	trimmed.SetGeneration(u.GetGeneration())
 	trimmed.SetDeletionTimestamp(u.GetDeletionTimestamp())
+	src, _ := u.Object["spec"].(map[string]any)
 	spec := map[string]any{}
 	for _, field := range []string{"chartRef", "kubeConfig"} {
-		if v, ok := u.Object["spec"].(map[string]any)[field]; ok {
+		if v, ok := src[field]; ok {
 			spec[field] = runtime.DeepCopyJSONValue(v)
 		}
 	}
@@ -264,6 +265,9 @@ func (r *Reconciler) setupWithManager(mgr manager.Manager) error {
 			return e.ObjectOld.GetGeneration() != e.ObjectNew.GetGeneration() && (r.isAgentChart(e.ObjectOld) || r.isAgentChart(e.ObjectNew))
 		},
 	}
+	// A status write changes neither the spec (the generation) nor the
+	// labels: nothing the reconciler copies or decides on.
+	specOrLabels := predicate.Or(predicate.GenerationChangedPredicate{}, predicate.LabelChangedPredicate{})
 	agent := &metav1.PartialObjectMetadata{}
 	agent.SetGroupVersionKind(r.cfg.AgentGVK)
 
@@ -274,13 +278,15 @@ func (r *Reconciler) setupWithManager(mgr manager.Manager) error {
 		Watches(object(r.cfg.HelmReleaseGVK), ownNamespace, builder.WithPredicates(agentRelease)).
 		Watches(&corev1.ServiceAccount{}, ownNamespace, builder.WithPredicates(isCopy)).
 		Watches(&rbacv1.RoleBinding{}, ownNamespace, builder.WithPredicates(isCopy)).
-		Watches(object(r.cfg.OCIRepositoryGVK), ownNamespace, builder.WithPredicates(isCopy))
-	// A copy reconciles its namespace; a source every tenant.
-	for _, o := range []client.Object{&corev1.Secret{}, object(r.cfg.HarnessGVK), object(r.cfg.ModelConfigGVK), object(r.cfg.WorkerPoolGVK)} {
-		b = b.Watches(o, handler.EnqueueRequestsFromMapFunc(r.copyOrSource))
-	}
+		Watches(object(r.cfg.OCIRepositoryGVK), ownNamespace, builder.WithPredicates(isCopy, specOrLabels)).
+		// A copy reconciles its namespace; a source every tenant.
+		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(r.copyOrSource))
+	kinds := []schema.GroupVersionKind{r.cfg.HarnessGVK, r.cfg.ModelConfigGVK, r.cfg.WorkerPoolGVK}
 	if !r.cfg.NetworkPolicyGVK.Empty() {
-		b = b.Watches(object(r.cfg.NetworkPolicyGVK), handler.EnqueueRequestsFromMapFunc(r.copyOrSource))
+		kinds = append(kinds, r.cfg.NetworkPolicyGVK)
+	}
+	for _, gvk := range kinds {
+		b = b.Watches(object(gvk), handler.EnqueueRequestsFromMapFunc(r.copyOrSource), builder.WithPredicates(specOrLabels))
 	}
 	return b.Complete(r)
 }

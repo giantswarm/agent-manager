@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"os"
+	"slices"
 	"testing"
 	"time"
 
@@ -244,6 +245,12 @@ func TestTenantReconcilerEnvtest(t *testing.T) {
 
 	t.Run("the first agent brings the Harness, a WorkerPool and the default model", func(t *testing.T) {
 		c.create(t, mcGVR, obj("api.kagent.dev/v1alpha3", "ModelConfig", "org-a", "own", map[string]any{"provider": "OpenAI"}))
+		// A HelmRelease without a spec (the CRD does not require one) is no
+		// agent, and the cache that trims it does not stop the reconciler.
+		noSpec := agentRelease("org-a")
+		noSpec.SetName("no-spec")
+		delete(noSpec.Object, "spec")
+		c.create(t, hrGVR, noSpec)
 		c.create(t, hrGVR, agentRelease("org-a"))
 		eventually(t, func() bool { return c.secret(t, "org-a", keySecret) != nil }, "the key Secret")
 		eventually(t, func() bool { return c.get(t, harnessGVR, "org-a", "kagent") != nil }, "the Harness")
@@ -268,6 +275,9 @@ func TestTenantReconcilerEnvtest(t *testing.T) {
 		eventually(t, func() bool {
 			return field(c.get(t, mcGVR, "org-a", "default-model-config"), "spec", "model") == "claude"
 		}, "the ModelConfig's model restored")
+
+		require.NoError(t, c.dyn.Resource(harnessGVR).Namespace("org-a").Delete(ctx, "kagent", metav1.DeleteOptions{}))
+		eventually(t, func() bool { return c.get(t, harnessGVR, "org-a", "kagent") != nil }, "a deleted copy is made again")
 	})
 
 	t.Run("a change to a platform source reaches every tenant with agents", func(t *testing.T) {
@@ -348,6 +358,16 @@ func TestTenantReconcilerEnvtest(t *testing.T) {
 		eventually(t, func() bool { return c.get(t, harnessGVR, "org-b", "kagent") != nil }, "the Agent brings the Harness")
 		require.NoError(t, c.dyn.Resource(agentGVR).Namespace("org-b").Delete(ctx, "bare", metav1.DeleteOptions{}))
 		eventually(t, func() bool { return c.get(t, harnessGVR, "org-b", "kagent") == nil }, "with only the remote release left, the Harness goes")
+	})
+
+	t.Run("a namespace that loses the label is no tenant any more, and keeps what it holds", func(t *testing.T) {
+		ns, err := c.admin.CoreV1().Namespaces().Get(ctx, "org-b", metav1.GetOptions{})
+		require.NoError(t, err)
+		delete(ns.Labels, OrganizationLabel)
+		_, err = c.admin.CoreV1().Namespaces().Update(ctx, ns, metav1.UpdateOptions{})
+		require.NoError(t, err)
+		eventually(t, func() bool { return !slices.Contains(c.r.Namespaces(), "org-b") }, "org-b no longer a tenant")
+		assert.NotNil(t, c.get(t, ociGVR, "org-b", "agent"), "nothing is deleted from a namespace that leaves")
 	})
 
 	t.Run("the replicas elect the reconciler's leader with the Lease", func(t *testing.T) {
