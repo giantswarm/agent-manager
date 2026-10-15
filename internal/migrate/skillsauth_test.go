@@ -3,6 +3,7 @@ package migrate
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
@@ -112,6 +113,27 @@ func TestSkillsCredentialWaitsForTheCurrentSecret(t *testing.T) {
 
 	c.credentialSecret(t, "kagent")
 	res, err = c.runnerV2(t, renameOptions("kagent"), v2Latest).Run(ctx)
+	require.NoError(t, err)
+	require.Equal(t, ActionRewritten, byRelease(res.Reports[0])["kagent/a"].Action)
+	require.Equal(t, map[string]any{"name": skillsCredential}, c.values(t, "kagent", "a")[agents.SkillsGitAuthValuesKey])
+}
+
+// A run waits for the Secret agent-manager's rollout creates while it runs,
+// and moves the release once it is there.
+func TestSkillsCredentialWaitsWithinTheRun(t *testing.T) {
+	poll := credentialPoll
+	credentialPoll = 10 * time.Millisecond
+	t.Cleanup(func() { credentialPoll = poll })
+	values := withSkillsCredential(map[string]any{"agent": map[string]any{"name": "a"}, "modelConfig": map[string]any{"name": "default-model-config"}}, skillsCredentialPrev)
+	c := newCluster(ociRepository("kagent", v2Target), helmRelease("kagent", "a", values, "2.0.0"), agentObj("kagent", "a", "a", "kagent", true))
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		c.credentialSecret(t, "kagent")
+	}()
+
+	opts := renameOptions("kagent")
+	opts.SkillsGitAuthWait = 5 * time.Second
+	res, err := c.runnerV2(t, opts, v2Latest).Run(t.Context())
 	require.NoError(t, err)
 	require.Equal(t, ActionRewritten, byRelease(res.Reports[0])["kagent/a"].Action)
 	require.Equal(t, map[string]any{"name": skillsCredential}, c.values(t, "kagent", "a")[agents.SkillsGitAuthValuesKey])

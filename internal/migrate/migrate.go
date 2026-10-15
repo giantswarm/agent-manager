@@ -109,6 +109,11 @@ type Options struct {
 	// skillsGitAuthSecretRef is moved to it.
 	SkillsGitAuthSecretName          string
 	SkillsGitAuthPreviousSecretNames []string
+	// SkillsGitAuthWait is how long a run waits, all in all, for the
+	// Secret of the current name to appear in a namespace where a release
+	// still names a previous one: agent-manager's chart creates it, and its
+	// rollout may trail the run. Zero does not wait.
+	SkillsGitAuthWait time.Duration
 }
 
 // StatusReader is the verdict on the object a release on the target chart
@@ -129,6 +134,8 @@ type Runner struct {
 	filter *regexp.Regexp
 	log    *slog.Logger
 	now    func() time.Time
+	// credentialDeadline ends the run's wait for the skills credential.
+	credentialDeadline time.Time
 }
 
 // New builds a runner; the target range must admit exactly one major with a
@@ -179,6 +186,7 @@ func (r *Runner) Run(ctx context.Context) (*Result, error) {
 	run := RunInfo{At: r.now().UTC().Format(time.RFC3339), DryRun: r.opts.DryRun, Version: r.opts.Version, Harness: r.opts.HarnessName, Path: r.hop.String(),
 		Chart: ChartInfo{OCIURL: r.opts.ChartOCIURL, TargetSemver: r.opts.TargetSemver, TargetSemverFilter: r.opts.TargetSemverFilter, LatestVersion: info.LatestVersion, SchemaVersion: sch.Version, SchemaSource: sch.Source}}
 	chartAvailable := info.LatestVersion != ""
+	r.credentialDeadline = r.now().Add(r.opts.SkillsGitAuthWait)
 	if !chartAvailable {
 		r.log.Warn("the registry has no chart version in the target range; no source is moved and no writable release is rewritten this run", "chart", r.opts.ChartOCIURL, "range", r.opts.TargetSemver, "error", info.Error)
 	}

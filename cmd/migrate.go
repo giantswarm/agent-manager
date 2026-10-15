@@ -45,6 +45,7 @@ type migrateOptions struct {
 	skillsToken       string
 	skillsGitAuth     string
 	skillsGitAuthPrev string
+	skillsGitAuthWait time.Duration
 
 	reportConfigMap string
 	dryRun          bool
@@ -135,6 +136,7 @@ variable named next to it; flags win.`,
 	f.StringVar(&o.skillsToken, "skills-github-token", envOr("GITHUB_TOKEN", ""), "GitHub token for private skill repositories and a higher rate limit; prefer the environment (GITHUB_TOKEN)")
 	f.StringVar(&o.skillsGitAuth, "skills-git-auth-secret-name", envOr("AGENT_MANAGER_SKILLS_GIT_AUTH_SECRET_NAME", ""), "The installation's skills credential Secret, as serve takes it: every release whose skillsGitAuthSecretRef names one of --skills-git-auth-previous-secret-names is moved to it (AGENT_MANAGER_SKILLS_GIT_AUTH_SECRET_NAME)")
 	f.StringVar(&o.skillsGitAuthPrev, "skills-git-auth-previous-secret-names", envOr("AGENT_MANAGER_SKILLS_GIT_AUTH_PREVIOUS_SECRET_NAMES", ""), "Comma-separated earlier names of the installation's skills credential Secret; empty moves no release (AGENT_MANAGER_SKILLS_GIT_AUTH_PREVIOUS_SECRET_NAMES)")
+	f.DurationVar(&o.skillsGitAuthWait, "skills-git-auth-wait", envDuration("AGENT_MANAGER_SKILLS_GIT_AUTH_WAIT", 5*time.Minute), "How long the run waits, all in all, for the --skills-git-auth-secret-name Secret to appear where a release still names a previous name (agent-manager's rollout may trail the run); then such a release keeps the previous name until a later run (AGENT_MANAGER_SKILLS_GIT_AUTH_WAIT)")
 	f.StringVar(&o.reportConfigMap, "report-configmap", envOr("AGENT_MANAGER_MIGRATE_REPORT_CONFIGMAP", migrate.DefaultReportConfigMap), "Name of the report ConfigMap written in every managed namespace (AGENT_MANAGER_MIGRATE_REPORT_CONFIGMAP)")
 	f.BoolVar(&o.dryRun, "dry-run", envBool("AGENT_MANAGER_MIGRATE_DRY_RUN", false), "Print the report and the diffs; write nothing, not even the report (AGENT_MANAGER_MIGRATE_DRY_RUN)")
 	return cmd
@@ -197,6 +199,7 @@ func runMigrate(ctx context.Context, out io.Writer, o *migrateOptions) error {
 
 		SkillsGitAuthSecretName:          o.skillsGitAuth,
 		SkillsGitAuthPreviousSecretNames: splitList(o.skillsGitAuthPrev),
+		SkillsGitAuthWait:                o.skillsGitAuthWait,
 	}, log)
 	if err != nil {
 		return err

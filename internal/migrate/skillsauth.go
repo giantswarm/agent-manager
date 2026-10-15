@@ -4,9 +4,11 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/wait"
 
 	"github.com/giantswarm/agent-manager/internal/agents"
 )
@@ -16,9 +18,9 @@ import (
 // in place, on either hop: the Secret was renamed, and the agent is to read
 // its git skills from the current one. A release naming its own Secret, or
 // none, is left as it is. So is one whose namespace has no Secret of the
-// current name yet (agent-manager's chart creates it, and its rollout may
-// trail this run): the previous Secret keeps working, and a later run moves
-// the release; the warning says so.
+// current name before the run's wait ends (agent-manager's chart creates it,
+// and its rollout may trail this run): the previous Secret keeps working, and
+// a later run moves the release; the warning says so.
 func (r *Runner) renameSkillsGitAuth(ctx context.Context, rel *release, values map[string]any, ch *ValueChanges) string {
 	current, previous := r.opts.SkillsGitAuthSecretName, r.opts.SkillsGitAuthPreviousSecretNames
 	if current == "" {
@@ -30,7 +32,7 @@ func (r *Runner) renameSkillsGitAuth(ctx context.Context, rel *release, values m
 		return ""
 	}
 	ns := rel.renderNamespace()
-	_, err := r.client.Typed().CoreV1().Secrets(ns).Get(ctx, current, metav1.GetOptions{})
+	err := r.awaitSecret(ctx, ns, current)
 	switch {
 	case apierrors.IsNotFound(err):
 		return fmt.Sprintf("skillsGitAuthSecretRef stays %s: namespace %s has no Secret %s yet; a later run moves it", name, ns, current)
@@ -40,4 +42,27 @@ func (r *Runner) renameSkillsGitAuth(ctx context.Context, rel *release, values m
 	ref["name"] = current
 	ch.Set = append(ch.Set, agents.SkillsGitAuthValuesKey+".name="+current)
 	return ""
+}
+
+// credentialPoll is how often a missing skills credential is looked for.
+var credentialPoll = 5 * time.Second
+
+// awaitSecret reads ns/name until it exists or the run's credential deadline
+// passes; the error is the last read's.
+func (r *Runner) awaitSecret(ctx context.Context, ns, name string) error {
+	get := func(ctx context.Context) error {
+		_, err := r.client.Typed().CoreV1().Secrets(ns).Get(ctx, name, metav1.GetOptions{})
+		return err
+	}
+	err := get(ctx)
+	left := r.credentialDeadline.Sub(r.now())
+	if !apierrors.IsNotFound(err) || left <= 0 {
+		return err
+	}
+	r.log.Info("waiting for the skills credential agent-manager's chart creates", "namespace", ns, "secret", name, "for", left.Round(time.Second))
+	_ = wait.PollUntilContextTimeout(ctx, credentialPoll, left, false, func(ctx context.Context) (bool, error) {
+		err = get(ctx)
+		return !apierrors.IsNotFound(err), nil
+	})
+	return err
 }
