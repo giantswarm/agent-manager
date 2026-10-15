@@ -57,7 +57,8 @@ type Config struct {
 	Sessions SessionClient
 	// HarnessEgress is the platform's origin list per claude Harness, by
 	// Harness name: written into a coding agent's egress, and the only
-	// origins it may name. A claude Harness without an entry reaches none.
+	// origins it may name. A claude Harness without an entry is refused; an
+	// empty list reaches none.
 	HarnessEgress map[string][]string
 }
 
