@@ -524,19 +524,19 @@ The agents' Flux identity can read and write every Secret of the tenant.
 helm-controller keeps an agent's Helm release Secrets
 (`sh.helm.release.v1.<release>.v<N>`) in the HelmRelease's namespace, and
 Helm's Secret storage driver calls `get`, `list`, `create`, `update` and
-`delete` on them (`agent-platform-tenant-flux` grants these and no more).
-RBAC cannot narrow a `list`, so that identity can read every Secret of an
+`delete` on them (`agent-platform-tenant-flux` grants these and no more). RBAC
+cannot narrow a `list`, so that identity can read every Secret of an
 organization namespace, the CAPI cluster kubeconfigs included, and a chart
 rendered through it can copy such a Secret with Helm `lookup` into an object
 it renders. With `create`, `update` and `delete` such a chart can also
 overwrite or delete any Secret there, and get the token of any ServiceAccount
 there (a `kubernetes.io/service-account-token` Secret it renders, read back
 with `lookup`), `automation` (`cluster-admin` in an org namespace, from
-rbac-operator) included. Whoever may create or change a HelmRelease or an OCIRepository in
-the namespace can trigger that: on a Giant Swarm management cluster, the
-organization's admins (`cluster-admin` there, from rbac-operator) and the
-members bound to `agent-platform:editor` or `agent-platform:admin`, which
-grant those writes but no Secret read.
+rbac-operator) included. Whoever may create or change a HelmRelease or an
+OCIRepository in the namespace can trigger that: on a Giant Swarm management
+cluster, the organization's admins (`cluster-admin` there) and the members
+bound to `agent-platform:editor` or `agent-platform:admin`, which grant those
+writes but no Secret read.
 
 Every create records the caller as `agent-platform.giantswarm.io/created-by`
 on the HelmRelease and, through the chart's `annotations` value, on the

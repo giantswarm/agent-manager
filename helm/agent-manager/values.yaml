@@ -417,10 +417,10 @@ tenants:
   # it can copy such a Secret with Helm `lookup` into an object it renders,
   # overwrite or delete any Secret there, and get the token of any
   # ServiceAccount there (`automation`, cluster-admin in an org namespace,
-  # included). Whoever may create or change a HelmRelease or an OCIRepository in the
-  # namespace can trigger that: on a Giant Swarm management cluster the
-  # organization's admins and the members bound to `agent-platform:editor`
-  # or `agent-platform:admin`.
+  # included). Whoever may create or change a HelmRelease or an
+  # OCIRepository in the namespace can trigger that: on a Giant Swarm
+  # management cluster the organization's admins and the members bound to
+  # `agent-platform:editor` or `agent-platform:admin`.
   enabled: false
   modelConfig:
     # -- The platform's default ModelConfig a tenant receives with its first
