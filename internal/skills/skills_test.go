@@ -78,6 +78,10 @@ func fakeGitHub(t *testing.T) (*httptest.Server, *int) {
 			_, _ = w.Write([]byte("---\nname: runbooks\ndescription: |\n  Operates things.\n---\n"))
 		case "noname/SKILL.md":
 			_, _ = w.Write([]byte("# no frontmatter at all\n"))
+		case "plugins/agent/plugin.json", "plugins/both/plugin.json", "plugins/both/.claude-plugin/plugin.json", "plugins/claude/.claude-plugin/plugin.json":
+			_, _ = w.Write([]byte(`{"name":"p"}`))
+		case "plugins/broken/plugin.json":
+			http.Error(w, `{"message":"Server Error"}`, http.StatusInternalServerError)
 		default:
 			http.NotFound(w, r)
 		}
@@ -193,6 +197,24 @@ func TestResolverPinsGitRefs(t *testing.T) {
 	got, err := r.GitHead(ctx, "https://github.com/giantswarm/private-skills", "")
 	require.NoError(t, err)
 	assert.Equal(t, tagCommit, got)
+}
+
+// A plugin is Claude-format by kagent's rule: a .claude-plugin/plugin.json
+// manifest and no root plugin.json.
+func TestResolverTellsClaudeFormatPlugins(t *testing.T) {
+	ts, _ := fakeGitHub(t)
+	r := NewResolver(ts.URL, StaticToken("secret"), nil, nil)
+	repo := "https://github.com/giantswarm/agent-skills"
+	for path, want := range map[string]bool{"plugins/agent": false, "plugins/both": false, "/plugins/claude/": true, "plugins/none": false} {
+		got, err := r.ClaudeFormatPlugin(t.Context(), repo, headCommit, path)
+		require.NoError(t, err, path)
+		assert.Equal(t, want, got, path)
+	}
+	_, err := r.ClaudeFormatPlugin(t.Context(), repo, headCommit, "plugins/broken")
+	require.ErrorIs(t, err, ErrUnresolvable)
+	assert.Contains(t, err.Error(), repo)
+	_, err = r.ClaudeFormatPlugin(t.Context(), "https://gitlab.com/x/y", headCommit, "")
+	assert.ErrorIs(t, err, ErrUnresolvable)
 }
 
 func TestResolverPinsOCITags(t *testing.T) {
