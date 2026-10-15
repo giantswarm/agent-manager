@@ -580,7 +580,7 @@ func (r *Runner) planRelease(ctx context.Context, st *nsState, rel *release, cha
 		}
 		return rep
 	}
-	renameSkillsGitAuth(rewritten, r.opts.SkillsGitAuthSecretName, r.opts.SkillsGitAuthPreviousSecretNames, changes)
+	renameWarning := r.renameSkillsGitAuth(ctx, rel, rewritten, changes)
 	rel.values, rel.rewritten = values, rewritten
 	rewrittenHR := &unstructured.Unstructured{Object: runtime.DeepCopyJSON(rel.obj.Object)}
 	_ = unstructured.SetNestedMap(rewrittenHR.Object, rewritten, "spec", "values")
@@ -594,6 +594,9 @@ func (r *Runner) planRelease(ctx context.Context, st *nsState, rel *release, cha
 		return rep
 	}
 	rep.Warnings = r.subAgentWarnings(st, rel, rewritten)
+	if renameWarning != "" {
+		rep.Warnings = append(rep.Warnings, renameWarning)
+	}
 	if changes.Empty() && reflect.DeepEqual(values, rewritten) {
 		rep.Action, rep.Reason = ActionUnchanged, fmt.Sprintf("already on the %d.x values", to)
 		rel.onTarget = true

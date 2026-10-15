@@ -1,9 +1,12 @@
 package migrate
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/giantswarm/agent-manager/internal/agents"
@@ -17,6 +20,14 @@ const (
 func withSkillsCredential(values map[string]any, name string) map[string]any {
 	values[agents.SkillsGitAuthValuesKey] = map[string]any{"name": name}
 	return values
+}
+
+// credentialSecret is the Secret of the current name agent-manager's chart
+// renders in ns.
+func (c *cluster) credentialSecret(t *testing.T, ns string) {
+	t.Helper()
+	_, err := c.typed.CoreV1().Secrets(ns).Create(t.Context(), &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: skillsCredential, Namespace: ns}}, metav1.CreateOptions{})
+	require.NoError(t, err)
 }
 
 func renameOptions(namespaces ...string) Options {
@@ -36,6 +47,7 @@ func TestSkillsCredentialMovesToItsCurrentName(t *testing.T) {
 		helmRelease("kagent", "own", withSkillsCredential(agentValues("own"), "team-token"), "2.0.0"), agentObj("kagent", "own", "own", "kagent", true),
 		helmRelease("kagent", "current", withSkillsCredential(agentValues("current"), skillsCredential), "2.0.0"), agentObj("kagent", "current", "current", "kagent", true),
 	)
+	c.credentialSecret(t, "kagent")
 
 	res, err := c.runnerV2(t, renameOptions("kagent"), v2Latest).Run(ctx)
 	require.NoError(t, err)
@@ -72,6 +84,7 @@ func TestSkillsCredentialOfAGitOpsReleaseIsADiff(t *testing.T) {
 	hr := gitOpsLabeled(helmRelease("flux-giantswarm", "sre-agent", values, "2.0.0"))
 	require.NoError(t, unstructured.SetNestedField(hr.Object, "kagent", "spec", "targetNamespace"))
 	c := newCluster(gitOpsLabeled(ociRepository("flux-giantswarm", v2Target)), hr, agentObj("kagent", "sre-agent", "sre-agent", "flux-giantswarm", true))
+	c.credentialSecret(t, "kagent")
 
 	res, err := c.runnerV2(t, renameOptions("kagent"), v2Latest).Run(t.Context())
 	require.NoError(t, err)
@@ -80,4 +93,26 @@ func TestSkillsCredentialOfAGitOpsReleaseIsADiff(t *testing.T) {
 	require.Contains(t, rel.Diff, "-      name: "+skillsCredentialPrev+"\n")
 	require.Contains(t, rel.Diff, "+      name: "+skillsCredential+"\n")
 	require.Empty(t, c.writes("flux-giantswarm"))
+}
+
+// Before agent-manager's rollout created the Secret of the current name, a
+// release keeps the previous one (still filled) and the report warns; the
+// next run moves it.
+func TestSkillsCredentialWaitsForTheCurrentSecret(t *testing.T) {
+	ctx := t.Context()
+	values := withSkillsCredential(map[string]any{"agent": map[string]any{"name": "a"}, "modelConfig": map[string]any{"name": "default-model-config"}}, skillsCredentialPrev)
+	c := newCluster(ociRepository("kagent", v2Target), helmRelease("kagent", "a", values, "2.0.0"), agentObj("kagent", "a", "a", "kagent", true))
+
+	res, err := c.runnerV2(t, renameOptions("kagent"), v2Latest).Run(ctx)
+	require.NoError(t, err)
+	rel := byRelease(res.Reports[0])["kagent/a"]
+	require.Equal(t, ActionUnchanged, rel.Action)
+	require.Contains(t, strings.Join(rel.Warnings, "\n"), "namespace kagent has no Secret "+skillsCredential+" yet")
+	require.Empty(t, c.writes("kagent"))
+
+	c.credentialSecret(t, "kagent")
+	res, err = c.runnerV2(t, renameOptions("kagent"), v2Latest).Run(ctx)
+	require.NoError(t, err)
+	require.Equal(t, ActionRewritten, byRelease(res.Reports[0])["kagent/a"].Action)
+	require.Equal(t, map[string]any{"name": skillsCredential}, c.values(t, "kagent", "a")[agents.SkillsGitAuthValuesKey])
 }
