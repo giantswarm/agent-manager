@@ -95,6 +95,9 @@ spec:
             {{- with include "agent-manager.skillsGitAuthSecretName" . }}
             - --skills-git-auth-secret-name={{ . }}
             {{- end }}
+            {{- with (include "agent-manager.skillsGitAuthPreviousSecretNames" . | fromJsonArray) }}
+            - --skills-git-auth-previous-secret-names={{ join "," . }}
+            {{- end }}
             {{- if .Values.skills.mintGitAuthSecret }}
             - --skills-git-auth-mint=true
             {{- end }}

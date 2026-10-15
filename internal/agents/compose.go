@@ -3,6 +3,7 @@ package agents
 import (
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -55,6 +56,10 @@ type ComposeConfig struct {
 	// git skill or git plugin reads them with, unless the agent names its
 	// own. Empty: such agents fetch anonymously.
 	SkillsGitAuthSecretName string
+	// SkillsGitAuthPreviousSecretNames are the installation's earlier names
+	// of that Secret: an agent that names one is moved to
+	// SkillsGitAuthSecretName whenever its values are composed.
+	SkillsGitAuthPreviousSecretNames []string
 }
 
 // Defaults of the composition, the values composeManifests.ts uses.
@@ -90,14 +95,23 @@ var (
 	RenamedValuePaths = map[string]string{"muster.toolNames": "muster.tools"}
 )
 
+// TenantCredentialPrefix is the name prefix of the Secrets a tenant's agents
+// may name as a credential; the installation's skills credential carries it
+// too, so the platform's agents pass the same rule.
+const TenantCredentialPrefix = "tenant-credential-"
+
 // SkillsGitAuthValuesKey is the chart value that fans one read credential
 // out to every git skill and git plugin: {name: <Secret>}.
 const SkillsGitAuthValuesKey = "skillsGitAuthSecretRef"
 
 // skillsGitAuth is the credential Secret an agent with these skills and
 // plugins reads them with: its own, else the installation's; none without a
-// git source.
+// git source. An own Secret of a previous installation name is the
+// installation's current one.
 func skillsGitAuth(own string, skills Skills, plugins Plugins, cfg ComposeConfig) string {
+	if slices.Contains(cfg.SkillsGitAuthPreviousSecretNames, own) {
+		own = ""
+	}
 	hasGit := false
 	for _, sk := range skills {
 		hasGit = hasGit || sk.Git != nil

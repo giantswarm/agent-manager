@@ -104,6 +104,11 @@ type Options struct {
 	OCIRepositoryAPIVersion string
 	// Version is the agent-manager version recorded in the report.
 	Version string
+	// SkillsGitAuthSecretName is the installation's skills credential; a
+	// release naming one of SkillsGitAuthPreviousSecretNames as its
+	// skillsGitAuthSecretRef is moved to it.
+	SkillsGitAuthSecretName          string
+	SkillsGitAuthPreviousSecretNames []string
 }
 
 // StatusReader is the verdict on the object a release on the target chart
@@ -575,6 +580,7 @@ func (r *Runner) planRelease(ctx context.Context, st *nsState, rel *release, cha
 		}
 		return rep
 	}
+	renameSkillsGitAuth(rewritten, r.opts.SkillsGitAuthSecretName, r.opts.SkillsGitAuthPreviousSecretNames, changes)
 	rel.values, rel.rewritten = values, rewritten
 	rewrittenHR := &unstructured.Unstructured{Object: runtime.DeepCopyJSON(rel.obj.Object)}
 	_ = unstructured.SetNestedMap(rewrittenHR.Object, rewritten, "spec", "values")

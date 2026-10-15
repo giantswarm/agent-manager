@@ -243,7 +243,8 @@ port: {{ $port }}
 
 {{/*
 The installation's skills boot Secret: the minted one, else
-skills.gitAuthSecretName.
+skills.gitAuthSecretName. The minted one carries the tenant-credential- prefix,
+the one Secret name an agent's git credentialRef may carry.
 */}}
 {{- define "agent-manager.skillsGitAuthSecretName" -}}
 {{- if .Values.skills.mintGitAuthSecret -}}
@@ -253,8 +254,28 @@ skills.gitAuthSecretName.
 {{- if not .Values.skills.github.app.secretName -}}
 {{- fail "skills.mintGitAuthSecret needs skills.github.app.secretName: the Secret is filled with the skills GitHub App's installation token" -}}
 {{- end -}}
-{{- printf "%s-skills-token" (include "agent-manager.fullname" .) -}}
+{{- printf "tenant-credential-%s-skills-token" (include "agent-manager.fullname" .) -}}
 {{- else -}}
 {{- .Values.skills.gitAuthSecretName -}}
 {{- end -}}
+{{- end }}
+
+{{/*
+The earlier names of the installation's skills boot Secret, a JSON list:
+skills.previousGitAuthSecretNames and, when minting, the minted Secret's name
+before the tenant-credential- prefix. Agents naming one are moved to the
+current name; while minting, each is rendered and kept filled as well.
+*/}}
+{{- define "agent-manager.skillsGitAuthPreviousSecretNames" -}}
+{{- $names := list -}}
+{{- if .Values.skills.mintGitAuthSecret -}}
+{{- $names = append $names (printf "%s-skills-token" (include "agent-manager.fullname" .)) -}}
+{{- end -}}
+{{- $current := include "agent-manager.skillsGitAuthSecretName" . -}}
+{{- range .Values.skills.previousGitAuthSecretNames -}}
+{{- if and (ne . $current) (not (has . $names)) -}}
+{{- $names = append $names . -}}
+{{- end -}}
+{{- end -}}
+{{- $names | toJson -}}
 {{- end }}

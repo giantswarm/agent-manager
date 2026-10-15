@@ -20,24 +20,24 @@ tests:
       - hasDocuments:
           count: 0
 
-  - it: renders the Secret without data in every managed namespace
+  - it: renders the tenant-credential Secret and its previous name without data in every managed namespace
     set:
       kagent:
         namespace: kagent
         additionalNamespaces: [team-a]
     asserts:
       - hasDocuments:
-          count: 6
+          count: 8
       - isKind:
           of: Secret
-        documentIndex: 3
+        documentIndex: 4
       - equal:
           path: metadata.namespace
           value: team-a
-        documentIndex: 3
+        documentIndex: 4
       - equal:
           path: metadata.name
-          value: RELEASE-NAME-agent-manager-skills-token
+          value: tenant-credential-RELEASE-NAME-agent-manager-skills-token
         documentIndex: 0
       - equal:
           path: metadata.labels["ui.giantswarm.io/agent-skills-git-auth"]
@@ -46,20 +46,46 @@ tests:
       - notExists:
           path: data
         documentIndex: 0
+      - equal:
+          path: metadata.name
+          value: RELEASE-NAME-agent-manager-skills-token
+        documentIndex: 1
+      - notExists:
+          path: metadata.labels["ui.giantswarm.io/agent-skills-git-auth"]
+        documentIndex: 1
+      - notExists:
+          path: data
+        documentIndex: 1
 
-  - it: grants get and update on that one Secret only
+  - it: grants get and update on those Secrets only
     asserts:
       - isKind:
           of: Role
-        documentIndex: 1
+        documentIndex: 2
+      - equal:
+          path: metadata.name
+          value: tenant-credential-RELEASE-NAME-agent-manager-skills-token
+        documentIndex: 2
       - equal:
           path: rules
           value:
             - apiGroups: [""]
               resources: ["secrets"]
-              resourceNames: ["RELEASE-NAME-agent-manager-skills-token"]
+              resourceNames: ["tenant-credential-RELEASE-NAME-agent-manager-skills-token", "RELEASE-NAME-agent-manager-skills-token"]
               verbs: ["get", "update"]
-        documentIndex: 1
+        documentIndex: 2
+
+  - it: renders every listed previous name as well
+    set:
+      skills:
+        previousGitAuthSecretNames: [kagent-skills-token]
+    asserts:
+      - hasDocuments:
+          count: 5
+      - equal:
+          path: metadata.name
+          value: kagent-skills-token
+        documentIndex: 2
 
   - it: binds the Role even when the caller's RBAC governs everything else
     set:
@@ -73,8 +99,8 @@ tests:
     asserts:
       - isKind:
           of: RoleBinding
-        documentIndex: 2
+        documentIndex: 3
       - equal:
           path: subjects[0].name
           value: RELEASE-NAME-agent-manager
-        documentIndex: 2
+        documentIndex: 3
