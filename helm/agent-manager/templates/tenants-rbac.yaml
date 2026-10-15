@@ -47,9 +47,18 @@ metadata:
   labels:
     {{- include "agent-manager.labels" . | nindent 4 }}
 rules:
+  # Helm's Secret storage driver (helm-controller keeps the release Secrets
+  # sh.helm.release.v1.<release>.v<N> in the HelmRelease's namespace) calls
+  # get, list, create, update and delete, nothing else. RBAC cannot narrow a
+  # list (a label selector is no resourceNames), so this identity can read
+  # every Secret of an organization namespace, CAPI cluster kubeconfigs
+  # included, and a chart rendered through it can copy one with Helm `lookup`
+  # into an object it renders. Whoever may create or change a HelmRelease or
+  # an OCIRepository there can trigger that: the organization's admins and the
+  # members bound to agent-platform:editor or agent-platform:admin.
   - apiGroups: [""]
     resources: ["secrets"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+    verbs: ["get", "list", "create", "update", "delete"]
   - apiGroups: ["api.kagent.dev"]
     resources: ["agents", "remotemcpservers"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]

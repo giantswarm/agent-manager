@@ -59,7 +59,7 @@ tests:
       - failedTemplate:
           errorPattern: flux.helmReleaseServiceAccount is required with tenants.enabled
 
-  - it: renders the tenant Flux ClusterRole without agenttemplates
+  - it: renders the tenant Flux ClusterRole with only the Helm storage verbs on Secrets and without agenttemplates
     template: templates/tenants-rbac.yaml
     documentIndex: 0
     asserts:
@@ -73,7 +73,7 @@ tests:
           value:
             - apiGroups: [""]
               resources: ["secrets"]
-              verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+              verbs: ["get", "list", "create", "update", "delete"]
             - apiGroups: ["api.kagent.dev"]
               resources: ["agents", "remotemcpservers"]
               verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]

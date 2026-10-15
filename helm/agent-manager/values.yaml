@@ -410,7 +410,15 @@ tenants:
   # `oauth.downstream.enabled` (a request in a tenant runs as the caller) and
   # `flux.helmReleaseServiceAccount`. An agent in a tenant gets no
   # installation skills credential (`skills.gitAuthSecretName`,
-  # `skills.mintGitAuthSecret`): it names its own.
+  # `skills.mintGitAuthSecret`): it names its own. Read before you enable it:
+  # Helm keeps its release Secrets in the tenant and must `list` them, so
+  # `agent-platform-tenant-flux` can read every Secret of an organization
+  # namespace, CAPI cluster kubeconfigs included. A chart rendered through
+  # it can copy such a Secret with Helm `lookup` into an object it renders.
+  # Whoever may create or change a HelmRelease or an OCIRepository in the
+  # namespace can trigger that: on a Giant Swarm management cluster the
+  # organization's admins and the members bound to `agent-platform:editor`
+  # or `agent-platform:admin`.
   enabled: false
   modelConfig:
     # -- The platform's default ModelConfig a tenant receives with its first
