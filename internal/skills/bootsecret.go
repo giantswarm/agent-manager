@@ -37,6 +37,9 @@ type InstallationTokens interface {
 type BootSecretStatus struct {
 	// SecretName is the Secret (key token) in every namespace.
 	SecretName string `json:"secretName"`
+	// PreviousSecretNames are the installation's earlier names of that
+	// Secret, kept filled the same way until no agent names them.
+	PreviousSecretNames []string `json:"previousSecretNames,omitempty"`
 	// Namespaces are the namespaces the Secret is kept in.
 	Namespaces []string `json:"namespaces"`
 	// RefreshedAt is when the last refresh succeeded.
@@ -52,11 +55,14 @@ type BootSecretStatus struct {
 // the platform's egress gateway sends as Basic authentication (the base64
 // of "x-access-token:<token>"). The Secret exists already (the chart
 // renders it); only its token is written, with the ServiceAccount's one
-// permission to update that Secret by name.
+// permission to update that Secret by name. The Secrets of the previous names
+// get the same token, so an agent that still names one boots until the
+// migration has moved it to the current name.
 type BootSecret struct {
 	tokens     InstallationTokens
 	kube       kubernetes.Interface
 	name       string
+	previous   []string
 	namespaces []string
 	log        *slog.Logger
 
@@ -64,14 +70,16 @@ type BootSecret struct {
 	status BootSecretStatus
 }
 
-// NewBootSecret keeps the Secret name in namespaces.
-func NewBootSecret(tokens InstallationTokens, kube kubernetes.Interface, name string, namespaces []string, log *slog.Logger) *BootSecret {
+// NewBootSecret keeps the Secret name, and the Secrets of the previous names,
+// in namespaces.
+func NewBootSecret(tokens InstallationTokens, kube kubernetes.Interface, name string, previous, namespaces []string, log *slog.Logger) *BootSecret {
 	if log == nil {
 		log = slog.Default()
 	}
 	ns := append([]string(nil), namespaces...)
-	return &BootSecret{tokens: tokens, kube: kube, name: name, namespaces: ns, log: log,
-		status: BootSecretStatus{SecretName: name, Namespaces: ns}}
+	prev := append([]string(nil), previous...)
+	return &BootSecret{tokens: tokens, kube: kube, name: name, previous: prev, namespaces: ns, log: log,
+		status: BootSecretStatus{SecretName: name, PreviousSecretNames: prev, Namespaces: ns}}
 }
 
 // Run refreshes the Secret at once and then on every interval until ctx
@@ -115,26 +123,36 @@ func (b *BootSecret) refresh(ctx context.Context) error {
 	}
 	value := []byte(base64.StdEncoding.EncodeToString([]byte("x-access-token:" + token)))
 	for _, ns := range b.namespaces {
-		secret, err := b.kube.CoreV1().Secrets(ns).Get(ctx, b.name, metav1.GetOptions{})
-		if err != nil {
-			return fmt.Errorf("read Secret %s/%s: %w", ns, b.name, err)
+		for _, name := range append([]string{b.name}, b.previous...) {
+			if err := b.write(ctx, ns, name, value, expires); err != nil {
+				return err
+			}
 		}
-		if bytes.Equal(secret.Data[BootSecretKey], value) {
-			continue
-		}
-		if secret.Data == nil {
-			secret.Data = map[string][]byte{}
-		}
-		secret.Data[BootSecretKey] = value
-		if _, err := b.kube.CoreV1().Secrets(ns).Update(ctx, secret, metav1.UpdateOptions{FieldManager: "agent-manager"}); err != nil {
-			return fmt.Errorf("write Secret %s/%s: %w", ns, b.name, err)
-		}
-		b.log.Info("skills boot Secret refreshed", "secret", b.name, "namespace", ns, "expiresAt", expires)
 	}
 	now := time.Now()
 	b.mu.Lock()
 	b.status.RefreshedAt, b.status.ExpiresAt = &now, &expires
 	b.mu.Unlock()
+	return nil
+}
+
+// write puts value into the Secret ns/name unless it holds it already.
+func (b *BootSecret) write(ctx context.Context, ns, name string, value []byte, expires time.Time) error {
+	secret, err := b.kube.CoreV1().Secrets(ns).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("read Secret %s/%s: %w", ns, name, err)
+	}
+	if bytes.Equal(secret.Data[BootSecretKey], value) {
+		return nil
+	}
+	if secret.Data == nil {
+		secret.Data = map[string][]byte{}
+	}
+	secret.Data[BootSecretKey] = value
+	if _, err := b.kube.CoreV1().Secrets(ns).Update(ctx, secret, metav1.UpdateOptions{FieldManager: "agent-manager"}); err != nil {
+		return fmt.Errorf("write Secret %s/%s: %w", ns, name, err)
+	}
+	b.log.Info("skills boot Secret refreshed", "secret", name, "namespace", ns, "expiresAt", expires)
 	return nil
 }
 
@@ -144,5 +162,6 @@ func (b *BootSecret) Status() BootSecretStatus {
 	defer b.mu.Unlock()
 	out := b.status
 	out.Namespaces = append([]string(nil), b.status.Namespaces...)
+	out.PreviousSecretNames = append([]string(nil), b.status.PreviousSecretNames...)
 	return out
 }

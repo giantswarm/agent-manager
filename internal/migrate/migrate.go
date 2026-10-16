@@ -104,6 +104,16 @@ type Options struct {
 	OCIRepositoryAPIVersion string
 	// Version is the agent-manager version recorded in the report.
 	Version string
+	// SkillsGitAuthSecretName is the installation's skills credential; a
+	// release naming one of SkillsGitAuthPreviousSecretNames as its
+	// skillsGitAuthSecretRef is moved to it.
+	SkillsGitAuthSecretName          string
+	SkillsGitAuthPreviousSecretNames []string
+	// SkillsGitAuthWait is how long a run waits, all in all, for the
+	// Secret of the current name to appear in a namespace where a release
+	// still names a previous one: agent-manager's chart creates it, and its
+	// rollout may trail the run. Zero does not wait.
+	SkillsGitAuthWait time.Duration
 }
 
 // StatusReader is the verdict on the object a release on the target chart
@@ -124,6 +134,8 @@ type Runner struct {
 	filter *regexp.Regexp
 	log    *slog.Logger
 	now    func() time.Time
+	// credentialDeadline ends the run's wait for the skills credential.
+	credentialDeadline time.Time
 }
 
 // New builds a runner; the target range must admit exactly one major with a
@@ -174,6 +186,7 @@ func (r *Runner) Run(ctx context.Context) (*Result, error) {
 	run := RunInfo{At: r.now().UTC().Format(time.RFC3339), DryRun: r.opts.DryRun, Version: r.opts.Version, Harness: r.opts.HarnessName, Path: r.hop.String(),
 		Chart: ChartInfo{OCIURL: r.opts.ChartOCIURL, TargetSemver: r.opts.TargetSemver, TargetSemverFilter: r.opts.TargetSemverFilter, LatestVersion: info.LatestVersion, SchemaVersion: sch.Version, SchemaSource: sch.Source}}
 	chartAvailable := info.LatestVersion != ""
+	r.credentialDeadline = r.now().Add(r.opts.SkillsGitAuthWait)
 	if !chartAvailable {
 		r.log.Warn("the registry has no chart version in the target range; no source is moved and no writable release is rewritten this run", "chart", r.opts.ChartOCIURL, "range", r.opts.TargetSemver, "error", info.Error)
 	}
@@ -575,6 +588,7 @@ func (r *Runner) planRelease(ctx context.Context, st *nsState, rel *release, cha
 		}
 		return rep
 	}
+	renameWarning := r.renameSkillsGitAuth(ctx, rel, rewritten, changes)
 	rel.values, rel.rewritten = values, rewritten
 	rewrittenHR := &unstructured.Unstructured{Object: runtime.DeepCopyJSON(rel.obj.Object)}
 	_ = unstructured.SetNestedMap(rewrittenHR.Object, rewritten, "spec", "values")
@@ -588,6 +602,9 @@ func (r *Runner) planRelease(ctx context.Context, st *nsState, rel *release, cha
 		return rep
 	}
 	rep.Warnings = r.subAgentWarnings(st, rel, rewritten)
+	if renameWarning != "" {
+		rep.Warnings = append(rep.Warnings, renameWarning)
+	}
 	if changes.Empty() && reflect.DeepEqual(values, rewritten) {
 		rep.Action, rep.Reason = ActionUnchanged, fmt.Sprintf("already on the %d.x values", to)
 		rel.onTarget = true

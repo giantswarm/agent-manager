@@ -4,21 +4,28 @@ installation token, one per managed namespace. It is rendered without data:
 agent-manager writes the key `token`, which neither Helm nor Flux drift
 detection then own. Its Role is the ServiceAccount's only permission with
 oauth.downstream (agent-manager's one piece of work without a caller): get and
-update this one Secret by name, never create, list or read another.
+update these Secrets by name, never create, list or read another. The
+Secrets of the previous names (the minted name before the tenant-credential-
+prefix) are kept filled the same way until no agent names them.
 */}}
 {{- if .Values.skills.mintGitAuthSecret }}
 {{- $name := include "agent-manager.skillsGitAuthSecretName" . }}
+{{- $names := prepend (include "agent-manager.skillsGitAuthPreviousSecretNames" . | fromJsonArray) $name }}
 {{- range $ns := (include "agent-manager.managedNamespaces" . | fromJsonArray) }}
+{{- range $names }}
 ---
 apiVersion: v1
 kind: Secret
 metadata:
-  name: {{ $name }}
+  name: {{ . }}
   namespace: {{ $ns }}
   labels:
     {{- include "agent-manager.labels" $ | nindent 4 }}
+    {{- if eq . $name }}
     ui.giantswarm.io/agent-skills-git-auth: "true"
+    {{- end }}
 type: Opaque
+{{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
@@ -30,7 +37,7 @@ metadata:
 rules:
   - apiGroups: [""]
     resources: ["secrets"]
-    resourceNames: [{{ $name | quote }}]
+    resourceNames: [{{ range $i, $n := $names }}{{ if $i }}, {{ end }}{{ $n | quote }}{{ end }}]
     verbs: ["get", "update"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1

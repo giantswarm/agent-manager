@@ -371,6 +371,7 @@ func TestBuildValuesComposesTheSkillsCredential(t *testing.T) {
 	git := Skills{{Name: "a", Path: "a", Git: &GitSkill{URL: "https://github.com/o/private", Commit: strings.Repeat("a", 40)}}}
 	oci := Skills{{Name: "b", OCI: "gsoci.azurecr.io/s@sha256:" + strings.Repeat("b", 64)}}
 	installation := ComposeConfig{SkillsGitAuthSecretName: "kagent-skills-token"}
+	renamed := ComposeConfig{SkillsGitAuthSecretName: "tenant-credential-agent-manager-skills-token", SkillsGitAuthPreviousSecretNames: []string{"agent-manager-skills-token"}} // #nosec G101 -- test fixture, Secret names only
 	for _, tc := range []struct {
 		name   string
 		spec   Spec
@@ -383,6 +384,7 @@ func TestBuildValuesComposesTheSkillsCredential(t *testing.T) {
 		{"none without a git skill", Spec{Name: "a", Skills: oci, GitAuthSecretName: "team-token"}, installation, ""},
 		{"installation credential on a git plugin", Spec{Name: "a", Plugins: Plugins{{Git: &GitSkill{URL: "https://github.com/o/private", Commit: strings.Repeat("a", 40)}, Skills: []string{"x"}}}}, installation, "kagent-skills-token"},
 		{"none without any credential", Spec{Name: "a", Skills: git}, ComposeConfig{}, ""},
+		{"a previous installation name is the current one", Spec{Name: "a", Skills: git, GitAuthSecretName: "agent-manager-skills-token"}, renamed, "tenant-credential-agent-manager-skills-token"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			values := BuildValues(tc.spec, tc.cfg)
@@ -393,6 +395,22 @@ func TestBuildValuesComposesTheSkillsCredential(t *testing.T) {
 			assert.Equal(t, map[string]any{"name": tc.secret}, values[SkillsGitAuthValuesKey])
 		})
 	}
+}
+
+// An update of an agent that names a previous installation credential moves
+// it to the current name; in a tenant (no installation credential) the
+// previous name is dropped.
+func TestMergeSkillsGitAuthMovesAPreviousName(t *testing.T) {
+	git := []any{map[string]any{"name": "a", "path": "a", "git": map[string]any{"url": "https://github.com/o/private", "commit": strings.Repeat("a", 40)}}}
+	cfg := ComposeConfig{SkillsGitAuthSecretName: "tenant-credential-agent-manager-skills-token", SkillsGitAuthPreviousSecretNames: []string{"agent-manager-skills-token"}} // #nosec G101 -- test fixture, Secret names only
+	values := map[string]any{"skills": git, SkillsGitAuthValuesKey: map[string]any{"name": "agent-manager-skills-token"}}
+	mergeSkillsGitAuth(values, nil, cfg)
+	assert.Equal(t, map[string]any{"name": "tenant-credential-agent-manager-skills-token"}, values[SkillsGitAuthValuesKey])
+
+	cfg.SkillsGitAuthSecretName = ""
+	values = map[string]any{"skills": git, SkillsGitAuthValuesKey: map[string]any{"name": "agent-manager-skills-token"}}
+	mergeSkillsGitAuth(values, nil, cfg)
+	assert.NotContains(t, values, SkillsGitAuthValuesKey)
 }
 
 func TestSkillMountName(t *testing.T) {
