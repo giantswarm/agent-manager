@@ -25,7 +25,7 @@ Generated from the registered tools (`make tools-doc`); through muster every too
 ```text
 Create an agent: a HelmRelease of the Generic agent chart. It needs a toolset; confirm its name with the person.
 
-name is the DNS-1123 name the person chose, never derived from displayName. modelConfig must exist in the namespace (list_model_configs). Skills are pinned at write time (list_skills), plugins must come pinned and the values are checked against the chart schema: a failure writes nothing and names the valid values. Presets: preset:read-only, preset:none (no tools), preset:infrastructure, preset:agent-platform, preset:full. Poll get_agent_status until ready.
+name is the DNS-1123 name the person chose, never derived from displayName. modelConfig must exist in the namespace (list_model_configs; a refusal names the valid ones). Skills are pinned at write time (list_skills), plugins must come pinned and the values are checked against the chart schema; a failure writes nothing. Presets: preset:read-only, preset:none, preset:infrastructure, preset:agent-platform, preset:full. Poll get_agent_status until ready.
 ```
 
 ```json
@@ -60,7 +60,7 @@ name is the DNS-1123 name the person chose, never derived from displayName. mode
       "type": "boolean"
     },
     "egress": {
-      "description": "Extra HTTP(S) origins the agent may reach: <scheme>://<host>[:<port>]; a wildcard replaces the leftmost label. At most 64.",
+      "description": "Extra HTTP(S) origins the agent may reach: <scheme>://<host>[:<port>] origins, at most 64; a wildcard replaces the leftmost label.",
       "items": {
         "type": "string"
       },
@@ -71,7 +71,7 @@ name is the DNS-1123 name the person chose, never derived from displayName. mode
       "type": "string"
     },
     "harness": {
-      "description": "Harness of the namespace that runs the agent; omit for the platform Harness (get_info). claude runs it as Claude Code. Fixed at create.",
+      "description": "Harness that runs the agent; omit for the platform Harness. A coding Harness (claude, codex, …) fixes egress, refuses extra bindings.",
       "type": "string"
     },
     "iconUrl": {
@@ -115,7 +115,7 @@ name is the DNS-1123 name the person chose, never derived from displayName. mode
       "type": "string"
     },
     "plugins": {
-      "description": "Agent Plugins bundles to enable skills from: {git: {url, commit} or oci: <ref>@sha256:<digest>, path, skills}; must come pinned.",
+      "description": "Agent Plugins bundles to enable skills from: {git: {url, commit} or oci: <ref>@sha256:<digest>, path, skills} entries, pinned.",
       "items": {
         "properties": {
           "git": {
@@ -163,7 +163,7 @@ name is the DNS-1123 name the person chose, never derived from displayName. mode
       "type": "string"
     },
     "skills": {
-      "description": "Skills to mount: {name, path, git: {url, ref | commit}} or {name, oci}; refs and image tags are pinned at write time.",
+      "description": "Skills to mount: {name, path, git: {url, ref | commit}} or {name, oci} entries, pinned at write time.",
       "items": {
         "properties": {
           "git": {
@@ -208,7 +208,7 @@ name is the DNS-1123 name the person chose, never derived from displayName. mode
       "type": "string"
     },
     "toolset": {
-      "description": "Gateway tool selectors preset:<name>, server:<name>, workflow:<name>, tool:<name> (at most 32), e.g. preset:read-only; preset:none: no tools.",
+      "description": "Gateway tools the agent may use: preset:<name>, server:<name>, workflow:<name> or tool:<name> selectors, at most 32; preset:none means no tools.",
       "items": {
         "type": "string"
       },
@@ -650,7 +650,7 @@ Refused with conflict while the agent has no ready revision (get_agent_status). 
 ```text
 Change an agent: only the fields passed change; a list, labels or annotations replaces the whole value.
 
-Lists are skills, plugins, egress and toolset. "" clears a field back to the chart default. refreshSkills re-pins every git skill. The Harness is fixed at create. Returns the values before and after. A suspended release is refused unless force is true; a GitOps-owned one needs mode commit.
+Lists are skills, plugins, egress and toolset. "" clears a text field back to the chart default; gitAuthSecretName "" goes back to the installation's. Presets: preset:read-only, preset:none, preset:infrastructure, preset:agent-platform, preset:full. refreshSkills re-pins every git skill. The Harness is fixed at create. Returns the values before and after. A suspended release is refused unless force is true; a GitOps-owned one needs mode commit.
 ```
 
 ```json
@@ -660,7 +660,7 @@ Lists are skills, plugins, egress and toolset. "" clears a field back to the cha
       "additionalProperties": {
         "type": "string"
       },
-      "description": "Replaces all extra annotations on the Agent object ({} clears them); pass every annotation to keep.",
+      "description": "Replaces all extra annotations on the Agent ({} clears them; the creator annotation always stays); pass every one to keep.",
       "properties": {},
       "type": "object"
     },
@@ -685,7 +685,7 @@ Lists are skills, plugins, egress and toolset. "" clears a field back to the cha
       "type": "boolean"
     },
     "egress": {
-      "description": "Replaces the whole egress list ([] clears it): <scheme>://<host>[:<port>] origins, at most 64.",
+      "description": "Replaces the whole egress list ([] clears it): <scheme>://<host>[:<port>] origins, at most 64; a wildcard replaces the leftmost label.",
       "items": {
         "type": "string"
       },
@@ -740,7 +740,7 @@ Lists are skills, plugins, egress and toolset. "" clears a field back to the cha
       "type": "string"
     },
     "plugins": {
-      "description": "Replaces the whole plugin list ([] clears it): {git: {url, commit} or oci: <ref>@sha256:<digest>, path, skills}, pinned.",
+      "description": "Replaces the whole plugin list ([] clears it): {git: {url, commit} or oci: <ref>@sha256:<digest>, path, skills} entries, pinned.",
       "items": {
         "properties": {
           "git": {
@@ -792,7 +792,7 @@ Lists are skills, plugins, egress and toolset. "" clears a field back to the cha
       "type": "string"
     },
     "skills": {
-      "description": "Replaces the whole skill list: {name, path, git: {url, ref | commit}} or {name, oci}, pinned at write time.",
+      "description": "Replaces the whole skill list: {name, path, git: {url, ref | commit}} or {name, oci} entries, pinned at write time.",
       "items": {
         "properties": {
           "git": {
@@ -837,7 +837,7 @@ Lists are skills, plugins, egress and toolset. "" clears a field back to the cha
       "type": "string"
     },
     "toolset": {
-      "description": "Replaces the whole toolset: preset:<name>, server:<name>, workflow:<name>, tool:<name> selectors; [] is refused, [\"preset:none\"]: no tools.",
+      "description": "Replaces the whole toolset: preset:<name>, server:<name>, workflow:<name> or tool:<name> selectors, at most 32; [] is refused: use preset:none.",
       "items": {
         "type": "string"
       },
@@ -856,7 +856,7 @@ Lists are skills, plugins, egress and toolset. "" clears a field back to the cha
 ```text
 Dry run of create_agent, or of update_agent with update: true: the manifests and every violation. Writes nothing.
 
-Checks the name, modelConfig, harness and toolset (required for a create), pins the skills, checks the plugins are pinned and validates the values against the chart schema. mode answers as the write would.
+Checks the name, modelConfig, harness and toolset (required for a create), pins the skills, checks the plugins are pinned and validates the values against the chart schema. mode answers as the write would. With update: true, lists, labels and annotations replace the whole value, as in update_agent.
 ```
 
 ```json
@@ -883,7 +883,7 @@ Checks the name, modelConfig, harness and toolset (required for a create), pins 
       "type": "string"
     },
     "egress": {
-      "description": "Extra HTTP(S) origins the agent may reach: <scheme>://<host>[:<port>]; a wildcard replaces the leftmost label. At most 64.",
+      "description": "Extra HTTP(S) origins the agent may reach: <scheme>://<host>[:<port>] origins, at most 64; a wildcard replaces the leftmost label.",
       "items": {
         "type": "string"
       },
@@ -898,7 +898,7 @@ Checks the name, modelConfig, harness and toolset (required for a create), pins 
       "type": "string"
     },
     "harness": {
-      "description": "Harness of the namespace that runs the agent; omit for the platform Harness (get_info). claude runs it as Claude Code. Fixed at create.",
+      "description": "Harness that runs the agent; omit for the platform Harness. A coding Harness (claude, codex, …) fixes egress, refuses extra bindings.",
       "type": "string"
     },
     "iconUrl": {
@@ -938,7 +938,7 @@ Checks the name, modelConfig, harness and toolset (required for a create), pins 
       "type": "string"
     },
     "plugins": {
-      "description": "Agent Plugins bundles to enable skills from: {git: {url, commit} or oci: <ref>@sha256:<digest>, path, skills}; must come pinned.",
+      "description": "Agent Plugins bundles to enable skills from: {git: {url, commit} or oci: <ref>@sha256:<digest>, path, skills} entries, pinned.",
       "items": {
         "properties": {
           "git": {
@@ -986,7 +986,7 @@ Checks the name, modelConfig, harness and toolset (required for a create), pins 
       "type": "boolean"
     },
     "skills": {
-      "description": "Skills to mount: {name, path, git: {url, ref | commit}} or {name, oci}; refs and image tags are pinned at write time.",
+      "description": "Skills to mount: {name, path, git: {url, ref | commit}} or {name, oci} entries, pinned at write time.",
       "items": {
         "properties": {
           "git": {
@@ -1031,7 +1031,7 @@ Checks the name, modelConfig, harness and toolset (required for a create), pins 
       "type": "string"
     },
     "toolset": {
-      "description": "Gateway tool selectors preset:<name>, server:<name>, workflow:<name>, tool:<name> (at most 32), e.g. preset:read-only; preset:none: no tools.",
+      "description": "Gateway tools the agent may use: preset:<name>, server:<name>, workflow:<name> or tool:<name> selectors, at most 32; preset:none means no tools.",
       "items": {
         "type": "string"
       },

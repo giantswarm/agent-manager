@@ -79,6 +79,9 @@ func validateSelector(sel string) error {
 }
 
 // presetSelectors renders the shipped presets as selectors, for messages.
+// PresetSelectors are the shipped presets as selectors (preset:<name>).
+func PresetSelectors() []string { return presetSelectors() }
+
 func presetSelectors() []string {
 	out := make([]string, 0, len(ShippedPresets))
 	for _, p := range ShippedPresets {

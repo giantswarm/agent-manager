@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/giantswarm/mcp-toolkit/tooldesc"
 	"github.com/mark3labs/mcp-go/mcp"
@@ -112,11 +113,12 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 		// MCP spans nest under it instead of extracting it a second time.
 		mcpotel.WithServerTracingPropagator(otel.Tracer(tracerName), propagation.NewCompositeTextMapPropagator()),
 		mcpserver.WithToolCapabilities(false),
-		mcpserver.WithInstructions("Manage the agents of the Agent Platform. An agent is a Flux HelmRelease of the Generic agent chart, which renders a kagent Agent, its Harness reference and the agent's muster RemoteMCPServer carrying its toolset. Call get_info first, and list_model_configs and list_skills before create_agent. Names are DNS-1123 labels the person chooses and confirms. Every agent needs a toolset. The write tools take dryRun and mode: apply writes live as you, commit opens a pull request as you in the repository that owns the namespace. organization and cluster (both or neither) place an agent on a workload cluster and address it in every later call. Talk to an agent with start_session and get_session."),
+		mcpserver.WithInstructions("Manage the agents of the Agent Platform. An agent is a Flux HelmRelease of the Generic agent chart, which renders a kagent Agent, its Harness reference and the agent's muster RemoteMCPServer carrying its toolset. Call get_info first, and list_model_configs and list_skills before create_agent. Names are DNS-1123 labels the person chooses and confirms. Every agent needs a toolset. create_agent, update_agent and delete_agent take dryRun and mode: apply writes live as you, commit opens a pull request as you in the repository that owns the namespace. organization and cluster (both or neither) place an agent on a workload cluster and address it in every later call of a tool that takes them. Talk to an agent with start_session and get_session."),
 	)
 	t := &tools{svc: svc}
 
-	skillDesc := "Skills to mount: {name, path, git: {url, ref | commit}} or {name, oci}; refs and image tags are pinned at write time."
+	skillShape := "{name, path, git: {url, ref | commit}} or {name, oci} entries, pinned at write time"
+	skillDesc := "Skills to mount: " + skillShape + "."
 	skillEntry := map[string]any{
 		"type": "object",
 		"properties": map[string]any{
@@ -138,17 +140,20 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 	gitAuthProp := mcp.WithString(argGitAuthSecret, mcp.Description(gitAuthDesc))
 	gitAuthReplaceProp := mcp.WithString(argGitAuthSecret, mcp.Description(gitAuthDesc+"; \"\" goes back to it"))
 	skillsProp := mcp.WithArray(argSkills, mcp.Description(skillDesc), mcp.Items(skillEntry))
-	skillsReplaceProp := mcp.WithArray(argSkills, mcp.Description("Replaces the whole skill list: {name, path, git: {url, ref | commit}} or {name, oci}, pinned at write time."), mcp.Items(skillEntry))
+	skillsReplaceProp := mcp.WithArray(argSkills, mcp.Description("Replaces the whole skill list: "+skillShape+"."), mcp.Items(skillEntry))
 	refreshSkillsProp := mcp.WithBoolean(argRefreshSkills, mcp.Description("Re-pin every git skill to its default-branch head and change nothing else on the release (default false)."))
-	toolsetDesc := "Gateway tool selectors preset:<name>, server:<name>, workflow:<name>, tool:<name> (at most 32), e.g. preset:read-only; preset:none: no tools."
+	selectorShape := "preset:<name>, server:<name>, workflow:<name> or tool:<name> selectors, at most 32"
+	toolsetDesc := "Gateway tools the agent may use: " + selectorShape + "; preset:none means no tools."
+	presetsSentence := "Presets: " + strings.Join(agents.PresetSelectors(), ", ") + "."
 	toolsetProp := mcp.WithArray(argToolset, mcp.Description(toolsetDesc), mcp.WithStringItems())
 	toolsetRequiredProp := mcp.WithArray(argToolset, mcp.Required(), mcp.Description(toolsetDesc), mcp.WithStringItems())
-	toolsetReplaceProp := mcp.WithArray(argToolset, mcp.Description("Replaces the whole toolset: preset:<name>, server:<name>, workflow:<name>, tool:<name> selectors; [] is refused, [\"preset:none\"]: no tools."), mcp.WithStringItems())
+	toolsetReplaceProp := mcp.WithArray(argToolset, mcp.Description("Replaces the whole toolset: "+selectorShape+"; [] is refused: use preset:none."), mcp.WithStringItems())
 	labelsProp := mcp.WithObject(argLabels, mcp.Description("Extra labels on the Agent object (string values)."), mcp.AdditionalProperties(stringSchema))
 	annotationsProp := mcp.WithObject(argAnnotations, mcp.Description("Extra annotations on the Agent object (string values)."), mcp.AdditionalProperties(stringSchema))
 	labelsReplaceProp := mcp.WithObject(argLabels, mcp.Description("Replaces all extra labels on the Agent object ({} clears them); pass every label to keep."), mcp.AdditionalProperties(stringSchema))
-	annotationsReplaceProp := mcp.WithObject(argAnnotations, mcp.Description("Replaces all extra annotations on the Agent object ({} clears them); pass every annotation to keep."), mcp.AdditionalProperties(stringSchema))
-	pluginDesc := "Agent Plugins bundles to enable skills from: {git: {url, commit} or oci: <ref>@sha256:<digest>, path, skills}; must come pinned."
+	annotationsReplaceProp := mcp.WithObject(argAnnotations, mcp.Description("Replaces all extra annotations on the Agent ({} clears them; the creator annotation always stays); pass every one to keep."), mcp.AdditionalProperties(stringSchema))
+	pluginShape := "{git: {url, commit} or oci: <ref>@sha256:<digest>, path, skills} entries, pinned"
+	pluginDesc := "Agent Plugins bundles to enable skills from: " + pluginShape + "."
 	pluginEntry := map[string]any{
 		"type":     "object",
 		"required": []string{"skills"},
@@ -167,11 +172,12 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 		},
 	}
 	pluginsProp := mcp.WithArray(argPlugins, mcp.Description(pluginDesc), mcp.Items(pluginEntry))
-	pluginsReplaceProp := mcp.WithArray(argPlugins, mcp.Description("Replaces the whole plugin list ([] clears it): {git: {url, commit} or oci: <ref>@sha256:<digest>, path, skills}, pinned."), mcp.Items(pluginEntry))
-	egressDesc := "Extra HTTP(S) origins the agent may reach: <scheme>://<host>[:<port>]; a wildcard replaces the leftmost label. At most 64."
+	pluginsReplaceProp := mcp.WithArray(argPlugins, mcp.Description("Replaces the whole plugin list ([] clears it): "+pluginShape+"."), mcp.Items(pluginEntry))
+	originShape := "<scheme>://<host>[:<port>] origins, at most 64; a wildcard replaces the leftmost label"
+	egressDesc := "Extra HTTP(S) origins the agent may reach: " + originShape + "."
 	egressProp := mcp.WithArray(argEgress, mcp.Description(egressDesc), mcp.Items(stringSchema))
-	egressReplaceProp := mcp.WithArray(argEgress, mcp.Description("Replaces the whole egress list ([] clears it): <scheme>://<host>[:<port>] origins, at most 64."), mcp.Items(stringSchema))
-	harnessDesc := "Harness of the namespace that runs the agent; omit for the platform Harness (get_info). claude runs it as Claude Code. Fixed at create."
+	egressReplaceProp := mcp.WithArray(argEgress, mcp.Description("Replaces the whole egress list ([] clears it): "+originShape+"."), mcp.Items(stringSchema))
+	harnessDesc := "Harness that runs the agent; omit for the platform Harness. A coding Harness (claude, codex, …) fixes egress, refuses extra bindings."
 	maxBytesProp := mcp.WithNumber(argMaxBytes, mcp.Description(fmt.Sprintf("Max answer size in bytes, %d-%d, default %d", agents.MinSessionMaxBytes, agents.MaxSessionMaxBytes, agents.DefaultSessionMaxBytes)))
 	nsProp := mcp.WithString(argNamespace, mcp.Description("Namespace of the agent; default: the installation's kagent namespace (get_info lists the managed ones)."))
 	orgProp := mcp.WithString(argOrganization, mcp.Description("With cluster: the organization owning the workload cluster the agent runs on. Omit both for the installation's own cluster."))
@@ -223,7 +229,7 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 
 	s.AddTool(mcp.NewTool(ToolCreateAgent,
 		tooldesc.Describe("Create an agent: a HelmRelease of the Generic agent chart. It needs a toolset; confirm its name with the person.",
-			"name is the DNS-1123 name the person chose, never derived from displayName. modelConfig must exist in the namespace (list_model_configs). Skills are pinned at write time (list_skills), plugins must come pinned and the values are checked against the chart schema: a failure writes nothing and names the valid values. Presets: preset:read-only, preset:none (no tools), preset:infrastructure, preset:agent-platform, preset:full. Poll get_agent_status until ready."),
+			"name is the DNS-1123 name the person chose, never derived from displayName. modelConfig must exist in the namespace (list_model_configs; a refusal names the valid ones). Skills are pinned at write time (list_skills), plugins must come pinned and the values are checked against the chart schema; a failure writes nothing. "+presetsSentence+" Poll get_agent_status until ready."),
 		mcp.WithString(argName, mcp.Required(), mcp.Description("DNS-1123 technical name (max 63 chars): the HelmRelease and Agent name")),
 		mcp.WithString(argModelConfig, mcp.Required(), mcp.Description("Name of an existing kagent ModelConfig in the namespace (list_model_configs)")),
 		mcp.WithString(argHarness, mcp.Description(harnessDesc)),
@@ -250,7 +256,7 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 
 	s.AddTool(mcp.NewTool(ToolUpdateAgent,
 		tooldesc.Describe("Change an agent: only the fields passed change; a list, labels or annotations replaces the whole value.",
-			"Lists are skills, plugins, egress and toolset. \"\" clears a field back to the chart default. refreshSkills re-pins every git skill. The Harness is fixed at create. Returns the values before and after. A suspended release is refused unless force is true; a GitOps-owned one needs mode commit."),
+			"Lists are skills, plugins, egress and toolset. \"\" clears a text field back to the chart default; gitAuthSecretName \"\" goes back to the installation's. "+presetsSentence+" refreshSkills re-pins every git skill. The Harness is fixed at create. Returns the values before and after. A suspended release is refused unless force is true; a GitOps-owned one needs mode commit."),
 		mcp.WithString(argName, mcp.Required(), mcp.Description("Agent name")),
 		mcp.WithString(argDisplayName, mcp.Description("New friendly name; \"\" clears it")),
 		mcp.WithString(argDescription, mcp.Description("New description; \"\" clears it")),
@@ -306,7 +312,7 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 
 	s.AddTool(mcp.NewTool(ToolValidateAgent,
 		tooldesc.Describe("Dry run of create_agent, or of update_agent with update: true: the manifests and every violation. Writes nothing.",
-			"Checks the name, modelConfig, harness and toolset (required for a create), pins the skills, checks the plugins are pinned and validates the values against the chart schema. mode answers as the write would."),
+			"Checks the name, modelConfig, harness and toolset (required for a create), pins the skills, checks the plugins are pinned and validates the values against the chart schema. mode answers as the write would. With update: true, lists, labels and annotations replace the whole value, as in update_agent."),
 		mcp.WithString(argName, mcp.Required(), mcp.Description("Agent name")),
 		mcp.WithString(argModelConfig, mcp.Description("ModelConfig name (required for a create)")),
 		mcp.WithString(argHarness, mcp.Description(harnessDesc)),
