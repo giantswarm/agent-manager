@@ -5,7 +5,7 @@ agent-manager writes the key `token`, which neither Helm nor Flux drift
 detection then own. Its Role is the ServiceAccount's only permission with
 oauth.downstream (agent-manager's one piece of work without a caller): get and
 update these Secrets by name, never create, list or read another. The
-Secrets of the previous names (the minted name before the tenant-credential-
+Secrets of the previous names (the minted name under the tenant-credential-
 prefix) are kept filled the same way until no agent names them.
 */}}
 {{- if .Values.skills.mintGitAuthSecret }}

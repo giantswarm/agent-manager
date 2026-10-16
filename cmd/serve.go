@@ -181,8 +181,8 @@ func runServe(ctx context.Context, o *serveOptions) error {
 	if o.skillsGitAuthMint && (app == nil || o.skillsGitAuth == "") {
 		return fmt.Errorf("--skills-git-auth-mint needs the skills GitHub App (--skills-github-app-id) and --skills-git-auth-secret-name: the App's installation token is written into that Secret")
 	}
-	if o.skillsGitAuth != "" && !strings.HasPrefix(o.skillsGitAuth, agents.TenantCredentialPrefix) {
-		log.Warn("the installation's skills credential is not named "+agents.TenantCredentialPrefix+"*: admission that holds an Agent's git credentialRef to tenant credentials refuses the agents composed with it; rename the Secret and list the old name in --skills-git-auth-previous-secret-names", "secret", o.skillsGitAuth)
+	if strings.HasPrefix(o.skillsGitAuth, agents.TenantCredentialPrefix) {
+		log.Warn("the installation's skills credential is named "+agents.TenantCredentialPrefix+"*, the prefix of a tenant's own credentials: where it is present in an Organization's namespace, admission lets a tenant name it; rename the Secret and list the old name in --skills-git-auth-previous-secret-names", "secret", o.skillsGitAuth)
 	}
 	if o.githubAuthorizationServer != "" && !o.oauthEnabled {
 		return fmt.Errorf("--github-authorization-server needs --enable-oauth: the forwarded IdP ID token is validated by the OAuth resource server")

@@ -172,19 +172,21 @@ skills:
   # -- Boot private git skills with the skills GitHub App instead of a
   # provisioned token (needs `github.app.secretName`; replaces
   # `gitAuthSecretName`): the chart renders the Secret
-  # `tenant-credential-<fullname>-skills-token` without data in
-  # `kagent.namespace` and every `kagent.additionalNamespaces` entry, plus a
-  # Role that may only get and update it, and composes it as every git-skill
-  # agent's `skillsGitAuthSecretRef.name`. agent-manager writes an
-  # installation token into it (key `token`, the Basic form of
-  # `x-access-token:<token>`) and replaces it well before its one-hour
-  # expiry; `get_info` reports the last refresh and a failed one as
-  # `skillsGitAuthMint`. The Secret's earlier name `<fullname>-skills-token`
-  # is a previous name (see `previousGitAuthSecretNames`): still rendered and
-  # filled, and the agents naming it are moved to the current name.
+  # `<fullname>-skills-token` without data in `kagent.namespace` and every
+  # `kagent.additionalNamespaces` entry, plus a Role that may only get and
+  # update it, and composes it as every git-skill agent's
+  # `skillsGitAuthSecretRef.name`. agent-manager writes an installation token
+  # into it (key `token`, the Basic form of `x-access-token:<token>`) and
+  # replaces it well before its one-hour expiry; `get_info` reports the last
+  # refresh and a failed one as `skillsGitAuthMint`. The name is the
+  # installation's own, never under the `tenant-credential-` prefix of a
+  # tenant's credentials. The Secret's earlier name
+  # `tenant-credential-<fullname>-skills-token` is a previous name (see
+  # `previousGitAuthSecretNames`): still rendered and filled, and the agents
+  # naming it are moved to the current name.
   mintGitAuthSecret: false
   # -- Earlier names of the installation's skills credential Secret, after a
-  # rename (to the `tenant-credential-` prefix, say): an agent naming one is
+  # rename: an agent naming one is
   # composed with the current name on its next update, and the connectivity
   # chart's `agent-manager migrate` moves the rest. With
   # `mintGitAuthSecret` each is also rendered and kept filled until it is
