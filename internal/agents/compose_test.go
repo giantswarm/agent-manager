@@ -384,7 +384,7 @@ func TestBuildValuesComposesTheSkillsCredential(t *testing.T) {
 		{"none without a git skill", Spec{Name: "a", Skills: oci, GitAuthSecretName: "team-token"}, installation, ""},
 		{"installation credential on a git plugin", Spec{Name: "a", Plugins: Plugins{{Git: &GitSkill{URL: "https://github.com/o/private", Commit: strings.Repeat("a", 40)}, Skills: []string{"x"}}}}, installation, "kagent-skills-token"},
 		{"none without any credential", Spec{Name: "a", Skills: git}, ComposeConfig{}, ""},
-		{"a previous installation name is the current one", Spec{Name: "a", Skills: git, GitAuthSecretName: "tenant-credential-agent-manager-skills-token"}, renamed, "agent-manager-skills-token"},
+		{"a previous installation name is the current one", Spec{Name: "a", Skills: git, GitAuthSecretName: "tenant-credential-agent-manager-skills-token"}, renamed, "agent-manager-skills-token"}, // #nosec G101 -- test fixture, Secret names only
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			values := BuildValues(tc.spec, tc.cfg)
