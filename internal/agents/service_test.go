@@ -12,6 +12,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	authenticationv1 "k8s.io/api/authentication/v1"
 	authorizationv1 "k8s.io/api/authorization/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -556,6 +557,47 @@ func TestValidateCreateIsADryRun(t *testing.T) {
 	assert.Contains(t, ok.Manifests.OCIRepository, "kind: OCIRepository")
 	hrs, _ := f.dyn.Resource(hrGVR).Namespace("kagent").List(ctx, metav1.ListOptions{})
 	assert.Len(t, hrs.Items, 1, "validate writes nothing")
+}
+
+func TestCreateChecksCreateAccessBeforeTheName(t *testing.T) {
+	ctx := t.Context()
+	spec := func(name string) Spec {
+		return Spec{Name: name, ModelConfig: "default-model-config", Toolset: []string{"preset:read-only"}}
+	}
+
+	// A caller with create still hears that the name is taken.
+	f := seeded(t)
+	_, err := f.svc.Create(ctx, spec("verifier"))
+	require.ErrorIs(t, err, ErrConflict)
+
+	// A caller who may read but not create gets 403 for a taken name and a
+	// free one alike, and the review answers the same without naming the clash.
+	f = seeded(t)
+	allowCreate(f.typed, func(string) bool { return false })
+	f.typed.PrependReactor("create", "selfsubjectreviews", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		review := a.(k8stesting.CreateAction).GetObject().(*authenticationv1.SelfSubjectReview)
+		review.Status.UserInfo.Username = "oidc:viewer@example.com"
+		return true, review, nil
+	})
+	refusal := `User "oidc:viewer@example.com" cannot create resource "helmreleases" in API group "helm.toolkit.fluxcd.io" in the namespace "kagent"`
+	for _, name := range []string{"verifier", "fresh"} {
+		_, err := f.svc.Create(ctx, spec(name))
+		require.ErrorIs(t, err, ErrForbidden, name)
+		assert.NotErrorIs(t, err, ErrConflict, name)
+		assert.Contains(t, err.Error(), refusal, name)
+
+		res, err := f.svc.ValidateCreate(ctx, spec(name))
+		require.NoError(t, err, name)
+		assert.False(t, res.Valid, name)
+		joined := strings.Join(res.Errors, "\n")
+		assert.Contains(t, joined, refusal, name)
+		assert.NotContains(t, joined, "already exists", name)
+		assert.Empty(t, res.Notes, name)
+		assert.Contains(t, res.Manifests.HelmRelease, "kind: HelmRelease", name)
+	}
+	hrs, err := f.dyn.Resource(hrGVR).Namespace("kagent").List(ctx, metav1.ListOptions{})
+	require.NoError(t, err)
+	assert.Len(t, hrs.Items, 1, "nothing was written")
 }
 
 func TestValidateCreateChecksTheName(t *testing.T) {

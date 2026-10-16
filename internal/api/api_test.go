@@ -14,12 +14,14 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	authorizationv1 "k8s.io/api/authorization/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	kubefake "k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/giantswarm/agent-manager/internal/agents"
 	"github.com/giantswarm/agent-manager/internal/chart"
@@ -75,6 +77,11 @@ func newService(t *testing.T) (*agents.Service, *dynamicfake.FakeDynamicClient) 
 		hrGVR: "HelmReleaseList", ociGVR: "OCIRepositoryList", agentGVR: "AgentList", serverGVR: "RemoteMCPServerList", mcGVR: "ModelConfigList",
 	}, mc)
 	typed := kubefake.NewClientset()
+	typed.PrependReactor("create", "selfsubjectaccessreviews", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		review := a.(k8stesting.CreateAction).GetObject().(*authorizationv1.SelfSubjectAccessReview)
+		review.Status.Allowed = true
+		return true, review, nil
+	})
 	client := kube.FromInterfaces(dyn, typed, typed.Discovery())
 	svc := agents.New(kube.NewServiceAccountProvider(client), embeddedChart{}, nil, pinner{}, agents.Config{DefaultNamespace: "kagent", Version: "test"}, nil)
 	return svc, dyn
