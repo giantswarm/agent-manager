@@ -28,10 +28,12 @@ The same operations are exposed twice from one process:
   `list_agents`, `get_agent`, `create_agent`, `update_agent`, `delete_agent`,
   `get_agent_status`, `validate_agent`, `list_model_configs`, `list_skills`,
   `list_sessions`, `get_session`, `get_session_turn`, `start_session`
-  (through muster: `x_agent-manager_<tool>`). Every tool description says
-  whether it writes and what it writes, and every tool sets all four
+  (through muster: `x_agent-manager_<tool>`). Every tool sets all four
   annotations: read-only, destructive, idempotent and open-world (true for the
   tools that resolve a caller-named GitHub repository or OCI reference).
+  Every description starts with a summary line of at most 120 runes, all
+  muster's discovery shows, then the details; [`docs/tools.md`](docs/tools.md)
+  has every description and input schema, kept current by a test.
 
 Part of the [Agent Control Plane epic](https://github.com/giantswarm/giantswarm/issues/36796)
 ("create and manage versioned agents"): the reconciler half is the `agent`

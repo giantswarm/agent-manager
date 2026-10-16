@@ -634,6 +634,9 @@ func (s *Service) requireModelConfig(ctx context.Context, st *site, name string)
 	if !st.loc.IsSet() && s.isTenant(ns) && name == s.cfg.Tenants.ModelConfig() {
 		return nil
 	}
+	if !st.loc.IsSet() && s.isTenant(ns) {
+		names = append(names, s.cfg.Tenants.ModelConfig()+" (the platform default, provided with the first agent)")
+	}
 	if len(names) == 0 {
 		return invalidf("modelConfig %q does not exist in namespace %s (no ModelConfigs there; a platform admin provisions them)", name, ns)
 	}
