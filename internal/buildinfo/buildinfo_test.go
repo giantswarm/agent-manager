@@ -38,6 +38,10 @@ func TestResolve(t *testing.T) {
 			},
 			want: Info{Version: "1.1.9", Commit: "6e3caf2-dirty", Date: "unknown"},
 		},
+		"a stamped full commit hash is abbreviated": {
+			version: "2.3.1", commit: "9ed501d2381e0c1b2a3f6e3caf2d9c1f4b7a8e2d", date: "2026-10-16T00:00:00Z", bi: tagged,
+			want: Info{Version: "2.3.1", Commit: "9ed501d", Date: "2026-10-16T00:00:00Z"},
+		},
 		"ldflags values win": {
 			version: "1.2.0", commit: "1234567", date: "2026-10-01T00:00:00Z", bi: tagged,
 			want: Info{Version: "1.2.0", Commit: "1234567", Date: "2026-10-01T00:00:00Z"},
