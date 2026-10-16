@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/giantswarm/mcp-toolkit/tooldesc"
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpotel "github.com/mark3labs/mcp-go/otel"
 	mcpserver "github.com/mark3labs/mcp-go/server"
@@ -111,11 +112,11 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 		// MCP spans nest under it instead of extracting it a second time.
 		mcpotel.WithServerTracingPropagator(otel.Tracer(tracerName), propagation.NewCompositeTextMapPropagator()),
 		mcpserver.WithToolCapabilities(false),
-		mcpserver.WithInstructions("Manage the agents of the Agent Platform. An agent is a Flux HelmRelease of the Generic agent chart (2.x; one release renders one api.kagent.dev/v1alpha3 Agent, its template inline and its Harness by name, plus the agent's own muster RemoteMCPServer carrying its toolset) plus the shared per-namespace OCIRepository of that chart. Call get_info first for the managed namespaces, the chart range and version, the platform Harness and the muster URL; list_model_configs before create_agent (the modelConfig must exist in the namespace; in a tenant namespace without agents yet, the platform default ModelConfig is provided with the first agent); list_skills for the skills an agent can mount: it reports each repository's head commit, and every skill is written pinned to a commit or a digest (a branch, tag or image tag is resolved at write time). Names are DNS-1123 labels the caller chooses and confirms; the service never derives a name from a display name. validate_agent is a dry run of create/update. Every agent declares a toolset and create_agent requires it: the selectors (preset:<name>, server:<name>, workflow:<name>, tool:<name>) that bound which of the gateway's tools the agent's meta-tools can see and call; presets shipped on every installation: read-only, none, infrastructure, agent-platform, full. list_agents reports the toolset of each agent, or implicitFullAccess: true for agents created before toolsets existed; assign them one with update_agent. Readiness is the Agent object's own conditions (get_agent_status). An agent runs on the platform Harness (kagent, the Go ADK) unless create_agent names another Harness of the namespace in harness, such as claude for a Claude Code coding agent: that Harness must exist in the namespace. plugins enable skills from pinned Agent Plugins bundles. There is no runtime argument and no per-source skill credential. Every write tool takes dryRun (return the manifests, write nothing) and mode: apply (default) writes live as the caller and never touches an agent whose HelmRelease is applied from git (managed: gitops; refused with gitops_owned); commit writes the manifests as files into the git repository that owns the namespace and opens a pull request as the caller (get_info capabilities.commit says whether this installation offers it; without the caller's GitHub authorization it answers auth_required). organization and cluster (both or neither) place an agent on a workload cluster of the installation and address it in every read and write tool: its HelmRelease stays on the installation in org-<organization>, the agent, its ModelConfig and its Harness are on the cluster (get_info capabilities.targetCluster) To talk to an agent: start_session creates a conversation with it and sends the first message, or without message only creates it for the caller to send the first turn over A2A (with workspaceGrant, the grant a workspace manager's authorize_workspace returned, in that workspace), get_session reads it back (poll with lastTurns 1), get_session_turn reads one turn or tool call whole, list_sessions lists an agent's conversations, delete_session deletes one of the caller's own; they reach the kagent controller through agentgateway as the caller (get_info capabilities.sessions says whether this installation offers them)."),
+		mcpserver.WithInstructions("Manage the agents of the Agent Platform. An agent is a Flux HelmRelease of the Generic agent chart, which renders a kagent Agent, its Harness reference and the agent's muster RemoteMCPServer carrying its toolset. Call get_info first, and list_model_configs and list_skills before create_agent. Names are DNS-1123 labels the person chooses and confirms. Every agent needs a toolset. The write tools take dryRun and mode: apply writes live as you, commit opens a pull request as you in the repository that owns the namespace. organization and cluster place an agent on a workload cluster. Talk to an agent with start_session and get_session."),
 	)
 	t := &tools{svc: svc}
 
-	skillDesc := "Skills the agent mounts, a list of {name, path, git: {url, ref | commit}} or {name, oci: <reference>} entries. A git skill names its repository (http(s) URL) and either a commit (40 or 64 hex characters; list_skills reports it) or a ref (branch or tag) that is resolved to its head commit at write time; neither means the head of the default branch. An OCI skill is <registry>/<repository>:<tag> (resolved to its digest) or @sha256:<digest>. What is written is always the pin; get_agent reports it. There is no gitAuthSecretName: a private repository is resolved with the service's own GitHub token."
+	skillDesc := "Skills to mount: {name, path, git: {url, ref | commit}} or {name, oci}; refs and image tags are pinned at write time."
 	skillEntry := map[string]any{
 		"type": "object",
 		"properties": map[string]any{
@@ -133,19 +134,19 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 			"oci": schemaProp("string", "OCI reference: <registry>/<repository>:<tag> (resolved to its digest) or <registry>/<repository>@sha256:<digest>"),
 		},
 	}
-	gitAuthDesc := "Secret in the agent's namespace whose key token reads the agent's private git skills and git plugins (a GitHub token; chart value skillsGitAuthSecretRef.name, offered to every git source's https host). Omit it: the installation's skills credential (get_info skillsGitAuthSecretName) is used for every agent with a git skill or plugin"
+	gitAuthDesc := "Secret in the agent's namespace whose token key reads private git skills and plugins; omit for the installation's (get_info)"
 	gitAuthProp := mcp.WithString(argGitAuthSecret, mcp.Description(gitAuthDesc))
-	gitAuthReplaceProp := mcp.WithString(argGitAuthSecret, mcp.Description(gitAuthDesc+"; \"\" goes back to the installation's"))
+	gitAuthReplaceProp := mcp.WithString(argGitAuthSecret, mcp.Description(gitAuthDesc+"; \"\" goes back to it"))
 	skillsProp := mcp.WithArray(argSkills, mcp.Description(skillDesc), mcp.Items(skillEntry))
-	skillsReplaceProp := mcp.WithArray(argSkills, mcp.Description("Replaces the agent's whole skill list. "+skillDesc), mcp.Items(skillEntry))
-	refreshSkillsProp := mcp.WithBoolean(argRefreshSkills, mcp.Description("Re-resolve every git skill of the agent to the head of its repository's default branch (a skill passed in skills with a ref in the same call goes to that ref's head) and change nothing else on the release (default false)."))
-	toolsetDesc := "Toolset: the selectors that bound which of the gateway's tools the agent's meta-tools can see and call. Each is preset:<name>, server:<name>, workflow:<name> or tool:<name> (exact names; at most 32 — define a preset for more). Shipped presets: preset:read-only, preset:none (a chat-only agent without tools), preset:infrastructure, preset:agent-platform, preset:full (every tool the gateway exposes). Composed as the chart's top-level toolset value, rendered as the X-Muster-Toolset header on the agent's own RemoteMCPServer; muster resolves it per caller. The former toolNames argument is gone: it never narrowed anything against muster."
+	skillsReplaceProp := mcp.WithArray(argSkills, mcp.Description("Replaces the whole skill list: {name, path, git: {url, ref | commit}} or {name, oci}, pinned at write time."), mcp.Items(skillEntry))
+	refreshSkillsProp := mcp.WithBoolean(argRefreshSkills, mcp.Description("Re-pin every git skill to its default-branch head and change nothing else on the release (default false)."))
+	toolsetDesc := "Gateway tool selectors: preset:<name>, server:, workflow:, tool:. Presets: read-only, preset:none (no tools), infrastructure, agent-platform, full."
 	toolsetProp := mcp.WithArray(argToolset, mcp.Description(toolsetDesc), mcp.WithStringItems())
-	toolsetRequiredProp := mcp.WithArray(argToolset, mcp.Required(), mcp.Description("REQUIRED. "+toolsetDesc), mcp.WithStringItems())
-	toolsetReplaceProp := mcp.WithArray(argToolset, mcp.Description("Replaces the agent's whole toolset with this list (an empty list is refused: use [\"preset:none\"] for no tools). "+toolsetDesc), mcp.WithStringItems())
+	toolsetRequiredProp := mcp.WithArray(argToolset, mcp.Required(), mcp.Description(toolsetDesc), mcp.WithStringItems())
+	toolsetReplaceProp := mcp.WithArray(argToolset, mcp.Description("Replaces the whole toolset: preset:, server:, workflow:, tool:<name> selectors; [] is refused, [\"preset:none\"] means no tools."), mcp.WithStringItems())
 	labelsProp := mcp.WithObject(argLabels, mcp.Description("Extra labels on the Agent object (string values)."), mcp.AdditionalProperties(map[string]any{"type": "string"}))
 	annotationsProp := mcp.WithObject(argAnnotations, mcp.Description("Extra annotations on the Agent object (string values)."), mcp.AdditionalProperties(map[string]any{"type": "string"}))
-	pluginDesc := "Agent Plugins bundles the agent enables skills from, a list of {git: {url, commit}, path, skills: [...]} or {oci: <registry>/<repository>@sha256:<digest>, path, skills: [...]} entries (chart plugins[], the Agent's spec.template.plugins[]). A plugin is written as given and must come pinned: a full commit id or a digest, never a branch, tag or image tag. skills names the bundle's skills to enable (at least one, unique); nothing else of the bundle reaches the agent. path is the bundle's directory within the artifact. A private git plugin reads with the same credential as a private git skill (gitAuthSecretName)."
+	pluginDesc := "Agent Plugins bundles to enable skills from: {git: {url, commit} or oci: <ref>@sha256:<digest>, path, skills}; must come pinned."
 	pluginEntry := map[string]any{
 		"type":     "object",
 		"required": []string{"skills"},
@@ -164,27 +165,28 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 		},
 	}
 	pluginsProp := mcp.WithArray(argPlugins, mcp.Description(pluginDesc), mcp.Items(pluginEntry))
-	pluginsReplaceProp := mcp.WithArray(argPlugins, mcp.Description("Replaces the agent's whole plugin list ([] clears it). "+pluginDesc), mcp.Items(pluginEntry))
-	egressDesc := "HTTP(S) origins the agent may reach besides what its revision compiles (the model, its MCP servers, its skill and plugin sources, telemetry): <scheme>://<host>[:<port>], such as https://github.com:443, https://proxy.golang.org or https://*.githubusercontent.com (a wildcard replaces the leftmost label and needs two labels under it); at most 64, none twice. Chart value agent.egress, the Agent's spec.egress; nothing allows every host."
+	pluginsReplaceProp := mcp.WithArray(argPlugins, mcp.Description("Replaces the whole plugin list ([] clears it): {git: {url, commit} or oci: <ref>@sha256:<digest>, path, skills}, pinned."), mcp.Items(pluginEntry))
+	egressDesc := "Extra HTTP(S) origins the agent may reach: <scheme>://<host>[:<port>]; a wildcard replaces the leftmost label. At most 64."
 	egressProp := mcp.WithArray(argEgress, mcp.Description(egressDesc), mcp.Items(stringSchema))
-	egressReplaceProp := mcp.WithArray(argEgress, mcp.Description("Replaces the agent's whole egress list ([] clears it). "+egressDesc), mcp.Items(stringSchema))
-	harnessDesc := "Harness of the namespace that runs the agent (chart agent.harness, the Agent's spec.harnessRef.name); omit for the platform Harness (get_info harness.name, the kagent Go ADK). A Harness whose runtime is Claude Code (claude on the platform) runs the agent as a Claude Code session: skills and plugins are Claude Code skills and plugins there, and the agent is guarded: its toolset is any the caller chooses, as on any other agent, requireApproval and tool bindings beside muster's are refused, its egress is the Harness's origin list (any other origin is refused) and its system prompt ends with the platform's egress note. Fixed at create: a name no Harness of the namespace carries is refused with the ones that exist."
+	egressReplaceProp := mcp.WithArray(argEgress, mcp.Description("Replaces the whole egress list ([] clears it): <scheme>://<host>[:<port>] origins, at most 64."), mcp.Items(stringSchema))
+	harnessDesc := "Harness of the namespace that runs the agent; omit for the platform Harness (get_info). claude runs it as Claude Code. Fixed at create."
 	maxBytesProp := mcp.WithNumber(argMaxBytes, mcp.Description(fmt.Sprintf("Max answer size in bytes, %d-%d, default %d", agents.MinSessionMaxBytes, agents.MaxSessionMaxBytes, agents.DefaultSessionMaxBytes)))
-	nsProp := mcp.WithString(argNamespace, mcp.Description("Namespace of the agent; default: the installation's kagent namespace (get_info reports the managed ones)."))
-	orgProp := mcp.WithString(argOrganization, mcp.Description("With cluster: the organization owning the workload cluster the agent runs on (its namespace org-<organization> holds the cluster's kubeconfig Secret and the agent's HelmRelease). Omit both for the installation's own cluster."))
-	clusterProp := mcp.WithString(argCluster, mcp.Description("With organization: the workload cluster the agent runs on. The HelmRelease stays on the installation and installs on the cluster through its Cluster API kubeconfig Secret <cluster>-kubeconfig; the agent, its ModelConfig and its Harness are read on the cluster, as the caller (the cluster's apiserver must trust the installation's identity provider). namespace is then the namespace on the cluster."))
-	modeProp := mcp.WithString(argMode, mcp.Enum(agents.ModeApply, agents.ModeCommit), mcp.Description("apply (default): write live as the caller; refused with gitops_owned for a HelmRelease a Flux Kustomization applies from git. commit: write the manifests as files into agent-manager's directory of the git repository that owns the namespace (from the Flux Kustomization labels, or repository/branch/path) and open a pull request as the caller; answers auth_required when the call carries no GitHub authorization. get_info capabilities.commit says whether commit is offered."))
-	dryRunProp := mcp.WithBoolean(argDryRun, mcp.Description("Return what the write would do — the manifests and, with mode commit, the repository, directory, files and branch of the pull request — and write nothing (default false)."))
-	repositoryProp := mcp.WithString(argRepository, mcp.Description("mode commit only: the GitHub repository (owner/name) to commit to where no Flux Kustomization owns the namespace yet; overrides the derived target. Needs branch."))
+	nsProp := mcp.WithString(argNamespace, mcp.Description("Namespace of the agent; default: the installation's kagent namespace (get_info lists the managed ones)."))
+	orgProp := mcp.WithString(argOrganization, mcp.Description("With cluster: the organization owning the workload cluster the agent runs on. Omit both for the installation's own cluster."))
+	clusterProp := mcp.WithString(argCluster, mcp.Description("With organization: the workload cluster the agent runs on; its HelmRelease stays on the installation. namespace is on the cluster."))
+	modeProp := mcp.WithString(argMode, mcp.Enum(agents.ModeApply, agents.ModeCommit), mcp.Description("apply (default): write live as you; a release applied from git is refused with gitops_owned. commit: open a pull request as you."))
+	dryRunProp := mcp.WithBoolean(argDryRun, mcp.Description("Return what the write would do, the manifests and with mode commit the pull request's files, and write nothing (default false)."))
+	repositoryProp := mcp.WithString(argRepository, mcp.Description("mode commit: the repository (owner/name) to commit to where no Flux Kustomization owns the namespace yet. Needs branch."))
 	branchProp := mcp.WithString(argBranch, mcp.Description("mode commit with repository: the base branch the pull request goes to."))
-	pathProp := mcp.WithString(argPath, mcp.Description("mode commit with repository: the repository-relative directory a Flux Kustomization builds from; agent-manager writes into its agent-manager/ subdirectory (default: the root)."))
+	pathProp := mcp.WithString(argPath, mcp.Description("mode commit with repository: the directory a Flux Kustomization builds from; files go into its agent-manager/ subdirectory."))
 
 	// Every tool spells out all four hints: mcp-go pre-fills an unset hint with
 	// the spec default, so a hint left out ships as a claim. openWorldHint is true
 	// where a caller-named GitHub repository or OCI reference is resolved, false
 	// for the tools that only read and write this installation's own resources.
 	s.AddTool(mcp.NewTool(ToolGetInfo,
-		mcp.WithDescription("Read-only. Report the service version, the agent chart (OCI URL, the tracked 2.x range, resolved latest version, which values schema validates right now), the managed namespaces in which the caller may create agents (namespaces.managed; with tenants, the namespaces labelled giantswarm.io/organization are managed too), the capability flags (commit: whether the write tools take mode commit), the served API versions (apiVersions.agent, agentTemplate, harness, remoteMcpServer, modelConfig, helmRelease, ociRepository), the platform Harness (harness.name), the muster MCP URL composed into every agent (muster.url; empty means the chart default), the Flux settings composed into every agent and how writes are authenticated. Call first."),
+		tooldesc.Describe("Where you can create agents and what this installation offers: managed namespaces, chart, Harness, capabilities.",
+			"Call it first. Also the service version, the served API versions, the muster URL and Flux settings composed into every agent, and how writes are authenticated."),
 		mcp.WithReadOnlyHintAnnotation(true),
 		mcp.WithDestructiveHintAnnotation(false),
 		mcp.WithIdempotentHintAnnotation(false),
@@ -192,11 +194,12 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 	), t.getInfo)
 
 	s.AddTool(mcp.NewTool(ToolListAgents,
-		mcp.WithDescription("Read-only. List the agents of a namespace, one summary each: display name, description, model config, the Harness it runs on, the declared toolset (or implicitFullAccess: true for an agent without one: it sees every tool the gateway exposes and still needs a toolset), ready (the Agent object's verdict) and how each is managed (helmrelease: writable here; gitops: applied from git, changed only with mode commit; none: a bare Agent object), plus suspended, deleting and the release's reason and message when its HelmRelease is suspended, being uninstalled or not Ready. HelmReleases of the agent chart that have not rendered an Agent yet are listed too (exists: false). The system prompt, pinned skills and plugins, MCP bindings, the Agent's status (conditions, revisions, warnings), HelmRelease and values of one agent come from get_agent."),
+		tooldesc.Describe("List the agents of a namespace, one summary each: model, Harness, toolset, readiness and how it is managed.",
+			"managed: helmrelease is writable here, gitops changes only with mode commit, none is a bare Agent object. implicitFullAccess: true means the agent sees every gateway tool and still needs a toolset (update_agent). An agent's prompt, skills, plugins and values come from get_agent."),
 		nsProp,
 		orgProp,
 		clusterProp,
-		mcp.WithBoolean(argDetails, mcp.Description("Report every agent in full, as get_agent does, system prompt and HelmRelease values included (default false). Large: prefer get_agent for the agents you need.")),
+		mcp.WithBoolean(argDetails, mcp.Description("Report every agent in full, as get_agent does (default false). Large: prefer get_agent for the agents you need.")),
 		mcp.WithReadOnlyHintAnnotation(true),
 		mcp.WithDestructiveHintAnnotation(false),
 		mcp.WithIdempotentHintAnnotation(false),
@@ -204,7 +207,8 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 	), t.listAgents)
 
 	s.AddTool(mcp.NewTool(ToolGetAgent,
-		mcp.WithDescription("Read-only. Get one agent with its HelmRelease values (the chart contract), its Harness, pinned skills and plugins, its declared toolset (or implicitFullAccess: true) and the status of its Agent object."),
+		tooldesc.Describe("Get one agent: its HelmRelease values, Harness, pinned skills and plugins, toolset and Agent status.",
+			""),
 		mcp.WithString(argName, mcp.Required(), mcp.Description("Agent name")),
 		nsProp,
 		orgProp,
@@ -216,7 +220,8 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 	), t.getAgent)
 
 	s.AddTool(mcp.NewTool(ToolCreateAgent,
-		mcp.WithDescription("WRITES: creates a Flux HelmRelease of the Generic agent chart named after the agent (and the shared OCIRepository of the chart in the namespace, tracking 2.x, when it does not exist yet); helm-controller then renders the api.kagent.dev/v1alpha3 Agent (the template inline, the Harness by name in spec.harnessRef) and the agent's muster RemoteMCPServer, and the Harness compiles it. A toolset is required (refused without one). Every skill is pinned (a branch or tag to its head commit, an image tag to its digest), plugins must come pinned, the values are validated against the chart's values.schema.json, the modelConfig must exist in the namespace and a named harness must exist there before anything is applied; a failure writes nothing and lists the valid names. harness selects the runtime: the platform Harness (kagent, the Go ADK) unless another is named; a Claude Code Harness (claude) runs the agent as a Claude Code session. Returns the applied manifests and the initial status; poll get_agent_status until the verdict is ready. dryRun returns the manifests and writes nothing. mode commit writes the HelmRelease (and the OCIRepository when the namespace has none) as files of a pull request opened as the caller in the repository that owns the namespace, applies nothing live and returns commit {repository, directory, files, branch, pullRequest}. The name is the DNS-1123 technical name the caller chose (confirm it with the user; it is never derived from displayName). runtime is refused: the Harness is the runtime."),
+		tooldesc.Describe("Create an agent: a HelmRelease of the Generic agent chart. It needs a toolset; confirm its name with the person.",
+			"name is the DNS-1123 name the person chose, never derived from displayName. modelConfig must exist in the namespace (list_model_configs). Skills are pinned at write time (list_skills), plugins must come pinned and the values are checked against the chart schema: a failure writes nothing and names the valid values. Poll get_agent_status until ready."),
 		mcp.WithString(argName, mcp.Required(), mcp.Description("DNS-1123 technical name (max 63 chars): the HelmRelease and Agent name")),
 		mcp.WithString(argModelConfig, mcp.Required(), mcp.Description("Name of an existing kagent ModelConfig in the namespace (list_model_configs)")),
 		mcp.WithString(argHarness, mcp.Description(harnessDesc)),
@@ -242,7 +247,8 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 	), t.createAgent)
 
 	s.AddTool(mcp.NewTool(ToolUpdateAgent,
-		mcp.WithDescription("WRITES: merges the given fields into the agent's HelmRelease values (only the arguments passed change; skills, plugins and toolset replace the whole list, skills are pinned, toolset is the way to assign one to an agent that reports implicitFullAccess; an empty string clears a field back to the chart default; refreshSkills re-pins every git skill to its default-branch head and changes nothing else), validates the result against the chart schema and updates the HelmRelease; helm-controller upgrades the Agent and its Harness compiles a new revision. The Harness itself is fixed at create. Returns the values before and after and the changed paths. dryRun returns them and writes nothing. A GitOps-owned release (managed: gitops) is refused in mode apply with gitops_owned; mode commit rewrites its file in agent-manager's directory of the owning repository and opens a pull request as the caller (a release defined elsewhere in the repository is refused). A suspended release is refused unless force is true."),
+		tooldesc.Describe("Change an agent: only the fields passed change; skills, plugins, egress and toolset replace the whole list.",
+			"\"\" clears a field back to the chart default. refreshSkills re-pins every git skill. The Harness is fixed at create. Returns the values before and after. A suspended release is refused unless force is true; a GitOps-owned one needs mode commit."),
 		mcp.WithString(argName, mcp.Required(), mcp.Description("Agent name")),
 		mcp.WithString(argDisplayName, mcp.Description("New friendly name; \"\" clears it")),
 		mcp.WithString(argDescription, mcp.Description("New description; \"\" clears it")),
@@ -269,7 +275,8 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 	), t.updateAgent)
 
 	s.AddTool(mcp.NewTool(ToolDeleteAgent,
-		mcp.WithDescription("WRITES (destructive): deletes the HelmRelease that owns the agent (helm-controller uninstalls the release and removes the Agent and the agent's RemoteMCPServer) and deletes the shared OCIRepository of the agent chart only when no other HelmRelease in the namespace references it (the result says why it was kept). A bare Agent without a HelmRelease is refused unless force is true (then the object is deleted directly); a suspended HelmRelease is refused unless force is true. A GitOps-owned release is refused in mode apply with gitops_owned; mode commit removes its file (and the chart source's when nothing else uses it) from agent-manager's directory of the owning repository with a pull request opened as the caller. dryRun reports what would be deleted and deletes nothing."),
+		tooldesc.Describe("Delete an agent: its HelmRelease, which removes the Agent and its muster RemoteMCPServer.",
+			"The chart's shared OCIRepository goes too when nothing else in the namespace uses it; the answer says why it was kept. A bare Agent or a suspended release is refused unless force is true; a GitOps-owned one needs mode commit."),
 		mcp.WithString(argName, mcp.Required(), mcp.Description("Agent name")),
 		mcp.WithBoolean(argForce, mcp.Description("Also delete bare Agent objects and suspended releases (default false). A GitOps-owned release is never deleted live: use mode commit")),
 		nsProp,
@@ -283,7 +290,8 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 	), t.deleteAgent)
 
 	s.AddTool(mcp.NewTool(ToolGetAgentStatus,
-		mcp.WithDescription("Read-only. One verdict (ready | progressing | failed | unknown) with a one-line summary, from the Agent object's conditions (ready: Ready and the desired revision is the latest successful one; progressing: a revision still compiling; failed: Accepted, ResolvedRefs or Compatible False with the condition's message, a Harness that does not exist being ResolvedRefs False), its warnings, the HelmRelease conditions and history, and the namespace's recent Warning events for the agent. No Deployment or pod is involved: agents run as Substrate actors."),
+		tooldesc.Describe("One readiness verdict for an agent: ready, progressing, failed or unknown, with a one-line summary.",
+			"From the Agent's conditions and warnings, the HelmRelease's conditions and history, and recent Warning events. Poll it after a create or update until ready."),
 		mcp.WithString(argName, mcp.Required(), mcp.Description("Agent name")),
 		nsProp,
 		orgProp,
@@ -295,7 +303,8 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 	), t.getAgentStatus)
 
 	s.AddTool(mcp.NewTool(ToolValidateAgent,
-		mcp.WithDescription("Read-only dry run of create_agent (or of update_agent when update is true): composes the OCIRepository and HelmRelease, checks the name, the modelConfig, the harness, the toolset (required for a create; validated when given for an update), pins the skills, checks the plugins come pinned and validates the values against the agent chart's values.schema.json, and returns the manifests and every violation. Nothing is written. mode answers as the write would: an update of a GitOps-owned release (managed: gitops) is refused in mode apply with gitops_owned and validated in mode commit, the change its pull request carries."),
+		tooldesc.Describe("Dry run of create_agent, or of update_agent with update: true: the manifests and every violation. Writes nothing.",
+			"Checks the name, modelConfig, harness and toolset (required for a create), pins the skills, checks the plugins are pinned and validates the values against the chart schema. mode answers as the write would."),
 		mcp.WithString(argName, mcp.Required(), mcp.Description("Agent name")),
 		mcp.WithString(argModelConfig, mcp.Description("ModelConfig name (required for a create)")),
 		mcp.WithString(argHarness, mcp.Description(harnessDesc)),
@@ -324,7 +333,8 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 	), t.validateAgent)
 
 	s.AddTool(mcp.NewTool(ToolListModelConfigs,
-		mcp.WithDescription("Read-only. List the kagent ModelConfigs of a namespace (name, provider, model, Accepted condition, who manages it) — the values create_agent accepts for modelConfig. ModelConfigs are platform-admin owned; agent-manager never writes them."),
+		tooldesc.Describe("List the ModelConfigs of a namespace: the values create_agent accepts for modelConfig.",
+			"Each with provider, model, its Accepted condition and who manages it; agent-manager never writes them. In a tenant namespace without agents yet, the platform default ModelConfig comes with the first agent."),
 		nsProp,
 		orgProp,
 		clusterProp,
@@ -335,7 +345,8 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 	), t.listModelConfigs)
 
 	s.AddTool(mcp.NewTool(ToolListSkills,
-		mcp.WithDescription("Read-only. Discover the skills of the configured skill repositories: per repository the ref read and the head commit it resolved to (the commit a skills entry of create_agent/update_agent pins), and its skills (every SKILL.md, by frontmatter name, description and directory path). Results are cached briefly; refresh re-reads GitHub."),
+		tooldesc.Describe("List the skills agents can mount, from the configured skill repositories, with each repository's head commit.",
+			"Per repository: the ref read, the commit it resolved to (what a skills entry pins) and each SKILL.md's name, description and path. Cached briefly; refresh re-reads GitHub."),
 		mcp.WithString(argRepository, mcp.Description("Only this repository (https://github.com/<owner>/<repo>); default: every configured one")),
 		mcp.WithString(argRef, mcp.Description("Git ref to read; default: the default branch (the ref refreshSkills follows)")),
 		mcp.WithBoolean(argRefresh, mcp.Description("Bypass the cache (default false)")),
@@ -346,7 +357,8 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 	), t.listSkills)
 
 	s.AddTool(mcp.NewTool(ToolListSessions,
-		mcp.WithDescription("Read-only. List the conversations (kagent Sessions) of one agent, as the caller: SessionService/ListSessions through agentgateway. Each session reports its id, creator, agent, name, state (RUNTIME_STATE_CREATING | READY | SUSPENDED | FAILED | DELETING | DELETED), failure and timestamps. Only the caller's own sessions unless allCreators is true, which the controller grants only to a caller authorized for it."),
+		tooldesc.Describe("List your conversations with one agent: id, name, state, failure and timestamps.",
+			"Read through agentgateway as you. allCreators includes every person's sessions, when the controller authorizes you for it."),
 		mcp.WithString(argName, mcp.Required(), mcp.Description("Agent name")),
 		nsProp,
 		mcp.WithBoolean(argAllCreators, mcp.Description("Include every person's sessions of the agent, when the controller authorizes the caller for it (default false)")),
@@ -357,7 +369,8 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 	), t.listSessions)
 
 	s.AddTool(mcp.NewTool(ToolGetSession,
-		mcp.WithDescription(fmt.Sprintf("Read-only. A conversation's turns, oldest first, one per A2A task, indexed from 0. detail: summary (default) gives per turn the user's message, the agent's reply, the state and one stub per tool call (index, name, error, pending), without arguments or responses; transcript gives every message and artifact, with tool arguments clipped and results as stubs; full gives the raw A2A tasks. The answer fits maxBytes (default %d) by dropping the oldest turns (counted in omittedTurns). To poll, use lastTurns 1: a turn is finished in state COMPLETED, FAILED, CANCELED, REJECTED or INPUT_REQUIRED. To read one turn whole or a tool call's response, use get_session_turn.", agents.DefaultSessionMaxBytes)),
+		tooldesc.Describe("Read a conversation's turns, oldest first. To poll, use lastTurns: 1 until the last turn's state is final.",
+			fmt.Sprintf("Final states: COMPLETED, FAILED, CANCELED, REJECTED, INPUT_REQUIRED. detail: summary (default) gives per turn the messages, state and one stub per tool call; transcript every message and artifact; full the raw A2A tasks. The oldest turns are dropped to fit maxBytes (default %d; omittedTurns counts them). One turn or tool call whole: get_session_turn.", agents.DefaultSessionMaxBytes)),
 		mcp.WithString(argSessionID, mcp.Required(), mcp.Description("Session id (from start_session or list_sessions)")),
 		mcp.WithString(argDetail, mcp.Enum(agents.DetailSummary, agents.DetailTranscript, agents.DetailFull)),
 		mcp.WithNumber(argLastTurns, mcp.Description("Only the last n turns")),
@@ -369,7 +382,8 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 	), t.getSession)
 
 	s.AddTool(mcp.NewTool(ToolGetSessionTurn,
-		mcp.WithDescription("Read-only. One turn of a conversation: its messages, then its artifacts, from fromMessage on. detail: transcript (default) clips tool arguments and gives results as stubs; full gives the raw A2A objects. If the answer is cut to fit maxBytes, call again with fromMessage set to nextMessage. With toolCall, it returns that one call instead: its arguments and full response, unwrapped from MCP envelopes, clipped only if it exceeds maxBytes."),
+		tooldesc.Describe("Read one turn of a conversation whole, or with toolCall one tool call's arguments and full response.",
+			"detail: transcript (default) clips tool arguments; full gives the raw A2A objects. If the answer is cut to fit maxBytes, call again with fromMessage set to nextMessage."),
 		mcp.WithString(argSessionID, mcp.Required(), mcp.Description("Session id")),
 		mcp.WithString(argTurn, mcp.Required(), mcp.Description("taskId, index (from 0) or last")),
 		mcp.WithString(argDetail, mcp.Enum(agents.DetailTranscript, agents.DetailFull)),
@@ -383,13 +397,14 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 	), t.getSessionTurn)
 
 	s.AddTool(mcp.NewTool(ToolStartSession,
-		mcp.WithDescription("WRITES: starts a conversation with an agent as the caller: SessionService/CreateSession for the agent (refused with conflict while the agent has no ready revision: get_agent_status first), then, when message is given, the first message over A2AService/SendStreamingMessage, addressed to the agent (tenant <namespace>/<name>) and the new session (message.contextId). With message it answers once the agent has accepted the turn: the session and the turn's first event as turn (usually its task in TASK_STATE_SUBMITTED or WORKING); the agent keeps working, read its answer with get_session. Without message it only creates the session and answers it with no turn: the caller sends the first message itself over A2A (tenant <namespace>/<name>, the session's contextId as message.contextId), for instance one with file parts. The agent runs its tools as the caller. requestId makes a retry idempotent: the same requestId answers the session the first attempt created, and when that session's first turn already carries the first message it answers that turn's latest state as turn and sends nothing, so a retry after a lost answer starts no second turn. workspaceGrant starts the session in a workspace: pass the grant the workspace manager's authorize_workspace returned to you; the session then works in its own directory on the workspace's volume with the workspace's git mirrors read-only, and the answer names the workspace. A grant that names another person, has expired or cannot be read is refused with the reason before anything is created; kagent's admission verifies it and refuses with its reason. Without one the session has no workspace."),
+		tooldesc.Describe("Start a conversation with an agent as you, optionally sending the first message. Read replies with get_session.",
+			"Refused with conflict while the agent has no ready revision (get_agent_status). With message it answers once the agent accepted the turn; the agent keeps working. Without it, send the first message yourself over A2A (tenant <namespace>/<name>, the session's contextId). The agent runs its tools as you. Reuse requestId on a retry: it never starts a second turn."),
 		mcp.WithString(argName, mcp.Required(), mcp.Description("Agent name")),
 		nsProp,
-		mcp.WithString(argMessage, mcp.Description(fmt.Sprintf("The first user message of the conversation, text only (at most %d characters). Omit it to create the session without a turn and send the first message yourself", agents.MaxSessionMessageLength))),
+		mcp.WithString(argMessage, mcp.Description(fmt.Sprintf("The first user message, text only, at most %d characters; omit it to send the first message yourself.", agents.MaxSessionMessageLength))),
 		mcp.WithString(argRequestID, mcp.Description("Idempotency key of this start (at most 128 characters); reuse it on a retry. Default: a new one per call")),
 		mcp.WithString(argSessionName, mcp.Description("Display name of the conversation (at most 200 characters); default: unnamed")),
-		mcp.WithString(argWorkspaceGrant, mcp.Description("The workspace grant authorize_workspace returned to you (the workspace manager's signed, short-lived token), to start the session in that workspace. Default: no workspace")),
+		mcp.WithString(argWorkspaceGrant, mcp.Description("The grant authorize_workspace returned to you, to start the session in that workspace; another person's or an expired one is refused.")),
 		mcp.WithReadOnlyHintAnnotation(false),
 		mcp.WithDestructiveHintAnnotation(false),
 		mcp.WithIdempotentHintAnnotation(false),
@@ -397,7 +412,8 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 	), t.startSession)
 
 	s.AddTool(mcp.NewTool(ToolDeleteSession,
-		mcp.WithDescription("WRITES, destructive: deletes one of the caller's conversations as the caller: SessionService/DeleteSession, which ends the session's runtime and removes its state; the conversation cannot be read back. Answers the session in RUNTIME_STATE_DELETED; it is gone from list_sessions and get_session. kagent scopes the delete to the session's creator: a session of another person is refused as not_found, as one that does not exist. While another operation on the session runs it is refused with conflict: retry shortly."),
+		tooldesc.Describe("Delete one of your conversations and its state for good; it cannot be read back.",
+			"Another person's session is refused as not_found. While another operation on it runs, it is refused with conflict: retry shortly."),
 		mcp.WithString(argSessionID, mcp.Required(), mcp.Description("Session id (a UUID, from start_session or list_sessions)")),
 		mcp.WithReadOnlyHintAnnotation(false),
 		mcp.WithDestructiveHintAnnotation(true),

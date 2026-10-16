@@ -373,20 +373,15 @@ func TestMCPToolsMirrorREST(t *testing.T) {
 		}
 		switch tool.Name {
 		case ToolCreateAgent, ToolUpdateAgent, ToolDeleteAgent:
-			assert.Contains(t, tool.Description, "WRITES", tool.Name)
 			for _, arg := range []string{"mode", "dryRun", "repository", "branch", "path"} {
 				assert.Contains(t, tool.InputSchema.Properties, arg, "%s takes %s", tool.Name, arg)
 			}
 			assert.Equal(t, []any{agents.ModeApply, agents.ModeCommit}, tool.InputSchema.Properties["mode"].(map[string]any)["enum"])
 		case ToolStartSession:
-			assert.Contains(t, tool.Description, "WRITES", tool.Name)
 			assert.ElementsMatch(t, []string{"name"}, tool.InputSchema.Required, "message is optional")
 			assert.Contains(t, tool.InputSchema.Properties, "message")
 		case ToolDeleteSession:
-			assert.Contains(t, tool.Description, "WRITES", tool.Name)
 			assert.ElementsMatch(t, []string{"sessionId"}, tool.InputSchema.Required)
-		default:
-			assert.Contains(t, tool.Description, "Read-only", tool.Name)
 		}
 		want, known := wantHints[tool.Name]
 		require.True(t, known, "no expected hints for %s", tool.Name)
