@@ -562,12 +562,14 @@ func (r *Reconciler) release(ctx context.Context, ns string) error {
 		errs = append(errs, fmt.Errorf("list modelconfigs in %s: %w", ns, err))
 	} else {
 		for i := range mcs.Items {
-			mc := &mcs.Items[i]
-			errs = append(errs, r.delete(ctx, mc))
-			if secret, _, _ := unstructured.NestedString(mc.Object, "spec", "apiKeySecret"); secret == r.cfg.ModelSecretName && secret != "" {
-				errs = append(errs, r.deleteSecret(ctx, ns, secret))
-			}
+			errs = append(errs, r.delete(ctx, &mcs.Items[i]))
 		}
+	}
+	// The key Secret goes whatever a ModelConfig copy names: one that names
+	// another Secret, or is gone already after a failed release, would
+	// otherwise leave it behind.
+	if r.cfg.ModelSecretName != "" {
+		errs = append(errs, r.deleteSecret(ctx, ns, r.cfg.ModelSecretName))
 	}
 	return errors.Join(errs...)
 }

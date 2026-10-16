@@ -63,6 +63,9 @@ func agentRelease(ns string) *unstructured.Unstructured {
 type cluster struct {
 	*testEnv
 	set *Set
+	// ctx is the test's: a subtest's ends with the subtest, while a
+	// condition of eventually may still read.
+	ctx context.Context
 	// config is the reconciler's Config.
 	config Config
 	// poolUpdates counts the reconciler's update requests of WorkerPools,
@@ -77,10 +80,11 @@ func (c *cluster) create(t *testing.T, gvr schema.GroupVersionResource, o *unstr
 	require.NoError(t, err)
 }
 
-// get reads an object as the admin; nil when absent.
-func (c *cluster) get(t *testing.T, gvr schema.GroupVersionResource, ns, name string) *unstructured.Unstructured {
-	t.Helper()
-	o, err := c.dyn.Resource(gvr).Namespace(ns).Get(t.Context(), name, metav1.GetOptions{})
+// get reads an object as the admin; nil when absent. t is the test, or an
+// eventually tick, whose failed read retries.
+func (c *cluster) get(t require.TestingT, gvr schema.GroupVersionResource, ns, name string) *unstructured.Unstructured {
+	helper(t)
+	o, err := c.dyn.Resource(gvr).Namespace(ns).Get(c.ctx, name, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
 		return nil
 	}
@@ -94,9 +98,9 @@ func (c *cluster) namespace(t *testing.T, name string, labels map[string]string)
 	require.NoError(t, err)
 }
 
-func (c *cluster) secret(t *testing.T, ns, name string) *corev1.Secret {
-	t.Helper()
-	s, err := c.admin.CoreV1().Secrets(ns).Get(t.Context(), name, metav1.GetOptions{})
+func (c *cluster) secret(t require.TestingT, ns, name string) *corev1.Secret {
+	helper(t)
+	s, err := c.admin.CoreV1().Secrets(ns).Get(c.ctx, name, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
 		return nil
 	}
@@ -104,9 +108,9 @@ func (c *cluster) secret(t *testing.T, ns, name string) *corev1.Secret {
 	return s
 }
 
-func (c *cluster) serviceAccount(t *testing.T, ns, name string) bool {
-	t.Helper()
-	_, err := c.admin.CoreV1().ServiceAccounts(ns).Get(t.Context(), name, metav1.GetOptions{})
+func (c *cluster) serviceAccount(t require.TestingT, ns, name string) bool {
+	helper(t)
+	_, err := c.admin.CoreV1().ServiceAccounts(ns).Get(c.ctx, name, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
 		return false
 	}
@@ -114,11 +118,21 @@ func (c *cluster) serviceAccount(t *testing.T, ns, name string) bool {
 	return true
 }
 
+// helper marks the caller a test helper when t is a test.
+func helper(t require.TestingT) {
+	if h, ok := t.(interface{ Helper() }); ok {
+		h.Helper()
+	}
+}
+
 // eventually waits for cond: the watches, not a resync, must bring it about
-// (the sync period is an hour).
-func eventually(t *testing.T, cond func() bool, msg string) {
+// (the sync period is an hour). cond reads with the tick's t: a failed read
+// fails the tick, never the test from the condition's goroutine.
+func eventually(t *testing.T, cond func(t require.TestingT) bool, msg string) {
 	t.Helper()
-	require.Eventually(t, cond, 20*time.Second, 100*time.Millisecond, msg)
+	require.EventuallyWithT(t, func(tick *assert.CollectT) {
+		assert.True(tick, cond(tick), msg)
+	}, 20*time.Second, 100*time.Millisecond, msg)
 }
 
 // startCluster seeds the platform namespace kagent (itself labelled, never a
@@ -127,8 +141,8 @@ func eventually(t *testing.T, cond func() bool, msg string) {
 // range; then runs the reconciler.
 func startCluster(t *testing.T) *cluster {
 	env := startEnvtest(t, "tenants.networkPolicy.flavor=kubernetes", "tenants.networkPolicy.names={substrate-workers}")
-	c := &cluster{testEnv: env}
-	ctx := t.Context()
+	c := &cluster{testEnv: env, ctx: t.Context()}
+	ctx := c.ctx
 
 	c.namespace(t, "kagent", map[string]string{OrganizationLabel: "giantswarm"})
 	c.namespace(t, "org-a", map[string]string{OrganizationLabel: "a"})
@@ -218,9 +232,9 @@ func TestTenantReconcilerEnvtest(t *testing.T) {
 	ctx := t.Context()
 
 	t.Run("a tenant without agents gets its Flux objects and network policies only", func(t *testing.T) {
-		eventually(t, func() bool { return c.get(t, ociGVR, "org-a", "agent") != nil }, "the OCIRepository")
+		eventually(t, func(t require.TestingT) bool { return c.get(t, ociGVR, "org-a", "agent") != nil }, "the OCIRepository")
 		assert.Equal(t, ScopeNamespace, c.get(t, ociGVR, "org-a", "agent").GetLabels()[ObjectLabel])
-		eventually(t, func() bool {
+		eventually(t, func(t require.TestingT) bool {
 			_, err := c.admin.NetworkingV1().NetworkPolicies("org-a").Get(ctx, "substrate-workers", metav1.GetOptions{})
 			return err == nil
 		}, "the network policy")
@@ -228,8 +242,8 @@ func TestTenantReconcilerEnvtest(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, "kagent/substrate-workers", np.Annotations[CopiedFromAnnotation])
 		assert.Empty(t, np.Labels["from"], "the source's labels are not copied")
-		eventually(t, func() bool { return c.serviceAccount(t, "org-a", "agents-flux") }, "the Flux ServiceAccount")
-		eventually(t, func() bool {
+		eventually(t, func(t require.TestingT) bool { return c.serviceAccount(t, "org-a", "agents-flux") }, "the Flux ServiceAccount")
+		eventually(t, func(t require.TestingT) bool {
 			_, err := c.admin.RbacV1().RoleBindings("org-a").Get(ctx, "agents-flux", metav1.GetOptions{})
 			return err == nil
 		}, "the Flux RoleBinding")
@@ -257,7 +271,7 @@ func TestTenantReconcilerEnvtest(t *testing.T) {
 		require.NoError(t, err)
 		c.create(t, hrGVR, agentRelease("org-c"))
 		// The tenant's copies show the namespace was reconciled with an agent.
-		eventually(t, func() bool { return c.get(t, mcGVR, "org-c", "default-model-config") != nil }, "org-c's ModelConfig")
+		eventually(t, func(t require.TestingT) bool { return c.get(t, mcGVR, "org-c", "default-model-config") != nil }, "org-c's ModelConfig")
 		h := c.get(t, harnessGVR, "org-c", "kagent")
 		assert.Empty(t, h.GetLabels()[ObjectLabel])
 		_, isClaude, _ := unstructured.NestedMap(h.Object, "spec", "claude")
@@ -276,17 +290,17 @@ func TestTenantReconcilerEnvtest(t *testing.T) {
 		delete(noSpec.Object, "spec")
 		c.create(t, hrGVR, noSpec)
 		c.create(t, hrGVR, agentRelease("org-a"))
-		eventually(t, func() bool { return c.secret(t, "org-a", keySecret) != nil }, "the key Secret")
-		eventually(t, func() bool { return c.get(t, harnessGVR, "org-a", "kagent") != nil }, "the Harness")
+		eventually(t, func(t require.TestingT) bool { return c.secret(t, "org-a", keySecret) != nil }, "the key Secret")
+		eventually(t, func(t require.TestingT) bool { return c.get(t, harnessGVR, "org-a", "kagent") != nil }, "the Harness")
 		assert.Equal(t, ScopeAgents, c.get(t, harnessGVR, "org-a", "kagent").GetLabels()[ObjectLabel])
-		eventually(t, func() bool { return c.get(t, poolGVR, "org-a", "kagent-default") != nil }, "the WorkerPool")
+		eventually(t, func(t require.TestingT) bool { return c.get(t, poolGVR, "org-a", "kagent-default") != nil }, "the WorkerPool")
 		pool := c.get(t, poolGVR, "org-a", "kagent-default")
 		replicas, _, _ := unstructured.NestedInt64(pool.Object, "spec", "replicas")
 		assert.Equal(t, int64(1), replicas, "the tenant's replica count, not the platform pool's")
 		assert.Equal(t, "org-a", pool.GetLabels()[workerPoolNamespaceLabel])
 		assert.Equal(t, "kagent-default", pool.GetLabels()[workerPoolNameLabel])
-		eventually(t, func() bool { return c.serviceAccount(t, "org-a", "kagent-default") }, "the workers' ServiceAccount")
-		eventually(t, func() bool { return c.get(t, mcGVR, "org-a", "default-model-config") != nil }, "the ModelConfig")
+		eventually(t, func(t require.TestingT) bool { return c.serviceAccount(t, "org-a", "kagent-default") }, "the workers' ServiceAccount")
+		eventually(t, func(t require.TestingT) bool { return c.get(t, mcGVR, "org-a", "default-model-config") != nil }, "the ModelConfig")
 		assert.Equal(t, []byte("sk"), c.secret(t, "org-a", keySecret).Data["ANTHROPIC_API_KEY"])
 	})
 
@@ -306,13 +320,13 @@ func TestTenantReconcilerEnvtest(t *testing.T) {
 		}
 		setPlatformPool(func(spec map[string]any) { spec["nodeSelector"] = map[string]any{"pool": "old"} })
 		for _, ns := range []string{"org-a", "org-c"} {
-			eventually(t, func() bool {
+			eventually(t, func(t require.TestingT) bool {
 				return field(c.get(t, poolGVR, ns, "kagent-default"), "spec", "nodeSelector", "pool") == "old"
 			}, ns+"'s copy gets the new field")
 		}
 		setPlatformPool(func(spec map[string]any) { delete(spec, "nodeSelector") })
 		for _, ns := range []string{"org-a", "org-c"} {
-			eventually(t, func() bool {
+			eventually(t, func(t require.TestingT) bool {
 				_, found, _ := unstructured.NestedFieldNoCopy(c.get(t, poolGVR, ns, "kagent-default").Object, "spec", "nodeSelector")
 				return !found
 			}, ns+"'s copy loses the removed field")
@@ -339,12 +353,12 @@ func TestTenantReconcilerEnvtest(t *testing.T) {
 		require.NoError(t, unstructured.SetNestedField(mc.Object, "other", "spec", "model"))
 		_, err := c.dyn.Resource(mcGVR).Namespace("org-a").Update(ctx, mc, metav1.UpdateOptions{})
 		require.NoError(t, err)
-		eventually(t, func() bool {
+		eventually(t, func(t require.TestingT) bool {
 			return field(c.get(t, mcGVR, "org-a", "default-model-config"), "spec", "model") == "claude"
 		}, "the ModelConfig's model restored")
 
 		require.NoError(t, c.dyn.Resource(harnessGVR).Namespace("org-a").Delete(ctx, "kagent", metav1.DeleteOptions{}))
-		eventually(t, func() bool { return c.get(t, harnessGVR, "org-a", "kagent") != nil }, "a deleted copy is made again")
+		eventually(t, func(t require.TestingT) bool { return c.get(t, harnessGVR, "org-a", "kagent") != nil }, "a deleted copy is made again")
 	})
 
 	t.Run("a change to a platform source reaches every tenant with agents", func(t *testing.T) {
@@ -353,7 +367,7 @@ func TestTenantReconcilerEnvtest(t *testing.T) {
 		_, err := c.admin.CoreV1().Secrets("kagent").Update(ctx, src, metav1.UpdateOptions{})
 		require.NoError(t, err)
 		for _, ns := range []string{"org-a", "org-c"} {
-			eventually(t, func() bool {
+			eventually(t, func(t require.TestingT) bool {
 				s := c.secret(t, ns, keySecret)
 				return s != nil && string(s.Data["ANTHROPIC_API_KEY"]) == "rotated"
 			}, ns+"'s key rotated")
@@ -389,31 +403,39 @@ func TestTenantReconcilerEnvtest(t *testing.T) {
 		require.NoError(t, unstructured.SetNestedField(mc.Object, "other", "spec", "apiKeySecret"))
 		_, err := c.dyn.Resource(mcGVR).Namespace("kagent").Update(ctx, mc, metav1.UpdateOptions{})
 		require.NoError(t, err)
-		eventually(t, func() bool {
+		eventually(t, func(t require.TestingT) bool {
 			return field(c.get(t, mcGVR, "org-a", "default-model-config"), "spec", "apiKeySecret") == "other"
 		}, "the copy follows the source")
 		_, err = c.set.reconciler().Reconcile(ctx, reconcile.Request{NamespacedName: types.NamespacedName{Name: "org-a"}})
 		require.ErrorContains(t, err, `the default ModelConfig's key Secret "other" is not the tenant model Secret "`+keySecret+`"`)
 		assert.Nil(t, c.secret(t, "org-a", "other"))
-
-		// Back to the configured name for the subtests after.
-		mc, err = c.dyn.Resource(mcGVR).Namespace("kagent").Get(ctx, "default-model-config", metav1.GetOptions{})
-		require.NoError(t, err)
-		require.NoError(t, unstructured.SetNestedField(mc.Object, keySecret, "spec", "apiKeySecret"))
-		_, err = c.dyn.Resource(mcGVR).Namespace("kagent").Update(ctx, mc, metav1.UpdateOptions{})
-		require.NoError(t, err)
 	})
 
-	t.Run("the last agent takes them away; the namespace's objects and the tenant's own stay", func(t *testing.T) {
+	t.Run("the last agent takes them away, the key Secret too while the copy names another; the namespace's objects and the tenant's own stay", func(t *testing.T) {
+		require.Equal(t, "other", field(c.get(t, mcGVR, "org-a", "default-model-config"), "spec", "apiKeySecret"))
+		require.NotNil(t, c.secret(t, "org-a", keySecret))
 		require.NoError(t, c.dyn.Resource(hrGVR).Namespace("org-a").Delete(ctx, "sre", metav1.DeleteOptions{}))
-		eventually(t, func() bool { return c.secret(t, "org-a", keySecret) == nil }, "the key Secret removed")
-		eventually(t, func() bool { return c.get(t, harnessGVR, "org-a", "kagent") == nil }, "the Harness removed")
-		eventually(t, func() bool { return c.get(t, poolGVR, "org-a", "kagent-default") == nil }, "the WorkerPool removed")
-		eventually(t, func() bool { return c.get(t, mcGVR, "org-a", "default-model-config") == nil }, "the ModelConfig removed")
-		eventually(t, func() bool { return !c.serviceAccount(t, "org-a", "kagent-default") }, "the workers' ServiceAccount removed")
+		eventually(t, func(t require.TestingT) bool { return c.secret(t, "org-a", keySecret) == nil }, "the key Secret removed")
+		eventually(t, func(t require.TestingT) bool { return c.get(t, harnessGVR, "org-a", "kagent") == nil }, "the Harness removed")
+		eventually(t, func(t require.TestingT) bool { return c.get(t, poolGVR, "org-a", "kagent-default") == nil }, "the WorkerPool removed")
+		eventually(t, func(t require.TestingT) bool { return c.get(t, mcGVR, "org-a", "default-model-config") == nil }, "the ModelConfig removed")
+		eventually(t, func(t require.TestingT) bool { return !c.serviceAccount(t, "org-a", "kagent-default") }, "the workers' ServiceAccount removed")
 		assert.NotNil(t, c.get(t, mcGVR, "org-a", "own"), "a tenant's own ModelConfig is never touched")
 		assert.NotNil(t, c.get(t, ociGVR, "org-a", "agent"), "the namespace's objects stay")
 		assert.True(t, c.serviceAccount(t, "org-a", "agents-flux"))
+
+		// Back to the configured name for the subtests after.
+		require.NoError(t, retry.RetryOnConflict(retry.DefaultRetry, func() error {
+			mc, err := c.dyn.Resource(mcGVR).Namespace("kagent").Get(ctx, "default-model-config", metav1.GetOptions{})
+			if err != nil {
+				return err
+			}
+			if err := unstructured.SetNestedField(mc.Object, keySecret, "spec", "apiKeySecret"); err != nil {
+				return err
+			}
+			_, err = c.dyn.Resource(mcGVR).Namespace("kagent").Update(ctx, mc, metav1.UpdateOptions{})
+			return err
+		}))
 	})
 
 	t.Run("an Agent object counts as an agent; a release on a workload cluster does not", func(t *testing.T) {
@@ -422,9 +444,9 @@ func TestTenantReconcilerEnvtest(t *testing.T) {
 		remote.Object["spec"].(map[string]any)["kubeConfig"] = map[string]any{"secretRef": map[string]any{"name": "wc1-kubeconfig"}}
 		c.create(t, hrGVR, remote)
 		c.create(t, agentGVR, obj("api.kagent.dev/v1alpha3", "Agent", "org-b", "bare", map[string]any{}))
-		eventually(t, func() bool { return c.get(t, harnessGVR, "org-b", "kagent") != nil }, "the Agent brings the Harness")
+		eventually(t, func(t require.TestingT) bool { return c.get(t, harnessGVR, "org-b", "kagent") != nil }, "the Agent brings the Harness")
 		require.NoError(t, c.dyn.Resource(agentGVR).Namespace("org-b").Delete(ctx, "bare", metav1.DeleteOptions{}))
-		eventually(t, func() bool { return c.get(t, harnessGVR, "org-b", "kagent") == nil }, "with only the remote release left, the Harness goes")
+		eventually(t, func(t require.TestingT) bool { return c.get(t, harnessGVR, "org-b", "kagent") == nil }, "with only the remote release left, the Harness goes")
 	})
 
 	t.Run("a namespace that loses the label is no tenant any more, and keeps what it holds", func(t *testing.T) {
@@ -433,7 +455,7 @@ func TestTenantReconcilerEnvtest(t *testing.T) {
 		delete(ns.Labels, OrganizationLabel)
 		_, err = c.admin.CoreV1().Namespaces().Update(ctx, ns, metav1.UpdateOptions{})
 		require.NoError(t, err)
-		eventually(t, func() bool { return !slices.Contains(c.set.Namespaces(), "org-b") }, "org-b no longer a tenant")
+		eventually(t, func(t require.TestingT) bool { return !slices.Contains(c.set.Namespaces(), "org-b") }, "org-b no longer a tenant")
 		assert.NotNil(t, c.get(t, ociGVR, "org-b", "agent"), "nothing is deleted from a namespace that leaves")
 	})
 
@@ -477,11 +499,15 @@ func TestTenantReconcilerEnvtest(t *testing.T) {
 			"the new reconciler's cache knows a tenant labelled after the failure")
 		assert.True(t, c.set.Status().Running, "a new reconciler runs")
 		assert.Equal(t, "leader election lost", c.set.Status().Error, "the last failure stays")
-		assert.Never(t, func() bool { return c.get(t, ociGVR, "org-d", "agent") != nil }, 3*time.Second, 200*time.Millisecond,
+		assert.Never(t, func() bool {
+			_, err := c.dyn.Resource(ociGVR).Namespace("org-d").Get(ctx, "agent", metav1.GetOptions{})
+			return !apierrors.IsNotFound(err)
+		}, 3*time.Second, 200*time.Millisecond,
 			"nothing reconciles here while another replica holds the Lease")
 
 		require.NoError(t, leases.Delete(ctx, LeaderElectionID, metav1.DeleteOptions{}))
-		require.Eventually(t, func() bool { return c.get(t, ociGVR, "org-d", "agent") != nil }, time.Minute, 200*time.Millisecond,
-			"the new reconciler takes the free Lease and reconciles")
+		require.EventuallyWithT(t, func(tick *assert.CollectT) {
+			assert.NotNil(tick, c.get(tick, ociGVR, "org-d", "agent"))
+		}, time.Minute, 200*time.Millisecond, "the new reconciler takes the free Lease and reconciles")
 	})
 }
