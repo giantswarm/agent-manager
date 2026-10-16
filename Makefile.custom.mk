@@ -3,8 +3,8 @@
 BINARY := agent-manager
 
 .PHONY: build-linux-amd64
-build-linux-amd64: ## Build the linux/amd64 binary the Dockerfile expects; version and commit come from the Go build info (the tag at HEAD, else dev).
-	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o $(BINARY)-linux-amd64 .
+build-linux-amd64: ## Build the linux/amd64 binary the Dockerfile expects, stamped into pkg/project as the release pipeline does (version from gitsemver).
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s $(LDFLAGS)" -o $(BINARY)-linux-amd64 .
 
 .PHONY: docker-build
 docker-build: build-linux-amd64 ## Build a local dev image (TAG=agent-manager:dev).

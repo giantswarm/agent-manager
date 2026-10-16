@@ -11,6 +11,9 @@
 #     kube-apiserver (the tenant ValidatingAdmissionPolicy). The go-build job's
 #     `make test` skips them without KUBEBUILDER_ASSETS; this job downloads one
 #     with setup-envtest. The architect image carries Go and helm.
+#   - verify-release-version: on a tag build, the binary go-build produced
+#     must report the tag (without its v); a release whose stamp is lost fails
+#     its pipeline.
 version: 2.1
 
 jobs:
@@ -45,6 +48,21 @@ jobs:
           command: make test-envtest
       - architect/go-cache-save
 
+  verify-release-version:
+    executor: architect/architect
+    resource_class: small
+    steps:
+      - attach_workspace:
+          at: .
+      - run:
+          name: The binary reports the release tag
+          command: |
+            set -euo pipefail
+            want="${CIRCLE_TAG#v}"
+            got="$(./agent-manager version | sed -n 's/^agent-manager version //p')"
+            echo "tag ${CIRCLE_TAG}, binary reports ${got}"
+            test "${got}" = "${want}"
+
 workflows:
   build:
     jobs:
@@ -62,3 +80,12 @@ workflows:
         filters:
           tags:
             only: /^v.*/
+    - verify-release-version:
+        context: architect
+        requires:
+          - go-build
+        filters:
+          tags:
+            only: /^v.*/
+          branches:
+            ignore: /.*/
