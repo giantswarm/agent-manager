@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -14,7 +15,8 @@ import (
 )
 
 // TestToolsDocIsCurrent keeps docs/tools.md — the tool names, descriptions
-// and input schemas as muster exposes them — equal to the registered tools.
+// and input schemas the server registers, which tools/list answers — equal
+// to the registered tools.
 // TOOLS_DOC_UPDATE=1 rewrites the file (`make tools-doc`).
 func TestToolsDocIsCurrent(t *testing.T) {
 	svc, _ := newService(t)
@@ -47,8 +49,7 @@ func renderToolsDoc(ts []mcp.Tool) string {
 	b.WriteString("| Tool | Kind |\n|---|---|\n")
 	for _, tool := range ts {
 		kind := "read-only"
-		switch a := tool.Annotations; {
-		case a.ReadOnlyHint == nil || !*a.ReadOnlyHint:
+		if a := tool.Annotations; a.ReadOnlyHint == nil || !*a.ReadOnlyHint {
 			kind = "write"
 			if a.DestructiveHint != nil && *a.DestructiveHint {
 				kind = "write, destructive"
@@ -57,9 +58,26 @@ func renderToolsDoc(ts []mcp.Tool) string {
 		fmt.Fprintf(&b, "| `%s` | %s |\n", tool.Name, kind)
 	}
 	for _, tool := range ts {
-		fmt.Fprintf(&b, "\n## `%s`\n\n%s\n\n", tool.Name, tool.Description)
-		schema, _ := json.MarshalIndent(tool.InputSchema, "", "  ")
-		fmt.Fprintf(&b, "```json\n%s\n```\n", schema)
+		// A bare < starts an HTML tag on GitHub: <namespace> would vanish.
+		fmt.Fprintf(&b, "\n## `%s`\n\n%s\n\n", tool.Name, strings.ReplaceAll(tool.Description, "<", `\<`))
+		// mcp-go's own MarshalJSON escapes <, > and &; decode and encode
+		// again without it.
+		raw, err := json.Marshal(tool.InputSchema)
+		var v any
+		if err == nil {
+			err = json.Unmarshal(raw, &v)
+		}
+		var schema bytes.Buffer
+		enc := json.NewEncoder(&schema)
+		enc.SetEscapeHTML(false)
+		enc.SetIndent("", "  ")
+		if err == nil {
+			err = enc.Encode(v)
+		}
+		if err != nil {
+			return "encode " + tool.Name + ": " + err.Error()
+		}
+		fmt.Fprintf(&b, "```json\n%s```\n", schema.String())
 	}
 	return b.String()
 }

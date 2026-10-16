@@ -24,7 +24,7 @@ Generated from the registered tools (`make tools-doc`); through muster every too
 
 Create an agent: a HelmRelease of the Generic agent chart. It needs a toolset; confirm its name with the person.
 
-name is the DNS-1123 name the person chose, never derived from displayName. modelConfig must exist in the namespace (list_model_configs). Skills are pinned at write time (list_skills), plugins must come pinned and the values are checked against the chart schema: a failure writes nothing and names the valid values. Poll get_agent_status until ready.
+name is the DNS-1123 name the person chose, never derived from displayName. modelConfig must exist in the namespace (list_model_configs). Skills are pinned at write time (list_skills), plugins must come pinned and the values are checked against the chart schema: a failure writes nothing and names the valid values. Presets: preset:read-only, preset:none (no tools), preset:infrastructure, preset:agent-platform, preset:full. Poll get_agent_status until ready.
 
 ```json
 {
@@ -58,7 +58,7 @@ name is the DNS-1123 name the person chose, never derived from displayName. mode
       "type": "boolean"
     },
     "egress": {
-      "description": "Extra HTTP(S) origins the agent may reach: \u003cscheme\u003e://\u003chost\u003e[:\u003cport\u003e]; a wildcard replaces the leftmost label. At most 64.",
+      "description": "Extra HTTP(S) origins the agent may reach: <scheme>://<host>[:<port>]; a wildcard replaces the leftmost label. At most 64.",
       "items": {
         "type": "string"
       },
@@ -113,7 +113,7 @@ name is the DNS-1123 name the person chose, never derived from displayName. mode
       "type": "string"
     },
     "plugins": {
-      "description": "Agent Plugins bundles to enable skills from: {git: {url, commit} or oci: \u003cref\u003e@sha256:\u003cdigest\u003e, path, skills}; must come pinned.",
+      "description": "Agent Plugins bundles to enable skills from: {git: {url, commit} or oci: <ref>@sha256:<digest>, path, skills}; must come pinned.",
       "items": {
         "properties": {
           "git": {
@@ -134,7 +134,7 @@ name is the DNS-1123 name the person chose, never derived from displayName. mode
             "type": "object"
           },
           "oci": {
-            "description": "Digest-pinned image reference: \u003cregistry\u003e/\u003crepository\u003e@sha256:\u003cdigest\u003e",
+            "description": "Digest-pinned image reference: <registry>/<repository>@sha256:<digest>",
             "type": "string"
           },
           "path": {
@@ -189,7 +189,7 @@ name is the DNS-1123 name the person chose, never derived from displayName. mode
             "type": "string"
           },
           "oci": {
-            "description": "OCI reference: \u003cregistry\u003e/\u003crepository\u003e:\u003ctag\u003e (resolved to its digest) or \u003cregistry\u003e/\u003crepository\u003e@sha256:\u003cdigest\u003e",
+            "description": "OCI reference: <registry>/<repository>:<tag> (resolved to its digest) or <registry>/<repository>@sha256:<digest>",
             "type": "string"
           },
           "path": {
@@ -206,7 +206,7 @@ name is the DNS-1123 name the person chose, never derived from displayName. mode
       "type": "string"
     },
     "toolset": {
-      "description": "Gateway tool selectors: preset:\u003cname\u003e, server:, workflow:, tool:. Presets: read-only, preset:none (no tools), infrastructure, agent-platform, full.",
+      "description": "Gateway tool selectors preset:<name>, server:<name>, workflow:<name>, tool:<name> (at most 32), e.g. preset:read-only; preset:none: no tools.",
       "items": {
         "type": "string"
       },
@@ -339,7 +339,7 @@ Get one agent: its HelmRelease values, Harness, pinned skills and plugins, tools
 
 One readiness verdict for an agent: ready, progressing, failed or unknown, with a one-line summary.
 
-From the Agent's conditions and warnings, the HelmRelease's conditions and history, and recent Warning events. Poll it after a create or update until ready.
+From the Agent's conditions and warnings, the HelmRelease's conditions and history, and recent Warning events. Poll it after a create or update until ready. No Deployment or pod is involved: agents run as Substrate actors.
 
 ```json
 {
@@ -372,7 +372,7 @@ From the Agent's conditions and warnings, the HelmRelease's conditions and histo
 
 Where you can create agents and what this installation offers: managed namespaces, chart, Harness, capabilities.
 
-Call it first. Also the service version, the served API versions, the muster URL and Flux settings composed into every agent, and how writes are authenticated.
+Call it first: capabilities says whether this installation offers mode commit, the session tools and workload clusters. Also the service version, the served API versions, the muster URL and Flux settings composed into every agent, and how writes are authenticated.
 
 ```json
 {
@@ -386,7 +386,7 @@ Call it first. Also the service version, the served API versions, the muster URL
 
 Read a conversation's turns, oldest first. To poll, use lastTurns: 1 until the last turn's state is final.
 
-Final states: COMPLETED, FAILED, CANCELED, REJECTED, INPUT_REQUIRED. detail: summary (default) gives per turn the messages, state and one stub per tool call; transcript every message and artifact; full the raw A2A tasks. The oldest turns are dropped to fit maxBytes (default 100000; omittedTurns counts them). One turn or tool call whole: get_session_turn.
+Final states: COMPLETED, FAILED, CANCELED, REJECTED, INPUT_REQUIRED. detail: summary (default) gives per turn the messages, state and one stub per tool call; transcript every message and artifact, tool results as stubs; full the raw A2A tasks. The oldest turns are dropped to fit maxBytes (default 100000; omittedTurns counts them). One turn or tool call whole: get_session_turn.
 
 ```json
 {
@@ -421,9 +421,9 @@ Final states: COMPLETED, FAILED, CANCELED, REJECTED, INPUT_REQUIRED. detail: sum
 
 ## `get_session_turn`
 
-Read one turn of a conversation whole, or with toolCall one tool call's arguments and full response.
+Read one turn of a conversation, or with toolCall one tool call's arguments and full response.
 
-detail: transcript (default) clips tool arguments; full gives the raw A2A objects. If the answer is cut to fit maxBytes, call again with fromMessage set to nextMessage.
+detail: transcript (default) clips tool arguments and gives tool results as stubs (read one with toolCall); full gives the raw A2A objects. If the answer is cut to fit maxBytes, call again with fromMessage set to nextMessage.
 
 ```json
 {
@@ -569,7 +569,7 @@ Per repository: the ref read, the commit it resolved to (what a skills entry pin
       "type": "boolean"
     },
     "repository": {
-      "description": "Only this repository (https://github.com/\u003cowner\u003e/\u003crepo\u003e); default: every configured one",
+      "description": "Only this repository (https://github.com/<owner>/<repo>); default: every configured one",
       "type": "string"
     }
   },
@@ -582,7 +582,7 @@ Per repository: the ref read, the commit it resolved to (what a skills entry pin
 
 Start a conversation with an agent as you, optionally sending the first message. Read replies with get_session.
 
-Refused with conflict while the agent has no ready revision (get_agent_status). With message it answers once the agent accepted the turn; the agent keeps working. Without it, send the first message yourself over A2A (tenant <namespace>/<name>, the session's contextId). The agent runs its tools as you. Reuse requestId on a retry: it never starts a second turn.
+Refused with conflict while the agent has no ready revision (get_agent_status). With message it answers once the agent accepted the turn; the agent keeps working. Without it, send the first message yourself over A2A (tenant \<namespace>/\<name>, the session's contextId). The agent runs its tools as you. Pass a requestId and reuse it on a retry: it never starts a second turn.
 
 ```json
 {
@@ -600,7 +600,7 @@ Refused with conflict while the agent has no ready revision (get_agent_status). 
       "type": "string"
     },
     "requestId": {
-      "description": "Idempotency key of this start (at most 128 characters); reuse it on a retry. Default: a new one per call",
+      "description": "Idempotency key (at most 128 characters): pass one and reuse it on a retry; without it a retry starts a second session.",
       "type": "string"
     },
     "sessionName": {
@@ -621,9 +621,9 @@ Refused with conflict while the agent has no ready revision (get_agent_status). 
 
 ## `update_agent`
 
-Change an agent: only the fields passed change; skills, plugins, egress and toolset replace the whole list.
+Change an agent: only the fields passed change; a list, labels or annotations replaces the whole value.
 
-"" clears a field back to the chart default. refreshSkills re-pins every git skill. The Harness is fixed at create. Returns the values before and after. A suspended release is refused unless force is true; a GitOps-owned one needs mode commit.
+Lists are skills, plugins, egress and toolset. "" clears a field back to the chart default. refreshSkills re-pins every git skill. The Harness is fixed at create. Returns the values before and after. A suspended release is refused unless force is true; a GitOps-owned one needs mode commit.
 
 ```json
 {
@@ -632,7 +632,7 @@ Change an agent: only the fields passed change; skills, plugins, egress and tool
       "additionalProperties": {
         "type": "string"
       },
-      "description": "Extra annotations on the Agent object (string values).",
+      "description": "Replaces all extra annotations on the Agent object ({} clears them); pass every annotation to keep.",
       "properties": {},
       "type": "object"
     },
@@ -657,7 +657,7 @@ Change an agent: only the fields passed change; skills, plugins, egress and tool
       "type": "boolean"
     },
     "egress": {
-      "description": "Replaces the whole egress list ([] clears it): \u003cscheme\u003e://\u003chost\u003e[:\u003cport\u003e] origins, at most 64.",
+      "description": "Replaces the whole egress list ([] clears it): <scheme>://<host>[:<port>] origins, at most 64.",
       "items": {
         "type": "string"
       },
@@ -679,7 +679,7 @@ Change an agent: only the fields passed change; skills, plugins, egress and tool
       "additionalProperties": {
         "type": "string"
       },
-      "description": "Extra labels on the Agent object (string values).",
+      "description": "Replaces all extra labels on the Agent object ({} clears them); pass every label to keep.",
       "properties": {},
       "type": "object"
     },
@@ -712,7 +712,7 @@ Change an agent: only the fields passed change; skills, plugins, egress and tool
       "type": "string"
     },
     "plugins": {
-      "description": "Replaces the whole plugin list ([] clears it): {git: {url, commit} or oci: \u003cref\u003e@sha256:\u003cdigest\u003e, path, skills}, pinned.",
+      "description": "Replaces the whole plugin list ([] clears it): {git: {url, commit} or oci: <ref>@sha256:<digest>, path, skills}, pinned.",
       "items": {
         "properties": {
           "git": {
@@ -733,7 +733,7 @@ Change an agent: only the fields passed change; skills, plugins, egress and tool
             "type": "object"
           },
           "oci": {
-            "description": "Digest-pinned image reference: \u003cregistry\u003e/\u003crepository\u003e@sha256:\u003cdigest\u003e",
+            "description": "Digest-pinned image reference: <registry>/<repository>@sha256:<digest>",
             "type": "string"
           },
           "path": {
@@ -792,7 +792,7 @@ Change an agent: only the fields passed change; skills, plugins, egress and tool
             "type": "string"
           },
           "oci": {
-            "description": "OCI reference: \u003cregistry\u003e/\u003crepository\u003e:\u003ctag\u003e (resolved to its digest) or \u003cregistry\u003e/\u003crepository\u003e@sha256:\u003cdigest\u003e",
+            "description": "OCI reference: <registry>/<repository>:<tag> (resolved to its digest) or <registry>/<repository>@sha256:<digest>",
             "type": "string"
           },
           "path": {
@@ -809,7 +809,7 @@ Change an agent: only the fields passed change; skills, plugins, egress and tool
       "type": "string"
     },
     "toolset": {
-      "description": "Replaces the whole toolset: preset:, server:, workflow:, tool:\u003cname\u003e selectors; [] is refused, [\"preset:none\"] means no tools.",
+      "description": "Replaces the whole toolset: preset:<name>, server:<name>, workflow:<name>, tool:<name> selectors; [] is refused, [\"preset:none\"]: no tools.",
       "items": {
         "type": "string"
       },
@@ -853,7 +853,7 @@ Checks the name, modelConfig, harness and toolset (required for a create), pins 
       "type": "string"
     },
     "egress": {
-      "description": "Extra HTTP(S) origins the agent may reach: \u003cscheme\u003e://\u003chost\u003e[:\u003cport\u003e]; a wildcard replaces the leftmost label. At most 64.",
+      "description": "Extra HTTP(S) origins the agent may reach: <scheme>://<host>[:<port>]; a wildcard replaces the leftmost label. At most 64.",
       "items": {
         "type": "string"
       },
@@ -908,7 +908,7 @@ Checks the name, modelConfig, harness and toolset (required for a create), pins 
       "type": "string"
     },
     "plugins": {
-      "description": "Agent Plugins bundles to enable skills from: {git: {url, commit} or oci: \u003cref\u003e@sha256:\u003cdigest\u003e, path, skills}; must come pinned.",
+      "description": "Agent Plugins bundles to enable skills from: {git: {url, commit} or oci: <ref>@sha256:<digest>, path, skills}; must come pinned.",
       "items": {
         "properties": {
           "git": {
@@ -929,7 +929,7 @@ Checks the name, modelConfig, harness and toolset (required for a create), pins 
             "type": "object"
           },
           "oci": {
-            "description": "Digest-pinned image reference: \u003cregistry\u003e/\u003crepository\u003e@sha256:\u003cdigest\u003e",
+            "description": "Digest-pinned image reference: <registry>/<repository>@sha256:<digest>",
             "type": "string"
           },
           "path": {
@@ -984,7 +984,7 @@ Checks the name, modelConfig, harness and toolset (required for a create), pins 
             "type": "string"
           },
           "oci": {
-            "description": "OCI reference: \u003cregistry\u003e/\u003crepository\u003e:\u003ctag\u003e (resolved to its digest) or \u003cregistry\u003e/\u003crepository\u003e@sha256:\u003cdigest\u003e",
+            "description": "OCI reference: <registry>/<repository>:<tag> (resolved to its digest) or <registry>/<repository>@sha256:<digest>",
             "type": "string"
           },
           "path": {
@@ -1001,7 +1001,7 @@ Checks the name, modelConfig, harness and toolset (required for a create), pins 
       "type": "string"
     },
     "toolset": {
-      "description": "Gateway tool selectors: preset:\u003cname\u003e, server:, workflow:, tool:. Presets: read-only, preset:none (no tools), infrastructure, agent-platform, full.",
+      "description": "Gateway tool selectors preset:<name>, server:<name>, workflow:<name>, tool:<name> (at most 32), e.g. preset:read-only; preset:none: no tools.",
       "items": {
         "type": "string"
       },
