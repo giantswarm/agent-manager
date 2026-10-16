@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"golang.org/x/sync/errgroup"
+	authenticationv1 "k8s.io/api/authentication/v1"
 	authorizationv1 "k8s.io/api/authorization/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -871,10 +872,25 @@ func (s *Service) requireCreate(ctx context.Context, st *site, name string) erro
 	if err != nil {
 		return wrapKube(err, fmt.Sprintf("review create access to HelmReleases in %s", st.fluxNS))
 	}
-	if !res.Status.Allowed {
-		return forbiddenf("the caller may not create HelmReleases in namespace %s, so may not create agent %s", st.fluxNS, st.describe(name))
+	if res.Status.Allowed {
+		return nil
 	}
-	return nil
+	// The refusal reads as the API server's own, naming the user as the API
+	// server authenticated it: what a create without the review would answer.
+	cause := fmt.Errorf("%s cannot create resource %q in API group %q in the namespace %q", s.apiserverUser(ctx, st), gvr.Resource, gvr.Group, st.fluxNS)
+	what := fmt.Sprintf("create HelmRelease %s/%s", st.fluxNS, st.releaseName(name))
+	return wrapKube(apierrors.NewForbidden(gvr.GroupResource(), st.releaseName(name), cause), what)
+}
+
+// apiserverUser names the caller as the installation's API server
+// authenticates it (a SelfSubjectReview), as its own Forbidden does:
+// `User "oidc:jane@example.com"`. Without an answer it is "the caller".
+func (s *Service) apiserverUser(ctx context.Context, st *site) string {
+	review, err := st.fluxClient.Typed().AuthenticationV1().SelfSubjectReviews().Create(ctx, &authenticationv1.SelfSubjectReview{}, metav1.CreateOptions{})
+	if err != nil || review.Status.UserInfo.Username == "" {
+		return "the caller"
+	}
+	return fmt.Sprintf("User %q", review.Status.UserInfo.Username)
 }
 
 // requireFreeName fails when a HelmRelease or an Agent object of that name
