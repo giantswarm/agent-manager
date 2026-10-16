@@ -22,9 +22,11 @@ Generated from the registered tools (`make tools-doc`); through muster every too
 
 ## `create_agent`
 
+```text
 Create an agent: a HelmRelease of the Generic agent chart. It needs a toolset; confirm its name with the person.
 
 name is the DNS-1123 name the person chose, never derived from displayName. modelConfig must exist in the namespace (list_model_configs). Skills are pinned at write time (list_skills), plugins must come pinned and the values are checked against the chart schema: a failure writes nothing and names the valid values. Presets: preset:read-only, preset:none (no tools), preset:infrastructure, preset:agent-platform, preset:full. Poll get_agent_status until ready.
+```
 
 ```json
 {
@@ -224,9 +226,11 @@ name is the DNS-1123 name the person chose, never derived from displayName. mode
 
 ## `delete_agent`
 
+```text
 Delete an agent: its HelmRelease, which removes the Agent and its muster RemoteMCPServer.
 
 The chart's shared OCIRepository goes too when nothing else in the namespace uses it; the answer says why it was kept. A bare Agent or a suspended release is refused unless force is true; a GitOps-owned one needs mode commit.
+```
 
 ```json
 {
@@ -285,9 +289,11 @@ The chart's shared OCIRepository goes too when nothing else in the namespace use
 
 ## `delete_session`
 
+```text
 Delete one of your conversations and its state for good; it cannot be read back.
 
 Another person's session is refused as not_found. While another operation on it runs, it is refused with conflict: retry shortly.
+```
 
 ```json
 {
@@ -306,7 +312,9 @@ Another person's session is refused as not_found. While another operation on it 
 
 ## `get_agent`
 
+```text
 Get one agent: its HelmRelease values, Harness, pinned skills and plugins, toolset and Agent status.
+```
 
 ```json
 {
@@ -337,9 +345,11 @@ Get one agent: its HelmRelease values, Harness, pinned skills and plugins, tools
 
 ## `get_agent_status`
 
+```text
 One readiness verdict for an agent: ready, progressing, failed or unknown, with a one-line summary.
 
 From the Agent's conditions and warnings, the HelmRelease's conditions and history, and recent Warning events. Poll it after a create or update until ready. No Deployment or pod is involved: agents run as Substrate actors.
+```
 
 ```json
 {
@@ -370,9 +380,11 @@ From the Agent's conditions and warnings, the HelmRelease's conditions and histo
 
 ## `get_info`
 
+```text
 Where you can create agents and what this installation offers: managed namespaces, chart, Harness, capabilities.
 
 Call it first: capabilities says whether this installation offers mode commit, the session tools and workload clusters. Also the service version, the served API versions, the muster URL and Flux settings composed into every agent, and how writes are authenticated.
+```
 
 ```json
 {
@@ -384,9 +396,11 @@ Call it first: capabilities says whether this installation offers mode commit, t
 
 ## `get_session`
 
+```text
 Read a conversation's turns, oldest first. To poll, use lastTurns: 1 until the last turn's state is final.
 
 Final states: COMPLETED, FAILED, CANCELED, REJECTED, INPUT_REQUIRED. detail: summary (default) gives per turn the messages, state and one stub per tool call; transcript every message and artifact, tool results as stubs; full the raw A2A tasks. The oldest turns are dropped to fit maxBytes (default 100000; omittedTurns counts them). One turn or tool call whole: get_session_turn.
+```
 
 ```json
 {
@@ -421,9 +435,11 @@ Final states: COMPLETED, FAILED, CANCELED, REJECTED, INPUT_REQUIRED. detail: sum
 
 ## `get_session_turn`
 
+```text
 Read one turn of a conversation, or with toolCall one tool call's arguments and full response.
 
 detail: transcript (default) clips tool arguments and gives tool results as stubs (read one with toolCall); full gives the raw A2A objects. If the answer is cut to fit maxBytes, call again with fromMessage set to nextMessage.
+```
 
 ```json
 {
@@ -466,9 +482,11 @@ detail: transcript (default) clips tool arguments and gives tool results as stub
 
 ## `list_agents`
 
+```text
 List the agents of a namespace, one summary each: model, Harness, toolset, readiness and how it is managed.
 
 managed: helmrelease is writable here, gitops changes only with mode commit, none is a bare Agent object. implicitFullAccess: true means the agent sees every gateway tool and still needs a toolset (update_agent). An agent's prompt, skills, plugins and values come from get_agent.
+```
 
 ```json
 {
@@ -497,9 +515,11 @@ managed: helmrelease is writable here, gitops changes only with mode commit, non
 
 ## `list_model_configs`
 
+```text
 List the ModelConfigs of a namespace: the values create_agent accepts for modelConfig.
 
 Each with provider, model, its Accepted condition and who manages it; agent-manager never writes them. In a tenant namespace without agents yet, the platform default ModelConfig comes with the first agent.
+```
 
 ```json
 {
@@ -524,9 +544,11 @@ Each with provider, model, its Accepted condition and who manages it; agent-mana
 
 ## `list_sessions`
 
+```text
 List your conversations with one agent: id, name, state, failure and timestamps.
 
 Read through agentgateway as you. allCreators includes every person's sessions, when the controller authorizes you for it.
+```
 
 ```json
 {
@@ -553,9 +575,11 @@ Read through agentgateway as you. allCreators includes every person's sessions, 
 
 ## `list_skills`
 
+```text
 List the skills agents can mount, from the configured skill repositories, with each repository's head commit.
 
 Per repository: the ref read, the commit it resolved to (what a skills entry pins) and each SKILL.md's name, description and path. Cached briefly; refresh re-reads GitHub.
+```
 
 ```json
 {
@@ -580,9 +604,11 @@ Per repository: the ref read, the commit it resolved to (what a skills entry pin
 
 ## `start_session`
 
+```text
 Start a conversation with an agent as you, optionally sending the first message. Read replies with get_session.
 
-Refused with conflict while the agent has no ready revision (get_agent_status). With message it answers once the agent accepted the turn; the agent keeps working. Without it, send the first message yourself over A2A (tenant \<namespace>/\<name>, the session's contextId). The agent runs its tools as you. Pass a requestId and reuse it on a retry: it never starts a second turn.
+Refused with conflict while the agent has no ready revision (get_agent_status). With message it answers once the agent accepted the turn; the agent keeps working. Without it, send the first message yourself over A2A (tenant <namespace>/<name>, the session's contextId). The agent runs its tools as you. Pass a requestId and reuse it on a retry: it never starts a second turn.
+```
 
 ```json
 {
@@ -621,9 +647,11 @@ Refused with conflict while the agent has no ready revision (get_agent_status). 
 
 ## `update_agent`
 
+```text
 Change an agent: only the fields passed change; a list, labels or annotations replaces the whole value.
 
 Lists are skills, plugins, egress and toolset. "" clears a field back to the chart default. refreshSkills re-pins every git skill. The Harness is fixed at create. Returns the values before and after. A suspended release is refused unless force is true; a GitOps-owned one needs mode commit.
+```
 
 ```json
 {
@@ -825,9 +853,11 @@ Lists are skills, plugins, egress and toolset. "" clears a field back to the cha
 
 ## `validate_agent`
 
+```text
 Dry run of create_agent, or of update_agent with update: true: the manifests and every violation. Writes nothing.
 
 Checks the name, modelConfig, harness and toolset (required for a create), pins the skills, checks the plugins are pinned and validates the values against the chart schema. mode answers as the write would.
+```
 
 ```json
 {
