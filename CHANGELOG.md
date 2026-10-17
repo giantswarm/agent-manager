@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- The tenant admission policy `agent-manager-tenants` admits the refresh of the skills boot Secret under every previous name the chart renders while minting (`skills.previousGitAuthSecretNames` and the `tenant-credential-` name), not only the current name: agent-manager no longer logs `skills boot Secret refresh failed` every minute, and an agent still naming a previous name keeps a fresh token until it is migrated ([agent-manager#197](https://github.com/giantswarm/agent-manager/issues/197)).
+
 ## [2.5.0-rc.4] - 2026-10-17
 
 ### Fixed

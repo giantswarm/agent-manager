@@ -116,3 +116,53 @@ func TestTenantPolicyEnvtest(t *testing.T) {
 		})
 	}
 }
+
+// TestSkillsTokenPolicyEnvtest: while minting, agent-manager refreshes the
+// skills boot Secret under its current name and every previous name in each
+// managed namespace (templates/skills-token.yaml). The tenant policy admits
+// those updates in the platform namespace, which is no tenant, and refuses
+// the update of any other Secret there.
+func TestSkillsTokenPolicyEnvtest(t *testing.T) {
+	const previous = "old-skills-token" // #nosec G101 -- a Secret name, not a credential
+	env := startEnvtest(t, mintSkillsToken, "skills.github.app.secretName=skills-app",
+		"skills.previousGitAuthSecretNames={"+previous+"}")
+	ctx := t.Context()
+
+	_, err := env.admin.CoreV1().Secrets("kagent").Create(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "other"}}, metav1.CreateOptions{})
+	require.NoError(t, err)
+	// RBAC alone would refuse the update of another Secret before admission:
+	// grant it, so the policy is what refuses it.
+	_, err = env.admin.RbacV1().Roles("kagent").Create(ctx, &rbacv1.Role{
+		ObjectMeta: metav1.ObjectMeta{Name: "every-secret"},
+		Rules:      []rbacv1.PolicyRule{{APIGroups: []string{""}, Resources: []string{"secrets"}, Verbs: []string{"update"}}},
+	}, metav1.CreateOptions{})
+	require.NoError(t, err)
+	_, err = env.admin.RbacV1().RoleBindings("kagent").Create(ctx, &rbacv1.RoleBinding{
+		ObjectMeta: metav1.ObjectMeta{Name: "every-secret"},
+		RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "Role", Name: "every-secret"},
+		Subjects:   []rbacv1.Subject{{Kind: rbacv1.UserKind, APIGroup: rbacv1.GroupName, Name: env.reconciler}},
+	}, metav1.CreateOptions{})
+	require.NoError(t, err)
+	sa, err := kubernetes.NewForConfig(env.as(env.reconciler))
+	require.NoError(t, err)
+	refresh := func(name string) error {
+		_, err := sa.CoreV1().Secrets("kagent").Update(ctx, &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: name},
+			StringData: map[string]string{"token": "fresh"},
+		}, metav1.UpdateOptions{DryRun: []string{metav1.DryRunAll}})
+		return err
+	}
+
+	// The binding takes effect once the API server's policy informer sees
+	// it: wait for the first refusal.
+	require.Eventually(t, func() bool {
+		err := refresh("other")
+		return err != nil && strings.Contains(err.Error(), "only in namespaces labelled giantswarm.io/organization; kagent is not one")
+	}, 30*time.Second, 200*time.Millisecond, "the policy never refused another Secret in the platform namespace")
+
+	for _, name := range []string{"agent-manager-skills-token", "tenant-credential-agent-manager-skills-token", previous} {
+		t.Run("refresh "+name, func(t *testing.T) {
+			require.NoError(t, refresh(name))
+		})
+	}
+}

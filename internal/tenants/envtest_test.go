@@ -6,12 +6,14 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -42,8 +44,13 @@ type testEnv struct {
 	reconciler string
 }
 
+// mintSkillsToken is the --set value that also renders the skills boot
+// Secrets and their Role (templates/skills-token.yaml).
+const mintSkillsToken = "skills.mintGitAuthSecret=true" // #nosec G101 -- a Helm value, not a credential
+
 // startEnvtest starts the API server and applies the rendered chart, with
-// helmSet as further --set values. Skipped without envtest binaries: run via
+// helmSet as further --set values; with mintSkillsToken among them it applies
+// templates/skills-token.yaml as well. Skipped without envtest binaries: run via
 // `make test-envtest`, which resolves KUBEBUILDER_ASSETS with setup-envtest
 // (and needs helm).
 func startEnvtest(t *testing.T, helmSet ...string) *testEnv {
@@ -59,6 +66,9 @@ func startEnvtest(t *testing.T, helmSet ...string) *testEnv {
 		"--set", "tenants.modelConfig.apiKeySecretName=" + keySecret,
 		"--set", "oauth.enabled=true,oauth.downstream.enabled=true,oauth.existingSecret=oauth",
 		"--set", "oauth.baseURL=https://agent-manager.example.com,oauth.dex.issuerURL=https://dex.example.com,oauth.dex.clientID=platform",
+	}
+	if slices.Contains(helmSet, mintSkillsToken) {
+		args = append(args, "--show-only", "templates/skills-token.yaml")
 	}
 	for _, s := range helmSet {
 		args = append(args, "--set", s)
@@ -111,8 +121,12 @@ func startEnvtest(t *testing.T, helmSet ...string) *testEnv {
 		mapping, err := te.mapper.RESTMapping(gvk.GroupKind(), gvk.Version)
 		require.NoError(t, err)
 		var res dynamic.ResourceInterface = te.dyn.Resource(mapping.Resource)
-		if u.GetNamespace() != "" {
-			res = te.dyn.Resource(mapping.Resource).Namespace(u.GetNamespace())
+		if ns := u.GetNamespace(); ns != "" {
+			_, err := admin.CoreV1().Namespaces().Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns}}, metav1.CreateOptions{})
+			if !apierrors.IsAlreadyExists(err) {
+				require.NoError(t, err)
+			}
+			res = te.dyn.Resource(mapping.Resource).Namespace(ns)
 		}
 		_, err = res.Create(ctx, u, metav1.CreateOptions{})
 		require.NoError(t, err, "create %s %s", gvk.Kind, u.GetName())
