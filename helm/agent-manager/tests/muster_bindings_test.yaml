@@ -1,0 +1,88 @@
+# muster's session bindings, which start_session binds a workspace session's
+# sandbox at: rendered with the session tools only (OAuth and a controller
+# target), and the egress rule to it.
+#
+# Run with: make helm-test (helm unittest helm/agent-manager)
+suite: muster session bindings
+templates:
+  - templates/deployment.yaml
+  - templates/networkpolicy.yaml
+set:
+  oauth:
+    enabled: true
+    existingSecret: platform-oauth
+  global:
+    domain: example.com
+    identity:
+      issuerUrl: https://dex.example.com
+      clientId: platform-client
+tests:
+  - it: calls the in-cluster muster Service by default
+    template: templates/deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --muster-bindings-url=http://muster.agent-platform.svc.cluster.local:8090/session-bindings
+
+  - it: renders no bindings without the session tools
+    template: templates/deployment.yaml
+    set:
+      kagent.controllerTarget: ""
+    asserts:
+      - notExists:
+          path: spec.template.spec.containers[0].args[?(@ =~ /^--muster-bindings-url=/)]
+
+  - it: renders no bindings without OAuth
+    template: templates/deployment.yaml
+    set:
+      oauth.enabled: false
+    asserts:
+      - notExists:
+          path: spec.template.spec.containers[0].args[?(@ =~ /^--muster-bindings-url=/)]
+
+  - it: renders no bindings when they are turned off
+    template: templates/deployment.yaml
+    set:
+      muster.bindingsUrl: ""
+    asserts:
+      - notExists:
+          path: spec.template.spec.containers[0].args[?(@ =~ /^--muster-bindings-url=/)]
+
+  - it: opens egress to the muster Service's namespace on its port
+    template: templates/networkpolicy.yaml
+    set:
+      networkPolicy.enabled: true
+    asserts:
+      - contains:
+          path: spec.egress
+          content:
+            to:
+              - namespaceSelector:
+                  matchLabels:
+                    kubernetes.io/metadata.name: agent-platform
+            ports:
+              - {protocol: TCP, port: 8090}
+
+  - it: opens egress to every address on 443 for a public HTTPS endpoint
+    template: templates/networkpolicy.yaml
+    set:
+      networkPolicy.enabled: true
+      muster.bindingsUrl: https://muster.example.com/session-bindings
+    asserts:
+      - contains:
+          path: spec.egress
+          content:
+            to:
+              - ipBlock:
+                  cidr: 0.0.0.0/0
+            ports:
+              - {protocol: TCP, port: 443}
+
+  - it: refuses an endpoint that is not an HTTP one
+    template: templates/networkpolicy.yaml
+    set:
+      networkPolicy.enabled: true
+      muster.bindingsUrl: grpc://muster:8090
+    asserts:
+      - failedTemplate:
+          errorPattern: must be http\(s\)://host\[:port\]/session-bindings

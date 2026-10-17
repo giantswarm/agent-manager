@@ -447,7 +447,12 @@ paths:
         running and its answer is read with `GET /api/v1/sessions/{id}`. An
         Agent without a ready revision is `409 conflict`. `requestId` makes a
         retry idempotent: the controller answers the session the first
-        attempt created.
+        attempt created. With `workspaceGrant` the session's sandbox actor is
+        bound to the caller at muster's session bindings, as the caller,
+        before the first message: muster releases the caller's provider
+        tokens to that sandbox alone. A bind muster refuses deletes the
+        session again and is answered with muster's reason; an installation
+        without the bindings (`--muster-bindings-url`) answers `501`.
       operationId: startSession
       x-mcp-tool: start_session
       requestBody:
@@ -582,7 +587,11 @@ paths:
         `RUNTIME_STATE_DELETED`; it is gone from every read after. kagent
         scopes the delete to the session's creator: a session of somebody
         else is `404`, as one that does not exist. While another operation on
-        the session runs the delete is `409`; retry it shortly.
+        the session runs the delete is `409`; retry it shortly. A workspace
+        session's sandbox is then unbound at muster's session bindings, as
+        the caller; when muster did not remove the binding the delete still
+        answers `200` with `warning`, and the binding expires with the
+        Session idle TTL.
       operationId: deleteSession
       x-mcp-tool: delete_session
       responses:
@@ -1227,6 +1236,7 @@ components:
       type: object
       properties:
         session: { $ref: "#/components/schemas/Session" }
+        warning: { type: string, description: "What was left undone after the delete: muster did not remove the workspace session's binding, which expires with the Session idle TTL" }
     StartSessionRequest:
       type: object
       required: [message]
@@ -1235,6 +1245,7 @@ components:
         message: { type: string, maxLength: 32000, description: The first user message }
         requestId: { type: string, maxLength: 128, description: Idempotency key; reuse it on a retry. Default a new one per call }
         sessionName: { type: string, maxLength: 200, description: Display name of the conversation; default unnamed }
+        workspaceGrant: { type: string, maxLength: 16384, description: "The grant authorize_workspace returned to the caller: the session works in that workspace and its sandbox is bound to the caller in muster before its first turn" }
     SessionStart:
       type: object
       properties:

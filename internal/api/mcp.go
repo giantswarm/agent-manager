@@ -412,7 +412,7 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 		mcp.WithString(argMessage, mcp.Description(fmt.Sprintf("The first user message, text only, at most %d characters; omit it to send the first message yourself.", agents.MaxSessionMessageLength))),
 		mcp.WithString(argRequestID, mcp.Description("Idempotency key (at most 128 characters): pass one and reuse it on a retry; without it a retry starts a second session.")),
 		mcp.WithString(argSessionName, mcp.Description("Display name of the conversation (at most 200 characters); default: unnamed")),
-		mcp.WithString(argWorkspaceGrant, mcp.Description("The grant authorize_workspace returned to you, to start the session in that workspace; another person's or an expired one is refused.")),
+		mcp.WithString(argWorkspaceGrant, mcp.Description("The grant authorize_workspace returned to you: the session works in that workspace, its sandbox bound to you in muster. Others' are refused.")),
 		mcp.WithReadOnlyHintAnnotation(false),
 		mcp.WithDestructiveHintAnnotation(false),
 		mcp.WithIdempotentHintAnnotation(false),
@@ -421,7 +421,7 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 
 	s.AddTool(mcp.NewTool(ToolDeleteSession,
 		tooldesc.Describe("Delete one of your conversations and its state for good; it cannot be read back.",
-			"Another person's session is refused as not_found. While another operation on it runs, it is refused with conflict: retry shortly."),
+			"Another person's session is refused as not_found. While another operation on it runs, it is refused with conflict: retry shortly. A workspace session is unbound in muster; warning says when that failed."),
 		mcp.WithString(argSessionID, mcp.Required(), mcp.Description("Session id (a UUID, from start_session or list_sessions)")),
 		mcp.WithReadOnlyHintAnnotation(false),
 		mcp.WithDestructiveHintAnnotation(true),

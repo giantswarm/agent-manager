@@ -127,6 +127,9 @@ spec:
             {{- end }}
             {{- with .Values.kagent.controllerTarget }}
             - --kagent-target={{ . }}
+            {{- with $.Values.muster.bindingsUrl }}
+            - --muster-bindings-url={{ . }}
+            {{- end }}
             {{- end }}
             {{- if .Values.github.enabled }}
             - --github-authorization-server={{ .Values.github.authorizationServer.issuer }}

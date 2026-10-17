@@ -292,7 +292,7 @@ The chart's shared OCIRepository goes too when nothing else in the namespace use
 ```text
 Delete one of your conversations and its state for good; it cannot be read back.
 
-Another person's session is refused as not_found. While another operation on it runs, it is refused with conflict: retry shortly.
+Another person's session is refused as not_found. While another operation on it runs, it is refused with conflict: retry shortly. A workspace session is unbound in muster; warning says when that failed.
 ```
 
 ```json
@@ -634,7 +634,7 @@ Refused with conflict while the agent has no ready revision (get_agent_status). 
       "type": "string"
     },
     "workspaceGrant": {
-      "description": "The grant authorize_workspace returned to you, to start the session in that workspace; another person's or an expired one is refused.",
+      "description": "The grant authorize_workspace returned to you: the session works in that workspace, its sandbox bound to you in muster. Others' are refused.",
       "type": "string"
     }
   },

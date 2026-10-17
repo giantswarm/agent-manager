@@ -59,6 +59,10 @@ type Config struct {
 	// Sessions is the kagent controller the session operations call through
 	// agentgateway as the caller. Nil: they are refused as unsupported.
 	Sessions SessionClient
+	// Bindings is muster's session bindings, which bind a workspace
+	// Session's sandbox to the person who started it. Nil: a Session is
+	// started in no workspace.
+	Bindings SessionBinder
 	// HarnessEgress is the platform's origin list per coding Harness (any
 	// runtime but kagent), by Harness name: written into a coding agent's
 	// egress, and the only origins it may name. A coding Harness without an
