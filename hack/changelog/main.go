@@ -129,7 +129,7 @@ func gitTags() ([]tag, error) {
 
 func git(args ...string) (string, error) {
 	var stderr bytes.Buffer
-	cmd := exec.Command("git", args...)
+	cmd := exec.Command("git", args...) //nolint:gosec // git with this command's own arguments and the repository's tag names
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
 	if err != nil {
