@@ -14,6 +14,14 @@ docker-build: build-linux-amd64 ## Build a local dev image (TAG=agent-manager:de
 tools-doc: ## Regenerate docs/tools.md from the registered tools (the test TestToolsDocIsCurrent keeps it current).
 	TOOLS_DOC_UPDATE=1 go test -count=1 -run TestToolsDocIsCurrent ./internal/api
 
+.PHONY: changelog-cut
+changelog-cut: ## Move every CHANGELOG.md Unreleased entry a tag already carries into that tag's version section.
+	go run ./hack/changelog cut
+
+.PHONY: changelog-check
+changelog-check: ## Fail when CHANGELOG.md's Unreleased holds an entry a tag already carries (the changelog-check CI job).
+	go run ./hack/changelog check
+
 .PHONY: test-race
 test-race: ## Run tests with the race detector.
 	go test -race ./...
