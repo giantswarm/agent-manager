@@ -46,7 +46,7 @@ type testEnv struct {
 
 // mintSkillsToken is the --set value that also renders the skills boot
 // Secrets and their Role (templates/skills-token.yaml).
-const mintSkillsToken = "skills.mintGitAuthSecret=true"
+const mintSkillsToken = "skills.mintGitAuthSecret=true" // #nosec G101 -- a Helm value, not a credential
 
 // startEnvtest starts the API server and applies the rendered chart, with
 // helmSet as further --set values; with mintSkillsToken among them it applies
