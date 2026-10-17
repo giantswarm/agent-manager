@@ -14,6 +14,11 @@
 #   - verify-release-version: on a tag build, the binary go-build produced
 #     must report the tag (without its v); a release whose stamp is lost fails
 #     its pipeline.
+#   - changelog-check: `make changelog-check`. Every merge to main is a
+#     release, so an entry under Unreleased that a tag's CHANGELOG.md already
+#     holds is released; the job fails until `make changelog-cut` moves it into
+#     that tag's version section. Tags are fetched: the checkout may lack them.
+#     Branches only: on main the merge is itself the release being tagged.
 version: 2.1
 
 jobs:
@@ -48,6 +53,18 @@ jobs:
           command: make test-envtest
       - architect/go-cache-save
 
+  changelog-check:
+    executor: architect/architect
+    resource_class: small
+    steps:
+      - checkout
+      - run:
+          name: Fetch the tags
+          command: git fetch --force --tags origin
+      - run:
+          name: Unreleased holds only changes no tag carries
+          command: make changelog-check
+
   verify-release-version:
     executor: architect/architect
     resource_class: small
@@ -80,6 +97,11 @@ workflows:
         filters:
           tags:
             only: /^v.*/
+    - changelog-check:
+        context: architect
+        filters:
+          branches:
+            ignore: main
     - verify-release-version:
         context: architect
         requires:
