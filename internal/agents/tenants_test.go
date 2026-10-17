@@ -152,3 +152,40 @@ func TestTenantGetsNoInstallationSkillsCredential(t *testing.T) {
 	assert.NotContains(t, values("org-a"), SkillsGitAuthValuesKey)
 	assert.Equal(t, map[string]any{"name": "skills-token"}, values("kagent")[SkillsGitAuthValuesKey])
 }
+
+// An agent in a tenant written before the credential step names the
+// installation's skills credential, under its current or a previous name:
+// admission refuses either there, so an update drops the reference and
+// keeps a tenant's own credential.
+func TestTenantUpdateDropsTheInstallationSkillsCredential(t *testing.T) {
+	f := seeded(t)
+	withTenants(f, &fakeTenants{namespaces: []string{"org-a"}})
+	f.svc.cfg.Compose.SkillsGitAuthSecretName = "agent-manager-skills-token"
+	f.svc.cfg.Compose.SkillsGitAuthPreviousSecretNames = []string{"tenant-credential-agent-manager-skills-token"} // #nosec G101 -- a Secret name, not a credential
+	ctx := t.Context()
+	gitPlugin := Plugin{Path: "bundles/sre", Git: &GitSkill{URL: skillsRepo, Commit: tagHead}, Skills: []string{"triage"}}
+	_, err := f.svc.Create(ctx, Spec{Location: In("org-a"), Name: "sre", ModelConfig: "default-model-config",
+		Toolset: []string{"preset:read-only"}, Plugins: Plugins{gitPlugin}})
+	require.NoError(t, err)
+
+	hrs := f.dyn.Resource(hrGVR).Namespace("org-a")
+	for _, ref := range []string{"agent-manager-skills-token", "tenant-credential-agent-manager-skills-token", "tenant-credential-own"} {
+		hr, err := hrs.Get(ctx, "sre", metav1.GetOptions{})
+		require.NoError(t, err)
+		require.NoError(t, unstructured.SetNestedField(hr.Object, map[string]any{"name": ref}, "spec", "values", SkillsGitAuthValuesKey))
+		_, err = hrs.Update(ctx, hr, metav1.UpdateOptions{})
+		require.NoError(t, err)
+
+		desc := "updated with " + ref
+		res, err := f.svc.Update(ctx, Update{Location: In("org-a"), Name: "sre", Description: &desc})
+		require.NoError(t, err, ref)
+		hr, err = hrs.Get(ctx, "sre", metav1.GetOptions{})
+		require.NoError(t, err)
+		if ref == "tenant-credential-own" {
+			assert.Equal(t, map[string]any{"name": ref}, mustValues(hr)[SkillsGitAuthValuesKey], ref)
+			continue
+		}
+		assert.NotContains(t, res.After, SkillsGitAuthValuesKey, ref)
+		assert.NotContains(t, mustValues(hr), SkillsGitAuthValuesKey, ref)
+	}
+}

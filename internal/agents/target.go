@@ -136,7 +136,7 @@ func placedOn(hr *unstructured.Unstructured) (secret, targetNS string) {
 // own).
 func (c ComposeConfig) ForTarget() ComposeConfig {
 	c.MusterURL = c.TargetMusterURL
-	c.SkillsGitAuthSecretName = ""
+	c.SkillsGitAuthOwnOnly = true
 	return c
 }
 
@@ -225,8 +225,9 @@ func (s *Service) site(ctx context.Context, loc Location) (*site, error) {
 	if !loc.IsSet() {
 		if s.isTenant(ns) {
 			// The installation's skills credential lives in the configured
-			// namespaces only: an agent in a tenant names its own.
-			st.compose.SkillsGitAuthSecretName = ""
+			// namespaces only, and admission refuses it in a tenant: an
+			// agent there names its own.
+			st.compose.SkillsGitAuthOwnOnly = true
 		}
 		return st, nil
 	}

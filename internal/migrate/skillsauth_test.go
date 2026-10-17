@@ -162,3 +162,58 @@ func TestSkillsCredentialWaitsForTheToken(t *testing.T) {
 	require.Contains(t, strings.Join(rel.Warnings, "\n"), "has no key token yet")
 	require.Empty(t, c.writes("kagent"))
 }
+
+// A pre-step agent in a tenant namespace that names the installation's skills
+// credential, under either name, loses the reference: admission refuses it
+// there. A tenant's own credential, a GitOps-owned release and a namespace
+// that is no tenant are left as they are, and the run writes nothing but
+// HelmReleases in a tenant.
+func TestTenantReleasesLoseTheInstallationSkillsCredential(t *testing.T) {
+	ctx := t.Context()
+	agentValues := func(name string) map[string]any {
+		return map[string]any{"agent": map[string]any{"name": name}, "modelConfig": map[string]any{"name": "default-model-config"}}
+	}
+	c := newCluster(
+		ociRepository("kagent", v2Target),
+		helmRelease("org-a", "pre-step", withSkillsCredential(agentValues("pre-step"), skillsCredentialPrev), "2.0.0"),
+		helmRelease("org-a", "current", withSkillsCredential(agentValues("current"), skillsCredential), "2.0.0"),
+		helmRelease("org-a", "own", withSkillsCredential(agentValues("own"), "tenant-credential-own"), "2.0.0"),
+		helmRelease("org-a", "none", agentValues("none"), "2.0.0"),
+		gitOpsLabeled(helmRelease("org-a", "gitops", withSkillsCredential(agentValues("gitops"), skillsCredentialPrev), "2.0.0")),
+		helmRelease("org-b", "elsewhere", withSkillsCredential(agentValues("elsewhere"), skillsCredentialPrev), "2.0.0"),
+	)
+	opts := renameOptions("kagent")
+	opts.TenantNamespaces = []string{"org-a"}
+
+	dry := opts
+	dry.DryRun = true
+	res, err := c.runnerV2(t, dry, v2Latest).Run(ctx)
+	require.NoError(t, err)
+	require.Len(t, res.Reports[0].Tenants, 3)
+	require.Empty(t, c.writes("org-a"), "a dry run writes nothing")
+
+	res, err = c.runnerV2(t, opts, v2Latest).Run(ctx)
+	require.NoError(t, err)
+	tenants := map[string]ReleaseReport{}
+	for _, rep := range res.Reports[0].Tenants {
+		tenants[rep.Namespace+"/"+rep.Name] = rep
+	}
+	require.Len(t, tenants, 3)
+	for _, name := range []string{"pre-step", "current"} {
+		require.Equal(t, ActionRewritten, tenants["org-a/"+name].Action, name)
+		require.Equal(t, []string{agents.SkillsGitAuthValuesKey}, tenants["org-a/"+name].Changes.Removed, name)
+		require.NotContains(t, c.values(t, "org-a", name), agents.SkillsGitAuthValuesKey, name)
+		require.Equal(t, agentValues(name), c.values(t, "org-a", name), name)
+	}
+	require.Equal(t, ActionPending, tenants["org-a/gitops"].Action)
+	require.Equal(t, OwnershipGitOps, tenants["org-a/gitops"].Ownership)
+	require.Equal(t, map[string]any{"name": skillsCredentialPrev}, c.values(t, "org-a", "gitops")[agents.SkillsGitAuthValuesKey])
+	require.Equal(t, map[string]any{"name": "tenant-credential-own"}, c.values(t, "org-a", "own")[agents.SkillsGitAuthValuesKey])
+	require.Equal(t, map[string]any{"name": skillsCredentialPrev}, c.values(t, "org-b", "elsewhere")[agents.SkillsGitAuthValuesKey])
+	require.Equal(t, []string{"update helmreleases", "update helmreleases"}, c.writes("org-a"))
+	require.True(t, res.Reports[0].Changed)
+
+	res, err = c.runnerV2(t, opts, v2Latest).Run(ctx)
+	require.NoError(t, err)
+	require.Len(t, res.Reports[0].Tenants, 1, "only the GitOps-owned release is left")
+}

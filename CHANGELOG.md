@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- An agent in an Organization's namespace no longer keeps the installation's skills credential: `update_agent` drops a `skillsGitAuthSecretRef` naming it under its current or a previous name (it kept the current name), so Flux applies the update the tenant credential admission policy refused, and `agent-manager migrate --multi-tenant` (`AGENT_MANAGER_MULTI_TENANT`) drops it from every agent release in the tenant namespaces, found as the tenant reconciler finds them, reading and writing only HelmReleases there; the default namespace's report lists them under `tenants` ([agent-manager#191](https://github.com/giantswarm/agent-manager/issues/191)).
+
 ## [2.5.0-rc.2] - 2026-10-17
 
 ### Added

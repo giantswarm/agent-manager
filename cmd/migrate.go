@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 	"github.com/giantswarm/agent-manager/internal/kube"
 	"github.com/giantswarm/agent-manager/internal/migrate"
 	"github.com/giantswarm/agent-manager/internal/skills"
+	"github.com/giantswarm/agent-manager/internal/tenants"
 )
 
 // migrateOptions shares serve's flags and environment variables for
@@ -46,6 +48,8 @@ type migrateOptions struct {
 	skillsGitAuth     string
 	skillsGitAuthPrev string
 	skillsGitAuthWait time.Duration
+
+	multiTenant bool
 
 	reportConfigMap string
 	dryRun          bool
@@ -83,6 +87,15 @@ On either path, a release whose skillsGitAuthSecretRef names an earlier name of
 the installation's skills credential (--skills-git-auth-previous-secret-names)
 is moved to its current name (--skills-git-auth-secret-name), also when its
 values are on the target major already; a GitOps-owned release gets the diff.
+
+With --multi-tenant, the agent releases in the tenant namespaces (labelled
+giantswarm.io/organization, as serve's tenant reconciler finds them) lose a
+skillsGitAuthSecretRef that names the installation's skills credential under
+its current or an earlier name: admission refuses that reference in a tenant,
+where an agent reads its git sources with its own credential or anonymously.
+Nothing else of a tenant is migrated, and the run reads and writes only
+HelmReleases there; the default namespace's report lists those releases under
+tenants. A GitOps-owned one is reported, never written.
 
   expand    every Generic-chart HelmRelease rendering into a managed namespace
             gets the target major's values, validated against the target
@@ -136,6 +149,7 @@ variable named next to it; flags win.`,
 	f.StringVar(&o.skillsToken, "skills-github-token", envOr("GITHUB_TOKEN", ""), "GitHub token for private skill repositories and a higher rate limit; prefer the environment (GITHUB_TOKEN)")
 	f.StringVar(&o.skillsGitAuth, "skills-git-auth-secret-name", envOr("AGENT_MANAGER_SKILLS_GIT_AUTH_SECRET_NAME", ""), "The installation's skills credential Secret, as serve takes it: every release whose skillsGitAuthSecretRef names one of --skills-git-auth-previous-secret-names is moved to it (AGENT_MANAGER_SKILLS_GIT_AUTH_SECRET_NAME)")
 	f.StringVar(&o.skillsGitAuthPrev, "skills-git-auth-previous-secret-names", envOr("AGENT_MANAGER_SKILLS_GIT_AUTH_PREVIOUS_SECRET_NAMES", ""), "Comma-separated earlier names of the installation's skills credential Secret; empty moves no release (AGENT_MANAGER_SKILLS_GIT_AUTH_PREVIOUS_SECRET_NAMES)")
+	f.BoolVar(&o.multiTenant, "multi-tenant", envBool("AGENT_MANAGER_MULTI_TENANT", false), "Also drop the installation's skills credential from the agent releases in the tenant namespaces (labelled "+tenants.OrganizationLabel+"), as serve's --multi-tenant composes them (AGENT_MANAGER_MULTI_TENANT)")
 	f.DurationVar(&o.skillsGitAuthWait, "skills-git-auth-wait", envDuration("AGENT_MANAGER_SKILLS_GIT_AUTH_WAIT", 10*time.Minute), "How long the run waits, all in all, for the --skills-git-auth-secret-name Secret to appear where a release still names a previous name (agent-manager's rollout may trail the run); then such a release keeps the previous name until a later run (AGENT_MANAGER_SKILLS_GIT_AUTH_WAIT)")
 	f.StringVar(&o.reportConfigMap, "report-configmap", envOr("AGENT_MANAGER_MIGRATE_REPORT_CONFIGMAP", migrate.DefaultReportConfigMap), "Name of the report ConfigMap written in every managed namespace (AGENT_MANAGER_MIGRATE_REPORT_CONFIGMAP)")
 	f.BoolVar(&o.dryRun, "dry-run", envBool("AGENT_MANAGER_MIGRATE_DRY_RUN", false), "Print the report and the diffs; write nothing, not even the report (AGENT_MANAGER_MIGRATE_DRY_RUN)")
@@ -183,9 +197,22 @@ func runMigrate(ctx context.Context, out io.Writer, o *migrateOptions) error {
 		targetFilter = &o.chartSemverFilter
 	}
 	namespaces := svc.Info(ctx).Namespaces.Managed
+	var tenantNamespaces []string
+	if o.multiTenant {
+		found, err := tenants.List(ctx, clients.Typed(), o.kagentNamespace)
+		if err != nil {
+			return err
+		}
+		for _, ns := range found {
+			if !slices.Contains(namespaces, ns) {
+				tenantNamespaces = append(tenantNamespaces, ns)
+			}
+		}
+	}
 	runner, err := migrate.New(clients, resolver, pinner, status, migrate.Options{
 		Namespaces:              namespaces,
 		GitOpsNamespaces:        splitList(o.gitopsNamespaces),
+		TenantNamespaces:        tenantNamespaces,
 		HarnessName:             o.harnessName,
 		ChartOCIURL:             o.chartOCIURL,
 		TargetSemver:            o.chartSemver,
@@ -204,7 +231,7 @@ func runMigrate(ctx context.Context, out io.Writer, o *migrateOptions) error {
 	if err != nil {
 		return err
 	}
-	log.Info("agent-manager migrate starting", "version", build.Version, "commit", build.Commit, "namespaces", namespaces, "gitopsNamespaces", splitList(o.gitopsNamespaces),
+	log.Info("agent-manager migrate starting", "version", build.Version, "commit", build.Commit, "namespaces", namespaces, "tenantNamespaces", tenantNamespaces, "gitopsNamespaces", splitList(o.gitopsNamespaces),
 		"chart", o.chartOCIURL, "targetSemver", o.chartSemver, "targetMajor", major, "targetSemverFilter", o.chartSemverFilter, "targetSemverFilterSet", o.chartSemverFilterSet, "harness", o.harnessName, "kagentAPI", kagentVersion, "dryRun", o.dryRun, "report", o.reportConfigMap, "githubToken", o.skillsToken != "", "skillsGitAuthSecretName", o.skillsGitAuth, "skillsGitAuthPreviousSecretNames", splitList(o.skillsGitAuthPrev))
 
 	res, runErr := runner.Run(ctx)

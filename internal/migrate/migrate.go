@@ -79,6 +79,12 @@ type Options struct {
 	// Namespaces are the managed namespaces (the default one first): the
 	// releases rendering into them are migrated, their reports written there.
 	Namespaces []string
+	// TenantNamespaces are the tenant (Organization) namespaces: their
+	// agent releases lose a reference to the installation's skills
+	// credential (SkillsGitAuthSecretName or a previous name), which the
+	// tenant credential admission policy refuses there. Nothing else of them
+	// is migrated.
+	TenantNamespaces []string
 	// GitOpsNamespaces are searched for Generic-chart HelmReleases with a
 	// targetNamespace in Namespaces, next to what the provenance labels name.
 	GitOpsNamespaces []string
@@ -206,6 +212,12 @@ func (r *Runner) Run(ctx context.Context) (*Result, error) {
 		states = append(states, st)
 	}
 	r.contract(ctx, states)
+	if len(states) > 0 {
+		tenantReleases, changed, tenantErrs := r.tenantSkillsGitAuth(ctx)
+		states[0].report.Tenants = tenantReleases
+		states[0].report.Changed = states[0].report.Changed || changed
+		errs = append(errs, tenantErrs...)
+	}
 
 	res := &Result{}
 	for _, st := range states {
