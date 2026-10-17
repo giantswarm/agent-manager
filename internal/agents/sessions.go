@@ -22,6 +22,7 @@ import (
 	"github.com/giantswarm/agent-manager/internal/identity"
 	"github.com/giantswarm/agent-manager/internal/kagent"
 	apiv1alpha1 "github.com/giantswarm/agent-manager/internal/kagent/gen/kagent/api/v1alpha1"
+	"github.com/giantswarm/agent-manager/internal/muster"
 )
 
 const (
@@ -45,6 +46,14 @@ type SessionClient interface {
 	CreateSession(ctx context.Context, token string, in kagent.SessionCreate) (*apiv1alpha1.Session, error)
 	SendMessage(ctx context.Context, token string, agent kagent.Ref, contextID, messageID, text string) (*a2apb.StreamResponse, error)
 	DeleteSession(ctx context.Context, token, sessionID string) (*apiv1alpha1.Session, error)
+}
+
+// SessionBinder is muster's session bindings, called as the caller: a
+// workspace Session's sandbox actor bound to the person who started it is
+// what muster releases that person's provider tokens to (muster.Client).
+type SessionBinder interface {
+	Bind(ctx context.Context, token string, b muster.Binding) error
+	Unbind(ctx context.Context, token, actor string) error
 }
 
 // SessionList is the answer of list_sessions: the Agent's sessions as kagent
@@ -153,9 +162,11 @@ type SessionStart struct {
 }
 
 // SessionDelete is the answer of delete_session: the session as the
-// controller left it (RUNTIME_STATE_DELETED).
+// controller left it (RUNTIME_STATE_DELETED). Warning says what was left
+// undone after the delete: a binding muster did not remove.
 type SessionDelete struct {
 	Session json.RawMessage `json:"session"`
+	Warning string          `json:"warning,omitempty"`
 }
 
 // AgentRef names an Agent.
@@ -585,6 +596,9 @@ func sessionMaxBytes(n int) (int, error) {
 // volume: the grant is checked to name the caller and to be unexpired, then
 // passed to the controller as the admission token of the volume source it
 // names; the controller's admission verifies it and refuses with its reason.
+// A Session started in a workspace is bound in muster to the caller before
+// its first turn, so its sandbox acts as the caller towards the workspace's
+// providers; a bind muster refuses deletes the Session again.
 func (s *Service) StartSession(ctx context.Context, in StartSession) (*SessionStart, error) {
 	if in.Message != "" && strings.TrimSpace(in.Message) == "" {
 		return nil, invalidf("message is blank: omit it to create the session without a first message")
@@ -612,11 +626,19 @@ func (s *Service) StartSession(ctx context.Context, in StartSession) (*SessionSt
 		if workspace, err = workspaceGrant(ctx, in.WorkspaceGrant, time.Now()); err != nil {
 			return nil, err
 		}
+		if s.cfg.Bindings == nil {
+			return nil, errSessionBindingsUnsupported
+		}
 		create.VolumeSource, create.AdmissionToken = workspace.Volume, in.WorkspaceGrant
 	}
 	session, err := s.cfg.Sessions.CreateSession(ctx, token, create)
 	if err != nil {
 		return nil, kagentError(err, fmt.Sprintf("a session of agent %s", ref.Tenant()))
+	}
+	if workspace != nil {
+		if err := s.bindSession(ctx, token, session); err != nil {
+			return nil, s.abandonSession(ctx, token, session, err)
+		}
 	}
 	var turn *a2apb.StreamResponse
 	if in.Message != "" {
@@ -709,6 +731,16 @@ func (s *Service) DeleteSession(ctx context.Context, sessionID string) (*Session
 	if err != nil {
 		return nil, err
 	}
+	var binding *muster.Binding
+	if s.cfg.Bindings != nil {
+		current, err := s.cfg.Sessions.GetSession(ctx, token, sessionID)
+		if err != nil {
+			return nil, kagentError(err, fmt.Sprintf("session %s", sessionID))
+		}
+		if binding, err = sessionBinding(current); err != nil {
+			return nil, err
+		}
+	}
 	session, err := s.cfg.Sessions.DeleteSession(ctx, token, sessionID)
 	if status.Code(err) == codes.Aborted {
 		return nil, fmt.Errorf("%w (another operation on the session is running: retry the delete shortly)", kagentError(err, fmt.Sprintf("session %s", sessionID)))
@@ -720,11 +752,95 @@ func (s *Service) DeleteSession(ctx context.Context, sessionID string) (*Session
 		Namespace: session.GetAgent().GetNamespace(), Name: session.GetAgent().GetName(),
 	}.Tenant(), "session", session.GetId())
 	out := &SessionDelete{}
+	if binding != nil {
+		if err := s.cfg.Bindings.Unbind(ctx, token, binding.Actor); err != nil {
+			s.log.ErrorContext(ctx, "session deleted but not unbound in muster", identity.LogAttr(ctx), "session", session.GetId(), "actor", binding.Actor, "error", err)
+			out.Warning = fmt.Sprintf("the session was deleted, but muster did not remove its sandbox's binding (it expires with the Session idle TTL): %v", err)
+		}
+	}
 	if out.Session, err = marshalProto(session); err != nil {
 		return nil, err
 	}
 	return out, nil
 }
+
+// actorAuthoritySuffix ends a Session's A2A authority,
+// <actor>.<atespace>.actors.resources.substrate.ate.dev: the address kagent
+// records for the Session's Substrate actor once it is created.
+const actorAuthoritySuffix = ".actors.resources.substrate.ate.dev"
+
+// sessionBinding is the binding of a workspace Session's sandbox actor: its
+// SPIFFE id from the Session's A2A authority and the provider instances
+// kagent admitted it to. Nil for a Session without providers: muster has
+// nothing to release to its sandbox.
+func sessionBinding(session *apiv1alpha1.Session) (*muster.Binding, error) {
+	var providers []string
+	for _, p := range session.GetProviders() {
+		if p.GetAudience() != "" && !slices.Contains(providers, p.GetAudience()) {
+			providers = append(providers, p.GetAudience())
+		}
+	}
+	if len(providers) == 0 {
+		return nil, nil
+	}
+	name, ok := strings.CutSuffix(session.GetA2AAuthority(), actorAuthoritySuffix)
+	actor, atespace, hasAtespace := strings.Cut(name, ".")
+	if !ok || !hasAtespace || actor == "" || atespace == "" || strings.Contains(atespace, ".") {
+		return nil, conflictf("session %s has no Substrate actor address kagent records (a2aAuthority %q), so its sandbox cannot be bound in muster", session.GetId(), session.GetA2AAuthority())
+	}
+	return &muster.Binding{
+		Actor:     muster.ActorID(atespace, actor),
+		Session:   session.GetAgent().GetNamespace() + "/" + session.GetId(),
+		Providers: providers,
+	}, nil
+}
+
+// bindSession binds a workspace Session's sandbox actor to the caller in
+// muster, as the caller.
+func (s *Service) bindSession(ctx context.Context, token string, session *apiv1alpha1.Session) error {
+	binding, err := sessionBinding(session)
+	if err != nil {
+		return err
+	}
+	if binding == nil {
+		s.log.InfoContext(ctx, "workspace session has no providers: nothing to bind in muster", identity.LogAttr(ctx), "session", session.GetId())
+		return nil
+	}
+	if err := s.cfg.Bindings.Bind(ctx, token, *binding); err != nil {
+		return bindingError(err, session.GetId())
+	}
+	s.log.InfoContext(ctx, "session bound in muster", identity.LogAttr(ctx), "session", session.GetId(), "actor", binding.Actor, "providers", binding.Providers)
+	return nil
+}
+
+// abandonSession deletes a Session whose bind failed, so no workspace
+// Session runs without its person, and answers the bind's error, naming the
+// Session when the delete failed too.
+func (s *Service) abandonSession(ctx context.Context, token string, session *apiv1alpha1.Session, cause error) error {
+	if _, err := s.cfg.Sessions.DeleteSession(ctx, token, session.GetId()); err != nil {
+		s.log.ErrorContext(ctx, "session left behind after a failed bind", identity.LogAttr(ctx), "session", session.GetId(), "error", err)
+		return fmt.Errorf("%w (session %s could not be deleted again: delete it with delete_session: %v)", cause, session.GetId(), kagentError(err, fmt.Sprintf("session %s", session.GetId())))
+	}
+	s.log.InfoContext(ctx, "session deleted after a failed bind", identity.LogAttr(ctx), "session", session.GetId())
+	return cause
+}
+
+// bindingError maps a refused bind onto the domain sentinels; every message
+// names muster.
+func bindingError(err error, sessionID string) error {
+	what := fmt.Sprintf("binding session %s's sandbox to you in muster failed, so the session was not started", sessionID)
+	switch {
+	case errors.Is(err, muster.ErrForbidden):
+		return fmt.Errorf("%w: %s: %v", ErrForbidden, what, err)
+	case errors.Is(err, muster.ErrInvalid):
+		return fmt.Errorf("%w: %s: %v", ErrInvalid, what, err)
+	case errors.Is(err, muster.ErrUnauthenticated):
+		return fmt.Errorf("%w: %s: %v", ErrUnauthenticated, what, err)
+	}
+	return fmt.Errorf("%s: %w", what, err)
+}
+
+var errSessionBindingsUnsupported = fmt.Errorf("%w: this installation has no muster session bindings (--muster-bindings-url), so a session cannot be started in a workspace: its sandbox would not act as you", ErrUnsupported)
 
 var errSessionsUnsupported = fmt.Errorf("%w: this installation has no kagent controller target (--kagent-target), so the session tools are not offered", ErrUnsupported)
 

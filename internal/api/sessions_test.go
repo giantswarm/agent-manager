@@ -21,6 +21,7 @@ import (
 	apiv1alpha1 "github.com/giantswarm/agent-manager/internal/kagent/gen/kagent/api/v1alpha1"
 	"github.com/giantswarm/agent-manager/internal/kagent/kagenttest"
 	"github.com/giantswarm/agent-manager/internal/kube"
+	"github.com/giantswarm/agent-manager/internal/muster"
 )
 
 const callerToken = "caller-id-token"
@@ -30,8 +31,13 @@ func newSessionService(t *testing.T) (*agents.Service, *kagenttest.Controller) {
 	ctrl, conn := kagenttest.New(t)
 	dyn := dynamicfake.NewSimpleDynamicClient(runtime.NewScheme())
 	typed := kubefake.NewClientset()
+	// muster's session bindings, accepting every bind and unbind.
+	bindings := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }))
+	t.Cleanup(bindings.Close)
+	binder, err := muster.New(bindings.URL+"/session-bindings", nil)
+	require.NoError(t, err)
 	svc := agents.New(kube.NewServiceAccountProvider(kube.FromInterfaces(dyn, typed, typed.Discovery())), embeddedChart{}, nil, pinner{}, agents.Config{
-		DefaultNamespace: "kagent", Version: "test", Sessions: kagent.NewClient(conn),
+		DefaultNamespace: "kagent", Version: "test", Sessions: kagent.NewClient(conn), Bindings: binder,
 	}, nil)
 	return svc, ctrl
 }

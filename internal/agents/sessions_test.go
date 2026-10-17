@@ -1,9 +1,11 @@
 package agents
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -20,16 +22,61 @@ import (
 	"github.com/giantswarm/agent-manager/internal/kagent"
 	apiv1alpha1 "github.com/giantswarm/agent-manager/internal/kagent/gen/kagent/api/v1alpha1"
 	"github.com/giantswarm/agent-manager/internal/kagent/kagenttest"
+	"github.com/giantswarm/agent-manager/internal/muster"
 )
 
 const callerToken = "caller-id-token"
 
 func newSessionFixture(t *testing.T) (*Service, *kagenttest.Controller) {
 	t.Helper()
+	svc, ctrl, _ := newBoundSessionFixture(t)
+	return svc, ctrl
+}
+
+// newBoundSessionFixture is newSessionFixture with muster's session
+// bindings, which it answers too.
+func newBoundSessionFixture(t *testing.T) (*Service, *kagenttest.Controller, *fakeBindings) {
+	t.Helper()
 	f := newFixture(t, []runtime.Object{})
 	ctrl, conn := kagenttest.New(t)
 	f.svc.cfg.Sessions = kagent.NewClient(conn)
-	return f.svc, ctrl
+	bindings := &fakeBindings{}
+	f.svc.cfg.Bindings = bindings
+	return f.svc, ctrl, bindings
+}
+
+// fakeBindings records muster's session bindings as the caller made them.
+type fakeBindings struct {
+	mu        sync.Mutex
+	BindErr   error
+	UnbindErr error
+	Bound     []fakeBind
+	Unbound   []fakeBind
+}
+
+type fakeBind struct {
+	Token   string
+	Binding muster.Binding
+}
+
+func (f *fakeBindings) Bind(_ context.Context, token string, b muster.Binding) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.BindErr != nil {
+		return f.BindErr
+	}
+	f.Bound = append(f.Bound, fakeBind{Token: token, Binding: b})
+	return nil
+}
+
+func (f *fakeBindings) Unbind(_ context.Context, token, actor string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.UnbindErr != nil {
+		return f.UnbindErr
+	}
+	f.Unbound = append(f.Unbound, fakeBind{Token: token, Binding: muster.Binding{Actor: actor}})
+	return nil
 }
 
 func TestSessionsUnsupportedWithoutATarget(t *testing.T) {

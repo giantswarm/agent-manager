@@ -10,6 +10,7 @@ import (
 	"net"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 
@@ -51,6 +52,9 @@ type Controller struct {
 	// an admission token, as the controller's configured admission does: its
 	// error is the refusal. Nil admits every such request.
 	Admission func(req *apiv1alpha1.CreateSessionRequest) error
+	// Providers are what the admission admits a session with a volume source
+	// to, kept on the session as the controller keeps them.
+	Providers []*apiv1alpha1.SessionProvider
 
 	mu        sync.Mutex
 	sessions  []*apiv1alpha1.Session
@@ -58,6 +62,16 @@ type Controller struct {
 	tasks     map[string][]*a2apb.Task
 	calls     []Call
 	turnEnded chan struct{}
+}
+
+// Atespace is the atespace the fake's session actors run in.
+const Atespace = "kagent-sre"
+
+// ActorAuthority is a created session's A2A authority as the controller
+// records it: <actor>.<atespace>.actors.resources.substrate.ate.dev, the
+// actor named session-<lowercased id>.
+func ActorAuthority(sessionID string) string {
+	return "session-" + strings.ToLower(sessionID) + "." + Atespace + ".actors.resources.substrate.ate.dev"
 }
 
 // New starts the fake and answers a client connection to it. Both stop with
@@ -134,6 +148,12 @@ func (c *Controller) newSession(namespace, name, sessionName string, volume *api
 		Agent:        &apiv1alpha1.ResourceReference{Namespace: namespace, Name: name},
 		State:        apiv1alpha1.RuntimeState_RUNTIME_STATE_READY,
 		VolumeSource: volume,
+		A2AAuthority: ActorAuthority(id),
+	}
+	if volume != nil {
+		for _, p := range c.Providers {
+			s.Providers = append(s.Providers, proto.Clone(p).(*apiv1alpha1.SessionProvider))
+		}
 	}
 	c.sessions = append(c.sessions, s)
 	return s
@@ -270,7 +290,7 @@ func (c *Controller) DeleteSession(ctx context.Context, req *apiv1alpha1.DeleteS
 	if s == nil {
 		return nil, status.Error(codes.NotFound, "Session not found")
 	}
-	s.State = apiv1alpha1.RuntimeState_RUNTIME_STATE_DELETED
+	s.State, s.A2AAuthority = apiv1alpha1.RuntimeState_RUNTIME_STATE_DELETED, ""
 	delete(c.tasks, s.GetContextId())
 	return &apiv1alpha1.DeleteSessionResponse{Session: proto.Clone(s).(*apiv1alpha1.Session)}, nil
 }

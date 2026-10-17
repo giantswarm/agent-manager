@@ -24,6 +24,7 @@ import (
 	"github.com/giantswarm/agent-manager/internal/chart"
 	"github.com/giantswarm/agent-manager/internal/kagent"
 	"github.com/giantswarm/agent-manager/internal/kube"
+	"github.com/giantswarm/agent-manager/internal/muster"
 	"github.com/giantswarm/agent-manager/internal/server"
 	"github.com/giantswarm/agent-manager/internal/skills"
 	"github.com/giantswarm/agent-manager/internal/tenants"
@@ -43,6 +44,7 @@ type serveOptions struct {
 	harnessEgress     string
 	musterURL         string
 	targetMusterURL   string
+	musterBindingsURL string
 	helmReleaseAPI    string
 	ociRepositoryAPI  string
 
@@ -120,6 +122,7 @@ environment variable named next to it; flags win over the environment.`,
 	f.StringVar(&o.harnessName, "harness-name", envOr("AGENT_HARNESS_NAME", agents.DefaultHarnessName), "Name of the platform Harness an agent runs on unless create_agent names another: composed as the chart value agent.harness, the Agent's spec.harnessRef.name (AGENT_HARNESS_NAME)")
 	f.StringVar(&o.harnessEgress, "harness-egress", envOr("AGENT_MANAGER_HARNESS_EGRESS", ""), "JSON object of the origins a coding agent (on a Harness whose runtime is not kagent) reaches, by Harness name ({\"claude\": [\"https://github.com\"]}): written into the Agent's spec.egress, and the only origins such an agent may name; a coding Harness without an entry is refused, an empty list reaches none (AGENT_MANAGER_HARNESS_EGRESS)")
 	f.StringVar(&o.musterURL, "muster-url", envOr("AGENT_MUSTER_URL", ""), "The platform's muster MCP URL, composed into every agent as the chart value muster.url; empty composes nothing and the chart default applies (AGENT_MUSTER_URL)")
+	f.StringVar(&o.musterBindingsURL, "muster-bindings-url", envOr("AGENT_MANAGER_MUSTER_BINDINGS_URL", ""), "muster's session bindings endpoint (http(s)://host[:port]/session-bindings), which start_session binds a workspace session's sandbox to the caller at and delete_session unbinds it from, as the caller. Empty: start_session refuses a workspace grant. Needs --kagent-target (AGENT_MANAGER_MUSTER_BINDINGS_URL)")
 	f.StringVar(&o.targetMusterURL, "target-muster-url", envOr("AGENT_TARGET_MUSTER_URL", ""), "The muster MCP URL composed into an agent on a workload cluster: one those clusters reach (the installation's public muster endpoint); empty refuses target clusters (AGENT_TARGET_MUSTER_URL)")
 	f.StringVar(&o.helmReleaseAPI, "flux-helmrelease-api-version", envOr("FLUX_HELMRELEASE_API_VERSION", "auto"), "helm.toolkit.fluxcd.io API version composed into HelmReleases; auto discovers it (FLUX_HELMRELEASE_API_VERSION)")
 	f.StringVar(&o.ociRepositoryAPI, "flux-ocirepository-api-version", envOr("FLUX_OCIREPOSITORY_API_VERSION", "auto"), "source.toolkit.fluxcd.io API version composed into OCIRepositories; auto discovers it (FLUX_OCIREPOSITORY_API_VERSION)")
@@ -189,6 +192,9 @@ func runServe(ctx context.Context, o *serveOptions) error {
 	}
 	if o.kagentTarget != "" && !o.oauthEnabled {
 		return fmt.Errorf("--kagent-target needs --enable-oauth: the session tools call kagent as the caller, with the caller's IdP token, and never as the ServiceAccount")
+	}
+	if o.musterBindingsURL != "" && o.kagentTarget == "" {
+		return fmt.Errorf("--muster-bindings-url needs --kagent-target: only a session started through kagent is bound in muster")
 	}
 	if o.downstreamOAuth && !o.oauthEnabled {
 		return fmt.Errorf("--downstream-oauth needs --enable-oauth: without OAuth there is no caller token to present to the Kubernetes API")
@@ -321,6 +327,14 @@ func runServe(ctx context.Context, o *serveOptions) error {
 		defer func() { _ = client.Close() }()
 		sessions = client
 	}
+	var bindings agents.SessionBinder
+	if o.musterBindingsURL != "" {
+		client, err := muster.New(o.musterBindingsURL, nil)
+		if err != nil {
+			return fmt.Errorf("--muster-bindings-url: %w", err)
+		}
+		bindings = client
+	}
 
 	svc := agents.New(provider, resolver, discoverer, pinner, agents.Config{
 		DefaultNamespace:  o.kagentNamespace,
@@ -346,6 +360,7 @@ func runServe(ctx context.Context, o *serveOptions) error {
 		Version:          build.Version,
 		GitHub:           gitHubRemote(o.githubAuthorizationServer, o.githubAPIURL),
 		Sessions:         sessions,
+		Bindings:         bindings,
 		HarnessEgress:    harnessEgress,
 		Tenants:          tenantSetOrNil(tenantSet),
 	}, log)

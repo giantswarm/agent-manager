@@ -242,6 +242,30 @@ port: {{ $port }}
 {{- end -}}
 
 {{/*
+muster's session bindings endpoint as egress: the Service's namespace for an
+in-cluster host (<name>.<namespace>.svc...), the port the URL names or its
+scheme's. Rendered with the session tools only (oauth and a controller
+target), as the flag is.
+*/}}
+{{- define "agent-manager.musterBindingsEgress" -}}
+{{- if and .Values.oauth.enabled .Values.kagent.controllerTarget .Values.muster.bindingsUrl -}}
+{{- $url := urlParse .Values.muster.bindingsUrl -}}
+{{- if not (has $url.scheme (list "http" "https")) -}}
+{{- fail (printf "muster.bindingsUrl %q must be http(s)://host[:port]/session-bindings" .Values.muster.bindingsUrl) -}}
+{{- end -}}
+{{- $hostPort := splitList ":" $url.host -}}
+{{- $port := ternary (last $hostPort) (ternary "443" "80" (eq $url.scheme "https")) (gt (len $hostPort) 1) -}}
+{{- $labels := splitList "." (first $hostPort) -}}
+{{- $namespace := "" -}}
+{{- if and (ge (len $labels) 3) (eq (index $labels 2) "svc") -}}
+{{- $namespace = index $labels 1 -}}
+{{- end -}}
+namespace: {{ $namespace | quote }}
+port: {{ $port }}
+{{- end -}}
+{{- end -}}
+
+{{/*
 The installation's skills boot Secret: the minted one, else
 skills.gitAuthSecretName. The minted one is the installation's own,
 <fullname>-skills-token, never under the tenant-credential- prefix that marks a
