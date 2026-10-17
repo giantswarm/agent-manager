@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- An agent in an Organization's namespace no longer keeps the installation's skills credential: `update_agent` drops a `skillsGitAuthSecretRef` naming it under its current or a previous name (it kept the current name), so Flux applies the update the tenant credential admission policy refused, and `agent-manager migrate --multi-tenant` (`AGENT_MANAGER_MULTI_TENANT`) drops it from every agent release in the tenant namespaces, found as the tenant reconciler finds them, reading and writing only HelmReleases there; the default namespace's report lists them under `tenants` ([agent-manager#191](https://github.com/giantswarm/agent-manager/issues/191)).
+
 ### Added
 
 - A workspace session's sandbox acts as the person who started it: `start_session` with a `workspaceGrant` binds the session's Substrate actor (`spiffe://substrate-actor.local/actor/<atespace>/<actor>`, from the session's A2A authority) to the caller at muster's session bindings, as the caller (the forwarded IdP token), with the provider instances kagent admitted the session to, before its first message; muster then releases the caller's provider tokens to that sandbox alone. A bind muster refuses fails the start with muster's reason and deletes the session again; a session without a workspace, or whose workspace has no provider, is never bound. `delete_session` unbinds a bound session after kagent deleted it; a missed unbind is the answer's `warning` and expires with the Session idle TTL. agent-manager holds no token. New `--muster-bindings-url` (`AGENT_MANAGER_MUSTER_BINDINGS_URL`), chart `muster.bindingsUrl` (default the in-cluster `http://muster.agent-platform.svc.cluster.local:8090/session-bindings`, rendered with the session tools, the network policy opening egress to it); without it a workspace grant is refused as unsupported ([giantswarm#38597](https://github.com/giantswarm/giantswarm/issues/38597)).

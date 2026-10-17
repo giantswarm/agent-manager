@@ -543,9 +543,12 @@ of the namespace.
 Tenants need `--downstream-oauth`: a request in a tenant runs as the caller,
 whose RoleBindings there grant it. An agent in a tenant gets no installation
 skills credential (`--skills-git-auth-secret-name`): that Secret exists in the
-configured namespaces only, so it names its own. The reconciler creates a
-tenant's OCIRepository once and never moves its range; `agent-manager migrate`
-does not cover the tenants yet.
+configured namespaces only and admission refuses it there, so it names its own.
+`update_agent` drops a reference to the installation's credential, under its
+current or a previous name, from an agent in a tenant, and `agent-manager
+migrate --multi-tenant` drops it from every other agent release there. The
+reconciler creates a tenant's OCIRepository once and never moves its range;
+`agent-manager migrate` does not move the tenants' chart range yet.
 
 The chart renders the reconciler's ClusterRole (`bind` on
 `agent-platform-tenant-flux` only, no `escalate`), and a
@@ -763,6 +766,15 @@ the fleet's GitOps-owned `sre-agent` releases live in `flux-giantswarm` with
 `--gitops-namespaces` with a `targetNamespace` in the managed set. Releases
 outside the managed namespaces, and releases applied by a Flux Kustomization
 (`kustomize.toolkit.fluxcd.io/name`), are read and never written.
+
+With `--multi-tenant` (`AGENT_MANAGER_MULTI_TENANT`, as `serve` takes it) the
+run also finds the tenant namespaces as the tenant reconciler does and drops
+`skillsGitAuthSecretRef` from every agent release there that names the
+installation's skills credential under its current or a previous name: the
+tenant credential admission policy refuses that reference, so Flux could not
+apply the agent's next change. That is all it does in a tenant, reading and
+writing only HelmReleases; the default namespace's report lists those releases
+under `tenants`, a GitOps-owned one as pending, never written.
 
 ### 1.x → 2.x values
 

@@ -47,6 +47,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/selection"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
@@ -413,10 +414,33 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 
 // isTenant: labelled, not the platform namespace, not going away.
 func (r *Reconciler) isTenant(ns *corev1.Namespace) bool {
+	return IsTenant(ns, r.cfg.PlatformNamespace)
+}
+
+// IsTenant reports whether ns is a tenant beside platformNamespace: labelled,
+// not the platform namespace, not going away.
+func IsTenant(ns *corev1.Namespace, platformNamespace string) bool {
 	if _, ok := ns.Labels[OrganizationLabel]; !ok {
 		return false
 	}
-	return ns.Name != r.cfg.PlatformNamespace && ns.DeletionTimestamp == nil && ns.Status.Phase != corev1.NamespaceTerminating
+	return ns.Name != platformNamespace && ns.DeletionTimestamp == nil && ns.Status.Phase != corev1.NamespaceTerminating
+}
+
+// List are the tenant namespaces beside platformNamespace, sorted, found as
+// the reconciler finds them, for a caller without the reconciler's cache.
+func List(ctx context.Context, typed kubernetes.Interface, platformNamespace string) ([]string, error) {
+	list, err := typed.CoreV1().Namespaces().List(ctx, metav1.ListOptions{LabelSelector: OrganizationLabel})
+	if err != nil {
+		return nil, fmt.Errorf("list the namespaces labelled %s: %w", OrganizationLabel, err)
+	}
+	var found []string
+	for i := range list.Items {
+		if IsTenant(&list.Items[i], platformNamespace) {
+			found = append(found, list.Items[i].Name)
+		}
+	}
+	slices.Sort(found)
+	return found, nil
 }
 
 // reconcile keeps one tenant.

@@ -60,6 +60,11 @@ type ComposeConfig struct {
 	// of that Secret: an agent that names one is moved to
 	// SkillsGitAuthSecretName whenever its values are composed.
 	SkillsGitAuthPreviousSecretNames []string
+	// SkillsGitAuthOwnOnly: the installation's skills credential is not
+	// where the agent runs (a tenant namespace, a workload cluster), so an
+	// agent reads its git sources with its own Secret or anonymously, and a
+	// reference to the installation's, under any of its names, is dropped.
+	SkillsGitAuthOwnOnly bool
 }
 
 // Defaults of the composition, the values composeManifests.ts uses.
@@ -104,12 +109,19 @@ const TenantCredentialPrefix = "tenant-credential-" // #nosec G101 -- a Secret n
 // out to every git skill and git plugin: {name: <Secret>}.
 const SkillsGitAuthValuesKey = "skillsGitAuthSecretRef"
 
+// IsInstallationSkillsGitAuth reports whether name is the installation's
+// skills credential, under its current or a previous name.
+func (c ComposeConfig) IsInstallationSkillsGitAuth(name string) bool {
+	return name != "" && (name == c.SkillsGitAuthSecretName || slices.Contains(c.SkillsGitAuthPreviousSecretNames, name))
+}
+
 // skillsGitAuth is the credential Secret an agent with these skills and
-// plugins reads them with: its own, else the installation's; none without a
-// git source. An own Secret of a previous installation name is the
-// installation's current one.
+// plugins reads them with: its own, else the installation's (never with
+// SkillsGitAuthOwnOnly); none without a git source. An own Secret that is
+// the installation's, under any of its names, is the installation's current
+// one.
 func skillsGitAuth(own string, skills Skills, plugins Plugins, cfg ComposeConfig) string {
-	if slices.Contains(cfg.SkillsGitAuthPreviousSecretNames, own) {
+	if cfg.IsInstallationSkillsGitAuth(own) {
 		own = ""
 	}
 	hasGit := false
@@ -121,6 +133,9 @@ func skillsGitAuth(own string, skills Skills, plugins Plugins, cfg ComposeConfig
 	}
 	if !hasGit {
 		return ""
+	}
+	if cfg.SkillsGitAuthOwnOnly {
+		return own
 	}
 	return orDefault(own, cfg.SkillsGitAuthSecretName)
 }

@@ -117,6 +117,10 @@ type Report struct {
 	Warnings []string `json:"warnings,omitempty"`
 	// Contract is what the contract phase did, when it ran.
 	Contract *ContractReport `json:"contract,omitempty"`
+	// Tenants are the agent releases in the tenant namespaces that named the
+	// installation's skills credential, on the default namespace's report
+	// only (the run writes no report in a tenant).
+	Tenants []ReleaseReport `json:"tenants,omitempty"`
 }
 
 // RunInfo says which run wrote the report.
