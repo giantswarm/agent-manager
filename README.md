@@ -233,18 +233,20 @@ Two credentials are involved, neither of them a person's token:
   on its next update) and drops it when no git source is left.
   With `--skills-git-auth-mint` (chart `skills.mintGitAuthSecret`) that
   Secret carries the skills GitHub App's installation token too: the chart
-  renders `tenant-credential-<fullname>-skills-token` without data in every
+  renders `<fullname>-skills-token` without data in every
   managed namespace with a Role that may only get and update it, and
   agent-manager writes the token (the Basic form of `x-access-token:<token>`)
   and replaces it well before its one-hour expiry. The egress gateway reads
   the Secret on every fetch, so a replaced token needs no restart. `get_info`
   reports the last refresh and a failed one as `skillsGitAuthMint`.
-- **Credential names**: the installation's skills credential carries the
-  `tenant-credential-` prefix, the one Secret name an agent's git
-  `credentialRef` may carry; agent-manager warns at start when it does not.
+- **Credential names**: the installation's skills credential is the
+  installation's own, never named under the `tenant-credential-` prefix that
+  marks a tenant's own credentials: admission lets an agent in an
+  Organization's namespace name only those, so no tenant names the
+  installation's. agent-manager warns at start when it carries the prefix.
   After a rename, `--skills-git-auth-previous-secret-names` (chart
   `skills.previousGitAuthSecretNames`; the minted Secret's earlier name
-  `<fullname>-skills-token` is always one) lists the old names: an agent
+  `tenant-credential-<fullname>-skills-token` is always one) lists the old names: an agent
   naming one is composed with the current name on its next update,
   `agent-manager migrate` moves every other one once the Secret of the current
   name holds its token, waiting up to `--skills-git-auth-wait` for agent-manager's

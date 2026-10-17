@@ -96,8 +96,8 @@ var (
 )
 
 // TenantCredentialPrefix is the name prefix of the Secrets a tenant's agents
-// may name as a credential; the installation's skills credential carries it
-// too, so the platform's agents pass the same rule.
+// may name as a credential; the installation's skills credential never
+// carries it, so no tenant names that one.
 const TenantCredentialPrefix = "tenant-credential-" // #nosec G101 -- a Secret name prefix, not a credential
 
 // SkillsGitAuthValuesKey is the chart value that fans one read credential

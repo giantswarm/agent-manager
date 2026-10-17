@@ -20,7 +20,7 @@ tests:
       - hasDocuments:
           count: 0
 
-  - it: renders the tenant-credential Secret and its previous name without data in every managed namespace
+  - it: renders the installation Secret and its tenant-credential- previous name without data in every managed namespace
     set:
       kagent:
         namespace: kagent
@@ -37,7 +37,7 @@ tests:
         documentIndex: 4
       - equal:
           path: metadata.name
-          value: tenant-credential-RELEASE-NAME-agent-manager-skills-token
+          value: RELEASE-NAME-agent-manager-skills-token
         documentIndex: 0
       - equal:
           path: metadata.labels["ui.giantswarm.io/agent-skills-git-auth"]
@@ -48,7 +48,7 @@ tests:
         documentIndex: 0
       - equal:
           path: metadata.name
-          value: RELEASE-NAME-agent-manager-skills-token
+          value: tenant-credential-RELEASE-NAME-agent-manager-skills-token
         documentIndex: 1
       - notExists:
           path: metadata.labels["ui.giantswarm.io/agent-skills-git-auth"]
@@ -64,14 +64,14 @@ tests:
         documentIndex: 2
       - equal:
           path: metadata.name
-          value: tenant-credential-RELEASE-NAME-agent-manager-skills-token
+          value: RELEASE-NAME-agent-manager-skills-token
         documentIndex: 2
       - equal:
           path: rules
           value:
             - apiGroups: [""]
               resources: ["secrets"]
-              resourceNames: ["tenant-credential-RELEASE-NAME-agent-manager-skills-token", "RELEASE-NAME-agent-manager-skills-token"]
+              resourceNames: ["RELEASE-NAME-agent-manager-skills-token", "tenant-credential-RELEASE-NAME-agent-manager-skills-token"]
               verbs: ["get", "update"]
         documentIndex: 2
 

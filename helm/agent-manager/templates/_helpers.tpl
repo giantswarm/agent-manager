@@ -243,8 +243,10 @@ port: {{ $port }}
 
 {{/*
 The installation's skills boot Secret: the minted one, else
-skills.gitAuthSecretName. The minted one carries the tenant-credential- prefix,
-the one Secret name an agent's git credentialRef may carry.
+skills.gitAuthSecretName. The minted one is the installation's own,
+<fullname>-skills-token, never under the tenant-credential- prefix that marks a
+tenant's own credentials: admission refuses a reference to it in an
+Organization's namespace.
 */}}
 {{- define "agent-manager.skillsGitAuthSecretName" -}}
 {{- if .Values.skills.mintGitAuthSecret -}}
@@ -254,7 +256,7 @@ the one Secret name an agent's git credentialRef may carry.
 {{- if not .Values.skills.github.app.secretName -}}
 {{- fail "skills.mintGitAuthSecret needs skills.github.app.secretName: the Secret is filled with the skills GitHub App's installation token" -}}
 {{- end -}}
-{{- printf "tenant-credential-%s-skills-token" (include "agent-manager.fullname" .) -}}
+{{- printf "%s-skills-token" (include "agent-manager.fullname" .) -}}
 {{- else -}}
 {{- .Values.skills.gitAuthSecretName -}}
 {{- end -}}
@@ -262,14 +264,14 @@ the one Secret name an agent's git credentialRef may carry.
 
 {{/*
 The earlier names of the installation's skills boot Secret, a JSON list:
-skills.previousGitAuthSecretNames and, when minting, the minted Secret's name
-before the tenant-credential- prefix. Agents naming one are moved to the
-current name; while minting, each is rendered and kept filled as well.
+skills.previousGitAuthSecretNames and, when minting, the minted Secret's
+earlier name under the tenant-credential- prefix. Agents naming one are moved
+to the current name; while minting, each is rendered and kept filled as well.
 */}}
 {{- define "agent-manager.skillsGitAuthPreviousSecretNames" -}}
 {{- $names := list -}}
 {{- if .Values.skills.mintGitAuthSecret -}}
-{{- $names = append $names (printf "%s-skills-token" (include "agent-manager.fullname" .)) -}}
+{{- $names = append $names (printf "tenant-credential-%s-skills-token" (include "agent-manager.fullname" .)) -}}
 {{- end -}}
 {{- $current := include "agent-manager.skillsGitAuthSecretName" . -}}
 {{- range .Values.skills.previousGitAuthSecretNames -}}
