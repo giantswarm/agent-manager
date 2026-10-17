@@ -68,6 +68,12 @@ var (
 
 func newService(t *testing.T) (*agents.Service, *dynamicfake.FakeDynamicClient) {
 	t.Helper()
+	return newServiceAllowed(t, true)
+}
+
+// newServiceAllowed answers every create-access review with allowed.
+func newServiceAllowed(t *testing.T, allowed bool) (*agents.Service, *dynamicfake.FakeDynamicClient) {
+	t.Helper()
 	mc := &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "api.kagent.dev/v1alpha3", "kind": "ModelConfig",
 		"metadata": map[string]any{"name": "default-model-config", "namespace": "kagent"},
@@ -79,7 +85,7 @@ func newService(t *testing.T) (*agents.Service, *dynamicfake.FakeDynamicClient) 
 	typed := kubefake.NewClientset()
 	typed.PrependReactor("create", "selfsubjectaccessreviews", func(a k8stesting.Action) (bool, runtime.Object, error) {
 		review := a.(k8stesting.CreateAction).GetObject().(*authorizationv1.SelfSubjectAccessReview)
-		review.Status.Allowed = true
+		review.Status.Allowed = allowed
 		return true, review, nil
 	})
 	client := kube.FromInterfaces(dyn, typed, typed.Discovery())
@@ -520,4 +526,30 @@ func TestStatusForMapsEverySentinel(t *testing.T) {
 		assert.Equal(t, tc.status, status, tc.code)
 		assert.Equal(t, tc.code, code)
 	}
+}
+
+// The MCP error leads with the code once: the sentinel's own text is not
+// repeated after it.
+func TestMCPErrorsCarryTheCodeOnce(t *testing.T) {
+	sre := map[string]any{"name": "sre", "modelConfig": "default-model-config", "toolset": []string{"preset:read-only"}}
+
+	svc, _ := newServiceAllowed(t, false)
+	text, isErr := callTool(t, NewMCPServer(svc, "test"), ToolCreateAgent, sre)
+	assert.True(t, isErr)
+	assert.True(t, strings.HasPrefix(text, "forbidden: create HelmRelease kagent/sre: "), text)
+
+	svc, _ = newService(t)
+	srv := NewMCPServer(svc, "test")
+	text, isErr = callTool(t, srv, ToolCreateAgent, sre)
+	require.False(t, isErr, text)
+	text, isErr = callTool(t, srv, ToolCreateAgent, sre)
+	assert.True(t, isErr)
+	assert.True(t, strings.HasPrefix(text, "conflict: HelmRelease kagent/sre already exists"), text)
+
+	for _, c := range errorCodes {
+		got := errResult(fmt.Errorf("%w: detail", c.sentinel)).Content[0].(mcp.TextContent).Text
+		assert.Equal(t, c.code+": detail", got)
+	}
+	got := errResult(errors.New("boom")).Content[0].(mcp.TextContent).Text
+	assert.Equal(t, "backend_error: boom", got)
 }
