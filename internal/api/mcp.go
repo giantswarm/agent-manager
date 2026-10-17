@@ -653,7 +653,14 @@ func jsonResult(v any) (*mcp.CallToolResult, error) {
 	return mcp.NewToolResultText(string(data)), nil
 }
 
+// errResult answers "<code>: <message>". A domain error's message leads with
+// its sentinel ("forbidden: create HelmRelease …"); that lead is dropped so
+// the code stands once.
 func errResult(err error) *mcp.CallToolResult {
-	_, code := statusFor(err)
-	return mcp.NewToolResultError(fmt.Sprintf("%s: %s", code, err.Error()))
+	_, code, sentinel := classify(err)
+	msg := err.Error()
+	if sentinel != nil {
+		msg = strings.TrimPrefix(msg, sentinel.Error()+": ")
+	}
+	return mcp.NewToolResultError(code + ": " + msg)
 }

@@ -382,29 +382,39 @@ func (h *REST) writeError(w http.ResponseWriter, err error) {
 	writeJSON(w, status, errorBody{Error: errorDetail{Code: code, Message: err.Error()}})
 }
 
+// errorCodes maps the domain sentinels, in match order, to HTTP status and a
+// stable code clients can switch on.
+var errorCodes = []struct {
+	sentinel error
+	status   int
+	code     string
+}{
+	{agents.ErrNotFound, http.StatusNotFound, "not_found"},
+	{agents.ErrInvalid, http.StatusBadRequest, "invalid_request"},
+	{agents.ErrGitOpsOwned, http.StatusConflict, "gitops_owned"},
+	{agents.ErrAuthRequired, http.StatusUnauthorized, "auth_required"},
+	{agents.ErrConflict, http.StatusConflict, "conflict"},
+	{agents.ErrForbidden, http.StatusForbidden, "forbidden"},
+	{agents.ErrUnauthenticated, http.StatusUnauthorized, "unauthenticated"},
+	{agents.ErrUnsupported, http.StatusNotImplemented, "unsupported"},
+}
+
 // statusFor maps domain errors to HTTP status and a stable code clients can
 // switch on.
 func statusFor(err error) (int, string) {
-	switch {
-	case errors.Is(err, agents.ErrNotFound):
-		return http.StatusNotFound, "not_found"
-	case errors.Is(err, agents.ErrInvalid):
-		return http.StatusBadRequest, "invalid_request"
-	case errors.Is(err, agents.ErrGitOpsOwned):
-		return http.StatusConflict, "gitops_owned"
-	case errors.Is(err, agents.ErrAuthRequired):
-		return http.StatusUnauthorized, "auth_required"
-	case errors.Is(err, agents.ErrConflict):
-		return http.StatusConflict, "conflict"
-	case errors.Is(err, agents.ErrForbidden):
-		return http.StatusForbidden, "forbidden"
-	case errors.Is(err, agents.ErrUnauthenticated):
-		return http.StatusUnauthorized, "unauthenticated"
-	case errors.Is(err, agents.ErrUnsupported):
-		return http.StatusNotImplemented, "unsupported"
-	default:
-		return http.StatusBadGateway, "backend_error"
+	status, code, _ := classify(err)
+	return status, code
+}
+
+// classify is statusFor plus the sentinel that matched, nil for
+// backend_error.
+func classify(err error) (int, string, error) {
+	for _, c := range errorCodes {
+		if errors.Is(err, c.sentinel) {
+			return c.status, c.code, c.sentinel
+		}
 	}
+	return http.StatusBadGateway, "backend_error", nil
 }
 
 // writeCompactJSON answers 200 with v unindented: a session read is bounded
