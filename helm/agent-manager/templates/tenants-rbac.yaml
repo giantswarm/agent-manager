@@ -35,6 +35,10 @@ written here.
 {{- $secret := required "tenants.modelConfig.apiKeySecretName is required with tenants.enabled" .Values.tenants.modelConfig.apiKeySecretName }}
 {{- $netpol := include "agent-manager.tenantNetworkPolicyResource" . | default "{}" | fromJson }}
 {{- $platform := .Values.kagent.namespace }}
+{{- $skillsSecrets := list (include "agent-manager.skillsGitAuthSecretName" .) }}
+{{- if .Values.skills.mintGitAuthSecret }}
+{{- $skillsSecrets = concat $skillsSecrets (include "agent-manager.skillsGitAuthPreviousSecretNames" . | fromJsonArray) }}
+{{- end }}
 ---
 # What the agents' HelmReleases run as in a tenant namespace (helm-controller
 # impersonates the release's ServiceAccount): Secrets (Helm's release storage,
@@ -180,9 +184,10 @@ spec:
       expression: {{ printf "has(namespaceObject.metadata.labels) && 'giantswarm.io/organization' in namespaceObject.metadata.labels && namespaceObject.metadata.name != '%s'" $platform | quote }}
     # What the ServiceAccount's own namespaced Roles grant in the configured
     # namespaces (rbac.yaml, skills-token.yaml): the agents' OCIRepository
-    # without OAuth, and an update of the skills boot Secret.
+    # without OAuth, and an update of the skills boot Secret, under its
+    # current name and, while minting, the previous names it keeps filled.
     - name: configured
-      expression: {{ printf "request.namespace in %s && (request.resource.resource == 'ocirepositories' || (request.resource.resource == 'secrets' && request.operation == 'UPDATE' && request.name == '%s'))" (include "agent-manager.managedNamespaces" . | replace "\"" "'") (include "agent-manager.skillsGitAuthSecretName" .) | quote }}
+      expression: {{ printf "request.namespace in %s && (request.resource.resource == 'ocirepositories' || (request.resource.resource == 'secrets' && request.operation == 'UPDATE' && request.name in %s))" (include "agent-manager.managedNamespaces" . | replace "\"" "'") ($skillsSecrets | toJson | replace "\"" "'") | quote }}
     # The written object read untyped: the policy also matches Secrets and
     # ServiceAccounts, whose types have no roleRef, and the type check of
     # status.typeChecking would flag a typed object.roleRef for them.

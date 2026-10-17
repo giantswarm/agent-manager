@@ -157,6 +157,35 @@ tests:
             operations: ["CREATE", "UPDATE", "DELETE"]
             resources: ["rolebindings"]
 
+  - it: admits in the managed namespaces the update of the skills boot Secret under its current and every previous name it keeps filled, and no other Secret
+    template: templates/tenants-rbac.yaml
+    documentIndex: 3
+    set:
+      kagent:
+        additionalNamespaces: [agents]
+      skills:
+        mintGitAuthSecret: true
+        github:
+          app:
+            secretName: skills-app
+        previousGitAuthSecretNames: [old-skills-token]
+    asserts:
+      - equal:
+          path: spec.variables[1].expression
+          value: request.namespace in ['kagent','agents'] && (request.resource.resource == 'ocirepositories' || (request.resource.resource == 'secrets' && request.operation == 'UPDATE' && request.name in ['RELEASE-NAME-agent-manager-skills-token','tenant-credential-RELEASE-NAME-agent-manager-skills-token','old-skills-token']))
+
+  - it: admits only the configured skills Secret without minting, where agent-manager fills no previous name
+    template: templates/tenants-rbac.yaml
+    documentIndex: 3
+    set:
+      skills:
+        gitAuthSecretName: skills-token
+        previousGitAuthSecretNames: [old-skills-token]
+    asserts:
+      - equal:
+          path: spec.variables[1].expression
+          value: request.namespace in ['kagent'] && (request.resource.resource == 'ocirepositories' || (request.resource.resource == 'secrets' && request.operation == 'UPDATE' && request.name in ['skills-token']))
+
   - it: denies what the policy refuses
     template: templates/tenants-rbac.yaml
     documentIndex: 4
