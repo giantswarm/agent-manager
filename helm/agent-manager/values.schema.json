@@ -355,6 +355,10 @@
             "type": "object",
             "additionalProperties": false,
             "properties": {
+                "actorBearer": {
+                    "type": "boolean",
+                    "description": "Bind every session's sandbox actor at `bindingsUrl` with the reserved provider `muster` beside its workspace providers, so muster serves the sandbox's own MCP calls as the person who started the session, by the actor JWT Substrate's egress gateway injects on muster's host. Turn on only with muster's `credentialProvider.actorBearer`: muster refuses the provider otherwise, and the session is not started. Needs `bindingsUrl`."
+                },
                 "bindingsUrl": {
                     "type": "string",
                     "description": "muster's session bindings endpoint: `start_session` binds a workspace session's sandbox actor to the caller there, as the caller, before its first turn, and `delete_session` unbinds it, so muster releases the person's provider token to that sandbox alone. Rendered with the session tools (`oauth.enabled` and `kagent.controllerTarget`); empty refuses a workspace grant. With `networkPolicy.enabled` the policy opens egress to it: the Service's namespace for an in-cluster host, every address otherwise."
