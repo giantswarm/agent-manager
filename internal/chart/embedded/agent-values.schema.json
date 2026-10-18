@@ -3,10 +3,7 @@
     "$defs": {
         "plugin.schema.json": {
             "$schema": "https://json-schema.org/draft/2020-12/schema",
-            "$comment": "One entry of the `plugins` value: an Agent Plugins bundle pinned to an immutable source, with the skills to enable from it. Referenced from values.yaml (`plugins: [] # @schema itemRef:plugin.schema.json`) and bundled into values.schema.json by the helm-schema pre-commit hook. The source rules mirror skill.schema.json and what the api.kagent.dev/v1alpha3 AgentTemplateSpec refuses at admission (plugins[].source), so a branch, a tag, a short SHA or an OCI tag fails `helm template` instead of the API server.",
-            "required": [
-                "skills"
-            ],
+            "$comment": "One entry of the `plugins` value: a plugin pinned to an immutable source, with the skills to enable from it. Referenced from values.yaml (`plugins: [] # @schema itemRef:plugin.schema.json`) and bundled into values.schema.json by the helm-schema pre-commit hook. The source rules mirror skill.schema.json and what the api.kagent.dev/v1alpha3 AgentTemplateSpec refuses at admission (plugins[].source), so a branch, a tag, a short SHA or an OCI tag fails `helm template` instead of the API server.",
             "additionalProperties": false,
             "properties": {
                 "git": {
@@ -44,13 +41,12 @@
                 },
                 "skills": {
                     "type": "array",
-                    "description": "Names of the bundle's skills to enable; at least one, unique. A plugin enables nothing else.",
+                    "description": "Names of the skills to enable from an Agent Plugins format package (`plugin.json` at its root), unique; omitted or empty enables none of its skills, while its `mcp.json` servers still load. A Claude Code format plugin (`.claude-plugin/plugin.json`) loads whole on the `claude` Harness (`--plugin-dir`: its skills, hooks, commands and subagents) and needs no selection; the Harness ignores one.",
                     "items": {
                         "type": "string",
                         "minLength": 1
                     },
                     "maxItems": 50,
-                    "minItems": 1,
                     "uniqueItems": true
                 }
             },
@@ -392,7 +388,7 @@
         },
         "plugins": {
             "type": "array",
-            "description": "Agent Plugins bundles, each pinned to an immutable source like a skill, with the skills to enable from the bundle. An entry is `{git: {url, commit}, path, skills: [...]}` or `{oci: <ref@sha256:...>, path, skills: [...]}`; `skills` names the bundle's skills to enable (at least one, unique) and is the only selection: a plugin enables nothing else. Rendered into the Agent's spec.template.plugins[] as `{source: {git | oci, path}, skills}`. The pinning rules of `skills` apply (a branch, a tag, a short SHA or an OCI tag fails the render), and `skillsGitAuthSecretRef` reaches every git plugin the way it reaches every git skill.",
+            "description": "Plugins, each pinned to an immutable source like a skill. An entry is `{git: {url, commit}, path, skills: [...]}` or `{oci: <ref@sha256:...>, path, skills: [...]}`. An Agent Plugins format package (`plugin.json` at its root) enables only the skills `skills` names (optional, unique, never a name `skills[]` or another plugin already uses), and its `mcp.json` servers load either way. A Claude Code format plugin (`.claude-plugin/plugin.json`) loads whole on the `claude` Harness, its hooks, commands and subagents included, and needs no `skills`. Rendered into the Agent's spec.template.plugins[] as `{source: {git | oci, path}, skills}`, `skills` only when set. The pinning rules of `skills[]` apply (a branch, a tag, a short SHA or an OCI tag fails the render), and `skillsGitAuthSecretRef` reaches every git plugin the way it reaches every git skill.",
             "items": {
                 "$ref": "#/$defs/plugin.schema.json"
             },

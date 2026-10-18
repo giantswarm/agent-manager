@@ -25,7 +25,7 @@ Generated from the registered tools (`make tools-doc`); through muster every too
 ```text
 Create an agent: a HelmRelease of the Generic agent chart. It needs a toolset; confirm its name with the person.
 
-name is the DNS-1123 name the person chose, never derived from displayName. modelConfig must exist in the namespace (list_model_configs; a refusal names the valid ones). Skills are pinned at write time (list_skills), plugins must come pinned and the values are checked against the chart schema; a failure writes nothing. Presets: preset:read-only, preset:none, preset:infrastructure, preset:agent-platform, preset:full. Poll get_agent_status until ready.
+name is the DNS-1123 name the person chose, never derived from displayName. modelConfig must exist in the namespace (list_model_configs; a refusal names the valid ones). Skills and plugins are pinned at write time (list_skills) and the values are checked against the chart schema; a failure writes nothing. Presets: preset:read-only, preset:none, preset:infrastructure, preset:agent-platform, preset:full. Poll get_agent_status until ready.
 ```
 
 ```json
@@ -115,13 +115,17 @@ name is the DNS-1123 name the person chose, never derived from displayName. mode
       "type": "string"
     },
     "plugins": {
-      "description": "Agent Plugins bundles to enable skills from: {git: {url, commit} or oci: <ref>@sha256:<digest>, path, skills} entries, pinned.",
+      "description": "Plugins the agent loads: {git: {url, ref | commit} or oci: <reference>, path, skills} entries, pinned at write time.",
       "items": {
         "properties": {
           "git": {
             "properties": {
               "commit": {
-                "description": "Full commit id (40 or 64 hex characters); a ref is refused",
+                "description": "Full commit id (40 or 64 hex characters) to pin",
+                "type": "string"
+              },
+              "ref": {
+                "description": "Branch or tag to resolve to its head commit at write time; omit for the default branch",
                 "type": "string"
               },
               "url": {
@@ -130,30 +134,26 @@ name is the DNS-1123 name the person chose, never derived from displayName. mode
               }
             },
             "required": [
-              "url",
-              "commit"
+              "url"
             ],
             "type": "object"
           },
           "oci": {
-            "description": "Digest-pinned image reference: <registry>/<repository>@sha256:<digest>",
+            "description": "OCI reference: <registry>/<repository>:<tag> (resolved to its digest) or <registry>/<repository>@sha256:<digest>",
             "type": "string"
           },
           "path": {
-            "description": "Directory of the bundle within the artifact, relative without '..'; empty for the root",
+            "description": "Directory of the plugin within the artifact, relative without '..'; empty for the root",
             "type": "string"
           },
           "skills": {
-            "description": "Names of the bundle's skills to enable; at least one",
+            "description": "Skills to enable from an Agent Plugins format package, unique, never a name skills or another plugin uses; omit for a Claude Code format plugin",
             "items": {
               "type": "string"
             },
             "type": "array"
           }
         },
-        "required": [
-          "skills"
-        ],
         "type": "object"
       },
       "type": "array"
@@ -650,7 +650,7 @@ Refused with conflict while the agent has no ready revision (get_agent_status). 
 ```text
 Change an agent: only the fields passed change; a list, labels or annotations replaces the whole value.
 
-Lists are skills, plugins, egress and toolset. "" clears a text field back to the chart default; gitAuthSecretName "" goes back to the installation's. Presets: preset:read-only, preset:none, preset:infrastructure, preset:agent-platform, preset:full. refreshSkills re-pins every git skill. The Harness is fixed at create. Returns the values before and after. A suspended release is refused unless force is true; a GitOps-owned one needs mode commit.
+Lists are skills, plugins, egress and toolset. "" clears a text field back to the chart default; gitAuthSecretName "" goes back to the installation's. Presets: preset:read-only, preset:none, preset:infrastructure, preset:agent-platform, preset:full. refreshSkills re-pins every git skill and git plugin. The Harness is fixed at create. Returns the values before and after. A suspended release is refused unless force is true; a GitOps-owned one needs mode commit.
 ```
 
 ```json
@@ -740,13 +740,17 @@ Lists are skills, plugins, egress and toolset. "" clears a text field back to th
       "type": "string"
     },
     "plugins": {
-      "description": "Replaces the whole plugin list ([] clears it): {git: {url, commit} or oci: <ref>@sha256:<digest>, path, skills} entries, pinned.",
+      "description": "Replaces the whole plugin list ([] clears it): {git: {url, ref | commit} or oci: <reference>, path, skills} entries, pinned at write time.",
       "items": {
         "properties": {
           "git": {
             "properties": {
               "commit": {
-                "description": "Full commit id (40 or 64 hex characters); a ref is refused",
+                "description": "Full commit id (40 or 64 hex characters) to pin",
+                "type": "string"
+              },
+              "ref": {
+                "description": "Branch or tag to resolve to its head commit at write time; omit for the default branch",
                 "type": "string"
               },
               "url": {
@@ -755,36 +759,32 @@ Lists are skills, plugins, egress and toolset. "" clears a text field back to th
               }
             },
             "required": [
-              "url",
-              "commit"
+              "url"
             ],
             "type": "object"
           },
           "oci": {
-            "description": "Digest-pinned image reference: <registry>/<repository>@sha256:<digest>",
+            "description": "OCI reference: <registry>/<repository>:<tag> (resolved to its digest) or <registry>/<repository>@sha256:<digest>",
             "type": "string"
           },
           "path": {
-            "description": "Directory of the bundle within the artifact, relative without '..'; empty for the root",
+            "description": "Directory of the plugin within the artifact, relative without '..'; empty for the root",
             "type": "string"
           },
           "skills": {
-            "description": "Names of the bundle's skills to enable; at least one",
+            "description": "Skills to enable from an Agent Plugins format package, unique, never a name skills or another plugin uses; omit for a Claude Code format plugin",
             "items": {
               "type": "string"
             },
             "type": "array"
           }
         },
-        "required": [
-          "skills"
-        ],
         "type": "object"
       },
       "type": "array"
     },
     "refreshSkills": {
-      "description": "Re-pin every git skill to its default-branch head and change nothing else on the release (default false).",
+      "description": "Re-pin every git skill and git plugin to its default-branch head and change nothing else on the release (default false).",
       "type": "boolean"
     },
     "repository": {
@@ -856,7 +856,7 @@ Lists are skills, plugins, egress and toolset. "" clears a text field back to th
 ```text
 Dry run of create_agent, or of update_agent with update: true: the manifests and every violation. Writes nothing.
 
-Checks the name, modelConfig, harness and toolset (required for a create), pins the skills, checks the plugins are pinned and validates the values against the chart schema. mode answers as the write would. With update: true, lists, labels and annotations replace the whole value, as in update_agent.
+Checks the name, modelConfig, harness and toolset (required for a create), pins the skills and plugins and validates the values against the chart schema. mode answers as the write would. With update: true, lists, labels and annotations replace the whole value, as in update_agent.
 ```
 
 ```json
@@ -938,13 +938,17 @@ Checks the name, modelConfig, harness and toolset (required for a create), pins 
       "type": "string"
     },
     "plugins": {
-      "description": "Agent Plugins bundles to enable skills from: {git: {url, commit} or oci: <ref>@sha256:<digest>, path, skills} entries, pinned.",
+      "description": "Plugins the agent loads: {git: {url, ref | commit} or oci: <reference>, path, skills} entries, pinned at write time.",
       "items": {
         "properties": {
           "git": {
             "properties": {
               "commit": {
-                "description": "Full commit id (40 or 64 hex characters); a ref is refused",
+                "description": "Full commit id (40 or 64 hex characters) to pin",
+                "type": "string"
+              },
+              "ref": {
+                "description": "Branch or tag to resolve to its head commit at write time; omit for the default branch",
                 "type": "string"
               },
               "url": {
@@ -953,36 +957,32 @@ Checks the name, modelConfig, harness and toolset (required for a create), pins 
               }
             },
             "required": [
-              "url",
-              "commit"
+              "url"
             ],
             "type": "object"
           },
           "oci": {
-            "description": "Digest-pinned image reference: <registry>/<repository>@sha256:<digest>",
+            "description": "OCI reference: <registry>/<repository>:<tag> (resolved to its digest) or <registry>/<repository>@sha256:<digest>",
             "type": "string"
           },
           "path": {
-            "description": "Directory of the bundle within the artifact, relative without '..'; empty for the root",
+            "description": "Directory of the plugin within the artifact, relative without '..'; empty for the root",
             "type": "string"
           },
           "skills": {
-            "description": "Names of the bundle's skills to enable; at least one",
+            "description": "Skills to enable from an Agent Plugins format package, unique, never a name skills or another plugin uses; omit for a Claude Code format plugin",
             "items": {
               "type": "string"
             },
             "type": "array"
           }
         },
-        "required": [
-          "skills"
-        ],
         "type": "object"
       },
       "type": "array"
     },
     "refreshSkills": {
-      "description": "Re-pin every git skill to its default-branch head and change nothing else on the release (default false).",
+      "description": "Re-pin every git skill and git plugin to its default-branch head and change nothing else on the release (default false).",
       "type": "boolean"
     },
     "skills": {

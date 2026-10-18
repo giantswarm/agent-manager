@@ -174,19 +174,19 @@ func (s *Skills) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-// Plugin is one plugins[] entry of the Generic chart values: an Agent Plugins
-// bundle at an immutable source plus the names of the bundle's skills to
-// enable. Unlike a skill, a plugin's source is written as given: a git
-// commit or an OCI digest, never a ref to resolve.
+// Plugin is one plugins[] entry of the Generic chart values: a plugin at an
+// immutable source plus, for an Agent Plugins format package, the names of
+// its skills to enable. Its source is pinned at write time as a skill's is.
 type Plugin struct {
-	// Path is the bundle's directory within the artifact; empty for the root.
+	// Path is the plugin's directory within the artifact; empty for the root.
 	Path string `json:"path,omitempty"`
-	// Git is the git source: URL and Commit (Ref is refused).
+	// Git is the git source: URL plus Ref (resolved at write time) or Commit.
 	Git *GitSkill `json:"git,omitempty"`
-	// OCI is the digest-pinned image reference.
+	// OCI is the image reference; a tag is resolved to its digest.
 	OCI string `json:"oci,omitempty"`
-	// Skills names the bundle's skills to enable; at least one, unique.
-	Skills []string `json:"skills"`
+	// Skills names the skills an Agent Plugins format package enables;
+	// optional, unique. A Claude Code format plugin loads whole and needs none.
+	Skills []string `json:"skills,omitempty"`
 }
 
 // Plugins is an agent's plugin list.
@@ -222,7 +222,7 @@ type Spec struct {
 	IconURL string `json:"iconUrl,omitempty"`
 	// Skills the agent mounts; every entry is pinned before it is written.
 	Skills Skills `json:"skills,omitempty"`
-	// Plugins the agent enables skills from; every entry comes pinned.
+	// Plugins the agent loads; every entry is pinned before it is written.
 	Plugins Plugins `json:"plugins,omitempty"`
 	// Egress lists the HTTP(S) origins the agent may reach besides what its
 	// revision compiles (chart value agent.egress, the Agent's spec.egress),
@@ -272,9 +272,10 @@ type Update struct {
 	Toolset           *[]string          `json:"toolset,omitempty"`
 	Labels            *map[string]string `json:"labels,omitempty"`
 	Annotations       *map[string]string `json:"annotations,omitempty"`
-	// RefreshSkills re-resolves every git skill of the agent to the head of
-	// its repository's default branch — a skill passed in Skills with a Ref
-	// goes to that ref's head — and changes nothing else on the release.
+	// RefreshSkills re-resolves every git skill and git plugin of the agent
+	// to the head of its repository's default branch — an entry passed in
+	// Skills or Plugins with a Ref goes to that ref's head — and changes
+	// nothing else on the release.
 	RefreshSkills bool `json:"refreshSkills,omitempty"`
 	// Removed arguments: see Spec.
 	RemovedToolNames json.RawMessage `json:"toolNames,omitempty"`

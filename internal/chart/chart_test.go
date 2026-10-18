@@ -152,7 +152,7 @@ func TestEmbeddedSchemaIsTheChartContract(t *testing.T) {
 	plugins := props["plugins"].(map[string]any)
 	assert.Equal(t, "#/$defs/plugin.schema.json", plugins["items"].(map[string]any)["$ref"], "the chart bundles its plugin schema")
 	plugin := doc["$defs"].(map[string]any)["plugin.schema.json"].(map[string]any)
-	assert.Equal(t, []any{"skills"}, plugin["required"])
+	assert.NotContains(t, plugin, "required", "the skill selection is optional: a Claude Code format plugin loads whole")
 	for _, kept := range []string{"toolset", "extraTools", "extraAgentSpec", "labels", "annotations", "modelConfig"} {
 		assert.Contains(t, props, kept)
 	}
