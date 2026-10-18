@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - A session's sandbox calls muster as the person who started it: with `--muster-actor-bearer` (`AGENT_MANAGER_MUSTER_ACTOR_BEARER`, chart `muster.actorBearer`, off by default, needs the bindings URL) `start_session` binds every session's Substrate actor at muster's session bindings, as the caller, with the reserved provider `muster` beside its workspace providers, before its first message; muster then serves the actor JWT Substrate's egress gateway injects on its host as that person, and no credential is in the sandbox. A session without a Substrate actor and without a workspace provider is not bound; a bind muster refuses deletes the session again; `delete_session` unbinds it. Turn it on only with muster's `credentialProvider.actorBearer`, which muster needs to accept the provider ([giantswarm#38064](https://github.com/giantswarm/giantswarm/issues/38064)).
 
+## [2.5.0] - 2026-10-17
+
 ### Fixed
 
 - The tenant admission policy `agent-manager-tenants` admits the refresh of the skills boot Secret under every previous name the chart renders while minting (`skills.previousGitAuthSecretNames` and the `tenant-credential-` name), not only the current name: agent-manager no longer logs `skills boot Secret refresh failed` every minute, and an agent still naming a previous name keeps a fresh token until it is migrated ([agent-manager#197](https://github.com/giantswarm/agent-manager/issues/197)).
@@ -360,7 +362,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Chart: the MCPServer CR carries `agent-platform.giantswarm.io/tool-group: agent-platform` next to `muster.giantswarm.io/type` — the Agent Platform tier of MCP servers (the portal's MCP servers page, the `agent-platform` toolset preset). `muster.mcpServer.labels` still adds or overrides labels. (#23)
 
-[Unreleased]: https://github.com/giantswarm/agent-manager/compare/v2.5.0-rc.4...HEAD
+[Unreleased]: https://github.com/giantswarm/agent-manager/compare/v2.5.0...HEAD
+[2.5.0]: https://github.com/giantswarm/agent-manager/compare/v2.5.0-rc.4...v2.5.0
 [2.5.0-rc.4]: https://github.com/giantswarm/agent-manager/compare/v2.5.0-rc.2...v2.5.0-rc.4
 [2.5.0-rc.2]: https://github.com/giantswarm/agent-manager/compare/v2.5.0-rc.1...v2.5.0-rc.2
 [2.5.0-rc.1]: https://github.com/giantswarm/agent-manager/compare/v2.4.1-rc.2...v2.5.0-rc.1
