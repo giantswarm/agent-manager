@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `create_agent`, `validate_agent` and `update_agent` pin `plugins[]` at write time the way they pin skills: a git plugin's `ref` (or its default branch) resolves to its head commit, an OCI plugin's tag to its digest, and `refreshSkills` re-pins every git plugin too. A plugin's skill selection is optional, as in the Generic chart 2.1: a Claude Code format plugin loads whole and needs none. A skill name used twice across `skills` and the plugins' selections is refused, and a git plugin from a repository the caller cannot read is refused like a skill. The embedded chart schema is 2.1.0 ([giantswarm#38077](https://github.com/giantswarm/giantswarm/issues/38077)).
 
+## [2.5.1-rc.1] - 2026-10-18
+
 ### Changed
 
 - A workspace session's binding in muster carries the reserved provider `muster` when kagent admitted the session to it (where muster verifies Substrate's actor JWT), so muster serves the session's sandbox as the person who started it; agent-manager binds the providers kagent lists and never adds `muster` itself ([giantswarm#38064](https://github.com/giantswarm/giantswarm/issues/38064)).
@@ -366,7 +368,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Chart: the MCPServer CR carries `agent-platform.giantswarm.io/tool-group: agent-platform` next to `muster.giantswarm.io/type` — the Agent Platform tier of MCP servers (the portal's MCP servers page, the `agent-platform` toolset preset). `muster.mcpServer.labels` still adds or overrides labels. (#23)
 
-[Unreleased]: https://github.com/giantswarm/agent-manager/compare/v2.5.0...HEAD
+[Unreleased]: https://github.com/giantswarm/agent-manager/compare/v2.5.1-rc.1...HEAD
+[2.5.1-rc.1]: https://github.com/giantswarm/agent-manager/compare/v2.5.0...v2.5.1-rc.1
 [2.5.0]: https://github.com/giantswarm/agent-manager/compare/v2.5.0-rc.4...v2.5.0
 [2.5.0-rc.4]: https://github.com/giantswarm/agent-manager/compare/v2.5.0-rc.2...v2.5.0-rc.4
 [2.5.0-rc.2]: https://github.com/giantswarm/agent-manager/compare/v2.5.0-rc.1...v2.5.0-rc.2
