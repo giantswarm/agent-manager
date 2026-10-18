@@ -366,7 +366,7 @@ func TestOneDefinitionOnEveryCodingHarness(t *testing.T) {
 		assert.True(t, dry.Valid, "on %s: %v", h, dry.Errors)
 	}
 
-	claudePlugin := Plugin{Path: "claude-format", Git: &GitSkill{URL: skillsRepo, Commit: tagHead}, Skills: []string{"triage"}}
+	claudePlugin := Plugin{Path: "claude-format", Git: &GitSkill{URL: skillsRepo, Commit: tagHead}}
 	agentPlugin := Plugin{Path: "bundles/sre", Git: &GitSkill{URL: skillsRepo, Commit: tagHead}, Skills: []string{"triage"}}
 	spec := coderSpec("preset:full")
 	spec.Harness, spec.ModelConfig = "codex", "gpt-responses"

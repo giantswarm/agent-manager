@@ -35,8 +35,8 @@ make helm-docs          # regenerate helm/agent-manager/README.md
   an image tag to its digest.
 - `internal/agents` — the domain: `compose.go` mirrors the portal's
   `composeManifests.ts` (chart 2.x values, HelmRelease, OCIRepository),
-  `skills.go` validates and pins skill entries, `plugins.go` validates plugin
-  entries, `validate.go`
+  `skills.go` validates and pins skill entries, `plugins.go` validates and
+  pins plugin entries, `validate.go`
   runs the chart schema, `service.go` is list/get/create/update/delete plus
   model configs (the read model comes from the Agent object, the agent's
   RemoteMCPServer and the owning HelmRelease) and `status.go` folds the

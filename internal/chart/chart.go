@@ -32,7 +32,7 @@ import (
 // `muster.url`, `muster.tools`,
 // `muster.discovery`; none of the 0.x runtime keys; `skillsGitAuthSecretRef`,
 // the one read credential of every private git skill and plugin.
-const EmbeddedSchemaVersion = "2.0.0"
+const EmbeddedSchemaVersion = "2.1.0"
 
 //go:embed embedded/agent-values.schema.json
 var embeddedSchema []byte

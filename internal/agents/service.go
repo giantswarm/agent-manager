@@ -717,6 +717,9 @@ func checkSpec(spec Spec) []error {
 	if err := ValidatePlugins(spec.Plugins); err != nil {
 		errs = append(errs, err)
 	}
+	if err := validateSkillNames(spec.Skills, spec.Plugins); err != nil {
+		errs = append(errs, err)
+	}
 	if err := ValidateEgress(spec.Egress); err != nil {
 		errs = append(errs, err)
 	}
@@ -845,6 +848,14 @@ func (s *Service) ValidateCreate(ctx context.Context, spec Spec) (*ValidateResul
 		res.addError(err)
 	} else {
 		spec.Skills = pinned
+	}
+	if err := requireReadablePlugins(ctx, s.pinner, spec.Plugins); err != nil {
+		res.addError(err)
+	}
+	if pinned, err := pinPlugins(ctx, s.pinner, spec.Plugins, false); err != nil {
+		res.addError(err)
+	} else {
+		spec.Plugins = pinned
 	}
 	values := BuildValues(spec, st.compose)
 	setCreator(values, identity.Caller(ctx))
@@ -990,7 +1001,7 @@ func isDomainError(err error) bool {
 // ---- create --------------------------------------------------------------------
 
 // Create composes and applies the OCIRepository (when missing) and the
-// HelmRelease of a new agent after pinning its skills and validating the
+// HelmRelease of a new agent after pinning its skills and plugins and validating the
 // values against the chart schema. Nothing is written when a check fails, or
 // on a dry run. In commit mode the two land as files of a pull request in the
 // repository that owns the namespace instead.
@@ -1037,6 +1048,12 @@ func (s *Service) Create(ctx context.Context, spec Spec) (*CreateResult, error) 
 		return nil, err
 	}
 	if spec.Skills, err = pinSkills(ctx, s.pinner, spec.Skills, false); err != nil {
+		return nil, err
+	}
+	if err := requireReadablePlugins(ctx, s.pinner, spec.Plugins); err != nil {
+		return nil, err
+	}
+	if spec.Plugins, err = pinPlugins(ctx, s.pinner, spec.Plugins, false); err != nil {
 		return nil, err
 	}
 	values := BuildValues(spec, st.compose)
@@ -1202,9 +1219,9 @@ func mergeSkillsGitAuth(values map[string]any, own *string, cfg ComposeConfig) {
 }
 
 // mergedValues applies an Update to the release's current values and returns
-// (after, before). Skills given replace the list and are pinned; refreshSkills
-// re-pins every git skill to the head of its ref (the default branch unless
-// the request names one).
+// (after, before). Skills or plugins given replace their list and are pinned;
+// refreshSkills re-pins every git skill and git plugin to the head of its ref
+// (the default branch unless the request names one).
 func (s *Service) mergedValues(ctx context.Context, st *site, upd Update, hr *unstructured.Unstructured) (map[string]any, map[string]any, error) {
 	if upd.SystemMessage != nil {
 		if err := ValidateSystemMessage(*upd.SystemMessage); err != nil {
@@ -1268,14 +1285,30 @@ func (s *Service) mergedValues(ctx context.Context, st *site, upd Update, hr *un
 			delete(after, "skills")
 		}
 	}
-	if upd.Plugins != nil {
-		if err := ValidatePlugins(*upd.Plugins); err != nil {
+	if upd.Plugins != nil || upd.RefreshSkills {
+		list := pluginsFromValues(after)
+		if upd.Plugins != nil {
+			list = *upd.Plugins
+			if err := ValidatePlugins(list); err != nil {
+				return after, before, err
+			}
+			if err := requireReadablePlugins(ctx, s.pinner, list); err != nil {
+				return after, before, err
+			}
+		}
+		pinned, err := pinPlugins(ctx, s.pinner, list, upd.RefreshSkills)
+		if err != nil {
 			return after, before, err
 		}
-		if pl := pluginsValues(*upd.Plugins); pl != nil {
+		if pl := pluginsValues(pinned); pl != nil {
 			after["plugins"] = pl
 		} else {
 			delete(after, "plugins")
+		}
+	}
+	if upd.Skills != nil || upd.Plugins != nil {
+		if err := validateSkillNames(skillsFromValues(after), pluginsFromValues(after)); err != nil {
+			return after, before, err
 		}
 	}
 	mergeSkillsGitAuth(after, upd.GitAuthSecretName, st.compose)

@@ -141,7 +141,7 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 	gitAuthReplaceProp := mcp.WithString(argGitAuthSecret, mcp.Description(gitAuthDesc+"; \"\" goes back to it"))
 	skillsProp := mcp.WithArray(argSkills, mcp.Description(skillDesc), mcp.Items(skillEntry))
 	skillsReplaceProp := mcp.WithArray(argSkills, mcp.Description("Replaces the whole skill list: "+skillShape+"."), mcp.Items(skillEntry))
-	refreshSkillsProp := mcp.WithBoolean(argRefreshSkills, mcp.Description("Re-pin every git skill to its default-branch head and change nothing else on the release (default false)."))
+	refreshSkillsProp := mcp.WithBoolean(argRefreshSkills, mcp.Description("Re-pin every git skill and git plugin to its default-branch head and change nothing else on the release (default false)."))
 	selectorShape := "preset:<name>, server:<name>, workflow:<name> or tool:<name> selectors, at most 32"
 	toolsetDesc := "Gateway tools the agent may use: " + selectorShape + "; preset:none means no tools."
 	presetsSentence := "Presets: " + strings.Join(agents.PresetSelectors(), ", ") + "."
@@ -152,23 +152,23 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 	annotationsProp := mcp.WithObject(argAnnotations, mcp.Description("Extra annotations on the Agent object (string values)."), mcp.AdditionalProperties(stringSchema))
 	labelsReplaceProp := mcp.WithObject(argLabels, mcp.Description("Replaces all extra labels on the Agent object ({} clears them); pass every label to keep."), mcp.AdditionalProperties(stringSchema))
 	annotationsReplaceProp := mcp.WithObject(argAnnotations, mcp.Description("Replaces all extra annotations on the Agent ({} clears them; the creator annotation always stays); pass every one to keep."), mcp.AdditionalProperties(stringSchema))
-	pluginShape := "{git: {url, commit} or oci: <ref>@sha256:<digest>, path, skills} entries, pinned"
-	pluginDesc := "Agent Plugins bundles to enable skills from: " + pluginShape + "."
+	pluginShape := "{git: {url, ref | commit} or oci: <reference>, path, skills} entries, pinned at write time"
+	pluginDesc := "Plugins the agent loads: " + pluginShape + "."
 	pluginEntry := map[string]any{
-		"type":     "object",
-		"required": []string{"skills"},
+		"type": "object",
 		"properties": map[string]any{
-			"path": schemaProp("string", "Directory of the bundle within the artifact, relative without '..'; empty for the root"),
+			"path": schemaProp("string", "Directory of the plugin within the artifact, relative without '..'; empty for the root"),
 			"git": map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"url":    schemaProp("string", "Repository URL (http or https)"),
-					"commit": schemaProp("string", "Full commit id (40 or 64 hex characters); a ref is refused"),
+					"ref":    schemaProp("string", "Branch or tag to resolve to its head commit at write time; omit for the default branch"),
+					"commit": schemaProp("string", "Full commit id (40 or 64 hex characters) to pin"),
 				},
-				"required": []string{"url", "commit"},
+				"required": []string{"url"},
 			},
-			"oci":    schemaProp("string", "Digest-pinned image reference: <registry>/<repository>@sha256:<digest>"),
-			"skills": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, argDescription: "Names of the bundle's skills to enable; at least one"},
+			"oci":    schemaProp("string", "OCI reference: <registry>/<repository>:<tag> (resolved to its digest) or <registry>/<repository>@sha256:<digest>"),
+			"skills": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, argDescription: "Skills to enable from an Agent Plugins format package, unique, never a name skills or another plugin uses; omit for a Claude Code format plugin"},
 		},
 	}
 	pluginsProp := mcp.WithArray(argPlugins, mcp.Description(pluginDesc), mcp.Items(pluginEntry))
@@ -229,7 +229,7 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 
 	s.AddTool(mcp.NewTool(ToolCreateAgent,
 		tooldesc.Describe("Create an agent: a HelmRelease of the Generic agent chart. It needs a toolset; confirm its name with the person.",
-			"name is the DNS-1123 name the person chose, never derived from displayName. modelConfig must exist in the namespace (list_model_configs; a refusal names the valid ones). Skills are pinned at write time (list_skills), plugins must come pinned and the values are checked against the chart schema; a failure writes nothing. "+presetsSentence+" Poll get_agent_status until ready."),
+			"name is the DNS-1123 name the person chose, never derived from displayName. modelConfig must exist in the namespace (list_model_configs; a refusal names the valid ones). Skills and plugins are pinned at write time (list_skills) and the values are checked against the chart schema; a failure writes nothing. "+presetsSentence+" Poll get_agent_status until ready."),
 		mcp.WithString(argName, mcp.Required(), mcp.Description("DNS-1123 technical name (max 63 chars): the HelmRelease and Agent name")),
 		mcp.WithString(argModelConfig, mcp.Required(), mcp.Description("Name of an existing kagent ModelConfig in the namespace (list_model_configs)")),
 		mcp.WithString(argHarness, mcp.Description(harnessDesc)),
@@ -256,7 +256,7 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 
 	s.AddTool(mcp.NewTool(ToolUpdateAgent,
 		tooldesc.Describe("Change an agent: only the fields passed change; a list, labels or annotations replaces the whole value.",
-			"Lists are skills, plugins, egress and toolset. \"\" clears a text field back to the chart default; gitAuthSecretName \"\" goes back to the installation's. "+presetsSentence+" refreshSkills re-pins every git skill. The Harness is fixed at create. Returns the values before and after. A suspended release is refused unless force is true; a GitOps-owned one needs mode commit."),
+			"Lists are skills, plugins, egress and toolset. \"\" clears a text field back to the chart default; gitAuthSecretName \"\" goes back to the installation's. "+presetsSentence+" refreshSkills re-pins every git skill and git plugin. The Harness is fixed at create. Returns the values before and after. A suspended release is refused unless force is true; a GitOps-owned one needs mode commit."),
 		mcp.WithString(argName, mcp.Required(), mcp.Description("Agent name")),
 		mcp.WithString(argDisplayName, mcp.Description("New friendly name; \"\" clears it")),
 		mcp.WithString(argDescription, mcp.Description("New description; \"\" clears it")),
@@ -312,7 +312,7 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 
 	s.AddTool(mcp.NewTool(ToolValidateAgent,
 		tooldesc.Describe("Dry run of create_agent, or of update_agent with update: true: the manifests and every violation. Writes nothing.",
-			"Checks the name, modelConfig, harness and toolset (required for a create), pins the skills, checks the plugins are pinned and validates the values against the chart schema. mode answers as the write would. With update: true, lists, labels and annotations replace the whole value, as in update_agent."),
+			"Checks the name, modelConfig, harness and toolset (required for a create), pins the skills and plugins and validates the values against the chart schema. mode answers as the write would. With update: true, lists, labels and annotations replace the whole value, as in update_agent."),
 		mcp.WithString(argName, mcp.Required(), mcp.Description("Agent name")),
 		mcp.WithString(argModelConfig, mcp.Description("ModelConfig name (required for a create)")),
 		mcp.WithString(argHarness, mcp.Description(harnessDesc)),

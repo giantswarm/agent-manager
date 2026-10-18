@@ -1141,58 +1141,128 @@ func TestCreateOnTheHarnessTheCallerNames(t *testing.T) {
 	assert.Contains(t, dry.Errors, `harness "claude" does not exist in namespace kagent (no Harness there)`)
 }
 
-func TestPluginsComePinnedAndSelectSkills(t *testing.T) {
+func TestPluginsArePinnedAtWriteTime(t *testing.T) {
 	f := seeded(t)
 	f.svc.cfg.Compose.SkillsGitAuthSecretName = "kagent-skills-token"
 	ctx := t.Context()
 	readOnly := []string{"preset:read-only"}
-	pinnedGit := Plugin{Path: "bundles/sre", Git: &GitSkill{URL: skillsRepo, Commit: tagHead}, Skills: []string{"triage", "postmortem"}}
-	pinnedOCI := Plugin{OCI: kubectlRef + "@" + kubectlSum, Skills: []string{"k8s"}}
+	byTag := Plugin{Path: "bundles/sre", Git: &GitSkill{URL: skillsRepo, Ref: "v1.2.0"}, Skills: []string{"triage", "postmortem"}}
+	byImageTag := Plugin{OCI: kubectlRef + ":1.4.0", Skills: []string{"k8s"}}
+	claudeFormat := Plugin{Path: "plugins/commit-commands", Git: &GitSkill{URL: skillsRepo}}
 
-	dry, err := f.svc.ValidateCreate(ctx, Spec{Name: "sre", ModelConfig: "default-model-config", Toolset: readOnly, Plugins: Plugins{pinnedGit, pinnedOCI}})
+	// A ref, the default branch and an image tag are resolved and the pins
+	// written; a Claude Code format plugin needs no selection.
+	dry, err := f.svc.ValidateCreate(ctx, Spec{Name: "sre", ModelConfig: "default-model-config", Toolset: readOnly, Plugins: Plugins{byTag, byImageTag, claudeFormat}})
 	require.NoError(t, err)
 	require.True(t, dry.Valid, dry.Errors)
-	assert.Equal(t, []any{
+	pinnedValues := []any{
 		map[string]any{"git": map[string]any{"url": skillsRepo, "commit": tagHead}, "path": "bundles/sre", "skills": []any{"triage", "postmortem"}},
 		map[string]any{"oci": kubectlRef + "@" + kubectlSum, "skills": []any{"k8s"}},
-	}, dry.Manifests.Values["plugins"], "the chart's plugins list")
+		map[string]any{"git": map[string]any{"url": skillsRepo, "commit": mainHead}, "path": "plugins/commit-commands"},
+	}
+	assert.Equal(t, pinnedValues, dry.Manifests.Values["plugins"], "the chart's plugins list, pinned; no skills key without a selection")
 	assert.Equal(t, map[string]any{"name": "kagent-skills-token"}, dry.Manifests.Values[SkillsGitAuthValuesKey], "a git plugin gets the skills credential")
-	assert.Empty(t, f.pinner.calls, "a plugin is never resolved")
+	assert.ElementsMatch(t, []string{"git " + skillsRepo + "@v1.2.0", "oci " + kubectlRef + ":1.4.0", "git " + skillsRepo + "@"}, f.pinner.calls)
+
+	_, err = f.svc.Create(ctx, Spec{Name: "sre", ModelConfig: "default-model-config", Toolset: readOnly, Plugins: Plugins{byTag, byImageTag, claudeFormat}})
+	require.NoError(t, err)
+	hr, err := f.dyn.Resource(hrGVR).Namespace("kagent").Get(ctx, "sre", metav1.GetOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, pinnedValues, mustValues(hr)["plugins"], "create writes the pins")
+
+	// A pinned source is written as given, without a lookup.
+	f.pinner.calls = nil
+	pinnedOCI := Plugin{OCI: kubectlRef + "@" + kubectlSum, Skills: []string{"k8s"}}
+	_, err = f.svc.ValidateCreate(ctx, Spec{Name: "pinned", ModelConfig: "default-model-config", Toolset: readOnly, Plugins: Plugins{{Git: &GitSkill{URL: skillsRepo, Commit: tagHead}}, pinnedOCI}})
+	require.NoError(t, err)
+	assert.Empty(t, f.pinner.calls, "a pin is never resolved")
 
 	for name, tc := range map[string]struct {
-		plugin Plugin
-		want   string
+		spec Spec
+		want string
 	}{
-		"no source":     {Plugin{Skills: []string{"a"}}, "no source"},
-		"both sources":  {Plugin{Git: pinnedGit.Git, OCI: pinnedOCI.OCI, Skills: []string{"a"}}, "both git and oci"},
-		"a ref":         {Plugin{Git: &GitSkill{URL: skillsRepo, Ref: "main"}, Skills: []string{"a"}}, "git.ref is not accepted"},
-		"short sha":     {Plugin{Git: &GitSkill{URL: skillsRepo, Commit: "abc123"}, Skills: []string{"a"}}, "not a full commit id"},
-		"an image tag":  {Plugin{OCI: kubectlRef + ":1.4.0", Skills: []string{"a"}}, "not digest-pinned"},
-		"no skill":      {Plugin{OCI: pinnedOCI.OCI}, "selects no skill"},
-		"twice":         {Plugin{OCI: pinnedOCI.OCI, Skills: []string{"a", "a"}}, `names "a" twice`},
-		"climbing path": {Plugin{OCI: pinnedOCI.OCI, Path: "../x", Skills: []string{"a"}}, `".."`},
+		"no source":       {Spec{Plugins: Plugins{{Skills: []string{"a"}}}}, "plugins[0] has no source"},
+		"both sources":    {Spec{Plugins: Plugins{{Git: &GitSkill{URL: skillsRepo, Commit: tagHead}, OCI: pinnedOCI.OCI}}}, "plugins[0] has both git and oci"},
+		"ref and commit":  {Spec{Plugins: Plugins{{Git: &GitSkill{URL: skillsRepo, Ref: "main", Commit: tagHead}}}}, "plugins[0] gives both ref"},
+		"short sha":       {Spec{Plugins: Plugins{{Git: &GitSkill{URL: skillsRepo, Commit: "abc123"}}}}, "plugins[0].git.commit \"abc123\" is not a full commit id"},
+		"unknown ref":     {Spec{Plugins: Plugins{{Git: &GitSkill{URL: skillsRepo, Ref: "nope"}}}}, "ref nope of " + skillsRepo},
+		"unknown image":   {Spec{Plugins: Plugins{{OCI: "ghcr.io/x/y:1"}}}, "ghcr.io/x/y:1 could not be resolved"},
+		"twice":           {Spec{Plugins: Plugins{{OCI: pinnedOCI.OCI, Skills: []string{"a", "a"}}}}, `plugins[0].skills names "a" twice`},
+		"climbing path":   {Spec{Plugins: Plugins{{OCI: pinnedOCI.OCI, Path: "../x"}}}, `".."`},
+		"across plugins":  {Spec{Plugins: Plugins{pinnedOCI, {OCI: pinnedOCI.OCI, Skills: []string{"k8s"}}}}, `plugins[1] selects skill "k8s", which plugins[0] already uses`},
+		"a skill's name":  {Spec{Skills: Skills{{Name: "k8s", OCI: pinnedOCI.OCI}}, Plugins: Plugins{pinnedOCI}}, `plugins[0] selects skill "k8s", which skills[0] already uses`},
+		"too many skills": {Spec{Plugins: Plugins{{OCI: pinnedOCI.OCI, Skills: make([]string, MaxPluginSkills+1)}}}, "selects 51 skills"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			_, err := f.svc.Create(ctx, Spec{Name: "sre", ModelConfig: "default-model-config", Toolset: readOnly, Plugins: Plugins{tc.plugin}})
+			spec := tc.spec
+			spec.Name, spec.ModelConfig, spec.Toolset = "refused", "default-model-config", readOnly
+			_, err := f.svc.Create(ctx, spec)
 			require.ErrorIs(t, err, ErrInvalid)
 			assert.Contains(t, err.Error(), tc.want)
-			assert.Contains(t, err.Error(), "plugins[0]")
 		})
 	}
 
-	// An update replaces the list; [] clears it and drops the credential
-	// with the last git source.
-	res, err := f.svc.Update(ctx, Update{Name: "verifier", Plugins: &Plugins{pinnedGit}})
+	// An update replaces the list and pins it; [] clears it and drops the
+	// credential with the last git source.
+	f.pinner.calls = nil
+	res, err := f.svc.Update(ctx, Update{Name: "verifier", Plugins: &Plugins{byTag}})
 	require.NoError(t, err)
 	assert.Equal(t, []string{"plugins", "skillsGitAuthSecretRef.name"}, res.Changed)
-	assert.Equal(t, []any{map[string]any{"git": map[string]any{"url": skillsRepo, "commit": tagHead}, "path": "bundles/sre", "skills": []any{"triage", "postmortem"}}}, res.After["plugins"])
+	assert.Equal(t, pinnedValues[:1], res.After["plugins"])
+	assert.Equal(t, []string{"git " + skillsRepo + "@v1.2.0"}, f.pinner.calls)
+
+	// refreshSkills re-pins every git plugin to its default-branch head, keeps
+	// an OCI pin, and changes nothing else.
+	_, err = f.svc.Update(ctx, Update{Name: "verifier", Plugins: &Plugins{byTag, byImageTag}})
+	require.NoError(t, err)
+	f.pinner.calls = nil
+	res, err = f.svc.Update(ctx, Update{Name: "verifier", RefreshSkills: true})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"plugins"}, res.Changed, "only the plugins moved")
+	assert.Equal(t, []any{
+		map[string]any{"git": map[string]any{"url": skillsRepo, "commit": mainHead}, "path": "bundles/sre", "skills": []any{"triage", "postmortem"}},
+		pinnedValues[1],
+	}, res.After["plugins"], "the tag pin moved to the default-branch head; the OCI pin stayed")
+	assert.Equal(t, res.Before["agent"], res.After["agent"])
+	// refreshSkills with a plugin passed with ref: that ref's head.
+	res, err = f.svc.Update(ctx, Update{Name: "verifier", RefreshSkills: true, Plugins: &Plugins{{Git: &GitSkill{URL: skillsRepo, Ref: "feature"}}}})
+	require.NoError(t, err)
+	assert.Equal(t, []any{map[string]any{"git": map[string]any{"url": skillsRepo, "commit": featureHead}}}, res.After["plugins"])
+
+	// An update that makes a skill name clash is refused.
+	_, err = f.svc.Update(ctx, Update{Name: "verifier", Skills: &Skills{{Name: "runbooks", OCI: pinnedOCI.OCI}}, Plugins: &Plugins{{OCI: pinnedOCI.OCI, Skills: []string{"runbooks"}}}})
+	require.ErrorIs(t, err, ErrInvalid)
+	assert.Contains(t, err.Error(), `plugins[0] selects skill "runbooks", which skills[0] already uses`)
+
 	res, err = f.svc.Update(ctx, Update{Name: "verifier", Plugins: &Plugins{}})
 	require.NoError(t, err)
 	assert.Equal(t, []string{"plugins", "skillsGitAuthSecretRef.name"}, res.Changed)
 	_, hasPlugins := res.After["plugins"]
 	assert.False(t, hasPlugins)
-	_, err = f.svc.Update(ctx, Update{Name: "verifier", Plugins: &Plugins{{OCI: kubectlRef + ":1.4.0", Skills: []string{"a"}}}})
+	_, err = f.svc.Update(ctx, Update{Name: "verifier", Plugins: &Plugins{{OCI: "ghcr.io/x/y:1"}}})
 	require.ErrorIs(t, err, ErrInvalid)
+}
+
+func TestCreateRefusesPluginsFromARepositoryTheCallerCannotRead(t *testing.T) {
+	f := seeded(t)
+	private := Plugins{{Path: "bundles/sre", Git: &GitSkill{URL: privateSkillsRepo, Commit: mainHead}}}
+	spec := Spec{Name: "refused", ModelConfig: "default-model-config", Toolset: []string{"preset:read-only"}, Plugins: private}
+	john := identity.ContextWithGitHub(context.Background(), &identity.GitHub{Login: "john", Token: "ghu_john"})
+
+	_, err := f.svc.Create(john, spec)
+	require.ErrorIs(t, err, ErrForbidden)
+	assert.Contains(t, err.Error(), "plugins[0]")
+	assert.Contains(t, err.Error(), privateSkillsRepo)
+	dry, err := f.svc.ValidateCreate(john, spec)
+	require.NoError(t, err)
+	assert.False(t, dry.Valid)
+	assert.Contains(t, strings.Join(dry.Errors, "\n"), privateSkillsRepo)
+	_, err = f.svc.Update(john, Update{Name: "verifier", Plugins: &private})
+	require.ErrorIs(t, err, ErrForbidden, "an update cannot add what the caller cannot read either")
+
+	jane := identity.ContextWithGitHub(context.Background(), &identity.GitHub{Login: "jane", Token: "ghu_jane"})
+	_, err = f.svc.Create(jane, spec)
+	require.NoError(t, err)
 }
 
 func TestUpdateKeepsTheSkillsCredentialInStep(t *testing.T) {
