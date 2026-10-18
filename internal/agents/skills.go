@@ -14,11 +14,12 @@ import (
 	"github.com/giantswarm/agent-manager/internal/skills"
 )
 
-// A skill is an immutable source: a git repository at a full
+// A skill or a plugin is an immutable source: a git repository at a full
 // commit id, or an OCI image by digest. Callers may still say "this branch",
 // "this tag" or "this image tag" — agent-manager resolves the reference at
 // write time and writes the pin. refreshSkills is the way to move every git
-// skill of an agent to the head of its repository's default branch again.
+// skill and git plugin of an agent to the head of its repository's default
+// branch again.
 
 // SkillPinner resolves mutable skill references to pins (skills.Resolver).
 type SkillPinner interface {
@@ -46,16 +47,41 @@ func gitHubLogin(ctx context.Context) string {
 func requireReadableSkills(ctx context.Context, pinner SkillPinner, list Skills) error {
 	seen := map[string]bool{}
 	for _, sk := range list {
-		if sk.Git == nil || seen[sk.Git.URL] {
+		if sk.Git == nil {
 			continue
 		}
-		seen[sk.Git.URL] = true
-		if err := pinner.RequireReadable(ctx, sk.Git.URL, gitHubLogin(ctx)); err != nil {
-			if errors.Is(err, skills.ErrNotReadable) {
-				return fmt.Errorf("%w: skill %q: %v", ErrForbidden, sk.Name, err)
-			}
-			return invalidf("skill %q: %v", sk.Name, err)
+		if err := requireReadableRepo(ctx, pinner, seen, sk.Git.URL, fmt.Sprintf("skill %q", sk.Name)); err != nil {
+			return err
 		}
+	}
+	return nil
+}
+
+// requireReadablePlugins is requireReadableSkills for git plugins.
+func requireReadablePlugins(ctx context.Context, pinner SkillPinner, list Plugins) error {
+	seen := map[string]bool{}
+	for i, pl := range list {
+		if pl.Git == nil {
+			continue
+		}
+		if err := requireReadableRepo(ctx, pinner, seen, pl.Git.URL, fmt.Sprintf("plugins[%d]", i)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// requireReadableRepo checks repoURL once per seen set; what names the entry.
+func requireReadableRepo(ctx context.Context, pinner SkillPinner, seen map[string]bool, repoURL, what string) error {
+	if seen[repoURL] {
+		return nil
+	}
+	seen[repoURL] = true
+	if err := pinner.RequireReadable(ctx, repoURL, gitHubLogin(ctx)); err != nil {
+		if errors.Is(err, skills.ErrNotReadable) {
+			return fmt.Errorf("%w: %s: %v", ErrForbidden, what, err)
+		}
+		return invalidf("%s: %v", what, err)
 	}
 	return nil
 }
@@ -167,37 +193,46 @@ func pinSkills(ctx context.Context, p SkillPinner, list Skills, refresh bool) (S
 	out := make(Skills, 0, len(list))
 	for i, s := range list {
 		pinned := Skill{Name: s.mountName(), Path: s.Path}
-		switch {
-		case s.Git != nil:
-			g := GitSkill{URL: s.Git.URL, Commit: s.Git.Commit}
-			switch {
-			case !refresh && g.Commit != "" && s.Git.Ref != "":
-				return nil, invalidf("skills[%d] (%s) gives both ref %q and commit %q; give the commit to pin, or the ref to have it resolved", i, pinned.Name, s.Git.Ref, g.Commit)
-			case refresh || g.Commit == "":
-				if p == nil {
-					return nil, invalidf("skills[%d] (%s): no resolver to look up %s — give git.commit", i, pinned.Name, describeRef(s.Git.Ref))
-				}
-				commit, err := p.GitHead(ctx, g.URL, s.Git.Ref)
-				if err != nil {
-					return nil, fmt.Errorf("%w: skills[%d] (%s): %w", ErrInvalid, i, pinned.Name, err)
-				}
-				g.Commit = commit
-			}
-			pinned.Git = &g
-		default:
-			if skills.DigestRefPattern.MatchString(s.OCI) || p == nil {
-				pinned.OCI = s.OCI
-				break
-			}
-			digest, err := p.OCIDigest(ctx, s.OCI)
-			if err != nil {
-				return nil, fmt.Errorf("%w: skills[%d] (%s): %w", ErrInvalid, i, pinned.Name, err)
-			}
-			pinned.OCI = digest
+		var err error
+		at := fmt.Sprintf("skills[%d] (%s)", i, pinned.Name)
+		if pinned.Git, pinned.OCI, err = pinSource(ctx, p, at, s.Git, s.OCI, refresh); err != nil {
+			return nil, err
 		}
 		out = append(out, pinned)
 	}
 	return out, nil
+}
+
+// pinSource pins one source, a skill's or a plugin's, named at in errors: a
+// git source to a full commit (its Commit when given, else the head of Ref,
+// else of the default branch — with refresh, always the head of Ref or the
+// default branch), an OCI source to its digest.
+func pinSource(ctx context.Context, p SkillPinner, at string, git *GitSkill, ociRef string, refresh bool) (*GitSkill, string, error) {
+	if git == nil {
+		if skills.DigestRefPattern.MatchString(ociRef) || p == nil {
+			return nil, ociRef, nil
+		}
+		digest, err := p.OCIDigest(ctx, ociRef)
+		if err != nil {
+			return nil, "", fmt.Errorf("%w: %s: %w", ErrInvalid, at, err)
+		}
+		return nil, digest, nil
+	}
+	g := GitSkill{URL: git.URL, Commit: git.Commit}
+	switch {
+	case !refresh && g.Commit != "" && git.Ref != "":
+		return nil, "", invalidf("%s gives both ref %q and commit %q; give the commit to pin, or the ref to have it resolved", at, git.Ref, g.Commit)
+	case refresh || g.Commit == "":
+		if p == nil {
+			return nil, "", invalidf("%s: no resolver to look up %s — give git.commit", at, describeRef(git.Ref))
+		}
+		commit, err := p.GitHead(ctx, g.URL, git.Ref)
+		if err != nil {
+			return nil, "", fmt.Errorf("%w: %s: %w", ErrInvalid, at, err)
+		}
+		g.Commit = commit
+	}
+	return &g, "", nil
 }
 
 func describeRef(ref string) string {

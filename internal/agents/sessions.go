@@ -771,8 +771,11 @@ const actorAuthoritySuffix = ".actors.resources.substrate.ate.dev"
 
 // sessionBinding is the binding of a workspace Session's sandbox actor: its
 // SPIFFE id from the Session's A2A authority and the provider instances
-// kagent admitted it to. Nil for a Session without providers: muster has
-// nothing to release to its sandbox.
+// kagent admitted it to. Where muster verifies the actor's own JWT, kagent
+// lists the reserved provider muster among them, so the binding carries it
+// and muster serves the sandbox's calls as the person; agent-manager never
+// adds it. Nil for a Session without providers: muster has nothing to
+// release to its sandbox.
 func sessionBinding(session *apiv1alpha1.Session) (*muster.Binding, error) {
 	var providers []string
 	for _, p := range session.GetProviders() {

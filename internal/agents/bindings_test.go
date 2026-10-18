@@ -76,6 +76,42 @@ func TestAWorkspaceSessionIsBoundToItsStarterBeforeItsFirstTurn(t *testing.T) {
 	assert.Equal(t, bindings.Bound[0], bindings.Bound[1])
 }
 
+// musterProvider is the entry kagent adds to a grant-admitted Session where
+// muster verifies the actor's own JWT: the reserved provider muster on
+// muster's host.
+func musterProvider() *apiv1alpha1.SessionProvider {
+	return &apiv1alpha1.SessionProvider{Hostname: "muster.example.com", Audience: "muster", Scheme: "Bearer"}
+}
+
+func TestAWorkspaceSessionIsBoundWithTheMusterProviderKagentAdmitted(t *testing.T) {
+	svc, ctrl, bindings := newBoundSessionFixture(t)
+	ctrl.Providers = append(githubProviders(), musterProvider())
+	ctx := asPerson(t.Context(), "admin@lab.local")
+	grant := kagenttest.NewSigner(t).Sign(t, "admin@lab.local", 5*time.Minute, kagenttest.WorkspaceGrant())
+
+	started, err := svc.StartSession(ctx, StartSession{Name: "sre", Message: "hello", WorkspaceGrant: grant})
+	require.NoError(t, err)
+	require.Len(t, bindings.Bound, 1)
+	assert.Equal(t, []string{"github", "muster"}, bindings.Bound[0].Binding.Providers, "muster once, as kagent listed it")
+
+	_, err = svc.DeleteSession(ctx, sessionID(t, started.Session))
+	require.NoError(t, err)
+	require.Len(t, bindings.Unbound, 1)
+	assert.Equal(t, bindings.Bound[0].Binding.Actor, bindings.Unbound[0].Binding.Actor)
+}
+
+func TestAWorkspaceSessionWithOnlyTheMusterProviderIsBound(t *testing.T) {
+	svc, ctrl, bindings := newBoundSessionFixture(t)
+	ctrl.Providers = []*apiv1alpha1.SessionProvider{musterProvider()}
+	ctx := asPerson(t.Context(), "admin@lab.local")
+	grant := kagenttest.NewSigner(t).Sign(t, "admin@lab.local", 5*time.Minute, kagenttest.WorkspaceGrant())
+
+	_, err := svc.StartSession(ctx, StartSession{Name: "sre", Message: "hello", WorkspaceGrant: grant})
+	require.NoError(t, err)
+	require.Len(t, bindings.Bound, 1)
+	assert.Equal(t, []string{"muster"}, bindings.Bound[0].Binding.Providers, "muster serves the sandbox as its person with no workspace provider")
+}
+
 func TestASessionWithoutAWorkspaceIsNeverBound(t *testing.T) {
 	svc, ctrl, bindings := newBoundSessionFixture(t)
 	ctrl.Providers = githubProviders()

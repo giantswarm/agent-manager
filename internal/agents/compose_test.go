@@ -135,13 +135,16 @@ func TestBuildValuesIsTheChartContract(t *testing.T) {
 	}, full)
 	_, violations := ValidateValues(context.Background(), embeddedChart{}, full)
 	assert.Empty(t, violations, "the composed values satisfy the Generic chart 2.x schema")
-	// The chart refuses what a write refuses: a mutable plugin source, an
-	// empty skill selection.
+	// The chart refuses what a write never writes: a mutable plugin source.
 	broken := BuildValues(Spec{Name: "sre", ModelConfig: "mc", Plugins: Plugins{{Git: &GitSkill{URL: skillsRepo, Commit: "main"}}}}, cfg)
 	_, violations = ValidateValues(context.Background(), embeddedChart{}, broken)
 	joined := strings.Join(violations, "\n")
 	assert.Contains(t, joined, "/plugins/0/git/commit")
-	assert.Contains(t, joined, "/plugins/0")
+	// A plugin without a selection is the chart's too (a Claude Code format
+	// plugin loads whole).
+	whole := BuildValues(Spec{Name: "sre", ModelConfig: "mc", Plugins: Plugins{{Git: &GitSkill{URL: skillsRepo, Commit: tagHead}}}}, cfg)
+	_, violations = ValidateValues(context.Background(), embeddedChart{}, whole)
+	assert.Empty(t, violations)
 
 	// Nothing the contract removed is ever emitted.
 	for _, values := range []map[string]any{minimal, full} {

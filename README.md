@@ -175,13 +175,19 @@ person.
 
 The guards are write-time: a HelmRelease applied directly bypasses them.
 
-- `plugins` is a list of Agent Plugins bundles, `{git: {url, commit}, path,
-  skills}` or `{oci: <ref>@sha256:<digest>, path, skills}` (chart `plugins[]`,
-  `spec.template.plugins[]`). A plugin is written as given and must come
-  pinned: a full commit id or a digest, never a branch, tag or image tag.
-  `skills` names the bundle's skills to enable (at least one, unique); nothing
-  else of the bundle reaches the agent. A private git plugin reads with the
-  same credential as a private git skill.
+- `plugins` is a list of plugins, `{git: {url, ref | commit}, path, skills}`
+  or `{oci: <reference>, path, skills}` (chart `plugins[]`,
+  `spec.template.plugins[]`), pinned at write time the way skills are (see
+  below): a `ref` or the default branch resolves to its head commit, an image
+  tag to its digest, and `refreshSkills` re-pins every git plugin too. A
+  Claude Code format plugin (`.claude-plugin/plugin.json`) loads whole on the
+  `claude` Harness, its hooks, commands and subagents included, and needs no
+  `skills`. An Agent Plugins format package (`plugin.json` at its root)
+  enables only the skills `skills` names (optional, unique); its `mcp.json`
+  servers load either way. A skill name appears once across `skills` and
+  every plugin's selection. A private git plugin reads with the same
+  credential as a private git skill, and is refused when the caller cannot
+  read its repository.
 
 There is no `runtime` argument: a request still carrying `runtime` is refused
 with the reason, and the 0.x `skills.gitAuthSecretName` is refused naming its
@@ -203,10 +209,11 @@ full commit id, or an OCI image by digest. `skills` is a list of
 What is written is always the pin, and `get_agent` reports it. A reference
 that cannot be resolved — a private repository without a token, an unknown
 tag — is a `400` naming the repository or image; nothing is written.
-`update_agent` with `refreshSkills: true` re-resolves every git skill of the
-agent to the head of its repository's default branch (a skill passed in
-`skills` with a `ref` in the same call goes to that ref's head) and changes
-nothing else on the release — the way to pick up new skill commits. `name`
+`update_agent` with `refreshSkills: true` re-resolves every git skill and git
+plugin of the agent to the head of its repository's default branch (an entry
+passed in `skills` or `plugins` with a `ref` in the same call goes to that
+ref's head) and changes nothing else on the release — the way to pick up new
+skill and plugin commits. `name`
 defaults to the last path segment (else the repository or image name) and
 must be unique per agent; `path` is relative without `..`.
 

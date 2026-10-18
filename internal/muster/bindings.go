@@ -40,7 +40,9 @@ type Binding struct {
 	Session string `json:"session"`
 	// Providers are the provider instances whose grants muster may release
 	// to the actor: the first path segment of the Session's
-	// ate-secret://muster.giantswarm.io/<provider>/<git|api> references.
+	// ate-secret://muster.giantswarm.io/<provider>/<git|api> references,
+	// and the reserved provider muster when kagent admitted the Session to
+	// muster's actor bearer.
 	Providers []string `json:"providers"`
 }
 
