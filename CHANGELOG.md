@@ -7,9 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
+### Changed
 
-- A session's sandbox calls muster as the person who started it: with `--muster-actor-bearer` (`AGENT_MANAGER_MUSTER_ACTOR_BEARER`, chart `muster.actorBearer`, off by default, needs the bindings URL) `start_session` binds every session's Substrate actor at muster's session bindings, as the caller, with the reserved provider `muster` beside its workspace providers, before its first message; muster then serves the actor JWT Substrate's egress gateway injects on its host as that person, and no credential is in the sandbox. A session without a Substrate actor and without a workspace provider is not bound; a bind muster refuses deletes the session again; `delete_session` unbinds it. Turn it on only with muster's `credentialProvider.actorBearer`, which muster needs to accept the provider ([giantswarm#38064](https://github.com/giantswarm/giantswarm/issues/38064)).
+- A workspace session's binding in muster carries the reserved provider `muster` when kagent admitted the session to it (where muster verifies Substrate's actor JWT), so muster serves the session's sandbox as the person who started it; agent-manager binds the providers kagent lists and never adds `muster` itself ([giantswarm#38064](https://github.com/giantswarm/giantswarm/issues/38064)).
 
 ## [2.5.0] - 2026-10-17
 

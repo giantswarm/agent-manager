@@ -63,13 +63,6 @@ type Config struct {
 	// Session's sandbox to the person who started it. Nil: a Session is
 	// started in no workspace.
 	Bindings SessionBinder
-	// MusterActorBearer binds every Session's sandbox actor with the
-	// reserved provider muster.Provider beside its workspace providers, so
-	// muster serves the sandbox's own calls as the person who started it,
-	// by the actor JWT Substrate's egress gateway injects. Only with
-	// Bindings, and only where muster's actor bearer is on: muster refuses
-	// the provider otherwise.
-	MusterActorBearer bool
 	// HarnessEgress is the platform's origin list per coding Harness (any
 	// runtime but kagent), by Harness name: written into a coding agent's
 	// egress, and the only origins it may name. A coding Harness without an

@@ -598,9 +598,7 @@ func sessionMaxBytes(n int) (int, error) {
 // names; the controller's admission verifies it and refuses with its reason.
 // A Session started in a workspace is bound in muster to the caller before
 // its first turn, so its sandbox acts as the caller towards the workspace's
-// providers; with muster's actor bearer every Session is, so its sandbox
-// calls muster as the caller too. A bind muster refuses deletes the Session
-// again.
+// providers; a bind muster refuses deletes the Session again.
 func (s *Service) StartSession(ctx context.Context, in StartSession) (*SessionStart, error) {
 	if in.Message != "" && strings.TrimSpace(in.Message) == "" {
 		return nil, invalidf("message is blank: omit it to create the session without a first message")
@@ -637,7 +635,7 @@ func (s *Service) StartSession(ctx context.Context, in StartSession) (*SessionSt
 	if err != nil {
 		return nil, kagentError(err, fmt.Sprintf("a session of agent %s", ref.Tenant()))
 	}
-	if workspace != nil || s.musterActorBearer() {
+	if workspace != nil {
 		if err := s.bindSession(ctx, token, session); err != nil {
 			return nil, s.abandonSession(ctx, token, session, err)
 		}
@@ -739,7 +737,7 @@ func (s *Service) DeleteSession(ctx context.Context, sessionID string) (*Session
 		if err != nil {
 			return nil, kagentError(err, fmt.Sprintf("session %s", sessionID))
 		}
-		if binding, err = sessionBinding(current, s.musterActorBearer()); err != nil {
+		if binding, err = sessionBinding(current); err != nil {
 			return nil, err
 		}
 	}
@@ -771,21 +769,19 @@ func (s *Service) DeleteSession(ctx context.Context, sessionID string) (*Session
 // records for the Session's Substrate actor once it is created.
 const actorAuthoritySuffix = ".actors.resources.substrate.ate.dev"
 
-// sessionBinding is the binding of a Session's sandbox actor: its SPIFFE id
-// from the Session's A2A authority, the provider instances kagent admitted it
-// to and, with musterActor, the reserved provider muster.Provider. Nil when
-// muster has nothing to serve the sandbox: no provider, or no sandbox actor
-// and no workspace provider (a Session that runs outside Substrate).
-func sessionBinding(session *apiv1alpha1.Session, musterActor bool) (*muster.Binding, error) {
+// sessionBinding is the binding of a workspace Session's sandbox actor: its
+// SPIFFE id from the Session's A2A authority and the provider instances
+// kagent admitted it to. Where muster verifies the actor's own JWT, kagent
+// lists the reserved provider muster among them, so the binding carries it
+// and muster serves the sandbox's calls as the person; agent-manager never
+// adds it. Nil for a Session without providers: muster has nothing to
+// release to its sandbox.
+func sessionBinding(session *apiv1alpha1.Session) (*muster.Binding, error) {
 	var providers []string
 	for _, p := range session.GetProviders() {
 		if p.GetAudience() != "" && !slices.Contains(providers, p.GetAudience()) {
 			providers = append(providers, p.GetAudience())
 		}
-	}
-	workspaceProviders := len(providers) > 0
-	if musterActor && !slices.Contains(providers, muster.Provider) {
-		providers = append(providers, muster.Provider)
 	}
 	if len(providers) == 0 {
 		return nil, nil
@@ -793,9 +789,6 @@ func sessionBinding(session *apiv1alpha1.Session, musterActor bool) (*muster.Bin
 	name, ok := strings.CutSuffix(session.GetA2AAuthority(), actorAuthoritySuffix)
 	actor, atespace, hasAtespace := strings.Cut(name, ".")
 	if !ok || !hasAtespace || actor == "" || atespace == "" || strings.Contains(atespace, ".") {
-		if !workspaceProviders {
-			return nil, nil
-		}
 		return nil, conflictf("session %s has no Substrate actor address kagent records (a2aAuthority %q), so its sandbox cannot be bound in muster", session.GetId(), session.GetA2AAuthority())
 	}
 	return &muster.Binding{
@@ -805,21 +798,15 @@ func sessionBinding(session *apiv1alpha1.Session, musterActor bool) (*muster.Bin
 	}, nil
 }
 
-// musterActorBearer is whether every Session's sandbox is bound with
-// muster.Provider.
-func (s *Service) musterActorBearer() bool {
-	return s.cfg.MusterActorBearer && s.cfg.Bindings != nil
-}
-
-// bindSession binds a Session's sandbox actor to the caller in muster, as
-// the caller.
+// bindSession binds a workspace Session's sandbox actor to the caller in
+// muster, as the caller.
 func (s *Service) bindSession(ctx context.Context, token string, session *apiv1alpha1.Session) error {
-	binding, err := sessionBinding(session, s.musterActorBearer())
+	binding, err := sessionBinding(session)
 	if err != nil {
 		return err
 	}
 	if binding == nil {
-		s.log.InfoContext(ctx, "session has nothing muster serves its sandbox: not bound in muster", identity.LogAttr(ctx), "session", session.GetId())
+		s.log.InfoContext(ctx, "workspace session has no providers: nothing to bind in muster", identity.LogAttr(ctx), "session", session.GetId())
 		return nil
 	}
 	if err := s.cfg.Bindings.Bind(ctx, token, *binding); err != nil {
@@ -829,8 +816,8 @@ func (s *Service) bindSession(ctx context.Context, token string, session *apiv1a
 	return nil
 }
 
-// abandonSession deletes a Session whose bind failed, so no Session runs
-// without its person, and answers the bind's error, naming the
+// abandonSession deletes a Session whose bind failed, so no workspace
+// Session runs without its person, and answers the bind's error, naming the
 // Session when the delete failed too.
 func (s *Service) abandonSession(ctx context.Context, token string, session *apiv1alpha1.Session, cause error) error {
 	if _, err := s.cfg.Sessions.DeleteSession(ctx, token, session.GetId()); err != nil {

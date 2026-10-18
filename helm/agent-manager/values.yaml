@@ -345,13 +345,6 @@ muster:
   # it: the Service's namespace for an in-cluster host, every address
   # otherwise.
   bindingsUrl: http://muster.agent-platform.svc.cluster.local:8090/session-bindings
-  # -- Bind every session's sandbox actor at `bindingsUrl` with the reserved
-  # provider `muster` beside its workspace providers, so muster serves the
-  # sandbox's own MCP calls as the person who started the session, by the
-  # actor JWT Substrate's egress gateway injects on muster's host. Turn on
-  # only with muster's `credentialProvider.actorBearer`: muster refuses the
-  # provider otherwise, and the session is not started. Needs `bindingsUrl`.
-  actorBearer: false
   mcpServer:
     # -- Register this server with muster by rendering an
     # `mcpservers.muster.giantswarm.io` CR in the release namespace. Tools then

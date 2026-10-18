@@ -48,32 +48,6 @@ tests:
       - notExists:
           path: spec.template.spec.containers[0].args[?(@ =~ /^--muster-bindings-url=/)]
 
-  - it: binds no session with the muster provider by default
-    template: templates/deployment.yaml
-    asserts:
-      - notContains:
-          path: spec.template.spec.containers[0].args
-          content: --muster-actor-bearer=true
-
-  - it: binds every session with the muster provider with the actor bearer
-    template: templates/deployment.yaml
-    set:
-      muster.actorBearer: true
-    asserts:
-      - contains:
-          path: spec.template.spec.containers[0].args
-          content: --muster-actor-bearer=true
-
-  - it: renders no actor bearer without the bindings
-    template: templates/deployment.yaml
-    set:
-      muster.actorBearer: true
-      muster.bindingsUrl: ""
-    asserts:
-      - notContains:
-          path: spec.template.spec.containers[0].args
-          content: --muster-actor-bearer=true
-
   - it: opens egress to the muster Service's namespace on its port
     template: templates/networkpolicy.yaml
     set:

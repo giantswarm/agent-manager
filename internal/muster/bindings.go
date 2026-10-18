@@ -31,13 +31,6 @@ func ActorID(atespace, name string) string {
 	return "spiffe://" + ActorTrustDomain + "/actor/" + atespace + "/" + name
 }
 
-// Provider is the reserved provider a binding lists when muster serves the
-// actor itself as the bound person: muster verifies the actor JWT Substrate's
-// egress gateway injects on muster's host and acts as the binding's person.
-// muster accepts it only with its actor bearer on and never releases a token
-// for it.
-const Provider = "muster"
-
 // Binding is one Session's sandbox actor bound to the caller.
 type Binding struct {
 	// Actor is the sandbox actor's SPIFFE id (ActorID).
@@ -48,7 +41,8 @@ type Binding struct {
 	// Providers are the provider instances whose grants muster may release
 	// to the actor: the first path segment of the Session's
 	// ate-secret://muster.giantswarm.io/<provider>/<git|api> references,
-	// and Provider when muster serves the actor as the person.
+	// and the reserved provider muster when kagent admitted the Session to
+	// muster's actor bearer.
 	Providers []string `json:"providers"`
 }
 

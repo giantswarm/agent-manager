@@ -76,6 +76,42 @@ func TestAWorkspaceSessionIsBoundToItsStarterBeforeItsFirstTurn(t *testing.T) {
 	assert.Equal(t, bindings.Bound[0], bindings.Bound[1])
 }
 
+// musterProvider is the entry kagent adds to a grant-admitted Session where
+// muster verifies the actor's own JWT: the reserved provider muster on
+// muster's host.
+func musterProvider() *apiv1alpha1.SessionProvider {
+	return &apiv1alpha1.SessionProvider{Hostname: "muster.example.com", Audience: "muster", Scheme: "Bearer"}
+}
+
+func TestAWorkspaceSessionIsBoundWithTheMusterProviderKagentAdmitted(t *testing.T) {
+	svc, ctrl, bindings := newBoundSessionFixture(t)
+	ctrl.Providers = append(githubProviders(), musterProvider())
+	ctx := asPerson(t.Context(), "admin@lab.local")
+	grant := kagenttest.NewSigner(t).Sign(t, "admin@lab.local", 5*time.Minute, kagenttest.WorkspaceGrant())
+
+	started, err := svc.StartSession(ctx, StartSession{Name: "sre", Message: "hello", WorkspaceGrant: grant})
+	require.NoError(t, err)
+	require.Len(t, bindings.Bound, 1)
+	assert.Equal(t, []string{"github", "muster"}, bindings.Bound[0].Binding.Providers, "muster once, as kagent listed it")
+
+	_, err = svc.DeleteSession(ctx, sessionID(t, started.Session))
+	require.NoError(t, err)
+	require.Len(t, bindings.Unbound, 1)
+	assert.Equal(t, bindings.Bound[0].Binding.Actor, bindings.Unbound[0].Binding.Actor)
+}
+
+func TestAWorkspaceSessionWithOnlyTheMusterProviderIsBound(t *testing.T) {
+	svc, ctrl, bindings := newBoundSessionFixture(t)
+	ctrl.Providers = []*apiv1alpha1.SessionProvider{musterProvider()}
+	ctx := asPerson(t.Context(), "admin@lab.local")
+	grant := kagenttest.NewSigner(t).Sign(t, "admin@lab.local", 5*time.Minute, kagenttest.WorkspaceGrant())
+
+	_, err := svc.StartSession(ctx, StartSession{Name: "sre", Message: "hello", WorkspaceGrant: grant})
+	require.NoError(t, err)
+	require.Len(t, bindings.Bound, 1)
+	assert.Equal(t, []string{"muster"}, bindings.Bound[0].Binding.Providers, "muster serves the sandbox as its person with no workspace provider")
+}
+
 func TestASessionWithoutAWorkspaceIsNeverBound(t *testing.T) {
 	svc, ctrl, bindings := newBoundSessionFixture(t)
 	ctrl.Providers = githubProviders()
@@ -191,82 +227,10 @@ func TestAMissedUnbindIsAWarningOnTheDelete(t *testing.T) {
 }
 
 func TestASessionWithoutAnActorAddressIsNotBound(t *testing.T) {
-	_, err := sessionBinding(&apiv1alpha1.Session{Id: "s", Providers: githubProviders(), A2AAuthority: "elsewhere.example"}, false)
+	_, err := sessionBinding(&apiv1alpha1.Session{Id: "s", Providers: githubProviders(), A2AAuthority: "elsewhere.example"})
 	require.ErrorIs(t, err, ErrConflict)
 	assert.Contains(t, err.Error(), "muster")
-	binding, err := sessionBinding(&apiv1alpha1.Session{Id: "s"}, false)
+	binding, err := sessionBinding(&apiv1alpha1.Session{Id: "s"})
 	require.NoError(t, err)
 	assert.Nil(t, binding)
-	// Without a sandbox actor muster has no sandbox to serve as the person.
-	binding, err = sessionBinding(&apiv1alpha1.Session{Id: "s", A2AAuthority: "elsewhere.example"}, true)
-	require.NoError(t, err)
-	assert.Nil(t, binding)
-	_, err = sessionBinding(&apiv1alpha1.Session{Id: "s", Providers: githubProviders(), A2AAuthority: "elsewhere.example"}, true)
-	require.ErrorIs(t, err, ErrConflict, "a workspace session's providers still need its actor")
-}
-
-// newActorBearerFixture is a bound session fixture whose muster serves a
-// sandbox's own calls as its person.
-func newActorBearerFixture(t *testing.T) (*Service, *kagenttest.Controller, *fakeBindings) {
-	t.Helper()
-	svc, ctrl, bindings := newBoundSessionFixture(t)
-	svc.cfg.MusterActorBearer = true
-	return svc, ctrl, bindings
-}
-
-func TestWithTheActorBearerASessionIsBoundWithMuster(t *testing.T) {
-	svc, _, bindings := newActorBearerFixture(t)
-	ctx := asPerson(t.Context(), "admin@lab.local")
-
-	started, err := svc.StartSession(ctx, StartSession{Name: "sre", Message: "hello"})
-	require.NoError(t, err)
-	id := sessionID(t, started.Session)
-	require.Len(t, bindings.Bound, 1)
-	assert.Equal(t, callerToken, bindings.Bound[0].Token, "muster is called as the person")
-	assert.Equal(t, muster.Binding{
-		Actor:     "spiffe://substrate-actor.local/actor/" + kagenttest.Atespace + "/session-" + strings.ToLower(id),
-		Session:   "kagent/" + id,
-		Providers: []string{muster.Provider},
-	}, bindings.Bound[0].Binding)
-
-	deleted, err := svc.DeleteSession(ctx, id)
-	require.NoError(t, err)
-	assert.Empty(t, deleted.Warning)
-	require.Len(t, bindings.Unbound, 1)
-	assert.Equal(t, bindings.Bound[0].Binding.Actor, bindings.Unbound[0].Binding.Actor)
-}
-
-func TestWithTheActorBearerAWorkspaceSessionIsBoundWithMusterBesideItsProviders(t *testing.T) {
-	svc, ctrl, bindings := newActorBearerFixture(t)
-	ctrl.Providers = githubProviders()
-	ctx := asPerson(t.Context(), "admin@lab.local")
-	grant := kagenttest.NewSigner(t).Sign(t, "admin@lab.local", 5*time.Minute, kagenttest.WorkspaceGrant())
-
-	_, err := svc.StartSession(ctx, StartSession{Name: "sre", Message: "hello", WorkspaceGrant: grant})
-	require.NoError(t, err)
-	require.Len(t, bindings.Bound, 1)
-	assert.Equal(t, []string{"github", muster.Provider}, bindings.Bound[0].Binding.Providers)
-}
-
-func TestWithTheActorBearerARefusedBindLeavesNoSession(t *testing.T) {
-	svc, ctrl, bindings := newActorBearerFixture(t)
-	bindings.BindErr = fmt.Errorf("%w (400 Bad Request): provider muster needs the actor bearer", muster.ErrInvalid)
-	ctx := asPerson(t.Context(), "admin@lab.local")
-
-	_, err := svc.StartSession(ctx, StartSession{Name: "sre", Message: "hello"})
-	require.ErrorIs(t, err, ErrInvalid)
-	assert.Contains(t, err.Error(), "was not started")
-	assert.NotContains(t, calledMethods(ctrl), "SendStreamingMessage", "no turn ran unbound")
-	list, err := svc.ListSessions(ctx, "", "sre", false)
-	require.NoError(t, err)
-	assert.Empty(t, list.Sessions, "the session was deleted again")
-}
-
-func TestTheActorBearerNeedsMustersBindings(t *testing.T) {
-	svc, _, _ := newActorBearerFixture(t)
-	svc.cfg.Bindings = nil
-	ctx := asPerson(t.Context(), "admin@lab.local")
-
-	_, err := svc.StartSession(ctx, StartSession{Name: "sre", Message: "hello"})
-	require.NoError(t, err, "a session without a workspace starts unbound")
 }
