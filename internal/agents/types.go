@@ -215,7 +215,7 @@ type Spec struct {
 	ModelConfig string `json:"modelConfig"`
 	// Harness names the Harness of the namespace that runs the agent (chart
 	// agent.harness, the Agent object's spec.harnessRef.name); empty selects
-	// the platform Harness. Fixed at create.
+	// the platform Harness.
 	Harness string `json:"harness,omitempty"`
 	// IconURL is the avatar URL (chart agent.iconUrl, rendered as the
 	// ui.giantswarm.io/icon-url annotation).
@@ -256,14 +256,18 @@ type Spec struct {
 // empty toolset is refused: use preset:none).
 type Update struct {
 	Location
-	Name          string   `json:"name"`
-	DisplayName   *string  `json:"displayName,omitempty"`
-	Description   *string  `json:"description,omitempty"`
-	SystemMessage *string  `json:"systemMessage,omitempty"`
-	ModelConfig   *string  `json:"modelConfig,omitempty"`
-	IconURL       *string  `json:"iconUrl,omitempty"`
-	Skills        *Skills  `json:"skills,omitempty"`
-	Plugins       *Plugins `json:"plugins,omitempty"`
+	Name          string  `json:"name"`
+	DisplayName   *string `json:"displayName,omitempty"`
+	Description   *string `json:"description,omitempty"`
+	SystemMessage *string `json:"systemMessage,omitempty"`
+	ModelConfig   *string `json:"modelConfig,omitempty"`
+	// Harness moves the agent to another Harness of its namespace after the
+	// checks a create on it runs; "" selects the platform Harness. Sessions
+	// that exist keep the revision they started on.
+	Harness *string  `json:"harness,omitempty"`
+	IconURL *string  `json:"iconUrl,omitempty"`
+	Skills  *Skills  `json:"skills,omitempty"`
+	Plugins *Plugins `json:"plugins,omitempty"`
 	// Egress replaces the agent's whole egress list; empty clears it.
 	Egress *[]string `json:"egress,omitempty"`
 	// GitAuthSecretName replaces the skills credential Secret; empty clears it

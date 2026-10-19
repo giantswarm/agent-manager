@@ -333,6 +333,7 @@ func SpecToUpdate(s agents.Spec) agents.Update {
 	upd.Description = str(s.Description)
 	upd.SystemMessage = str(s.SystemMessage)
 	upd.ModelConfig = str(s.ModelConfig)
+	upd.Harness = str(s.Harness)
 	upd.IconURL = str(s.IconURL)
 	if s.Skills != nil {
 		skills := s.Skills

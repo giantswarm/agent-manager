@@ -131,8 +131,14 @@ platform-admin owned: agent-manager only reads them.
 
 An agent runs on the platform Harness (`kagent`, the Go ADK) unless
 `create_agent` names another Harness of the namespace in `harness`; the name
-must be a Harness that exists there (the refusal lists the ones that do) and
-it is fixed at create. A Harness's runtime is the one key of its spec:
+must be a Harness that exists there (the refusal lists the ones that do).
+`update_agent` with `harness` moves an existing agent to another Harness of
+its namespace after the checks a create on that Harness runs (model protocol,
+plugins, egress, bindings); nothing is written when one fails, and
+`validate_agent` with `update: true` lists them. Moving from a coding Harness
+to a `kagent` one drops the coding Harness's egress list and prompt note.
+Sessions that exist keep the revision they started on; new Sessions start on
+the new Harness once its revision is Ready. A Harness's runtime is the one key of its spec:
 `kagent` (the Go ADK), `claude` (Claude Code), `codex` (Codex) or `byo` (an
 image of its own, such as omp). On every runtime but `kagent` the agent is a
 coding agent: it runs a coding CLI as a session, and its skills and plugins
