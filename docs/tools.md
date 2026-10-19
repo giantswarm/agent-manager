@@ -650,7 +650,7 @@ Refused with conflict while the agent has no ready revision (get_agent_status). 
 ```text
 Change an agent: only the fields passed change; a list, labels or annotations replaces the whole value.
 
-Lists are skills, plugins, egress and toolset. "" clears a text field back to the chart default; gitAuthSecretName "" goes back to the installation's. Presets: preset:read-only, preset:none, preset:infrastructure, preset:agent-platform, preset:full. refreshSkills re-pins every git skill and git plugin. The Harness is fixed at create. Returns the values before and after. A suspended release is refused unless force is true; a GitOps-owned one needs mode commit.
+Lists are skills, plugins, egress and toolset. "" clears a text field back to the chart default; gitAuthSecretName "" goes back to the installation's. Presets: preset:read-only, preset:none, preset:infrastructure, preset:agent-platform, preset:full. refreshSkills re-pins every git skill and git plugin. harness re-runs the create-time checks on the new Harness. Returns the values before and after. A suspended release is refused unless force is true; a GitOps-owned one needs mode commit.
 ```
 
 ```json
@@ -697,6 +697,10 @@ Lists are skills, plugins, egress and toolset. "" clears a text field back to th
     },
     "gitAuthSecretName": {
       "description": "Secret in the agent's namespace whose token key reads private git skills and plugins; omit for the installation's (get_info); \"\" goes back to it",
+      "type": "string"
+    },
+    "harness": {
+      "description": "Move the agent to another Harness of the namespace; \"\" selects the platform Harness. Existing Sessions keep their runtime",
       "type": "string"
     },
     "iconUrl": {

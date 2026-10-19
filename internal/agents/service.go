@@ -761,8 +761,9 @@ func (s *Service) releaseHarness(ctx context.Context, st *site, values map[strin
 }
 
 // guardUpdate applies the coding-agent guards to an update's merged values;
-// nil for an agent on a kagent Harness.
-func (s *Service) guardUpdate(ctx context.Context, st *site, upd Update, after map[string]any) ([]error, error) {
+// nil for an agent on a kagent Harness. An agent that leaves a coding Harness
+// leaves its platform-set egress and prompt note behind.
+func (s *Service) guardUpdate(ctx context.Context, st *site, upd Update, before, after map[string]any) ([]error, error) {
 	harness, runtime, err := s.releaseHarness(ctx, st, after)
 	if err != nil {
 		if isDomainError(err) {
@@ -771,6 +772,11 @@ func (s *Service) guardUpdate(ctx context.Context, st *site, upd Update, after m
 		return nil, err
 	}
 	if !isCodingRuntime(runtime) {
+		if upd.Harness != nil {
+			if err := s.leaveCoding(ctx, st, upd, before, after); err != nil {
+				return nil, err
+			}
+		}
 		return nil, nil
 	}
 	var requested []string
@@ -778,6 +784,30 @@ func (s *Service) guardUpdate(ctx context.Context, st *site, upd Update, after m
 		requested = *upd.Egress
 	}
 	return s.guardCoding(ctx, st, harness, runtime, after, requested)
+}
+
+// leaveCoding drops what a coding Harness set on an agent that moves to a
+// kagent one: the egress note in its prompt and, unless the update passes
+// egress of its own, the Harness's origin list.
+func (s *Service) leaveCoding(ctx context.Context, st *site, upd Update, before, after map[string]any) error {
+	_, from, err := s.releaseHarness(ctx, st, before)
+	if err != nil && !isDomainError(err) {
+		return err
+	}
+	agentBlock, _ := after["agent"].(map[string]any)
+	if prompt, ok := agentBlock["systemMessage"].(string); ok {
+		if i := strings.Index(prompt, egressNoteHeading); i >= 0 {
+			if prompt = strings.TrimRight(prompt[:i], " \t\n"); prompt != "" {
+				agentBlock["systemMessage"] = prompt
+			} else {
+				delete(agentBlock, "systemMessage")
+			}
+		}
+	}
+	if isCodingRuntime(from) && upd.Egress == nil {
+		delete(agentBlock, "egress")
+	}
+	return nil
 }
 
 // ValidateCreate is create_agent without the write. It takes the write's mode
@@ -961,7 +991,7 @@ func (s *Service) ValidateUpdate(ctx context.Context, upd Update) (*ValidateResu
 		return nil, err
 	}
 	res := &ValidateResult{Mode: "update"}
-	values, _, err := s.mergedValues(ctx, st, upd, hr)
+	values, before, err := s.mergedValues(ctx, st, upd, hr)
 	if err != nil {
 		if !isDomainError(err) {
 			return nil, err
@@ -969,7 +999,7 @@ func (s *Service) ValidateUpdate(ctx context.Context, upd Update) (*ValidateResu
 		res.addError(err)
 	}
 	if values != nil {
-		guardErrs, err := s.guardUpdate(ctx, st, upd, values)
+		guardErrs, err := s.guardUpdate(ctx, st, upd, before, values)
 		if err != nil {
 			return nil, err
 		}
@@ -1257,6 +1287,10 @@ func (s *Service) mergedValues(ctx context.Context, st *site, upd Update, hr *un
 	}
 	after["agent"] = agentBlock
 
+	if upd.Harness != nil {
+		agentBlock["harness"] = orDefault(strings.TrimSpace(*upd.Harness), orDefault(st.compose.HarnessName, DefaultHarnessName))
+	}
+
 	var firstErr error
 	if upd.ModelConfig != nil {
 		if err := s.requireModelConfig(ctx, st, *upd.ModelConfig); err != nil {
@@ -1401,7 +1435,7 @@ func (s *Service) update(ctx context.Context, st *site, upd Update) (*UpdateResu
 	if err != nil {
 		return nil, err
 	}
-	guardErrs, err := s.guardUpdate(ctx, st, upd, after)
+	guardErrs, err := s.guardUpdate(ctx, st, upd, before, after)
 	if err != nil {
 		return nil, err
 	}

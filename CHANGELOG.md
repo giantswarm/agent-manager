@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `update_agent` takes `harness`: an existing agent moves to another Harness of its namespace after the checks a create on that Harness runs (model protocol, Claude-format plugins on codex, the Harness's egress entry, bindings); nothing is written when one fails and `validate_agent` with `update: true` lists them. A move from a coding Harness to a `kagent` one drops the coding Harness's egress list and prompt note. Sessions keep the revision they started on ([giantswarm#38635](https://github.com/giantswarm/giantswarm/issues/38635)).
+
 ## [2.6.0] - 2026-10-18
 
 ### Added

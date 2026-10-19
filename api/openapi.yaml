@@ -50,7 +50,8 @@ info:
 
     `harness` names the Harness of the namespace that runs the agent (the
     platform Harness, the kagent Go ADK, unless another is named, such as
-    `claude` for Claude Code); it must exist there and is fixed at create.
+    `claude` for Claude Code); it must exist there. An update naming another
+    Harness runs the checks a create on it runs before writing.
     `plugins` enable skills from
     Agent Plugins bundles that come pinned (a commit or a digest).
 
@@ -804,7 +805,7 @@ components:
         description: { type: string }
         systemMessage: { type: string }
         modelConfig: { type: string, description: An existing ModelConfig of the namespace }
-        harness: { type: string, description: "Harness of the namespace that runs the agent (chart agent.harness, the Agent's spec.harnessRef.name); omitted, the platform Harness (GET /info harness.name). Must exist in the namespace; fixed at create" }
+        harness: { type: string, description: "Harness of the namespace that runs the agent (chart agent.harness, the Agent's spec.harnessRef.name); omitted, the platform Harness (GET /info harness.name). Must exist in the namespace" }
         iconUrl: { type: string, description: Avatar URL (chart agent.iconUrl, the ui.giantswarm.io/icon-url annotation) }
         skills: { $ref: "#/components/schemas/Skills" }
         plugins: { $ref: "#/components/schemas/Plugins" }
@@ -820,12 +821,13 @@ components:
         path: { type: string, description: "mode commit with repository: the directory a Kustomization builds from; files go to its agent-manager/ subdirectory" }
     Update:
       type: object
-      description: Partial change; absent fields stay, "" clears, skills, plugins and egress replace the whole list (skills pinned), toolset replaces the whole list, refreshSkills re-pins every git skill. The Harness is fixed at create
+      description: Partial change; absent fields stay, "" clears, skills, plugins and egress replace the whole list (skills pinned), toolset replaces the whole list, refreshSkills re-pins every git skill. harness moves the agent to another Harness after the create-time checks on it; "" selects the platform Harness
       properties:
         displayName: { type: string }
         description: { type: string }
         systemMessage: { type: string }
         modelConfig: { type: string }
+        harness: { type: string, description: "Another Harness of the namespace to run the agent; \"\" selects the platform Harness" }
         iconUrl: { type: string }
         skills: { $ref: "#/components/schemas/Skills" }
         plugins: { $ref: "#/components/schemas/Plugins" }
