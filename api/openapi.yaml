@@ -448,12 +448,15 @@ paths:
         running and its answer is read with `GET /api/v1/sessions/{id}`. An
         Agent without a ready revision is `409 conflict`. `requestId` makes a
         retry idempotent: the controller answers the session the first
-        attempt created. With `workspaceGrant` the session's sandbox actor is
+        attempt created. A session kagent gives providers (a
+        `workspaceGrant`'s, and muster itself where muster verifies the
+        sandbox's own JWT, with or without a workspace) has its sandbox actor
         bound to the caller at muster's session bindings, as the caller,
         before the first message: muster releases the caller's provider
-        tokens to that sandbox alone. A bind muster refuses deletes the
-        session again and is answered with muster's reason; an installation
-        without the bindings (`--muster-bindings-url`) answers `501`.
+        tokens and tools to that sandbox alone. A bind muster refuses deletes
+        the session again and is answered with muster's reason; a
+        `workspaceGrant` on an installation without the bindings
+        (`--muster-bindings-url`) answers `501`.
       operationId: startSession
       x-mcp-tool: start_session
       requestBody:
@@ -588,7 +591,7 @@ paths:
         `RUNTIME_STATE_DELETED`; it is gone from every read after. kagent
         scopes the delete to the session's creator: a session of somebody
         else is `404`, as one that does not exist. While another operation on
-        the session runs the delete is `409`; retry it shortly. A workspace
+        the session runs the delete is `409`; retry it shortly. A bound
         session's sandbox is then unbound at muster's session bindings, as
         the caller; when muster did not remove the binding the delete still
         answers `200` with `warning`, and the binding expires with the
@@ -1238,7 +1241,7 @@ components:
       type: object
       properties:
         session: { $ref: "#/components/schemas/Session" }
-        warning: { type: string, description: "What was left undone after the delete: muster did not remove the workspace session's binding, which expires with the Session idle TTL" }
+        warning: { type: string, description: "What was left undone after the delete: muster did not remove the session's binding, which expires with the Session idle TTL" }
     StartSessionRequest:
       type: object
       required: [message]

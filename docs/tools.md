@@ -292,7 +292,7 @@ The chart's shared OCIRepository goes too when nothing else in the namespace use
 ```text
 Delete one of your conversations and its state for good; it cannot be read back.
 
-Another person's session is refused as not_found. While another operation on it runs, it is refused with conflict: retry shortly. A workspace session is unbound in muster; warning says when that failed.
+Another person's session is refused as not_found. While another operation on it runs, it is refused with conflict: retry shortly. A session bound in muster is unbound; warning says when that failed.
 ```
 
 ```json
