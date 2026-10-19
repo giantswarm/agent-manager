@@ -55,6 +55,10 @@ type Controller struct {
 	// Providers are what the admission admits a session with a volume source
 	// to, kept on the session as the controller keeps them.
 	Providers []*apiv1alpha1.SessionProvider
+	// ActorJWTProviders are what the controller gives every session, with or
+	// without a volume source: the provider instances that verify the actor's
+	// own JWT (muster), after an admitted session's Providers.
+	ActorJWTProviders []*apiv1alpha1.SessionProvider
 
 	mu        sync.Mutex
 	sessions  []*apiv1alpha1.Session
@@ -154,6 +158,9 @@ func (c *Controller) newSession(namespace, name, sessionName string, volume *api
 		for _, p := range c.Providers {
 			s.Providers = append(s.Providers, proto.Clone(p).(*apiv1alpha1.SessionProvider))
 		}
+	}
+	for _, p := range c.ActorJWTProviders {
+		s.Providers = append(s.Providers, proto.Clone(p).(*apiv1alpha1.SessionProvider))
 	}
 	c.sessions = append(c.sessions, s)
 	return s

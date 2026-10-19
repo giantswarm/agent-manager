@@ -112,7 +112,60 @@ func TestAWorkspaceSessionWithOnlyTheMusterProviderIsBound(t *testing.T) {
 	assert.Equal(t, []string{"muster"}, bindings.Bound[0].Binding.Providers, "muster serves the sandbox as its person with no workspace provider")
 }
 
-func TestASessionWithoutAWorkspaceIsNeverBound(t *testing.T) {
+// A Session started outside a workspace (a Slack thread's) carries muster
+// where muster verifies the actor's own JWT, and is bound to its starter like a
+// workspace Session, so its sandbox reaches muster as the person.
+func TestASessionWithoutAWorkspaceIsBoundWithTheMusterProvider(t *testing.T) {
+	svc, ctrl, bindings := newBoundSessionFixture(t)
+	ctrl.Providers = githubProviders()
+	ctrl.ActorJWTProviders = []*apiv1alpha1.SessionProvider{musterProvider()}
+	ctx := asPerson(t.Context(), "admin@lab.local")
+
+	started, err := svc.StartSession(ctx, StartSession{Name: "sre", Message: "hello"})
+	require.NoError(t, err)
+	id := sessionID(t, started.Session)
+	require.Len(t, bindings.Bound, 1)
+	assert.Equal(t, callerToken, bindings.Bound[0].Token, "muster is called as the person")
+	assert.Equal(t, muster.Binding{
+		Actor:     "spiffe://substrate-actor.local/actor/" + kagenttest.Atespace + "/session-" + strings.ToLower(id),
+		Session:   "kagent/" + id,
+		Providers: []string{"muster"},
+	}, bindings.Bound[0].Binding, "muster alone: no workspace provider is admitted without a grant")
+
+	_, err = svc.DeleteSession(ctx, id)
+	require.NoError(t, err)
+	require.Len(t, bindings.Unbound, 1)
+	assert.Equal(t, bindings.Bound[0].Binding.Actor, bindings.Unbound[0].Binding.Actor)
+}
+
+func TestAFailedBindOfASessionWithoutAWorkspaceLeavesNoSession(t *testing.T) {
+	svc, ctrl, bindings := newBoundSessionFixture(t)
+	ctrl.ActorJWTProviders = []*apiv1alpha1.SessionProvider{musterProvider()}
+	bindings.BindErr = fmt.Errorf("%w (403 Forbidden)", muster.ErrForbidden)
+	ctx := asPerson(t.Context(), "admin@lab.local")
+
+	_, err := svc.StartSession(ctx, StartSession{Name: "sre", Message: "hello"})
+	require.ErrorIs(t, err, ErrForbidden)
+	assert.Contains(t, err.Error(), "was not started")
+	assert.NotContains(t, calledMethods(ctrl), "SendStreamingMessage", "no turn ran unbound")
+	list, err := svc.ListSessions(ctx, "", "sre", false)
+	require.NoError(t, err)
+	assert.Empty(t, list.Sessions, "the session was deleted again")
+}
+
+// Without muster's bindings configured, a Session without a workspace starts
+// as before: there is no bind to make.
+func TestASessionWithoutAWorkspaceStartsWithoutMustersBindings(t *testing.T) {
+	svc, ctrl, _ := newBoundSessionFixture(t)
+	svc.cfg.Bindings = nil
+	ctrl.ActorJWTProviders = []*apiv1alpha1.SessionProvider{musterProvider()}
+	ctx := asPerson(t.Context(), "admin@lab.local")
+
+	_, err := svc.StartSession(ctx, StartSession{Name: "sre", Message: "hello"})
+	require.NoError(t, err)
+}
+
+func TestASessionWithoutProvidersIsNeverBound(t *testing.T) {
 	svc, ctrl, bindings := newBoundSessionFixture(t)
 	ctrl.Providers = githubProviders()
 	ctx := asPerson(t.Context(), "admin@lab.local")

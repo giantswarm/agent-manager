@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `start_session` binds every session kagent gives providers to the caller in muster, not only a workspace one: where muster verifies the sandbox's own JWT, kagent lists muster on a session started without a workspace too (a Slack thread's), and its sandbox now reaches muster's tools as the person. A session without providers is not bound, as before ([giantswarm#38668](https://github.com/giantswarm/giantswarm/issues/38668)).
+
 ## [2.7.0-rc.1] - 2026-10-19
 
 ### Added
