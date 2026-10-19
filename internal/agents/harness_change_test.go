@@ -30,6 +30,7 @@ func TestUpdateRefusesAHarnessItsChecksFail(t *testing.T) {
 	f, ctx := codingFixture(t)
 
 	// The verifier's Anthropic model is no model codex reaches.
+	before := mustValues(mustGet(t, f, "verifier"))
 	dry, err := f.svc.ValidateUpdate(ctx, Update{Name: "verifier", Harness: str("codex")})
 	require.NoError(t, err)
 	assert.False(t, dry.Valid)
@@ -37,6 +38,7 @@ func TestUpdateRefusesAHarnessItsChecksFail(t *testing.T) {
 	_, err = f.svc.Update(ctx, Update{Name: "verifier", Harness: str("codex")})
 	require.ErrorIs(t, err, ErrInvalid)
 	assert.Contains(t, err.Error(), "speaks the OpenAI Responses API only")
+	assert.Equal(t, before, mustValues(mustGet(t, f, "verifier")), "a refused change writes nothing")
 
 	// The model changed with the Harness passes.
 	_, err = f.svc.Update(ctx, Update{Name: "verifier", Harness: str("codex"), ModelConfig: str("gpt-responses")})
@@ -59,11 +61,100 @@ func TestUpdateHarnessChecksThePlugins(t *testing.T) {
 	_, err := f.svc.Create(ctx, spec)
 	require.NoError(t, err)
 
-	_, err = f.svc.Update(ctx, Update{Name: "coder", Harness: str("codex"), ModelConfig: str("gpt-responses")})
+	toCodex := Update{Name: "coder", Harness: str("codex"), ModelConfig: str("gpt-responses")}
+	dry, err := f.svc.ValidateUpdate(ctx, toCodex)
+	require.NoError(t, err)
+	assert.False(t, dry.Valid)
+	assert.True(t, containsLine(dry.Errors, "is a Claude-format plugin"), dry.Errors)
+	_, err = f.svc.Update(ctx, toCodex)
 	require.ErrorIs(t, err, ErrInvalid)
 	assert.Contains(t, err.Error(), "is a Claude-format plugin")
 	_, err = f.svc.Update(ctx, Update{Name: "coder", Harness: str("omp")})
 	require.NoError(t, err)
+}
+
+// A coding Harness agent-manager has no origin list for is refused on a move
+// as on a create, and so is an origin outside the new Harness's list.
+func TestUpdateHarnessChecksTheEgress(t *testing.T) {
+	f, ctx := codingFixture(t)
+	mustCreate(t, f, f.svc.harnessGVR(), harness("kagent", "claude-go", ClaudeRuntime))
+	before := mustValues(mustGet(t, f, "verifier"))
+
+	for _, tc := range []struct {
+		name   string
+		update Update
+		want   string
+	}{
+		{"no egress entry", Update{Name: "verifier", Harness: str("claude-go")},
+			"Harness claude-go runs Claude Code but agent-manager has no egress entry for it"},
+		{"origin outside the list", Update{Name: "verifier", Harness: str("claude"), Egress: &[]string{"https://example.com"}},
+			`egress origin "https://example.com" is not one of Harness claude's origins`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dry, err := f.svc.ValidateUpdate(ctx, tc.update)
+			require.NoError(t, err)
+			assert.False(t, dry.Valid)
+			assert.True(t, containsLine(dry.Errors, tc.want), dry.Errors)
+			_, err = f.svc.Update(ctx, tc.update)
+			require.ErrorIs(t, err, ErrInvalid)
+			assert.Contains(t, err.Error(), tc.want)
+			assert.Equal(t, before, mustValues(mustGet(t, f, "verifier")), "a refused change writes nothing")
+		})
+	}
+}
+
+// A binding a kagent agent may carry but a coding agent takes none of
+// refuses the move; create_agent writes none of them, so the release is one
+// written elsewhere.
+func TestUpdateHarnessRefusesTheBindingsACodingAgentTakesNone(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		key   string
+		value any
+		want  string
+	}{
+		{"requireApproval", "muster", map[string]any{"requireApproval": true}, "takes no requireApproval binding"},
+		{"extraTools", "extraTools", []any{map[string]any{"mcp": map[string]any{"server": map[string]any{"kind": "RemoteMCPServer", "name": "github"}}}}, "extraTools: a coding agent reaches tools through muster only"},
+		{"extraAgentSpec.tools", "extraAgentSpec", map[string]any{"tools": []any{map[string]any{"type": "McpServer"}}}, "extraAgentSpec.tools: a coding agent reaches tools through muster only"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, ctx := codingFixture(t)
+			values := map[string]any{
+				"agent":       map[string]any{"name": "binder", "harness": DefaultHarnessName},
+				"modelConfig": map[string]any{"name": "default-model-config"},
+				tc.key:        tc.value,
+			}
+			mustCreate(t, f, hrGVR, helmRelease("kagent", "binder", values, true, nil))
+			before := mustValues(mustGet(t, f, "binder"))
+
+			dry, err := f.svc.ValidateUpdate(ctx, Update{Name: "binder", Harness: str("claude")})
+			require.NoError(t, err)
+			assert.False(t, dry.Valid)
+			assert.True(t, containsLine(dry.Errors, tc.want), dry.Errors)
+			_, err = f.svc.Update(ctx, Update{Name: "binder", Harness: str("claude")})
+			require.ErrorIs(t, err, ErrInvalid)
+			assert.Contains(t, err.Error(), tc.want)
+			assert.Equal(t, before, mustValues(mustGet(t, f, "binder")), "a refused change writes nothing")
+		})
+	}
+}
+
+// Every failing check is listed by the dry run, not the first alone.
+func TestValidateUpdateListsEveryHarnessRefusal(t *testing.T) {
+	f, ctx := codingFixture(t)
+	mustCreate(t, f, f.svc.harnessGVR(), harness("kagent", "claude-go", ClaudeRuntime))
+	values := map[string]any{
+		"agent":       map[string]any{"name": "binder", "harness": DefaultHarnessName},
+		"modelConfig": map[string]any{"name": "default-model-config"},
+		"muster":      map[string]any{"requireApproval": true},
+	}
+	mustCreate(t, f, hrGVR, helmRelease("kagent", "binder", values, true, nil))
+
+	dry, err := f.svc.ValidateUpdate(ctx, Update{Name: "binder", Harness: str("claude-go")})
+	require.NoError(t, err)
+	assert.False(t, dry.Valid)
+	assert.True(t, containsLine(dry.Errors, "has no egress entry for it"), dry.Errors)
+	assert.True(t, containsLine(dry.Errors, "takes no requireApproval binding"), dry.Errors)
 }
 
 // Leaving a coding Harness for a kagent one takes the platform's egress list
