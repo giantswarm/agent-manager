@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.7.0-rc.1] - 2026-10-19
+
 ### Added
 
 - `update_agent` takes `harness`: an existing agent moves to another Harness of its namespace after the checks a create on that Harness runs (model protocol, Claude-format plugins on codex, the Harness's egress entry, bindings); nothing is written when one fails and `validate_agent` with `update: true` lists them. A move from a coding Harness to a `kagent` one drops the coding Harness's egress list and prompt note. Sessions keep the revision they started on ([giantswarm#38635](https://github.com/giantswarm/giantswarm/issues/38635)).
@@ -380,8 +382,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Chart: the MCPServer CR carries `agent-platform.giantswarm.io/tool-group: agent-platform` next to `muster.giantswarm.io/type` — the Agent Platform tier of MCP servers (the portal's MCP servers page, the `agent-platform` toolset preset). `muster.mcpServer.labels` still adds or overrides labels. (#23)
 
-[Unreleased]: https://github.com/giantswarm/agent-manager/compare/v2.6.0...HEAD
-[2.6.0]: https://github.com/giantswarm/agent-manager/compare/v2.5.1-rc.1...v2.6.0
+[Unreleased]: https://github.com/giantswarm/agent-manager/compare/v2.7.0-rc.1...HEAD
+[2.7.0-rc.1]: https://github.com/giantswarm/agent-manager/compare/v2.6.0...v2.7.0-rc.1
+[2.6.0]: https://github.com/giantswarm/agent-manager/compare/v2.6.0-rc.1...v2.6.0
 [2.6.0-rc.1]: https://github.com/giantswarm/agent-manager/compare/v2.5.1-rc.1...v2.6.0-rc.1
 [2.5.1-rc.1]: https://github.com/giantswarm/agent-manager/compare/v2.5.0...v2.5.1-rc.1
 [2.5.0]: https://github.com/giantswarm/agent-manager/compare/v2.5.0-rc.4...v2.5.0
