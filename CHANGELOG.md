@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `start_session` asks kagent for the providers of a session it binds: with muster's session bindings configured, its `CreateSession` sets `bind_actor` (kagent 1.20.0), and only such a session without a workspace lists muster. A session created straight through kagent's API is not bound and keeps forwarding the caller's credential to muster. The kagent protos are those of kagent-upstream 1.20.0 ([giantswarm#38668](https://github.com/giantswarm/giantswarm/issues/38668)).
+
+## [2.7.1] - 2026-10-19
+
+### Changed
+
 - `start_session` binds every session kagent gives providers to the caller in muster, not only a workspace one: where muster verifies the sandbox's own JWT, kagent lists muster on a session started without a workspace too (a Slack thread's), and its sandbox now reaches muster's tools as the person. A session without providers is not bound, as before ([giantswarm#38668](https://github.com/giantswarm/giantswarm/issues/38668)).
 
 ## [2.7.0-rc.1] - 2026-10-19
@@ -386,7 +392,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Chart: the MCPServer CR carries `agent-platform.giantswarm.io/tool-group: agent-platform` next to `muster.giantswarm.io/type` — the Agent Platform tier of MCP servers (the portal's MCP servers page, the `agent-platform` toolset preset). `muster.mcpServer.labels` still adds or overrides labels. (#23)
 
-[Unreleased]: https://github.com/giantswarm/agent-manager/compare/v2.7.0-rc.1...HEAD
+[Unreleased]: https://github.com/giantswarm/agent-manager/compare/v2.7.1...HEAD
+[2.7.1]: https://github.com/giantswarm/agent-manager/compare/v2.7.0-rc.1...v2.7.1
 [2.7.0-rc.1]: https://github.com/giantswarm/agent-manager/compare/v2.6.0...v2.7.0-rc.1
 [2.6.0]: https://github.com/giantswarm/agent-manager/compare/v2.6.0-rc.1...v2.6.0
 [2.6.0-rc.1]: https://github.com/giantswarm/agent-manager/compare/v2.5.1-rc.1...v2.6.0-rc.1

@@ -318,17 +318,27 @@ func (x *Session) GetLastTurnTime() *timestamppb.Timestamp {
 
 // SessionProvider is a host whose credential a session gets: the egress
 // gateway sets it on requests to hostname with scheme, from a token the named
-// broker exchanges for audience. No credential is part of it.
+// broker exchanges for audience. No credential is part of it. One host may
+// carry a provider per path prefix: a request takes the provider with the
+// longest prefix its path lies under, the one without a prefix otherwise.
 type SessionProvider struct {
 	state    protoimpl.MessageState `protogen:"open.v1"`
 	Hostname string                 `protobuf:"bytes,1,opt,name=hostname,proto3" json:"hostname,omitempty"`
-	Audience string                 `protobuf:"bytes,2,opt,name=audience,proto3" json:"audience,omitempty"`
-	// "Bearer" or "Basic".
+	// The provider instance as clients read it before provider existed: equal
+	// to provider on a new Session, and read as provider when that is empty on
+	// a Session stored before it.
+	//
+	// Deprecated: Marked as deprecated in kagent/api/v1alpha1/sessions.proto.
+	Audience string `protobuf:"bytes,2,opt,name=audience,proto3" json:"audience,omitempty"`
+	// "Basic" (git) or "Bearer" (the provider's API).
 	Scheme string `protobuf:"bytes,3,opt,name=scheme,proto3" json:"scheme,omitempty"`
-	// The user name of the Basic scheme; empty for Bearer.
-	Username string `protobuf:"bytes,4,opt,name=username,proto3" json:"username,omitempty"`
-	// The token broker that exchanges the person's token for audience.
-	Broker        string `protobuf:"bytes,5,opt,name=broker,proto3" json:"broker,omitempty"`
+	// The request paths under this prefix, a path starting and ending with
+	// "/" (GitLab's "/api/"); empty for every path of hostname.
+	PathPrefix string `protobuf:"bytes,6,opt,name=path_prefix,json=pathPrefix,proto3" json:"path_prefix,omitempty"`
+	// The provider instance, one DNS label: the credential rule on hostname
+	// names ate-secret://<the installation's credential authority>/<provider>/git
+	// for Basic and .../api for Bearer.
+	Provider      string `protobuf:"bytes,7,opt,name=provider,proto3" json:"provider,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -370,6 +380,7 @@ func (x *SessionProvider) GetHostname() string {
 	return ""
 }
 
+// Deprecated: Marked as deprecated in kagent/api/v1alpha1/sessions.proto.
 func (x *SessionProvider) GetAudience() string {
 	if x != nil {
 		return x.Audience
@@ -384,16 +395,16 @@ func (x *SessionProvider) GetScheme() string {
 	return ""
 }
 
-func (x *SessionProvider) GetUsername() string {
+func (x *SessionProvider) GetPathPrefix() string {
 	if x != nil {
-		return x.Username
+		return x.PathPrefix
 	}
 	return ""
 }
 
-func (x *SessionProvider) GetBroker() string {
+func (x *SessionProvider) GetProvider() string {
 	if x != nil {
-		return x.Broker
+		return x.Provider
 	}
 	return ""
 }
@@ -666,8 +677,16 @@ type CreateSessionRequest struct {
 	// Optional. The proof the admission verifies for volume_source, opaque to
 	// kagent. Never stored and never shown.
 	AdmissionToken string `protobuf:"bytes,7,opt,name=admission_token,json=admissionToken,proto3" json:"admission_token,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// Optional. The caller binds the session's actor to its person at the
+	// installation's providers that verify the actor's own JWT once the session
+	// exists. A session without volume_source then lists those providers, so the
+	// egress gateway hands its actor that JWT on their hosts; without it, such a
+	// session lists none and its runtime keeps sending the caller's credential
+	// there, since a provider refuses an actor nobody bound. A session with
+	// volume_source gets what its admission admits either way.
+	BindActor     bool `protobuf:"varint,8,opt,name=bind_actor,json=bindActor,proto3" json:"bind_actor,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *CreateSessionRequest) Reset() {
@@ -733,6 +752,13 @@ func (x *CreateSessionRequest) GetAdmissionToken() string {
 		return x.AdmissionToken
 	}
 	return ""
+}
+
+func (x *CreateSessionRequest) GetBindActor() bool {
+	if x != nil {
+		return x.BindActor
+	}
+	return false
 }
 
 type CreateSessionResponse struct {
@@ -1749,13 +1775,14 @@ const file_kagent_api_v1alpha1_sessions_proto_rawDesc = "" +
 	"\rvolume_source\x18\x11 \x01(\v2(.kagent.api.v1alpha1.SessionVolumeSourceR\fvolumeSource\x12B\n" +
 	"\tproviders\x18\x12 \x03(\v2$.kagent.api.v1alpha1.SessionProviderR\tproviders\x12\x18\n" +
 	"\achanged\x18\x13 \x03(\tR\achanged\x12@\n" +
-	"\x0elast_turn_time\x18\x14 \x01(\v2\x1a.google.protobuf.TimestampR\flastTurnTimeJ\x04\b\x03\x10\x04J\x04\b\x04\x10\x05J\x04\b\f\x10\rR\aharnessR\x0eagent_templateR\x06labels\"\x95\x01\n" +
+	"\x0elast_turn_time\x18\x14 \x01(\v2\x1a.google.protobuf.TimestampR\flastTurnTimeJ\x04\b\x03\x10\x04J\x04\b\x04\x10\x05J\x04\b\f\x10\rR\aharnessR\x0eagent_templateR\x06labels\"\xc0\x01\n" +
 	"\x0fSessionProvider\x12\x1a\n" +
-	"\bhostname\x18\x01 \x01(\tR\bhostname\x12\x1a\n" +
-	"\baudience\x18\x02 \x01(\tR\baudience\x12\x16\n" +
-	"\x06scheme\x18\x03 \x01(\tR\x06scheme\x12\x1a\n" +
-	"\busername\x18\x04 \x01(\tR\busername\x12\x16\n" +
-	"\x06broker\x18\x05 \x01(\tR\x06broker\"\xaf\x03\n" +
+	"\bhostname\x18\x01 \x01(\tR\bhostname\x12\x1e\n" +
+	"\baudience\x18\x02 \x01(\tB\x02\x18\x01R\baudience\x12\x16\n" +
+	"\x06scheme\x18\x03 \x01(\tR\x06scheme\x12\x1f\n" +
+	"\vpath_prefix\x18\x06 \x01(\tR\n" +
+	"pathPrefix\x12\x1a\n" +
+	"\bprovider\x18\a \x01(\tR\bproviderJ\x04\b\x04\x10\x05J\x04\b\x05\x10\x06R\busernameR\x06broker\"\xaf\x03\n" +
 	"\x13SessionVolumeSource\x12B\n" +
 	"\x06volume\x18\x01 \x01(\v2\".kagent.api.v1alpha1.SessionVolumeB\x06\xbaH\x03\xc8\x01\x01R\x06volume\x12K\n" +
 	"\x06mounts\x18\x02 \x03(\v2'.kagent.api.v1alpha1.SessionVolumeMountB\n" +
@@ -1776,7 +1803,7 @@ const file_kagent_api_v1alpha1_sessions_proto_rawDesc = "" +
 	"\atask_id\x18\x01 \x01(\tR\x06taskId\x12\x16\n" +
 	"\x06reason\x18\x02 \x01(\tR\x06reason\x12\x18\n" +
 	"\amessage\x18\x03 \x01(\tR\amessage\x127\n" +
-	"\tfailed_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\bfailedAt\"\x95\x03\n" +
+	"\tfailed_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\bfailedAt\"\xb4\x03\n" +
 	"\x14CreateSessionRequest\x12D\n" +
 	"\x05agent\x18\x05 \x01(\v2&.kagent.api.v1alpha1.ResourceReferenceB\x06\xbaH\x03\xc8\x01\x01R\x05agent\x12)\n" +
 	"\n" +
@@ -1784,7 +1811,9 @@ const file_kagent_api_v1alpha1_sessions_proto_rawDesc = "" +
 	"\xbaH\ar\x05\x10\x01\x18\x80\x01R\trequestId\x12Q\n" +
 	"\x04name\x18\x04 \x01(\tB=\xbaH:r8\x18\xc8\x0123^(?:$|[^\\p{Z}\\p{Cc}](?:[^\\p{Cc}]*[^\\p{Z}\\p{Cc}])?)$R\x04name\x12M\n" +
 	"\rvolume_source\x18\x06 \x01(\v2(.kagent.api.v1alpha1.SessionVolumeSourceR\fvolumeSource\x12E\n" +
-	"\x0fadmission_token\x18\a \x01(\tB\x1c\xbaH\x19r\x17\x18\x80\x80\x012\x11^[^\\p{Z}\\p{Cc}]*$R\x0eadmissionTokenJ\x04\b\x01\x10\x02J\x04\b\x02\x10\x03R\aharnessR\x0eagent_template\"O\n" +
+	"\x0fadmission_token\x18\a \x01(\tB\x1c\xbaH\x19r\x17\x18\x80\x80\x012\x11^[^\\p{Z}\\p{Cc}]*$R\x0eadmissionToken\x12\x1d\n" +
+	"\n" +
+	"bind_actor\x18\b \x01(\bR\tbindActorJ\x04\b\x01\x10\x02J\x04\b\x02\x10\x03R\aharnessR\x0eagent_template\"O\n" +
 	"\x15CreateSessionResponse\x126\n" +
 	"\asession\x18\x01 \x01(\v2\x1c.kagent.api.v1alpha1.SessionR\asession\"<\n" +
 	"\x11GetSessionRequest\x12'\n" +

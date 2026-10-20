@@ -55,9 +55,10 @@ type Controller struct {
 	// Providers are what the admission admits a session with a volume source
 	// to, kept on the session as the controller keeps them.
 	Providers []*apiv1alpha1.SessionProvider
-	// ActorJWTProviders are what the controller gives every session, with or
-	// without a volume source: the provider instances that verify the actor's
-	// own JWT (muster), after an admitted session's Providers.
+	// ActorJWTProviders are what the controller gives a session with a volume
+	// source, and one without whose creator binds its actor (bind_actor): the
+	// provider instances that verify the actor's own JWT (muster), after an
+	// admitted session's Providers.
 	ActorJWTProviders []*apiv1alpha1.SessionProvider
 
 	mu        sync.Mutex
@@ -118,7 +119,7 @@ func (c *Controller) AddSession(namespace, name string, tasks ...*a2apb.Task) *a
 func (c *Controller) AddSessionOf(creator, namespace, name string, tasks ...*a2apb.Task) *apiv1alpha1.Session {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	s := c.newSession(namespace, name, "", nil)
+	s := c.newSession(namespace, name, "", nil, false)
 	s.Creator = creator
 	for _, task := range tasks {
 		task.ContextId = s.GetContextId()
@@ -145,7 +146,7 @@ func (c *Controller) Tasks(contextID string) []*a2apb.Task {
 // hung up, and the fake finishes the turn regardless, as the gateway does.
 func (c *Controller) TurnEnded() <-chan struct{} { return c.turnEnded }
 
-func (c *Controller) newSession(namespace, name, sessionName string, volume *apiv1alpha1.SessionVolumeSource) *apiv1alpha1.Session {
+func (c *Controller) newSession(namespace, name, sessionName string, volume *apiv1alpha1.SessionVolumeSource, bindActor bool) *apiv1alpha1.Session {
 	id := uuid.NewString()
 	s := &apiv1alpha1.Session{
 		Id: id, ContextId: id, Creator: Creator, Name: sessionName,
@@ -159,8 +160,10 @@ func (c *Controller) newSession(namespace, name, sessionName string, volume *api
 			s.Providers = append(s.Providers, proto.Clone(p).(*apiv1alpha1.SessionProvider))
 		}
 	}
-	for _, p := range c.ActorJWTProviders {
-		s.Providers = append(s.Providers, proto.Clone(p).(*apiv1alpha1.SessionProvider))
+	if volume != nil || bindActor {
+		for _, p := range c.ActorJWTProviders {
+			s.Providers = append(s.Providers, proto.Clone(p).(*apiv1alpha1.SessionProvider))
+		}
 	}
 	c.sessions = append(c.sessions, s)
 	return s
@@ -277,7 +280,7 @@ func (c *Controller) CreateSession(ctx context.Context, req *apiv1alpha1.CreateS
 			return nil, err
 		}
 	}
-	s := c.newSession(req.GetAgent().GetNamespace(), req.GetAgent().GetName(), req.GetName(), req.GetVolumeSource())
+	s := c.newSession(req.GetAgent().GetNamespace(), req.GetAgent().GetName(), req.GetName(), req.GetVolumeSource(), req.GetBindActor())
 	c.requests[req.GetRequestId()] = s.GetId()
 	return &apiv1alpha1.CreateSessionResponse{Session: s}, nil
 }

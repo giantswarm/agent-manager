@@ -63,8 +63,9 @@ func TestStartSessionWithoutAGrantIsTodaysRequest(t *testing.T) {
 		Agent:     &apiv1alpha1.ResourceReference{Namespace: "kagent", Name: "sre"},
 		RequestId: "req-1",
 		Name:      "triage",
+		BindActor: true,
 	}
-	assert.True(t, proto.Equal(want, reqs[0]), "the request is the one the surfaces send today: %v", reqs[0])
+	assert.True(t, proto.Equal(want, reqs[0]), "the request is the one the surfaces send today, its actor bound in muster: %v", reqs[0])
 	assert.Nil(t, reqs[0].GetVolumeSource())
 	assert.Empty(t, reqs[0].GetAdmissionToken())
 }
@@ -85,6 +86,7 @@ func TestStartSessionWithAGrantCarriesTheAdmissionTokenAndVolumeSource(t *testin
 		Name:           "triage",
 		VolumeSource:   platformVolume(),
 		AdmissionToken: grant,
+		BindActor:      true,
 	}
 	assert.True(t, proto.Equal(want, reqs[0]), "the request carries the grant as the admission token and the volume source it names: %v", reqs[0])
 

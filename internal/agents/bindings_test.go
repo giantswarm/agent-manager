@@ -22,8 +22,8 @@ import (
 // the provider instance github on its git and API hosts.
 func githubProviders() []*apiv1alpha1.SessionProvider {
 	return []*apiv1alpha1.SessionProvider{
-		{Hostname: "github.com", Audience: "github", Scheme: "Basic", Username: "x-access-token"},
-		{Hostname: "api.github.com", Audience: "github", Scheme: "Bearer"},
+		{Hostname: "github.com", Scheme: "Basic", Provider: "github"},
+		{Hostname: "api.github.com", Scheme: "Bearer", Provider: "github"},
 	}
 }
 
@@ -80,7 +80,7 @@ func TestAWorkspaceSessionIsBoundToItsStarterBeforeItsFirstTurn(t *testing.T) {
 // muster verifies the actor's own JWT: the reserved provider muster on
 // muster's host.
 func musterProvider() *apiv1alpha1.SessionProvider {
-	return &apiv1alpha1.SessionProvider{Hostname: "muster.example.com", Audience: "muster", Scheme: "Bearer"}
+	return &apiv1alpha1.SessionProvider{Hostname: "muster.example.com", Scheme: "Bearer", Provider: "muster"}
 }
 
 func TestAWorkspaceSessionIsBoundWithTheMusterProviderKagentAdmitted(t *testing.T) {
@@ -124,6 +124,9 @@ func TestASessionWithoutAWorkspaceIsBoundWithTheMusterProvider(t *testing.T) {
 	started, err := svc.StartSession(ctx, StartSession{Name: "sre", Message: "hello"})
 	require.NoError(t, err)
 	id := sessionID(t, started.Session)
+	requests := createRequests(ctrl)
+	require.Len(t, requests, 1)
+	assert.True(t, requests[0].GetBindActor(), "the session is created for its actor to be bound")
 	require.Len(t, bindings.Bound, 1)
 	assert.Equal(t, callerToken, bindings.Bound[0].Token, "muster is called as the person")
 	assert.Equal(t, muster.Binding{
@@ -161,8 +164,12 @@ func TestASessionWithoutAWorkspaceStartsWithoutMustersBindings(t *testing.T) {
 	ctrl.ActorJWTProviders = []*apiv1alpha1.SessionProvider{musterProvider()}
 	ctx := asPerson(t.Context(), "admin@lab.local")
 
-	_, err := svc.StartSession(ctx, StartSession{Name: "sre", Message: "hello"})
+	started, err := svc.StartSession(ctx, StartSession{Name: "sre", Message: "hello"})
 	require.NoError(t, err)
+	for _, request := range createRequests(ctrl) {
+		assert.False(t, request.GetBindActor(), "nothing binds the actor, so the session asks for no actor JWT provider")
+	}
+	assert.NotContains(t, string(started.Session), "muster", "the session keeps the caller's credential towards muster")
 }
 
 func TestASessionWithoutProvidersIsNeverBound(t *testing.T) {
@@ -286,4 +293,20 @@ func TestASessionWithoutAnActorAddressIsNotBound(t *testing.T) {
 	binding, err := sessionBinding(&apiv1alpha1.Session{Id: "s"})
 	require.NoError(t, err)
 	assert.Nil(t, binding)
+}
+
+// A Session kagent stored before SessionProvider.provider existed names its
+// provider instances in audience; the binding reads them from there.
+func TestASessionStoredBeforeProviderIsBoundByItsAudience(t *testing.T) {
+	session := &apiv1alpha1.Session{
+		Id:           "3ca7d52f-4b84-4586-9db3-413f6bbaa56d",
+		Agent:        &apiv1alpha1.ResourceReference{Namespace: "kagent", Name: "sre"},
+		A2AAuthority: "session-3ca7d52f-4b84-4586-9db3-413f6bbaa56d.kagent" + actorAuthoritySuffix,
+		//nolint:staticcheck // audience is what a Session stored before provider carries.
+		Providers: []*apiv1alpha1.SessionProvider{{Hostname: "muster.example.com", Audience: "muster", Scheme: "Bearer"}},
+	}
+	binding, err := sessionBinding(session)
+	require.NoError(t, err)
+	require.NotNil(t, binding)
+	assert.Equal(t, []string{"muster"}, binding.Providers)
 }

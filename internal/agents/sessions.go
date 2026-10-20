@@ -622,7 +622,7 @@ func (s *Service) StartSession(ctx context.Context, in StartSession) (*SessionSt
 	if requestID == "" {
 		requestID = uuid.NewString()
 	}
-	create := kagent.SessionCreate{Agent: ref, RequestID: requestID, Name: in.SessionName}
+	create := kagent.SessionCreate{Agent: ref, RequestID: requestID, Name: in.SessionName, BindActor: s.cfg.Bindings != nil}
 	var workspace *Workspace
 	if in.WorkspaceGrant != "" {
 		if workspace, err = workspaceGrant(ctx, in.WorkspaceGrant, time.Now()); err != nil {
@@ -771,6 +771,17 @@ func (s *Service) DeleteSession(ctx context.Context, sessionID string) (*Session
 // records for the Session's Substrate actor once it is created.
 const actorAuthoritySuffix = ".actors.resources.substrate.ate.dev"
 
+// providerInstance is the provider instance a Session provider names: its
+// provider, or its audience on a Session kagent stored before provider
+// existed.
+func providerInstance(p *apiv1alpha1.SessionProvider) string {
+	if p.GetProvider() != "" {
+		return p.GetProvider()
+	}
+	//nolint:staticcheck // audience is the provider instance on a Session stored before provider existed.
+	return p.GetAudience()
+}
+
 // sessionBinding is the binding of a Session's sandbox actor: its
 // SPIFFE id from the Session's A2A authority and the provider instances
 // kagent admitted it to. Where muster verifies the actor's own JWT, kagent
@@ -781,8 +792,8 @@ const actorAuthoritySuffix = ".actors.resources.substrate.ate.dev"
 func sessionBinding(session *apiv1alpha1.Session) (*muster.Binding, error) {
 	var providers []string
 	for _, p := range session.GetProviders() {
-		if p.GetAudience() != "" && !slices.Contains(providers, p.GetAudience()) {
-			providers = append(providers, p.GetAudience())
+		if name := providerInstance(p); name != "" && !slices.Contains(providers, name) {
+			providers = append(providers, name)
 		}
 	}
 	if len(providers) == 0 {
