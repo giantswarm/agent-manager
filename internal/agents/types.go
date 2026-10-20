@@ -224,9 +224,10 @@ type Spec struct {
 	Skills Skills `json:"skills,omitempty"`
 	// Plugins the agent loads; every entry is pinned before it is written.
 	Plugins Plugins `json:"plugins,omitempty"`
-	// Egress lists the HTTP(S) origins the agent may reach besides what its
-	// revision compiles (chart value agent.egress, the Agent's spec.egress),
-	// such as https://github.com:443 or https://*.githubusercontent.com.
+	// Egress lists the origins the agent may reach besides what its revision
+	// compiles (chart value agent.egress, the Agent's spec.egress): HTTP(S)
+	// origins such as https://github.com:443 or https://*.githubusercontent.com,
+	// and TLS passthrough destinations such as tls://db.example.com:5432.
 	Egress []string `json:"egress,omitempty"`
 	// GitAuthSecretName names the Secret in the agent's namespace whose key
 	// `token` reads the agent's private git skills and plugins (chart value

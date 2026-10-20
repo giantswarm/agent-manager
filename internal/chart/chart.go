@@ -31,8 +31,9 @@ import (
 // $defs/plugin.schema.json); `agent.harness` is the Agent's spec.harnessRef;
 // `muster.url`, `muster.tools`,
 // `muster.discovery`; none of the 0.x runtime keys; `skillsGitAuthSecretRef`,
-// the one read credential of every private git skill and plugin.
-const EmbeddedSchemaVersion = "2.1.0"
+// the one read credential of every private git skill and plugin;
+// `agent.egress` takes HTTP(S) origins and tls://<host>:<port>.
+const EmbeddedSchemaVersion = "2.2.0"
 
 //go:embed embedded/agent-values.schema.json
 var embeddedSchema []byte

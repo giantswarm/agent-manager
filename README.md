@@ -79,10 +79,13 @@ chose and confirmed — the service never derives one from a display name, per
 the creating-agents PRD), the **modelConfig** (must exist in the namespace;
 the error lists the valid ones), the **toolset** (required, see below), and
 optionally `harness`, `displayName`, `description`, `systemMessage`,
-`iconUrl`, `skills` and `plugins` (see below), `egress` (the HTTP(S) origins
-the agent may reach besides what its revision compiles, such as
-`https://github.com:443` or `https://*.githubusercontent.com`; chart
-`agent.egress`, the Agent's `spec.egress`), `labels`, `annotations`,
+`iconUrl`, `skills` and `plugins` (see below), `egress` (the origins the
+agent may reach besides what its revision compiles: HTTP(S) origins such as
+`https://github.com:443` or `https://*.githubusercontent.com`, and
+`tls://<host>:<port>` with a required port, such as `tls://db.example.com:5432`,
+TLS the egress gateway forwards without decrypting it; a host pattern and port
+take one protocol; chart `agent.egress` from 2.2.0, the Agent's `spec.egress`,
+kagent 1.21.0 or later), `labels`, `annotations`,
 `namespace`. It emits only what was set so the chart's defaults apply to
 everything else (the portal's rule) plus the platform's own two values, the
 Harness (`agent.harness`) and, when configured, the muster URL (`muster.url`),

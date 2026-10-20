@@ -60,7 +60,7 @@ name is the DNS-1123 name the person chose, never derived from displayName. mode
       "type": "boolean"
     },
     "egress": {
-      "description": "Extra HTTP(S) origins the agent may reach: <scheme>://<host>[:<port>] origins, at most 64; a wildcard replaces the leftmost label.",
+      "description": "Extra origins the agent may reach: http(s)://<host>[:<port>] or tls://<host>:<port>, at most 64; a wildcard replaces the leftmost label.",
       "items": {
         "type": "string"
       },
@@ -685,7 +685,7 @@ Lists are skills, plugins, egress and toolset. "" clears a text field back to th
       "type": "boolean"
     },
     "egress": {
-      "description": "Replaces the whole egress list ([] clears it): <scheme>://<host>[:<port>] origins, at most 64; a wildcard replaces the leftmost label.",
+      "description": "Replaces the whole egress list ([] clears it): http(s)://<host>[:<port>] or tls://<host>:<port>, at most 64; a wildcard replaces the leftmost label.",
       "items": {
         "type": "string"
       },
@@ -887,7 +887,7 @@ Checks the name, modelConfig, harness and toolset (required for a create), pins 
       "type": "string"
     },
     "egress": {
-      "description": "Extra HTTP(S) origins the agent may reach: <scheme>://<host>[:<port>] origins, at most 64; a wildcard replaces the leftmost label.",
+      "description": "Extra origins the agent may reach: http(s)://<host>[:<port>] or tls://<host>:<port>, at most 64; a wildcard replaces the leftmost label.",
       "items": {
         "type": "string"
       },
