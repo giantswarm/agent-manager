@@ -665,7 +665,7 @@ func TestUpdateMergesIntoValuesAndHonorsOwnership(t *testing.T) {
 
 	// Assigning a toolset to an agent that had none. The verifier release
 	// predates agent.harness: an update leaves the values it does not touch.
-	res, err := f.svc.Update(ctx, Update{Name: "verifier", DisplayName: str("Verifier 2"), Description: str("now with a description"), IconURL: str("https://avatars.example/v.png"), Toolset: &[]string{"preset:read-only", "server:github"}, ModelConfig: str("qwen3-8-27b")})
+	res, err := f.svc.Update(ctx, Update{Name: "verifier", DisplayName: new("Verifier 2"), Description: new("now with a description"), IconURL: new("https://avatars.example/v.png"), Toolset: &[]string{"preset:read-only", "server:github"}, ModelConfig: new("qwen3-8-27b")})
 	require.NoError(t, err)
 	assert.Equal(t, []string{"agent.description", "agent.displayName", "agent.iconUrl", "modelConfig.name", "toolset"}, res.Changed)
 	assert.Equal(t, "Verifier", res.Before["agent"].(map[string]any)["displayName"])
@@ -704,7 +704,7 @@ func TestUpdateMergesIntoValuesAndHonorsOwnership(t *testing.T) {
 	assert.Equal(t, []any{"preset:none"}, mustValues(hr)[ToolsetValuesKey], "refusals write nothing")
 
 	// Clearing a field drops the key; skills replace the list and are pinned.
-	res, err = f.svc.Update(ctx, Update{Name: "verifier", Description: str(""), Skills: &Skills{{OCI: kubectlRef + ":1.4.0"}, {Git: &GitSkill{URL: skillsRepo, Ref: "feature"}, Path: "runbooks"}}})
+	res, err = f.svc.Update(ctx, Update{Name: "verifier", Description: new(""), Skills: &Skills{{OCI: kubectlRef + ":1.4.0"}, {Git: &GitSkill{URL: skillsRepo, Ref: "feature"}, Path: "runbooks"}}})
 	require.NoError(t, err)
 	after := res.After
 	_, hasDesc := after["agent"].(map[string]any)["description"]
@@ -751,36 +751,36 @@ func TestUpdateMergesIntoValuesAndHonorsOwnership(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, res.Changed)
 
-	_, err = f.svc.Update(ctx, Update{Name: "verifier", ModelConfig: str("nope")})
+	_, err = f.svc.Update(ctx, Update{Name: "verifier", ModelConfig: new("nope")})
 	assert.ErrorIs(t, err, ErrInvalid)
 	_, err = f.svc.Update(ctx, Update{Name: "verifier", Skills: &Skills{{Git: &GitSkill{URL: "https://github.com/giantswarm/private-skills"}}}})
 	require.ErrorIs(t, err, ErrInvalid)
 	assert.Contains(t, err.Error(), "private-skills")
-	_, err = f.svc.Update(ctx, Update{Name: "missing", DisplayName: str("x")})
+	_, err = f.svc.Update(ctx, Update{Name: "missing", DisplayName: new("x")})
 	assert.ErrorIs(t, err, ErrNotFound)
 
 	// GitOps-owned: refused in apply mode, force or not; commit mode is the
 	// way (not offered by this service).
 	gitops := helmRelease("kagent", "gitops", map[string]any{"agent": map[string]any{"name": "gitops"}, "modelConfig": map[string]any{"name": "default-model-config"}}, true, map[string]any{KustomizationNameLabel: "flux-system"})
 	mustCreate(t, f, hrGVR, gitops)
-	_, err = f.svc.Update(ctx, Update{Name: "gitops", DisplayName: str("x")})
+	_, err = f.svc.Update(ctx, Update{Name: "gitops", DisplayName: new("x")})
 	require.ErrorIs(t, err, ErrGitOpsOwned)
 	assert.Contains(t, err.Error(), "flux-system")
-	_, err = f.svc.Update(ctx, Update{Name: "gitops", DisplayName: str("x"), Force: true})
+	_, err = f.svc.Update(ctx, Update{Name: "gitops", DisplayName: new("x"), Force: true})
 	require.ErrorIs(t, err, ErrGitOpsOwned)
-	_, err = f.svc.Update(ctx, Update{Name: "gitops", DisplayName: str("x"), WriteOptions: WriteOptions{Mode: ModeCommit}})
+	_, err = f.svc.Update(ctx, Update{Name: "gitops", DisplayName: new("x"), WriteOptions: WriteOptions{Mode: ModeCommit}})
 	require.ErrorIs(t, err, ErrUnsupported)
 	// The dry run answers as the write does.
-	_, err = f.svc.ValidateUpdate(ctx, Update{Name: "gitops", DisplayName: str("x")})
+	_, err = f.svc.ValidateUpdate(ctx, Update{Name: "gitops", DisplayName: new("x")})
 	require.ErrorIs(t, err, ErrGitOpsOwned)
-	_, err = f.svc.ValidateUpdate(ctx, Update{Name: "gitops", DisplayName: str("x"), Force: true})
+	_, err = f.svc.ValidateUpdate(ctx, Update{Name: "gitops", DisplayName: new("x"), Force: true})
 	require.ErrorIs(t, err, ErrGitOpsOwned)
-	_, err = f.svc.ValidateUpdate(ctx, Update{Name: "gitops", DisplayName: str("x"), WriteOptions: WriteOptions{Mode: ModeCommit}})
+	_, err = f.svc.ValidateUpdate(ctx, Update{Name: "gitops", DisplayName: new("x"), WriteOptions: WriteOptions{Mode: ModeCommit}})
 	require.ErrorIs(t, err, ErrUnsupported)
 
 	// A bare Agent has nothing to write to.
 	mustCreate(t, f, agentGVR, agentObject("kagent", "bare", "", "", true, true))
-	_, err = f.svc.Update(ctx, Update{Name: "bare", DisplayName: str("x")})
+	_, err = f.svc.Update(ctx, Update{Name: "bare", DisplayName: new("x")})
 	require.ErrorIs(t, err, ErrConflict)
 	assert.Contains(t, err.Error(), "bare Agent")
 }
@@ -1072,7 +1072,7 @@ func TestUpdateRetriesTheWriteWhenTheReleaseMovedUnderneath(t *testing.T) {
 		require.NoError(t, f.dyn.Tracker().Update(hrGVR, moved, "kagent"))
 		return true, nil, conflict
 	})
-	res, err := f.svc.Update(ctx, Update{Name: "verifier", Description: str("a new description")})
+	res, err := f.svc.Update(ctx, Update{Name: "verifier", Description: new("a new description")})
 	require.NoError(t, err)
 	assert.Equal(t, 2, updates, "one Conflict, one write")
 	assert.Equal(t, []string{"agent.description"}, res.Changed)
@@ -1091,7 +1091,7 @@ func TestUpdateRetriesTheWriteWhenTheReleaseMovedUnderneath(t *testing.T) {
 		updates++
 		return true, nil, conflict
 	})
-	_, err = f.svc.Update(ctx, Update{Name: "verifier", Description: str("never lands")})
+	_, err = f.svc.Update(ctx, Update{Name: "verifier", Description: new("never lands")})
 	require.ErrorIs(t, err, ErrConflict)
 	assert.True(t, apierrors.IsConflict(err), "the API server's error stays in the chain")
 	assert.Greater(t, updates, 1, "retried before giving up")
@@ -1162,7 +1162,10 @@ func TestPluginsArePinnedAtWriteTime(t *testing.T) {
 	}
 	assert.Equal(t, pinnedValues, dry.Manifests.Values["plugins"], "the chart's plugins list, pinned; no skills key without a selection")
 	assert.Equal(t, map[string]any{"name": "kagent-skills-token"}, dry.Manifests.Values[SkillsGitAuthValuesKey], "a git plugin gets the skills credential")
-	assert.ElementsMatch(t, []string{"git " + skillsRepo + "@v1.2.0", "oci " + kubectlRef + ":1.4.0", "git " + skillsRepo + "@"}, f.pinner.calls)
+	assert.ElementsMatch(t, []string{
+		"git " + skillsRepo + "@v1.2.0", "oci " + kubectlRef + ":1.4.0", "git " + skillsRepo + "@",
+		"plugin " + skillsRepo + "@" + tagHead + ":bundles/sre", "plugin " + skillsRepo + "@" + mainHead + ":plugins/commit-commands",
+	}, f.pinner.calls, "the kagent Harness checks each git plugin's format at its pin")
 
 	_, err = f.svc.Create(ctx, Spec{Name: "sre", ModelConfig: "default-model-config", Toolset: readOnly, Plugins: Plugins{byTag, byImageTag, claudeFormat}})
 	require.NoError(t, err)
@@ -1175,7 +1178,7 @@ func TestPluginsArePinnedAtWriteTime(t *testing.T) {
 	pinnedOCI := Plugin{OCI: kubectlRef + "@" + kubectlSum, Skills: []string{"k8s"}}
 	_, err = f.svc.ValidateCreate(ctx, Spec{Name: "pinned", ModelConfig: "default-model-config", Toolset: readOnly, Plugins: Plugins{{Git: &GitSkill{URL: skillsRepo, Commit: tagHead}}, pinnedOCI}})
 	require.NoError(t, err)
-	assert.Empty(t, f.pinner.calls, "a pin is never resolved")
+	assert.Equal(t, []string{"plugin " + skillsRepo + "@" + tagHead + ":"}, f.pinner.calls, "a pin is never resolved, only its format checked")
 
 	for name, tc := range map[string]struct {
 		spec Spec
@@ -1209,7 +1212,7 @@ func TestPluginsArePinnedAtWriteTime(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []string{"plugins", "skillsGitAuthSecretRef.name"}, res.Changed)
 	assert.Equal(t, pinnedValues[:1], res.After["plugins"])
-	assert.Equal(t, []string{"git " + skillsRepo + "@v1.2.0"}, f.pinner.calls)
+	assert.Equal(t, []string{"git " + skillsRepo + "@v1.2.0", "plugin " + skillsRepo + "@" + tagHead + ":bundles/sre"}, f.pinner.calls)
 
 	// refreshSkills re-pins every git plugin to its default-branch head, keeps
 	// an OCI pin, and changes nothing else.
@@ -1278,14 +1281,14 @@ func TestUpdateKeepsTheSkillsCredentialInStep(t *testing.T) {
 	assert.Contains(t, res.Changed, "skillsGitAuthSecretRef.name")
 
 	// The agent's own wins, "" goes back to the installation's.
-	res, err = f.svc.Update(ctx, Update{Name: "verifier", GitAuthSecretName: str("team-token")})
+	res, err = f.svc.Update(ctx, Update{Name: "verifier", GitAuthSecretName: new("team-token")})
 	require.NoError(t, err)
 	assert.Equal(t, map[string]any{"name": "team-token"}, credential(res))
 	assert.Equal(t, []string{"skillsGitAuthSecretRef.name"}, res.Changed)
-	res, err = f.svc.Update(ctx, Update{Name: "verifier", Description: str("unrelated")})
+	res, err = f.svc.Update(ctx, Update{Name: "verifier", Description: new("unrelated")})
 	require.NoError(t, err)
 	assert.Equal(t, map[string]any{"name": "team-token"}, credential(res), "an unrelated update keeps the agent's own")
-	res, err = f.svc.Update(ctx, Update{Name: "verifier", GitAuthSecretName: str("")})
+	res, err = f.svc.Update(ctx, Update{Name: "verifier", GitAuthSecretName: new("")})
 	require.NoError(t, err)
 	assert.Equal(t, map[string]any{"name": "kagent-skills-token"}, credential(res))
 

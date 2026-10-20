@@ -16,7 +16,8 @@ import (
 // time, on create_agent, update_agent and validate_agent, on the values it
 // writes: a HelmRelease applied directly bypasses it. Which muster tools the
 // agent reaches is its toolset, the person's choice as on any other agent. An
-// agent on a kagent Harness is not touched.
+// agent on a kagent Harness is not touched, except that its plugins are held
+// to the Agent Plugins format, as a codex agent's are.
 
 // The runtimes of a Harness: the one key of its spec besides the workload,
 // the environment and the Substrate policy.
@@ -61,9 +62,11 @@ func isCodingRuntime(runtime string) bool {
 	return runtime != "" && runtime != KagentRuntime
 }
 
-// runtimeLabel names what a coding runtime runs, in messages.
+// runtimeLabel names what a runtime runs, in messages.
 func runtimeLabel(runtime string) string {
 	switch runtime {
+	case KagentRuntime:
+		return "the kagent runtime"
 	case ClaudeRuntime:
 		return "Claude Code"
 	case CodexRuntime:
@@ -126,7 +129,7 @@ func (s *Service) guardCoding(ctx context.Context, st *site, harness, runtime st
 		}
 		errs = append(errs, err)
 	}
-	return append(errs, s.checkPlugins(ctx, harness, runtime, values)...), nil
+	return errs, nil
 }
 
 // refuseApproval refuses a requireApproval binding and tool bindings beside
@@ -212,17 +215,20 @@ type PluginFormats interface {
 	ClaudeFormatPlugin(ctx context.Context, repoURL, commit, path string) (bool, error)
 }
 
-// checkPlugins refuses a Claude-format plugin on codex, which reads Agent
-// Plugins only and fails such an agent at boot; it is never converted. An OCI
-// plugin's format is known only once pulled: the runtime reports it.
-func (s *Service) checkPlugins(ctx context.Context, harness, runtime string, values map[string]any) []error {
+// checkPlugins refuses a Claude-format git plugin on the runtimes that read
+// Agent Plugins only, kagent and codex, which fail such an agent at boot; it
+// is never converted. A plugin in accepted (the pins of a release that keeps
+// its Harness) is not looked up again. An OCI plugin's format is known only
+// once pulled: the runtime reports it. The rule is kagent's materialiser's,
+// which ClaudeFormatPlugin copies.
+func (s *Service) checkPlugins(ctx context.Context, harness, runtime string, values map[string]any, accepted Plugins) []error {
 	formats, ok := s.pinner.(PluginFormats)
-	if runtime != CodexRuntime || !ok {
+	if !readsAgentPluginsOnly(runtime) || !ok {
 		return nil
 	}
 	var errs []error
 	for i, p := range pluginsFromValues(values) {
-		if p.Git == nil {
+		if p.Git == nil || slices.ContainsFunc(accepted, p.samePin) {
 			continue
 		}
 		claude, err := formats.ClaudeFormatPlugin(ctx, p.Git.URL, p.Git.Commit, p.Path)
@@ -230,10 +236,21 @@ func (s *Service) checkPlugins(ctx context.Context, harness, runtime string, val
 		case err != nil:
 			errs = append(errs, invalidf("plugins[%d] (%s): its format could not be checked for Harness %s, which reads Agent Plugins only: %v", i, p.Git.URL, harness, err))
 		case claude:
-			errs = append(errs, invalidf("plugins[%d] (%s) is a Claude-format plugin (.claude-plugin/plugin.json): Harness %s runs Codex, which reads the Agent Plugins format only (plugin.json at the plugin root); drop it or use its skills as skills", i, p.Git.URL, harness))
+			errs = append(errs, invalidf("plugins[%d] (%s) is a Claude-format plugin (.claude-plugin/plugin.json): Harness %s runs %s, which reads the Agent Plugins format only (plugin.json at the plugin root); drop it or use its skills as skills", i, p.Git.URL, harness, runtimeLabel(runtime)))
 		}
 	}
 	return errs
+}
+
+// readsAgentPluginsOnly reports whether a runtime skips a Claude-format
+// plugin's Claude part and so cannot load one.
+func readsAgentPluginsOnly(runtime string) bool {
+	return runtime == KagentRuntime || runtime == CodexRuntime
+}
+
+// samePin reports whether o is p's git source at the same commit and path.
+func (p Plugin) samePin(o Plugin) bool {
+	return p.Git != nil && o.Git != nil && p.Git.URL == o.Git.URL && p.Git.Commit == o.Git.Commit && p.Path == o.Path
 }
 
 // withEgressNote is prompt with the platform's egress note in place of any
