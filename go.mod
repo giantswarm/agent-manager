@@ -6,7 +6,7 @@ require (
 	buf.build/gen/go/bufbuild/protovalidate/protocolbuffers/go v1.36.12-20260825204119-511051f7f437.2
 	github.com/Masterminds/semver/v3 v3.5.0
 	github.com/a2aproject/a2a-go/v2 v2.6.0
-	github.com/giantswarm/gitops-commit v0.11.4
+	github.com/giantswarm/gitops-commit v0.11.5
 	github.com/giantswarm/mcp-oauth v1.7.4
 	github.com/giantswarm/mcp-toolkit v0.4.2
 	github.com/go-jose/go-jose/v4 v4.1.6
@@ -124,7 +124,7 @@ require (
 	github.com/google/cel-go v0.29.2 // indirect
 	github.com/google/gnostic-models v0.7.0 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
-	github.com/google/go-github/v92 v92.0.0 // indirect
+	github.com/google/go-github/v93 v93.0.0 // indirect
 	github.com/google/go-querystring v1.2.0 // indirect
 	github.com/google/jsonschema-go v0.4.2 // indirect
 	github.com/google/s2a-go v0.1.9 // indirect
