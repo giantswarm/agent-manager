@@ -751,18 +751,25 @@ func (s *Service) requireHarness(ctx context.Context, dyn dynamic.Interface, ns 
 // release names that is gone is refused: whether its guards apply cannot be
 // told.
 func (s *Service) releaseHarness(ctx context.Context, st *site, values map[string]any) (string, string, error) {
-	agentBlock, _ := values["agent"].(map[string]any)
-	name, _ := agentBlock["harness"].(string)
-	if name == s.cfg.Compose.HarnessName {
-		name = ""
-	}
-	harness, obj, err := s.harnessFor(ctx, st.agent, st.ns(), name)
+	harness, obj, err := s.harnessFor(ctx, st.agent, st.ns(), s.releaseHarnessName(values))
 	return harness, harnessRuntime(obj), err
 }
 
-// guardUpdate applies the coding-agent guards to an update's merged values;
-// nil for an agent on a kagent Harness. An agent that leaves a coding Harness
-// leaves its platform-set egress and prompt note behind.
+// releaseHarnessName is the Harness a release's values name, empty for the
+// platform's.
+func (s *Service) releaseHarnessName(values map[string]any) string {
+	agentBlock, _ := values["agent"].(map[string]any)
+	name, _ := agentBlock["harness"].(string)
+	if name == s.cfg.Compose.HarnessName {
+		return ""
+	}
+	return name
+}
+
+// guardUpdate applies the coding-agent guards to an update's merged values,
+// none for an agent on a kagent Harness, and the plugin check to a Harness
+// change or a plugin pin the update adds or changes. An agent that leaves a
+// coding Harness leaves its platform-set egress and prompt note behind.
 func (s *Service) guardUpdate(ctx context.Context, st *site, upd Update, before, after map[string]any) ([]error, error) {
 	harness, runtime, err := s.releaseHarness(ctx, st, after)
 	if err != nil {
@@ -771,19 +778,25 @@ func (s *Service) guardUpdate(ctx context.Context, st *site, upd Update, before,
 		}
 		return nil, err
 	}
-	if !isCodingRuntime(runtime) {
-		if upd.Harness != nil {
-			if err := s.leaveCoding(ctx, st, upd, before, after); err != nil {
-				return nil, err
-			}
+	var errs []error
+	if isCodingRuntime(runtime) {
+		var requested []string
+		if upd.Egress != nil {
+			requested = *upd.Egress
 		}
-		return nil, nil
+		if errs, err = s.guardCoding(ctx, st, harness, runtime, after, requested); err != nil {
+			return nil, err
+		}
+	} else if upd.Harness != nil {
+		if err := s.leaveCoding(ctx, st, upd, before, after); err != nil {
+			return nil, err
+		}
 	}
-	var requested []string
-	if upd.Egress != nil {
-		requested = *upd.Egress
+	var accepted Plugins
+	if s.releaseHarnessName(before) == s.releaseHarnessName(after) {
+		accepted = pluginsFromValues(before)
 	}
-	return s.guardCoding(ctx, st, harness, runtime, after, requested)
+	return append(errs, s.checkPlugins(ctx, harness, runtime, after, accepted)...), nil
 }
 
 // leaveCoding drops what a coding Harness set on an agent that moves to a
@@ -897,6 +910,9 @@ func (s *Service) ValidateCreate(ctx context.Context, spec Spec) (*ValidateResul
 		for _, e := range errs {
 			res.addError(e)
 		}
+	}
+	for _, e := range s.checkPlugins(ctx, harness, runtime, values, nil) {
+		res.addError(e)
 	}
 	sch, violations := ValidateValues(ctx, s.chart, values)
 	res.Errors = append(res.Errors, violations...)
@@ -1096,6 +1112,9 @@ func (s *Service) Create(ctx context.Context, spec Spec) (*CreateResult, error) 
 		if len(errs) > 0 {
 			return nil, errs[0]
 		}
+	}
+	if errs := s.checkPlugins(ctx, harness, runtime, values, nil); len(errs) > 0 {
+		return nil, errs[0]
 	}
 	sch, violations := ValidateValues(ctx, s.chart, values)
 	if len(violations) > 0 {

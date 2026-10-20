@@ -41,6 +41,8 @@ func (embeddedChart) SemverRange() string { return DefaultChartSemver }
 // token is.
 type fakePinner struct {
 	calls []string
+	// formatErr, when set, is every plugin format lookup's answer.
+	formatErr error
 }
 
 func (p *fakePinner) GitHead(_ context.Context, repoURL, ref string) (string, error) {
@@ -73,9 +75,12 @@ func (p *fakePinner) RequireReadable(_ context.Context, repoURL, login string) e
 }
 
 // ClaudeFormatPlugin answers the plugin at path "claude-format" as
-// Claude-format, every other one as Agent Plugins.
+// Claude-format, every other one as Agent Plugins, unless formatErr is set.
 func (p *fakePinner) ClaudeFormatPlugin(_ context.Context, repoURL, commit, path string) (bool, error) {
 	p.calls = append(p.calls, "plugin "+repoURL+"@"+commit+":"+path)
+	if p.formatErr != nil {
+		return false, p.formatErr
+	}
 	return path == "claude-format", nil
 }
 
@@ -164,7 +169,7 @@ func TestBuildValuesIsTheChartContract(t *testing.T) {
 func assertNoPath(t *testing.T, values map[string]any, dotted string) {
 	t.Helper()
 	cur := any(values)
-	for _, seg := range strings.Split(dotted, ".") {
+	for seg := range strings.SplitSeq(dotted, ".") {
 		m, ok := cur.(map[string]any)
 		if !ok {
 			return

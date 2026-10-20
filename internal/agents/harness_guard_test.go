@@ -2,6 +2,7 @@ package agents
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -112,10 +113,10 @@ func TestClaudeHarnessRefusesRequireApproval(t *testing.T) {
 	withApproval := coderValues("preset:read-only")
 	withApproval["muster"] = map[string]any{"requireApproval": true}
 	mustCreate(t, f, hrGVR, helmRelease("kagent", "coder", withApproval, true, nil))
-	dry, err := f.svc.ValidateUpdate(ctx, Update{Name: "coder", Description: str("tidy")})
+	dry, err := f.svc.ValidateUpdate(ctx, Update{Name: "coder", Description: new("tidy")})
 	require.NoError(t, err)
 	assert.True(t, containsLine(dry.Errors, "takes no requireApproval binding"), dry.Errors)
-	_, err = f.svc.Update(ctx, Update{Name: "coder", Description: str("tidy")})
+	_, err = f.svc.Update(ctx, Update{Name: "coder", Description: new("tidy")})
 	require.ErrorIs(t, err, ErrInvalid)
 	assert.Contains(t, err.Error(), "takes no requireApproval binding")
 
@@ -187,7 +188,7 @@ func TestClaudeHarnessWithoutEgressEntryIsRefused(t *testing.T) {
 	onGo := coderValues("preset:read-only")
 	onGo["agent"].(map[string]any)["harness"] = "claude-go"
 	mustCreate(t, f, hrGVR, helmRelease("kagent", "coder", onGo, true, nil))
-	_, err = f.svc.Update(ctx, Update{Name: "coder", Description: str("tidy")})
+	_, err = f.svc.Update(ctx, Update{Name: "coder", Description: new("tidy")})
 	require.ErrorIs(t, err, ErrInvalid)
 	assert.Contains(t, err.Error(), missing)
 }
@@ -201,12 +202,12 @@ func TestClaudeHarnessSystemPromptCarriesTheEgressNote(t *testing.T) {
 	assert.Contains(t, prompt, "only these origins: https://github.com, https://*.githubusercontent.com")
 
 	// A new prompt gets the note once, never a second copy.
-	res, err := f.svc.Update(ctx, Update{Name: "coder", SystemMessage: str("You review pull requests.")})
+	res, err := f.svc.Update(ctx, Update{Name: "coder", SystemMessage: new("You review pull requests.")})
 	require.NoError(t, err)
 	prompt = res.After["agent"].(map[string]any)["systemMessage"].(string)
 	assert.True(t, strings.HasPrefix(prompt, "You review pull requests.\n\n"+egressNoteHeading), prompt)
 	assert.Equal(t, 1, strings.Count(prompt, egressNoteHeading))
-	res, err = f.svc.Update(ctx, Update{Name: "coder", Description: str("tidy")})
+	res, err = f.svc.Update(ctx, Update{Name: "coder", Description: new("tidy")})
 	require.NoError(t, err)
 	assert.Equal(t, []string{"agent.description"}, res.Changed, "an unchanged list rewrites nothing")
 
@@ -280,11 +281,11 @@ func TestCodingGuardOnEveryNonKagentHarness(t *testing.T) {
 				written[field] = value
 				require.NoError(t, f.dyn.Resource(hrGVR).Namespace("kagent").Delete(ctx, "coder", metav1.DeleteOptions{}))
 				mustCreate(t, f, hrGVR, helmRelease("kagent", "coder", written, true, nil))
-				dryUpd, err := f.svc.ValidateUpdate(ctx, Update{Name: "coder", Description: str("tidy")})
+				dryUpd, err := f.svc.ValidateUpdate(ctx, Update{Name: "coder", Description: new("tidy")})
 				require.NoError(t, err)
 				assert.False(t, dryUpd.Valid, "%s on %s", field, h)
 				assert.True(t, containsLine(dryUpd.Errors, field), "%s on %s: %v", field, h, dryUpd.Errors)
-				_, err = f.svc.Update(ctx, Update{Name: "coder", Description: str("tidy")})
+				_, err = f.svc.Update(ctx, Update{Name: "coder", Description: new("tidy")})
 				require.ErrorIs(t, err, ErrInvalid, "%s on %s", field, h)
 			}
 		})
@@ -347,7 +348,7 @@ func TestCodingGuardRefusesAModelTheRuntimeCannotReach(t *testing.T) {
 	spec.Harness, spec.ModelConfig = "codex", "gpt-responses"
 	_, err := f.svc.Create(ctx, spec)
 	require.NoError(t, err)
-	_, err = f.svc.Update(ctx, Update{Name: "coder", ModelConfig: str("default-model-config")})
+	_, err = f.svc.Update(ctx, Update{Name: "coder", ModelConfig: new("default-model-config")})
 	require.ErrorIs(t, err, ErrInvalid)
 	assert.Contains(t, err.Error(), "speaks the OpenAI Responses API only")
 }
@@ -395,5 +396,78 @@ func TestCodingHarnessesByName(t *testing.T) {
 		dry, err := f.svc.ValidateCreate(ctx, spec)
 		require.NoError(t, err)
 		assert.True(t, containsLine(dry.Errors, `harness "`+h+`" does not exist in namespace kagent; valid: claude, kagent`), dry.Errors)
+	}
+}
+
+// The kagent runtime reads the Agent Plugins format only: a Claude-format git
+// plugin is refused on create, an Agent Plugins one taken, an OCI one left to
+// the golden boot.
+func TestKagentHarnessRefusesClaudeFormatPlugins(t *testing.T) {
+	f, ctx := claudeFixture(t, nil)
+	spec := Spec{Name: "helper", ModelConfig: "default-model-config", SystemMessage: "Help.", Toolset: []string{"preset:read-only"}}
+	spec.Plugins = Plugins{{Path: "claude-format", Git: &GitSkill{URL: skillsRepo, Commit: tagHead}}}
+	dry, err := f.svc.ValidateCreate(ctx, spec)
+	require.NoError(t, err)
+	assert.False(t, dry.Valid)
+	assert.True(t, containsLine(dry.Errors, "plugins[0] ("+skillsRepo+") is a Claude-format plugin (.claude-plugin/plugin.json): Harness kagent runs the kagent runtime, which reads the Agent Plugins format only (plugin.json at the plugin root)"), dry.Errors)
+	_, err = f.svc.Create(ctx, spec)
+	require.ErrorIs(t, err, ErrInvalid)
+	assert.Contains(t, err.Error(), "is a Claude-format plugin")
+
+	spec.Plugins = Plugins{{Path: "bundles/sre", Git: &GitSkill{URL: skillsRepo, Commit: tagHead}, Skills: []string{"triage"}}}
+	dry, err = f.svc.ValidateCreate(ctx, spec)
+	require.NoError(t, err)
+	assert.True(t, dry.Valid, "an Agent Plugins package is taken: %v", dry.Errors)
+
+	f.pinner.formatErr = errors.New("GitHub answered 503")
+	dry, err = f.svc.ValidateCreate(ctx, spec)
+	require.NoError(t, err)
+	assert.True(t, containsLine(dry.Errors, "plugins[0] ("+skillsRepo+"): its format could not be checked for Harness kagent"), dry.Errors)
+
+	f.pinner.calls = nil
+	spec.Plugins = Plugins{{OCI: kubectlRef + "@" + kubectlSum, Skills: []string{"k8s"}}}
+	_, err = f.svc.Create(ctx, spec)
+	require.NoError(t, err)
+	assert.Empty(t, f.pinner.calls, "an OCI plugin's format is not looked up")
+}
+
+// A plugin accepted on a write is not looked up again by an update that
+// keeps the Harness and the pins: a GitHub outage does not block a prompt or
+// model edit. A changed pin or a Harness change is looked up, and a lookup
+// that fails refuses.
+func TestUnchangedPluginPinsAreNotLookedUp(t *testing.T) {
+	for _, tc := range []struct {
+		harness, model, otherHarness, otherModel string
+	}{
+		{"kagent", "default-model-config", "codex", "gpt-responses"},
+		{"codex", "gpt-responses", "kagent", "default-model-config"},
+	} {
+		t.Run(tc.harness, func(t *testing.T) {
+			f, ctx := codingFixture(t)
+			spec := coderSpec("preset:read-only")
+			spec.Harness, spec.ModelConfig = tc.harness, tc.model
+			spec.Plugins = Plugins{{Path: "bundles/sre", Git: &GitSkill{URL: skillsRepo, Commit: tagHead}, Skills: []string{"triage"}}}
+			_, err := f.svc.Create(ctx, spec)
+			require.NoError(t, err)
+
+			f.pinner.formatErr = errors.New("GitHub answered 403: rate limit exceeded")
+			f.pinner.calls = nil
+			_, err = f.svc.Update(ctx, Update{Name: "coder", SystemMessage: new("You review pull requests.")})
+			require.NoError(t, err)
+			_, err = f.svc.Update(ctx, Update{Name: "coder", Plugins: &spec.Plugins})
+			require.NoError(t, err, "the same pins passed again are the stored ones")
+			assert.Empty(t, f.pinner.calls, "no plugin format lookup")
+
+			for name, upd := range map[string]Update{
+				"changed pin":    {Name: "coder", Plugins: &Plugins{{Path: "bundles/sre", Git: &GitSkill{URL: skillsRepo, Commit: mainHead}, Skills: []string{"triage"}}}},
+				"Harness change": {Name: "coder", Harness: new(tc.otherHarness), ModelConfig: new(tc.otherModel)},
+			} {
+				dry, err := f.svc.ValidateUpdate(ctx, upd)
+				require.NoError(t, err)
+				assert.True(t, containsLine(dry.Errors, "plugins[0] ("+skillsRepo+"): its format could not be checked"), "%s: %v", name, dry.Errors)
+				_, err = f.svc.Update(ctx, upd)
+				require.ErrorIs(t, err, ErrInvalid, name)
+			}
+		})
 	}
 }

@@ -12,11 +12,11 @@ import (
 func TestUpdateMovesAnAgentToAnotherHarness(t *testing.T) {
 	f, ctx := codingFixture(t)
 
-	dry, err := f.svc.ValidateUpdate(ctx, Update{Name: "verifier", Harness: str("claude")})
+	dry, err := f.svc.ValidateUpdate(ctx, Update{Name: "verifier", Harness: new("claude")})
 	require.NoError(t, err)
 	assert.True(t, dry.Valid, dry.Errors)
 
-	res, err := f.svc.Update(ctx, Update{Name: "verifier", Harness: str("claude")})
+	res, err := f.svc.Update(ctx, Update{Name: "verifier", Harness: new("claude")})
 	require.NoError(t, err)
 	assert.Contains(t, res.Changed, "agent.harness")
 	agentBlock := mustValues(mustGet(t, f, "verifier"))["agent"].(map[string]any)
@@ -31,25 +31,25 @@ func TestUpdateRefusesAHarnessItsChecksFail(t *testing.T) {
 
 	// The verifier's Anthropic model is no model codex reaches.
 	before := mustValues(mustGet(t, f, "verifier"))
-	dry, err := f.svc.ValidateUpdate(ctx, Update{Name: "verifier", Harness: str("codex")})
+	dry, err := f.svc.ValidateUpdate(ctx, Update{Name: "verifier", Harness: new("codex")})
 	require.NoError(t, err)
 	assert.False(t, dry.Valid)
 	assert.True(t, containsLine(dry.Errors, "modelConfig default-model-config (provider Anthropic, model claude-sonnet-4-6): Harness codex runs Codex, which speaks the OpenAI Responses API only"), dry.Errors)
-	_, err = f.svc.Update(ctx, Update{Name: "verifier", Harness: str("codex")})
+	_, err = f.svc.Update(ctx, Update{Name: "verifier", Harness: new("codex")})
 	require.ErrorIs(t, err, ErrInvalid)
 	assert.Contains(t, err.Error(), "speaks the OpenAI Responses API only")
 	assert.Equal(t, before, mustValues(mustGet(t, f, "verifier")), "a refused change writes nothing")
 
 	// The model changed with the Harness passes.
-	_, err = f.svc.Update(ctx, Update{Name: "verifier", Harness: str("codex"), ModelConfig: str("gpt-responses")})
+	_, err = f.svc.Update(ctx, Update{Name: "verifier", Harness: new("codex"), ModelConfig: new("gpt-responses")})
 	require.NoError(t, err)
 	assert.Equal(t, "codex", mustValues(mustGet(t, f, "verifier"))["agent"].(map[string]any)["harness"])
 
 	// A Harness the namespace does not have is refused with the ones it has.
-	dry, err = f.svc.ValidateUpdate(ctx, Update{Name: "verifier", Harness: str("opencode")})
+	dry, err = f.svc.ValidateUpdate(ctx, Update{Name: "verifier", Harness: new("opencode")})
 	require.NoError(t, err)
 	assert.True(t, containsLine(dry.Errors, `harness "opencode" does not exist in namespace kagent; valid: claude, codex, kagent, omp`), dry.Errors)
-	_, err = f.svc.Update(ctx, Update{Name: "verifier", Harness: str("opencode")})
+	_, err = f.svc.Update(ctx, Update{Name: "verifier", Harness: new("opencode")})
 	require.ErrorIs(t, err, ErrInvalid)
 }
 
@@ -61,7 +61,7 @@ func TestUpdateHarnessChecksThePlugins(t *testing.T) {
 	_, err := f.svc.Create(ctx, spec)
 	require.NoError(t, err)
 
-	toCodex := Update{Name: "coder", Harness: str("codex"), ModelConfig: str("gpt-responses")}
+	toCodex := Update{Name: "coder", Harness: new("codex"), ModelConfig: new("gpt-responses")}
 	dry, err := f.svc.ValidateUpdate(ctx, toCodex)
 	require.NoError(t, err)
 	assert.False(t, dry.Valid)
@@ -69,8 +69,29 @@ func TestUpdateHarnessChecksThePlugins(t *testing.T) {
 	_, err = f.svc.Update(ctx, toCodex)
 	require.ErrorIs(t, err, ErrInvalid)
 	assert.Contains(t, err.Error(), "is a Claude-format plugin")
-	_, err = f.svc.Update(ctx, Update{Name: "coder", Harness: str("omp")})
+	_, err = f.svc.Update(ctx, Update{Name: "coder", Harness: new("omp")})
 	require.NoError(t, err)
+}
+
+// A claude agent binding a Claude-format plugin does not move to kagent,
+// whose revision would never become Ready.
+func TestUpdateHarnessToKagentChecksThePlugins(t *testing.T) {
+	f, ctx := codingFixture(t)
+	spec := coderSpec("preset:read-only")
+	spec.Plugins = Plugins{{Path: "claude-format", Git: &GitSkill{URL: skillsRepo, Commit: tagHead}}}
+	_, err := f.svc.Create(ctx, spec)
+	require.NoError(t, err)
+	before := mustValues(mustGet(t, f, "coder"))
+
+	toKagent := Update{Name: "coder", Harness: new("kagent")}
+	dry, err := f.svc.ValidateUpdate(ctx, toKagent)
+	require.NoError(t, err)
+	assert.False(t, dry.Valid)
+	assert.True(t, containsLine(dry.Errors, "plugins[0] ("+skillsRepo+") is a Claude-format plugin (.claude-plugin/plugin.json): Harness kagent runs the kagent runtime"), dry.Errors)
+	_, err = f.svc.Update(ctx, toKagent)
+	require.ErrorIs(t, err, ErrInvalid)
+	assert.Contains(t, err.Error(), "is a Claude-format plugin")
+	assert.Equal(t, before, mustValues(mustGet(t, f, "coder")), "a refused change writes nothing")
 }
 
 // A coding Harness agent-manager has no origin list for is refused on a move
@@ -85,9 +106,9 @@ func TestUpdateHarnessChecksTheEgress(t *testing.T) {
 		update Update
 		want   string
 	}{
-		{"no egress entry", Update{Name: "verifier", Harness: str("claude-go")},
+		{"no egress entry", Update{Name: "verifier", Harness: new("claude-go")},
 			"Harness claude-go runs Claude Code but agent-manager has no egress entry for it"},
-		{"origin outside the list", Update{Name: "verifier", Harness: str("claude"), Egress: &[]string{"https://example.com"}},
+		{"origin outside the list", Update{Name: "verifier", Harness: new("claude"), Egress: &[]string{"https://example.com"}},
 			`egress origin "https://example.com" is not one of Harness claude's origins`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -127,11 +148,11 @@ func TestUpdateHarnessRefusesTheBindingsACodingAgentTakesNone(t *testing.T) {
 			mustCreate(t, f, hrGVR, helmRelease("kagent", "binder", values, true, nil))
 			before := mustValues(mustGet(t, f, "binder"))
 
-			dry, err := f.svc.ValidateUpdate(ctx, Update{Name: "binder", Harness: str("claude")})
+			dry, err := f.svc.ValidateUpdate(ctx, Update{Name: "binder", Harness: new("claude")})
 			require.NoError(t, err)
 			assert.False(t, dry.Valid)
 			assert.True(t, containsLine(dry.Errors, tc.want), dry.Errors)
-			_, err = f.svc.Update(ctx, Update{Name: "binder", Harness: str("claude")})
+			_, err = f.svc.Update(ctx, Update{Name: "binder", Harness: new("claude")})
 			require.ErrorIs(t, err, ErrInvalid)
 			assert.Contains(t, err.Error(), tc.want)
 			assert.Equal(t, before, mustValues(mustGet(t, f, "binder")), "a refused change writes nothing")
@@ -150,7 +171,7 @@ func TestValidateUpdateListsEveryHarnessRefusal(t *testing.T) {
 	}
 	mustCreate(t, f, hrGVR, helmRelease("kagent", "binder", values, true, nil))
 
-	dry, err := f.svc.ValidateUpdate(ctx, Update{Name: "binder", Harness: str("claude-go")})
+	dry, err := f.svc.ValidateUpdate(ctx, Update{Name: "binder", Harness: new("claude-go")})
 	require.NoError(t, err)
 	assert.False(t, dry.Valid)
 	assert.True(t, containsLine(dry.Errors, "has no egress entry for it"), dry.Errors)
@@ -164,7 +185,7 @@ func TestUpdateFromACodingHarnessDropsThePlatformsEgress(t *testing.T) {
 	_, err := f.svc.Create(ctx, coderSpec("preset:read-only"))
 	require.NoError(t, err)
 
-	res, err := f.svc.Update(ctx, Update{Name: "coder", Harness: str("kagent")})
+	res, err := f.svc.Update(ctx, Update{Name: "coder", Harness: new("kagent")})
 	require.NoError(t, err)
 	agentBlock := res.After["agent"].(map[string]any)
 	assert.Equal(t, "kagent", agentBlock["harness"])
@@ -172,9 +193,9 @@ func TestUpdateFromACodingHarnessDropsThePlatformsEgress(t *testing.T) {
 	assert.Equal(t, "You keep the GitOps repositories tidy.", agentBlock["systemMessage"])
 
 	// Egress passed with the change is the agent's own and stays.
-	_, err = f.svc.Update(ctx, Update{Name: "coder", Harness: str("claude")})
+	_, err = f.svc.Update(ctx, Update{Name: "coder", Harness: new("claude")})
 	require.NoError(t, err)
-	res, err = f.svc.Update(ctx, Update{Name: "coder", Harness: str("kagent"), Egress: &[]string{"https://example.com"}})
+	res, err = f.svc.Update(ctx, Update{Name: "coder", Harness: new("kagent"), Egress: &[]string{"https://example.com"}})
 	require.NoError(t, err)
 	assert.Equal(t, []any{"https://example.com"}, res.After["agent"].(map[string]any)["egress"])
 }
@@ -184,7 +205,7 @@ func TestUpdateEmptyHarnessIsThePlatforms(t *testing.T) {
 	f, ctx := codingFixture(t)
 	_, err := f.svc.Create(ctx, coderSpec("preset:read-only"))
 	require.NoError(t, err)
-	res, err := f.svc.Update(ctx, Update{Name: "coder", Harness: str("")})
+	res, err := f.svc.Update(ctx, Update{Name: "coder", Harness: new("")})
 	require.NoError(t, err)
 	assert.Equal(t, DefaultHarnessName, res.After["agent"].(map[string]any)["harness"])
 }

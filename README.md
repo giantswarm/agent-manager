@@ -173,11 +173,9 @@ person.
   ModelConfig; on `codex` an OpenAI ModelConfig with `openAI.apiFormat:
   responses` or a Bedrock `gpt-*` one. A `byo` runtime's model is its image's
   to check (omp takes the Anthropic-protocol ModelConfig claude uses).
-- **No Claude-format plugin on `codex`**: a git plugin with a
-  `.claude-plugin/plugin.json` manifest and no root `plugin.json` is refused,
-  never converted; Codex reads the Agent Plugins format only. An OCI plugin's
-  format is reported by the runtime. MCP servers on `codex` speak Streamable
-  HTTP only; a coding agent binds none but muster's.
+- **No Claude-format plugin on `codex`**, as on `kagent` (see `plugins`
+  below). MCP servers on `codex` speak Streamable HTTP only; a coding agent
+  binds none but muster's.
 
 The guards are write-time: a HelmRelease applied directly bypasses them.
 
@@ -193,7 +191,13 @@ The guards are write-time: a HelmRelease applied directly bypasses them.
   servers load either way. A skill name appears once across `skills` and
   every plugin's selection. A private git plugin reads with the same
   credential as a private git skill, and is refused when the caller cannot
-  read its repository.
+  read its repository. On the `kagent` and `codex` Harnesses, which read the
+  Agent Plugins format only, a git plugin with a `.claude-plugin/plugin.json`
+  manifest and no root `plugin.json` is refused, never converted; the fix is a
+  root `plugin.json`. It is checked at its pinned commit on create, on a
+  Harness change and on an update that adds or changes a plugin pin; a lookup
+  that fails refuses. An update that keeps the Harness and the pins is not
+  checked again. An OCI plugin's format is reported by the runtime at boot.
 
 There is no `runtime` argument: a request still carrying `runtime` is refused
 with the reason, and the 0.x `skills.gitAuthSecretName` is refused naming its

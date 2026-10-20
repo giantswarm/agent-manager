@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `create_agent`, `validate_agent` and `update_agent` refuse a Claude-format git plugin (`.claude-plugin/plugin.json`, no root `plugin.json`) on a `kagent` Harness as on `codex`, a Harness change to `kagent` included, naming the Harness's runtime and the fix, a root `plugin.json`. On both, the format is looked up on create, on a Harness change and for a plugin pin an update adds or changes; an update that keeps the Harness and the pins makes no lookup, so a GitHub outage no longer blocks a prompt or model edit. OCI plugins stay unchecked ([giantswarm#38689](https://github.com/giantswarm/giantswarm/issues/38689)).
 - `start_session` asks kagent for the providers of a session it binds: with muster's session bindings configured, its `CreateSession` sets `bind_actor` (kagent 1.20.0), and only such a session without a workspace lists muster. A session created straight through kagent's API is not bound and keeps forwarding the caller's credential to muster. The kagent protos are those of kagent-upstream 1.20.0 ([giantswarm#38668](https://github.com/giantswarm/giantswarm/issues/38668)).
 
 ## [2.7.1] - 2026-10-19
