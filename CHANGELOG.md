@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.8.0-rc.1] - 2026-10-20
+
 ### Changed
 
 - `create_agent`, `validate_agent` and `update_agent` refuse a Claude-format git plugin (`.claude-plugin/plugin.json`, no root `plugin.json`) on a `kagent` Harness as on `codex`, a Harness change to `kagent` included, naming the Harness's runtime and the fix, a root `plugin.json`. On both, the format is looked up on create, on a Harness change and for a plugin pin an update adds or changes; an update that keeps the Harness and the pins makes no lookup, so a GitHub outage no longer blocks a prompt or model edit. OCI plugins stay unchecked ([giantswarm#38689](https://github.com/giantswarm/giantswarm/issues/38689)).
@@ -398,7 +400,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Chart: the MCPServer CR carries `agent-platform.giantswarm.io/tool-group: agent-platform` next to `muster.giantswarm.io/type` — the Agent Platform tier of MCP servers (the portal's MCP servers page, the `agent-platform` toolset preset). `muster.mcpServer.labels` still adds or overrides labels. (#23)
 
-[Unreleased]: https://github.com/giantswarm/agent-manager/compare/v2.7.2...HEAD
+[Unreleased]: https://github.com/giantswarm/agent-manager/compare/v2.8.0-rc.1...HEAD
+[2.8.0-rc.1]: https://github.com/giantswarm/agent-manager/compare/v2.7.2...v2.8.0-rc.1
 [2.7.2]: https://github.com/giantswarm/agent-manager/compare/v2.7.1...v2.7.2
 [2.7.1]: https://github.com/giantswarm/agent-manager/compare/v2.7.0-rc.1...v2.7.1
 [2.7.0-rc.1]: https://github.com/giantswarm/agent-manager/compare/v2.6.0...v2.7.0-rc.1
