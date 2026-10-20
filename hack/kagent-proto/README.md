@@ -16,4 +16,4 @@ Do not edit the generated files. To move the pin, set `KAGENT_PROTO_COMMIT` in
 `protoc-gen-go-grpc` on the PATH); the target runs `goimports` over the output because the
 repository formats every Go file with it.
 
-KAGENT_PROTO_COMMIT: a32ce670287481feba0cba562ace607a64b4ecb9
+KAGENT_PROTO_COMMIT: f696549e40cdd30ad42ffd33a3a1bdafbab0827e

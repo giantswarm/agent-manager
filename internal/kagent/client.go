@@ -277,6 +277,11 @@ type SessionCreate struct {
 	// AdmissionToken is the proof the controller's admission verifies for
 	// VolumeSource. The controller stores and shows it nowhere.
 	AdmissionToken string
+	// BindActor tells the controller the caller binds the session's actor in
+	// muster once it exists: only then does a session without VolumeSource
+	// list muster as a provider, where the egress gateway hands the actor its
+	// own JWT in place of the caller's credential.
+	BindActor bool
 }
 
 // CreateSession is SessionService/CreateSession.
@@ -291,6 +296,7 @@ func (c *Client) CreateSession(ctx context.Context, token string, in SessionCrea
 		Name:           in.Name,
 		VolumeSource:   in.VolumeSource,
 		AdmissionToken: in.AdmissionToken,
+		BindActor:      in.BindActor,
 	})
 	if err != nil {
 		return nil, err

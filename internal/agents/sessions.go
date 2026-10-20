@@ -622,7 +622,7 @@ func (s *Service) StartSession(ctx context.Context, in StartSession) (*SessionSt
 	if requestID == "" {
 		requestID = uuid.NewString()
 	}
-	create := kagent.SessionCreate{Agent: ref, RequestID: requestID, Name: in.SessionName}
+	create := kagent.SessionCreate{Agent: ref, RequestID: requestID, Name: in.SessionName, BindActor: s.cfg.Bindings != nil}
 	var workspace *Workspace
 	if in.WorkspaceGrant != "" {
 		if workspace, err = workspaceGrant(ctx, in.WorkspaceGrant, time.Now()); err != nil {

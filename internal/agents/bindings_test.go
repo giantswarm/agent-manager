@@ -22,8 +22,8 @@ import (
 // the provider instance github on its git and API hosts.
 func githubProviders() []*apiv1alpha1.SessionProvider {
 	return []*apiv1alpha1.SessionProvider{
-		{Hostname: "github.com", Audience: "github", Scheme: "Basic", Username: "x-access-token"},
-		{Hostname: "api.github.com", Audience: "github", Scheme: "Bearer"},
+		{Hostname: "github.com", Audience: "github", Scheme: "Basic", Provider: "github"},
+		{Hostname: "api.github.com", Audience: "github", Scheme: "Bearer", Provider: "github"},
 	}
 }
 
@@ -124,6 +124,9 @@ func TestASessionWithoutAWorkspaceIsBoundWithTheMusterProvider(t *testing.T) {
 	started, err := svc.StartSession(ctx, StartSession{Name: "sre", Message: "hello"})
 	require.NoError(t, err)
 	id := sessionID(t, started.Session)
+	requests := createRequests(ctrl)
+	require.Len(t, requests, 1)
+	assert.True(t, requests[0].GetBindActor(), "the session is created for its actor to be bound")
 	require.Len(t, bindings.Bound, 1)
 	assert.Equal(t, callerToken, bindings.Bound[0].Token, "muster is called as the person")
 	assert.Equal(t, muster.Binding{
@@ -161,8 +164,12 @@ func TestASessionWithoutAWorkspaceStartsWithoutMustersBindings(t *testing.T) {
 	ctrl.ActorJWTProviders = []*apiv1alpha1.SessionProvider{musterProvider()}
 	ctx := asPerson(t.Context(), "admin@lab.local")
 
-	_, err := svc.StartSession(ctx, StartSession{Name: "sre", Message: "hello"})
+	started, err := svc.StartSession(ctx, StartSession{Name: "sre", Message: "hello"})
 	require.NoError(t, err)
+	for _, request := range createRequests(ctrl) {
+		assert.False(t, request.GetBindActor(), "nothing binds the actor, so the session asks for no actor JWT provider")
+	}
+	assert.NotContains(t, string(started.Session), "muster", "the session keeps the caller's credential towards muster")
 }
 
 func TestASessionWithoutProvidersIsNeverBound(t *testing.T) {
