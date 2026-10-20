@@ -11,6 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `create_agent`, `validate_agent` and `update_agent` (and the REST API) accept `tls://<host>:<port>` in `egress`, a TLS passthrough destination with the host rules of an HTTP(S) origin and a required port, and pass it to the chart's `agent.egress` unchanged; a `tls://` entry without a port is refused with the reason, as is a host pattern and port listed over two protocols. The embedded values schema is the agent chart 2.2.0's; the Agent needs kagent 1.21.0 or later ([agent-manager#104](https://github.com/giantswarm/agent-manager/issues/104)).
+
+## [2.8.0-rc.1] - 2026-10-20
+
+### Changed
+
 - `create_agent`, `validate_agent` and `update_agent` refuse a Claude-format git plugin (`.claude-plugin/plugin.json`, no root `plugin.json`) on a `kagent` Harness as on `codex`, a Harness change to `kagent` included, naming the Harness's runtime and the fix, a root `plugin.json`. On both, the format is looked up on create, on a Harness change and for a plugin pin an update adds or changes; an update that keeps the Harness and the pins makes no lookup, so a GitHub outage no longer blocks a prompt or model edit. OCI plugins stay unchecked ([giantswarm#38689](https://github.com/giantswarm/giantswarm/issues/38689)).
 
 ## [2.7.2] - 2026-10-20

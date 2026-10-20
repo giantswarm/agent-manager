@@ -173,8 +173,8 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 	}
 	pluginsProp := mcp.WithArray(argPlugins, mcp.Description(pluginDesc), mcp.Items(pluginEntry))
 	pluginsReplaceProp := mcp.WithArray(argPlugins, mcp.Description("Replaces the whole plugin list ([] clears it): "+pluginShape+"."), mcp.Items(pluginEntry))
-	originShape := "<scheme>://<host>[:<port>] origins, at most 64; a wildcard replaces the leftmost label"
-	egressDesc := "Extra HTTP(S) origins the agent may reach: " + originShape + "."
+	originShape := "http(s)://<host>[:<port>] or tls://<host>:<port>, at most 64; a wildcard replaces the leftmost label"
+	egressDesc := "Extra origins the agent may reach: " + originShape + "."
 	egressProp := mcp.WithArray(argEgress, mcp.Description(egressDesc), mcp.Items(stringSchema))
 	egressReplaceProp := mcp.WithArray(argEgress, mcp.Description("Replaces the whole egress list ([] clears it): "+originShape+"."), mcp.Items(stringSchema))
 	harnessDesc := "Harness that runs the agent; omit for the platform Harness. A coding Harness (claude, codex, …) fixes egress, refuses extra bindings."

@@ -163,10 +163,10 @@
                 },
                 "egress": {
                     "type": "array",
-                    "description": "HTTP(S) origins the agent may reach besides the destinations its revision compiles (the model, its MCP servers, its skill and plugin sources, telemetry), such as `https://github.com:443` or `https://proxy.golang.org`. Rendered into the Agent's spec.egress. An origin is `http(s)://<host>[:port]` with no path; the host may have `*` as its leftmost label (`https://*.githubusercontent.com` matches one label, such as raw.githubusercontent.com) and a wildcard needs two labels under it, so nothing opens a whole top-level domain or every host. At most 64 origins. The chart refuses anything else, naming the entry.",
+                    "description": "Origins the agent may reach besides the destinations its revision compiles (the model, its MCP servers, its skill and plugin sources, telemetry), such as `https://github.com:443`, `https://proxy.golang.org` or `tls://db.example.com:5432`. Rendered into the Agent's spec.egress. An origin is `http(s)://<host>[:port]` with no path, or `tls://<host>:<port>` with a required port: TLS that the egress gateway forwards without decrypting it, matched on the SNI server name (a database or message broker that speaks TLS from the first byte, not STARTTLS). The host may have `*` as its leftmost label (`https://*.githubusercontent.com` matches one label, such as raw.githubusercontent.com) and a wildcard needs two labels under it, so nothing opens a whole top-level domain or every host. At most 64 origins. The chart refuses anything else, naming the entry.",
                     "items": {
                         "type": "string",
-                        "pattern": "^https?://(\\*\\.([a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?\\.)+|([a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?\\.)*)[a-z]([-a-z0-9]{0,61}[a-z0-9])?(:([1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?$"
+                        "pattern": "^(https?://(\\*\\.([a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?\\.)+|([a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?\\.)*)[a-z]([-a-z0-9]{0,61}[a-z0-9])?(:([1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?|tls://(\\*\\.([a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?\\.)+|([a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?\\.)*)[a-z]([-a-z0-9]{0,61}[a-z0-9])?:([1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))$"
                     },
                     "maxItems": 64,
                     "uniqueItems": true
