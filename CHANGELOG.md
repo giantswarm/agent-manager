@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.8.0-rc.1] - 2026-10-20
+
 ### Changed
 
 - `create_agent`, `validate_agent` and `update_agent` (and the REST API) accept `tls://<host>:<port>` in `egress`, a TLS passthrough destination with the host rules of an HTTP(S) origin and a required port, and pass it to the chart's `agent.egress` unchanged; a `tls://` entry without a port is refused with the reason, as is a host pattern and port listed over two protocols. The embedded values schema is the agent chart 2.2.0's; the Agent needs kagent 1.21.0 or later ([agent-manager#104](https://github.com/giantswarm/agent-manager/issues/104)).
