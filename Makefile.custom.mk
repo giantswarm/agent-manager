@@ -38,7 +38,7 @@ test-envtest: ## Run the envtest-backed tests against a real kube-apiserver (dow
 # generate-kagent`, and commit hack/kagent-proto/ and internal/kagent/gen/
 # together.
 KAGENT_PROTO_REPO ?= https://github.com/giantswarm/kagent-upstream.git
-KAGENT_PROTO_COMMIT ?= f696549e40cdd30ad42ffd33a3a1bdafbab0827e
+KAGENT_PROTO_COMMIT ?= 0acd151a7472987e0493732825e087926491c837
 KAGENT_PROTO_FILES := common runtime sessions
 
 .PHONY: generate-kagent
