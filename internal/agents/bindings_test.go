@@ -133,6 +133,7 @@ func TestASessionWithoutAWorkspaceIsBoundWithTheMusterProvider(t *testing.T) {
 		Actor:     "spiffe://substrate-actor.local/actor/" + kagenttest.Atespace + "/session-" + strings.ToLower(id),
 		Session:   "kagent/" + id,
 		Providers: []string{"muster"},
+		Toolset:   []string{"preset:read-only"},
 	}, bindings.Bound[0].Binding, "muster alone: no workspace provider is admitted without a grant")
 
 	_, err = svc.DeleteSession(ctx, id)

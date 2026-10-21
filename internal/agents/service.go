@@ -63,6 +63,12 @@ type Config struct {
 	// Session's sandbox to the person who started it. Nil: a Session is
 	// started in no workspace.
 	Bindings SessionBinder
+	// ToolsetBound says muster trusts the actor JWT of a bound Session:
+	// every Session start_session binds carries the agent's toolset, which
+	// muster resolves every request of the sandbox within. get_agent,
+	// list_agents and get_info then report a toolset as bound to each
+	// session at its start.
+	ToolsetBound bool
 	// HarnessEgress is the platform's origin list per coding Harness (any
 	// runtime but kagent), by Harness name: written into a coding agent's
 	// egress, and the only origins it may name. A coding Harness without an
@@ -239,6 +245,9 @@ func (s *Service) Info(ctx context.Context) InfoResponse {
 		// sessions: list_sessions, get_session, start_session and
 		// delete_session reach the kagent controller.
 		"sessions": s.SessionsAvailable(),
+		// toolsetBound: an agent's toolset is bound to each session at its
+		// start, at muster, for every process of the session's sandbox.
+		"toolsetBound": s.toolsetBound(),
 	}
 	out.Identity = s.kube.Identity()
 	kagentAPI := KagentAPIGroup + "/" + s.cfg.KagentAPIVersion
@@ -450,6 +459,9 @@ func (s *Service) List(ctx context.Context, loc Location) ([]Agent, error) {
 	for _, a := range byName {
 		out = append(out, *a)
 	}
+	for i := range out {
+		s.markToolsetBound(&out[i])
+	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, nil
 }
@@ -482,7 +494,22 @@ func (s *Service) get(ctx context.Context, st *site, name string) (*Agent, error
 	if hr != nil {
 		applyHelmRelease(&a, hr)
 	}
+	s.markToolsetBound(&a)
 	return &a, nil
+}
+
+// toolsetBound reports whether the installation binds an agent's toolset to
+// each session at its start: start_session binds sessions in muster and
+// muster trusts their actor JWT.
+func (s *Service) toolsetBound() bool {
+	return s.cfg.ToolsetBound && s.cfg.Bindings != nil && s.SessionsAvailable()
+}
+
+// markToolsetBound marks an agent of the installation's own cluster whose
+// toolset its sessions are bound to: a declared one or no tools. Implicit
+// full access binds none and stays labelled as such.
+func (s *Service) markToolsetBound(a *Agent) {
+	a.ToolsetBound = s.toolsetBound() && !a.IsSet() && !a.ImplicitFullAccess
 }
 
 // agentObjects reads an agent's Agent object and its owning HelmRelease

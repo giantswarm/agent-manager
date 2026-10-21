@@ -44,7 +44,17 @@ type Binding struct {
 	// and the reserved provider muster when kagent admitted the Session to
 	// muster's actor bearer.
 	Providers []string `json:"providers"`
+	// Toolset is the agent's toolset at the Session's start, the selectors
+	// muster resolves every request of the actor within when it calls muster
+	// with its own JWT (a header narrows it, never widens it). nil binds none:
+	// implicit full access.
+	Toolset []string `json:"toolset,omitempty"`
 }
+
+// Provider is the reserved provider instance a binding lists when kagent
+// admitted the Session to muster's actor bearer: the sandbox calls muster
+// itself as the person, and the binding's Toolset bounds those calls.
+const Provider = "muster"
 
 // Sentinel errors of a refused call; every error names muster.
 var (

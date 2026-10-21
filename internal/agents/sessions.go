@@ -159,6 +159,10 @@ type SessionStart struct {
 	Session   json.RawMessage `json:"session"`
 	Turn      json.RawMessage `json:"turn,omitempty"`
 	Workspace string          `json:"workspace,omitempty"`
+	// Toolset is the toolset bound to the session at muster: every request
+	// of its sandbox resolves within it until the session ends. Absent when
+	// none is bound.
+	Toolset []string `json:"toolset,omitempty"`
 }
 
 // SessionDelete is the answer of delete_session: the session as the
@@ -637,8 +641,9 @@ func (s *Service) StartSession(ctx context.Context, in StartSession) (*SessionSt
 	if err != nil {
 		return nil, kagentError(err, fmt.Sprintf("a session of agent %s", ref.Tenant()))
 	}
+	var bound []string
 	if s.cfg.Bindings != nil {
-		if err := s.bindSession(ctx, token, session); err != nil {
+		if bound, err = s.bindSession(ctx, token, ref, session); err != nil {
 			return nil, s.abandonSession(ctx, token, session, err)
 		}
 	}
@@ -648,7 +653,7 @@ func (s *Service) StartSession(ctx context.Context, in StartSession) (*SessionSt
 			return nil, err
 		}
 	}
-	out := &SessionStart{}
+	out := &SessionStart{Toolset: bound}
 	attrs := []any{identity.LogAttr(ctx), "agent", ref.Tenant(), "session", session.GetId()}
 	if workspace != nil {
 		out.Workspace = workspace.Name
@@ -812,21 +817,32 @@ func sessionBinding(session *apiv1alpha1.Session) (*muster.Binding, error) {
 }
 
 // bindSession binds a Session's sandbox actor to the caller in muster, as the
-// caller, when kagent gave the Session providers.
-func (s *Service) bindSession(ctx context.Context, token string, session *apiv1alpha1.Session) error {
+// caller, when kagent gave the Session providers. A Session whose sandbox
+// calls muster itself (the provider muster) is bound with the agent's
+// toolset as get_agent reports it at this moment, which muster resolves every
+// request of the sandbox within; a later update_agent applies to new
+// Sessions. It answers the bound toolset.
+func (s *Service) bindSession(ctx context.Context, token string, ref kagent.Ref, session *apiv1alpha1.Session) ([]string, error) {
 	binding, err := sessionBinding(session)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if binding == nil {
 		s.log.InfoContext(ctx, "session has no providers: nothing to bind in muster", identity.LogAttr(ctx), "session", session.GetId())
-		return nil
+		return nil, nil
+	}
+	if slices.Contains(binding.Providers, muster.Provider) {
+		agent, err := s.Get(ctx, In(ref.Namespace), ref.Name)
+		if err != nil {
+			return nil, fmt.Errorf("reading agent %s's toolset to bind session %s to it in muster: %w", ref.Tenant(), session.GetId(), err)
+		}
+		binding.Toolset = BoundToolset(agent)
 	}
 	if err := s.cfg.Bindings.Bind(ctx, token, *binding); err != nil {
-		return bindingError(err, session.GetId())
+		return nil, bindingError(err, session.GetId())
 	}
-	s.log.InfoContext(ctx, "session bound in muster", identity.LogAttr(ctx), "session", session.GetId(), "actor", binding.Actor, "providers", binding.Providers)
-	return nil
+	s.log.InfoContext(ctx, "session bound in muster", identity.LogAttr(ctx), "session", session.GetId(), "actor", binding.Actor, "providers", binding.Providers, "toolset", binding.Toolset)
+	return binding.Toolset, nil
 }
 
 // abandonSession deletes a Session whose bind failed, so no Session with

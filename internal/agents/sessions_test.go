@@ -34,15 +34,41 @@ func newSessionFixture(t *testing.T) (*Service, *kagenttest.Controller) {
 }
 
 // newBoundSessionFixture is newSessionFixture with muster's session
-// bindings, which it answers too.
+// bindings, which it answers too. Its agent sre declares the toolset
+// preset:read-only.
 func newBoundSessionFixture(t *testing.T) (*Service, *kagenttest.Controller, *fakeBindings) {
 	t.Helper()
-	f := newFixture(t, []runtime.Object{})
+	return newBoundSessionFixtureWith(t, sessionAgent("sre", []any{"preset:read-only"})...)
+}
+
+// newBoundSessionFixtureWith is newBoundSessionFixture with the given objects
+// in place of its agent.
+func newBoundSessionFixtureWith(t *testing.T, objs ...runtime.Object) (*Service, *kagenttest.Controller, *fakeBindings) {
+	t.Helper()
+	f := newFixture(t, objs)
 	ctrl, conn := kagenttest.New(t)
 	f.svc.cfg.Sessions = kagent.NewClient(conn)
 	bindings := &fakeBindings{}
 	f.svc.cfg.Bindings = bindings
 	return f.svc, ctrl, bindings
+}
+
+// sessionAgent is agent name in kagent as its release renders it: the
+// declared toolset (nil: none, implicit full access).
+func sessionAgent(name string, toolset []any) []runtime.Object {
+	values := map[string]any{"agent": map[string]any{"name": name}}
+	var header []string
+	if toolset != nil {
+		values[ToolsetValuesKey] = toolset
+		for _, sel := range toolset {
+			header = append(header, sel.(string))
+		}
+	}
+	return []runtime.Object{
+		helmRelease("kagent", name, values, true, nil),
+		agentObject("kagent", name, name, "kagent", true, true),
+		remoteMCPServer("kagent", name, header...),
+	}
 }
 
 // fakeBindings records muster's session bindings as the caller made them.

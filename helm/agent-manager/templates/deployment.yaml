@@ -129,6 +129,9 @@ spec:
             - --kagent-target={{ . }}
             {{- with $.Values.muster.bindingsUrl }}
             - --muster-bindings-url={{ . }}
+            {{- if $.Values.muster.actorBearer }}
+            - --muster-actor-bearer=true
+            {{- end }}
             {{- end }}
             {{- end }}
             {{- if .Values.github.enabled }}

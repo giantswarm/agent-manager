@@ -86,3 +86,27 @@ tests:
     asserts:
       - failedTemplate:
           errorPattern: must be http\(s\)://host\[:port\]/session-bindings
+
+  - it: tells agent-manager that muster trusts the actor JWT
+    template: templates/deployment.yaml
+    set:
+      muster.actorBearer: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --muster-actor-bearer=true
+
+  - it: renders no actor bearer by default
+    template: templates/deployment.yaml
+    asserts:
+      - notExists:
+          path: spec.template.spec.containers[0].args[?(@ =~ /^--muster-actor-bearer/)]
+
+  - it: renders no actor bearer without bindings
+    template: templates/deployment.yaml
+    set:
+      muster.actorBearer: true
+      muster.bindingsUrl: ""
+    asserts:
+      - notExists:
+          path: spec.template.spec.containers[0].args[?(@ =~ /^--muster-actor-bearer/)]
