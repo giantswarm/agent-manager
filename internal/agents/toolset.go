@@ -40,6 +40,23 @@ const (
 	selectorPrefixPresetOnly = "label:"
 )
 
+// presetNone is the toolset of an agent without tools.
+const presetNone = "preset:none"
+
+// BoundToolset is the toolset a Session binding carries for an agent as
+// get_agent reports it: the declared selectors, preset:none for an agent
+// without a muster server entry, nil for implicit full access (bound to no
+// toolset, as before toolsets were bound).
+func BoundToolset(a *Agent) []string {
+	switch {
+	case a.Toolset != nil:
+		return a.Toolset
+	case a.ImplicitFullAccess:
+		return nil
+	}
+	return []string{presetNone}
+}
+
 // ValidateToolset checks a declared toolset against the inline grammar:
 // non-empty, at most MaxToolsetSelectors selectors, each
 // preset:<name> | server:<name> | workflow:<name> | tool:<name>; `toolset:` is

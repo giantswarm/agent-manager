@@ -485,7 +485,7 @@ detail: transcript (default) clips tool arguments and gives tool results as stub
 ```text
 List the agents of a namespace, one summary each: model, Harness, toolset, readiness and how it is managed.
 
-managed: helmrelease is writable here, gitops changes only with mode commit, none is a bare Agent object. implicitFullAccess: true means the agent sees every gateway tool and still needs a toolset (update_agent). An agent's prompt, skills, plugins and values come from get_agent.
+managed: helmrelease is writable here, gitops changes only with mode commit, none is a bare Agent object. implicitFullAccess: true means the agent sees every gateway tool and still needs a toolset (update_agent). toolsetBound: true means the toolset is bound to each session at its start, for every process of its sandbox; otherwise the agent's runtime declares it. An agent's prompt, skills, plugins and values come from get_agent.
 ```
 
 ```json
@@ -607,7 +607,7 @@ Per repository: the ref read, the commit it resolved to (what a skills entry pin
 ```text
 Start a conversation with an agent as you, optionally sending the first message. Read replies with get_session.
 
-Refused with conflict while the agent has no ready revision (get_agent_status). With message it answers once the agent accepted the turn; the agent keeps working. Without it, send the first message yourself over A2A (tenant <namespace>/<name>, the session's contextId). The agent runs its tools as you. Pass a requestId and reuse it on a retry: it never starts a second turn.
+Refused with conflict while the agent has no ready revision (get_agent_status). With message it answers once the agent accepted the turn; the agent keeps working. Without it, send the first message yourself over A2A (tenant <namespace>/<name>, the session's contextId). The agent runs its tools as you, within toolset (the answer's: bound to the session; update_agent applies to new sessions). Pass a requestId and reuse it on a retry: it never starts a second turn.
 ```
 
 ```json

@@ -399,6 +399,11 @@ type Agent struct {
 	// muster: its meta-tools see every tool the gateway exposes to the
 	// caller. Such agents predate toolsets and still need one assigned.
 	ImplicitFullAccess bool `json:"implicitFullAccess,omitempty"`
+	// ToolsetBound is true where the installation binds the toolset to each
+	// session at its start: muster resolves every request of the session's
+	// sandbox within it, header or not, and a change applies to new
+	// sessions. False: the toolset is declared by the agent's runtime.
+	ToolsetBound bool `json:"toolsetBound,omitempty"`
 	// Tools are the template's MCP bindings.
 	Tools []ToolBinding `json:"tools,omitempty"`
 	// Ready is the Agent object's verdict (Ready and the desired revision is
@@ -430,6 +435,7 @@ type AgentSummary struct {
 	Harness            string   `json:"harness,omitempty"`
 	Toolset            []string `json:"toolset,omitempty"`
 	ImplicitFullAccess bool     `json:"implicitFullAccess,omitempty"`
+	ToolsetBound       bool     `json:"toolsetBound,omitempty"`
 	Ready              *bool    `json:"ready"`
 	Managed            string   `json:"managed"`
 	// The owning HelmRelease's state, when it needs attention: suspended,
@@ -454,6 +460,7 @@ func (a Agent) Summary() AgentSummary {
 		Harness:            a.Harness,
 		Toolset:            a.Toolset,
 		ImplicitFullAccess: a.ImplicitFullAccess,
+		ToolsetBound:       a.ToolsetBound,
 		Ready:              a.Ready,
 		Managed:            a.Managed,
 	}

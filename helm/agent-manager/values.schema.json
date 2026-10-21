@@ -355,6 +355,10 @@
             "type": "object",
             "additionalProperties": false,
             "properties": {
+                "actorBearer": {
+                    "type": "boolean",
+                    "description": "muster trusts the actor JWT of a bound session (muster's `credentialProvider.actorBearer`): every session `start_session` binds carries the agent's toolset, and `get_agent`, `list_agents` and `get_info` report a toolset as bound to each session at its start. Rendered with `bindingsUrl`. The agent-platform chart sets it with workspaces on."
+                },
                 "bindingsUrl": {
                     "type": "string",
                     "description": "muster's session bindings endpoint: `start_session` binds a workspace session's sandbox actor to the caller there, as the caller, before its first turn, and `delete_session` unbinds it, so muster releases the person's provider token to that sandbox alone. Rendered with the session tools (`oauth.enabled` and `kagent.controllerTarget`); empty refuses a workspace grant. With `networkPolicy.enabled` the policy opens egress to it: the Service's namespace for an in-cluster host, every address otherwise."
