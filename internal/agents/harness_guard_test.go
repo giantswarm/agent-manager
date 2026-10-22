@@ -199,7 +199,7 @@ func TestClaudeHarnessSystemPromptCarriesTheEgressNote(t *testing.T) {
 	require.NoError(t, err)
 	prompt := mustValues(mustGet(t, f, "coder"))["agent"].(map[string]any)["systemMessage"].(string)
 	assert.True(t, strings.HasPrefix(prompt, "You keep the GitOps repositories tidy.\n\n"+egressNoteHeading), prompt)
-	assert.Contains(t, prompt, "only these origins: https://github.com, https://*.githubusercontent.com")
+	assert.Contains(t, prompt, "only these origins: https://github.com, https://*.githubusercontent.com, and the registries of the toolchains mounted under /opt/kagent/tools.")
 
 	// A new prompt gets the note once, never a second copy.
 	res, err := f.svc.Update(ctx, Update{Name: "coder", SystemMessage: new("You review pull requests.")})
