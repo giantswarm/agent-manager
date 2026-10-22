@@ -535,7 +535,9 @@ resources:
     ephemeral-storage: 50Mi
   limits:
     cpu: 500m
-    memory: 256Mi
+    # A get_session answer at the 32 MiB maxBytes ceiling takes about 130Mi
+    # while it is built.
+    memory: 512Mi
     ephemeral-storage: 100Mi
 
 observability:

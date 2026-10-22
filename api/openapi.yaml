@@ -502,10 +502,13 @@ paths:
         answers per turn every message and then every artifact instead, tool
         call arguments clipped and tool results as stubs. `full` answers the
         raw tasks (`tasks`, with history and artifacts). The answer stays
-        within `maxBytes`: the newest turns that fit are kept, at most 200,
-        and the older ones counted in `omittedTurns`; a newest turn too big on
-        its own is clipped (`clipped`), or in `full` left out. Read one turn
-        whole with `GET /api/v1/sessions/{id}/turns/{turn}`.
+        within `maxBytes`: the newest turns that fit are kept, in `summary`
+        and `transcript` at most 200, and the older ones counted in
+        `omittedTurns`; a newest turn too big on its own is clipped
+        (`clipped`), or in `full` left out. `full` with a large `maxBytes`
+        answers the whole session as far as it fits, everything the agent
+        saw (customer data).
+        Read one turn whole with `GET /api/v1/sessions/{id}/turns/{turn}`.
       operationId: getSession
       x-mcp-tool: get_session
       parameters:
@@ -616,7 +619,7 @@ components:
       name: maxBytes
       in: query
       description: Bound on the answer's size in bytes; default 100000
-      schema: { type: integer, minimum: 4096, maximum: 1048576 }
+      schema: { type: integer, minimum: 4096, maximum: 33554432 }
     namespaceQuery:
       name: namespace
       in: query
