@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `create_agent`, `update_agent` and `validate_agent` (and the REST API) validate an agent by rendering the agent chart in-process and dry-running (`dryRun=All`) the rendered Agent and RemoteMCPServer as the caller, before the HelmRelease is written: the API server's field errors (CRD schema, CEL rules, ValidatingAdmissionPolicies, admission webhooks) are the answer, such as `Agent kagent/dba is invalid: spec.egress[0]: Too long: may not be more than 270 bytes`. An object the caller may not write, or a kind the cluster does not serve, is left to Flux and named in `validate_agent`'s `notes`. agent-manager's copy of the Agent CRD's `spec.egress` rules is gone, `--harness-egress` included; a host pattern and port listed over two protocols is now reported by kagent on the Agent's status. The binary embeds the agent chart 2.2.8 archive (was its 2.2.0 values schema) as the offline fallback. The chart's Role grants the ServiceAccount `create` and `update` on Agents and RemoteMCPServers for the dry-run ([giantswarm#38696](https://github.com/giantswarm/giantswarm/issues/38696)).
 
+### Fixed
+
+- `start_session` binds a Session with the muster provider for a person who may start Sessions but not read HelmReleases (`agent-platform:user`, `agent-platform:platform-user`): the toolset is read, as the caller, from the Agent and its RemoteMCPServer the release rendered, the toolset the agent runs with, instead of the HelmRelease; such a person's Session was created and deleted again. An `update_agent` toolset change binds Sessions started once its release is rendered ([agent-manager#239](https://github.com/giantswarm/agent-manager/issues/239)).
+
 ## [2.10.0] - 2026-10-22
 
 ### Changed
