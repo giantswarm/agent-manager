@@ -697,7 +697,20 @@ func (s *Service) defaultWorkspaceGrant(ctx context.Context, token string, ref k
 	if err != nil || workspace == "" {
 		return "", err
 	}
-	return s.authorizeDefaultWorkspace(ctx, token, workspace)
+	grant, err := s.authorizeDefaultWorkspace(ctx, token, workspace)
+	if err != nil {
+		return "", err
+	}
+	// The grant must admit the default and nothing else; kagent's admission
+	// checks its agent_namespace against the Agent's.
+	granted, err := workspaceGrant(ctx, grant, time.Now())
+	if err != nil {
+		return "", fmt.Errorf("the grant for the agent's default workspace %s: %w", workspace, err)
+	}
+	if _, name, _ := strings.Cut(workspace, "/"); granted.Name != workspace && granted.Name != name {
+		return "", fmt.Errorf("the workspace-manager answered a grant of workspace %s for the agent's default workspace %s", granted.Name, workspace)
+	}
+	return grant, nil
 }
 
 // firstMessageIDs is the namespace of the first messages' ids: a start's

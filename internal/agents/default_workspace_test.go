@@ -298,3 +298,17 @@ func TestABareStartWithoutBindingsIsRefusedNamingTheDefault(t *testing.T) {
 	assert.Contains(t, err.Error(), "kagent/platform")
 	assert.Empty(t, createRequests(ctrl), "it never falls back to no workspace")
 }
+
+func TestAGrantOfAnotherWorkspaceIsRefused(t *testing.T) {
+	other := kagenttest.WorkspaceGrant()
+	other.Workspace.Name = "other"
+	grant := kagenttest.NewSigner(t).Sign(t, "admin@lab.local", 5*time.Minute, other)
+	ws := &fakeWorkspaces{answer: &workspaces.Authorization{Outcome: workspaces.Granted, Grant: grant}}
+	svc, ctrl, _ := newDefaultWorkspaceFixture(t, ws)
+
+	_, err := svc.StartSession(asPerson(t.Context(), "admin@lab.local"), StartSession{Name: "sre"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "kagent/other")
+	assert.NotContains(t, err.Error(), grant)
+	assert.Empty(t, createRequests(ctrl))
+}
