@@ -10,7 +10,8 @@ its Harness by name, plus the agent's own muster `RemoteMCPServer`) plus the
 shared per-namespace `OCIRepository` of that chart tracking `2.x`;
 agent-manager composes both the way the portal's create flow does, pins every
 skill to a commit or a digest, validates the values against the chart's
-`values.schema.json` before applying, and reads agents back from the Agent,
+`values.schema.json` and has the API server dry-run the objects the chart
+renders from them before applying, and reads agents back from the Agent,
 the RemoteMCPServer and the HelmRelease. Readiness is the Agent's own
 `status.conditions`.
 
@@ -22,9 +23,9 @@ the RemoteMCPServer and the HelmRelease. Readiness is the Agent's own
   `agent-platform` meta chart); it is the Agent's `spec.harnessRef.name`.
 - `agentChart.ociUrl` / `agentChart.semver` are what the composed
   OCIRepository carries (`2.x`, never a pre-release build); the same registry
-  is read at run time for the latest version and its values schema
-  (`GET /api/v1/info` says which schema is in use — the embedded copy is the
-  offline fallback).
+  is read at run time for the latest version, its values schema and its
+  templates (`GET /api/v1/info` says which chart is in use — the embedded
+  copy is the offline fallback).
 - `muster.url` is the platform's muster MCP URL composed into every agent as
   the chart value `muster.url`; empty leaves the Generic chart's default.
 - `skills.repositories` are the GitHub repositories `list_skills` discovers
@@ -86,7 +87,7 @@ meta chart (`components.agent-manager.enabled`), which sets `kagent.namespace`,
 | kagent.controllerTarget | string | `"grpc://agentgateway.agent-platform.svc.cluster.local:8080"` | The kagent controller's gRPC API through agentgateway, which `list_sessions`, `get_session`, `start_session` and `delete_session` call as the caller (SessionService and the A2A service, the caller's IdP token as the bearer): `grpc://host:port` (h2c, the in-cluster agentgateway Service) or `grpcs://host[:port]` (TLS). Rendered only with `oauth.enabled`, since the calls never run as the ServiceAccount; empty turns the session tools off (`get_info` capabilities.sessions). With `networkPolicy.enabled` the policy opens egress to it: the Service's namespace for an in-cluster host, every address otherwise. |
 | harness.name | string | `"kagent"` | Name of the platform Harness an agent runs on unless `create_agent` names another (the connectivity chart renders it): composed as the chart value `agent.harness`, the Agent's `spec.harnessRef.name`. |
 | harness.egress | object | GitHub for `claude`, `codex` and `omp`, plus the Go and npm registries for `claude-go` and `claude-node` | The origins a coding agent (on a Harness whose runtime is not kagent: claude, codex, byo) reaches, by Harness name: the installation's forge and git hosts plus the toolchain's registries. agent-manager writes the list into the Agent's `spec.egress` and refuses any other origin; an agent on a coding Harness without an entry is refused, an empty list reaches none. Origins are `http(s)://host[:port]`, a host may start with `*.`. |
-| agentChart.ociUrl | string | `"oci://gsoci.azurecr.io/charts/giantswarm/agent"` | OCI URL of the Generic `agent` chart every agent renders from (2.x: one release renders one api.kagent.dev/v1alpha3 Agent plus the agent's muster RemoteMCPServer). Written into the shared per-namespace OCIRepository, and read at run time for the chart's values.schema.json that validates every create/update before it is applied (the pod needs egress to this registry; the embedded copy of the schema is the offline fallback). |
+| agentChart.ociUrl | string | `"oci://gsoci.azurecr.io/charts/giantswarm/agent"` | OCI URL of the Generic `agent` chart every agent renders from (2.x: one release renders one api.kagent.dev/v1alpha3 Agent plus the agent's muster RemoteMCPServer). Written into the shared per-namespace OCIRepository, and read at run time for the chart's values.schema.json and templates: every create/update is validated against the schema and its rendered objects dry-run before it is applied (the pod needs egress to this registry; the embedded copy of the chart is the offline fallback). |
 | agentChart.semver | string | `"2.x"` | Semver range the OCIRepository tracks. `2.x` follows every 2.x release of the Generic chart and never a pre-release build or a next major. |
 | agentChart.semverFilter | string | `""` | Regular expression the chart's tags must match before `semver` is evaluated (the OCIRepository's ref.semverFilter, and the version the values schema is read from). Set it beside a range that admits pre-releases (`>=1.5.0-0 <2.0.0-0`): the chart's branch builds are pushed to the same repository, and `^v?[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$` keeps them out while admitting release candidates. Empty filters nothing. |
 | agentChart.refresh | string | `"10m"` | How often the registry is re-read for the latest version and schema. |

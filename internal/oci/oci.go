@@ -8,6 +8,7 @@ package oci
 
 import (
 	"archive/tar"
+	"bytes"
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
@@ -213,6 +214,15 @@ func (c *Registry) ManifestDigest(ctx context.Context, ref Reference, tag string
 // ReadChartFile pulls the chart at tag and returns the named file from the
 // archive (relative to the chart root, e.g. values.schema.json).
 func (c *Registry) ReadChartFile(ctx context.Context, ref Reference, tag, file string) ([]byte, error) {
+	archive, err := c.ReadChart(ctx, ref, tag)
+	if err != nil {
+		return nil, err
+	}
+	return extractFile(bytes.NewReader(archive), ref.Name(), file)
+}
+
+// ReadChart pulls the chart at tag and returns its gzipped tar archive.
+func (c *Registry) ReadChart(ctx context.Context, ref Reference, tag string) ([]byte, error) {
 	manifestURL := fmt.Sprintf("%s/v2/%s/manifests/%s", ref.baseURL(), ref.Repository, tag)
 	resp, err := c.do(ctx, ref, http.MethodGet, manifestURL, ociManifestMediaType)
 	if err != nil {
@@ -246,7 +256,11 @@ func (c *Registry) ReadChartFile(ctx context.Context, ref Reference, tag, file s
 		return nil, err
 	}
 	defer func() { _ = blob.Body.Close() }()
-	return extractFile(io.LimitReader(blob.Body, maxChartBytes), ref.Name(), file)
+	archive, err := io.ReadAll(io.LimitReader(blob.Body, maxChartBytes))
+	if err != nil {
+		return nil, fmt.Errorf("read chart %s:%s: %w", ref.Repository, tag, err)
+	}
+	return archive, nil
 }
 
 // extractFile finds <chartName>/<file> in a gzipped tar chart archive.

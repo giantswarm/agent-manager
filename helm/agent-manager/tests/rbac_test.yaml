@@ -24,7 +24,7 @@ tests:
           content:
             apiGroups: ["api.kagent.dev"]
             resources: ["agents", "remotemcpservers"]
-            verbs: ["delete"]
+            verbs: ["create", "update", "delete"]
       - contains:
           path: rules
           content:

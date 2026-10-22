@@ -23,12 +23,12 @@ make helm-docs          # regenerate helm/agent-manager/README.md
   (subject, email, groups, source) and the IdP token downstream OAuth presents
   to the apiserver.
 - `internal/oci` — a minimal OCI distribution client (anonymous bearer
-  challenge, tag list, one file out of a chart archive, the digest a tag
+  challenge, tag list, a chart archive or one file out of it, the digest a tag
   resolves to) with a fake registry for tests in `ocitest`.
 - `internal/chart` — the agent chart: the resolver that tracks the latest
-  in-range version (`2.x`, Masterminds semantics like Flux) and its
-  `values.schema.json`, and the embedded copy of the chart 2.x schema as the
-  offline fallback.
+  in-range version (`2.x`, Masterminds semantics like Flux), its
+  `values.schema.json` and its in-process render (the Helm SDK), and the
+  embedded copy of the chart 2.x archive as the offline fallback.
 - `internal/skills` — SKILL.md discovery in GitHub repositories (the portal
   backend's `/agent-skills` semantics, each repository with the head commit it
   was read at) and the `Resolver` that pins a branch or tag to its head commit and

@@ -43,6 +43,8 @@ func newTargetFixture(t *testing.T, targetMusterURL string) *targetFixture {
 		modelConfig("kagent", "wc-model", "OpenAI", "qwen3.5:9b"),
 		harness("kagent", "kagent", "kagent"),
 	)
+	answerDryRuns(t, f.mc)
+	answerDryRuns(t, f.wc)
 	secret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{Name: "wc1-kubeconfig", Namespace: "org-acme"},
 		Data:       map[string][]byte{KubeconfigSecretKey: []byte(wcKubeconfig)},

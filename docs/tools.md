@@ -25,7 +25,7 @@ Generated from the registered tools (`make tools-doc`); through muster every too
 ```text
 Create an agent: a HelmRelease of the Generic agent chart. It needs a toolset; confirm its name with the person.
 
-name is the DNS-1123 name the person chose, never derived from displayName. modelConfig must exist in the namespace (list_model_configs; a refusal names the valid ones). Skills and plugins are pinned at write time (list_skills) and the values are checked against the chart schema; a failure writes nothing. Presets: preset:read-only, preset:none, preset:infrastructure, preset:agent-platform, preset:full. Poll get_agent_status until ready.
+name is the DNS-1123 name the person chose, never derived from displayName. modelConfig must exist in the namespace (list_model_configs; a refusal names the valid ones). Skills and plugins are pinned at write time (list_skills) the values pass the chart schema and the API server's dry-run of the rendered objects; a failure writes nothing. Presets: preset:read-only, preset:none, preset:infrastructure, preset:agent-platform, preset:full. Poll get_agent_status until ready.
 ```
 
 ```json
@@ -861,7 +861,7 @@ Lists are skills, plugins, egress and toolset. "" clears a text field back to th
 ```text
 Dry run of create_agent, or of update_agent with update: true: the manifests and every violation. Writes nothing.
 
-Checks the name, modelConfig, harness and toolset (required for a create), pins the skills and plugins and validates the values against the chart schema. mode answers as the write would. With update: true, lists, labels and annotations replace the whole value, as in update_agent.
+Checks the name, modelConfig, harness and toolset (required for a create), pins the skills and plugins, validates the values against the chart schema and has the API server dry-run the rendered Agent and RemoteMCPServer (its field errors are the errors; an object the caller may not write is a note). mode answers as the write would. With update: true, lists, labels and annotations replace the whole value, as in update_agent.
 ```
 
 ```json
