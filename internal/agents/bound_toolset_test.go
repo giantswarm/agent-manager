@@ -98,6 +98,21 @@ func TestAToolsetChangeAppliesToNewSessions(t *testing.T) {
 	assert.NotEqual(t, bindings.Bound[0].Binding.Actor, bindings.Bound[2].Binding.Actor)
 }
 
+// An Agent whose tools bind its own RemoteMCPServer while that server is
+// missing has an unknown toolset: the session is not started, never bound
+// with implicit full access.
+func TestASessionWhoseAgentsServerIsMissingIsNotStarted(t *testing.T) {
+	objs := sessionAgent("sre", []any{"preset:read-only"})
+	svc, ctrl, bindings := newBoundSessionFixtureWith(t, objs[:2]...)
+	ctrl.ActorJWTProviders = []*apiv1alpha1.SessionProvider{musterProvider()}
+	ctx := asPerson(t.Context(), "admin@lab.local")
+	_, err := svc.StartSession(ctx, StartSession{Name: "sre", Message: "hello"})
+	require.ErrorIs(t, err, ErrConflict)
+	assert.Contains(t, err.Error(), "toolset is unknown")
+	assert.Empty(t, bindings.Bound)
+	assert.NotContains(t, calledMethods(ctrl), "SendStreamingMessage", "no turn ran unbound")
+}
+
 // A person who may start Sessions and read Agents, but not their
 // HelmReleases (agent-platform:user, agent-platform:platform-user), gets a
 // Session bound with the toolset get_agent reports to an editor.

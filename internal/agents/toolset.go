@@ -81,6 +81,11 @@ func (s *Service) sessionToolset(ctx context.Context, namespace, name string) ([
 	}
 	a := Agent{}
 	a.Toolset, a.ImplicitFullAccess = toolsetOf(obj, server)
+	if a.ImplicitFullAccess && server == nil {
+		// Its tools bind a server that is not there (not rendered yet, or
+		// gone): the toolset is unknown, never full access.
+		return nil, conflictf("agent %s binds its RemoteMCPServer, which does not exist, so its toolset is unknown", st.describe(name))
+	}
 	return BoundToolset(&a), nil
 }
 
