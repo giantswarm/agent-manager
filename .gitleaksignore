@@ -1,0 +1,3 @@
+# Test fixtures naming repositories (giantswarm/secret, giantswarm/hidden), not credentials; the commit that carried them is replaced on the branch.
+b0c4885aa45852f21807d6597404b1f7d996ce38:internal/agents/default_workspace_test.go:generic-api-key:240
+b0c4885aa45852f21807d6597404b1f7d996ce38:internal/agents/default_workspace_test.go:generic-api-key:242
