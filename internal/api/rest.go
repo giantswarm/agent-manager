@@ -49,6 +49,7 @@ func (h *REST) Register(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE "+Prefix+"/agents/{namespace}/{name}", h.deleteAgent)
 	mux.HandleFunc("GET "+Prefix+"/agents/{namespace}/{name}/status", h.getAgentStatus)
 	mux.HandleFunc("GET "+Prefix+"/modelconfigs", h.listModelConfigs)
+	mux.HandleFunc("GET "+Prefix+"/egresspolicies", h.listEgressPolicies)
 	mux.HandleFunc("GET "+Prefix+"/skills", h.listSkills)
 	mux.HandleFunc("GET "+Prefix+"/agents/{namespace}/{name}/sessions", h.listSessions)
 	mux.HandleFunc("POST "+Prefix+"/agents/{namespace}/{name}/sessions", h.startSession)
@@ -208,6 +209,15 @@ func (h *REST) listModelConfigs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"modelConfigs": list})
+}
+
+func (h *REST) listEgressPolicies(w http.ResponseWriter, r *http.Request) {
+	list, err := h.svc.ListEgressPolicies(r.Context(), location(r, r.URL.Query().Get("namespace")))
+	if err != nil {
+		h.writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"egressPolicies": list})
 }
 
 func (h *REST) listSkills(w http.ResponseWriter, r *http.Request) {

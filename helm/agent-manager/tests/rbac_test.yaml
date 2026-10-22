@@ -17,7 +17,7 @@ tests:
           path: rules
           content:
             apiGroups: ["api.kagent.dev"]
-            resources: ["agents", "harnesses", "remotemcpservers", "modelconfigs"]
+            resources: ["agents", "harnesses", "remotemcpservers", "modelconfigs", "egresspolicies"]
             verbs: ["get", "list", "watch"]
       - contains:
           path: rules

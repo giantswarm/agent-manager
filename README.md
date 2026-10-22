@@ -27,7 +27,7 @@ The same operations are exposed twice from one process:
   [`api/openapi.yaml`](api/openapi.yaml), also served at `/api/v1/openapi.yaml`.
 - **MCP** (streamable HTTP, `/mcp`) for muster — tools `get_info`,
   `list_agents`, `get_agent`, `create_agent`, `update_agent`, `delete_agent`,
-  `get_agent_status`, `validate_agent`, `list_model_configs`, `list_skills`,
+  `get_agent_status`, `validate_agent`, `list_model_configs`, `list_egress_policies`, `list_skills`,
   `list_sessions`, `get_session`, `get_session_turn`, `start_session`
   (through muster: `x_agent-manager_<tool>`). Every tool sets all four
   annotations: read-only, destructive, idempotent and open-world (true for the
@@ -54,6 +54,7 @@ MCP-server-writer half.
 | Status verdict: the Agent's conditions, HelmRelease conditions/history, Warning events | `GET /api/v1/agents/{ns}/{name}/status` | `get_agent_status` | no |
 | Dry run of create/update: pinned skills, composed manifests + every violation | `POST /api/v1/agents/validate` | `validate_agent` | no |
 | kagent ModelConfigs of a namespace | `GET /api/v1/modelconfigs?namespace=` | `list_model_configs` | no |
+| kagent EgressPolicies of a namespace, read as the caller: each origin and its credential header's name, never the Secret | `GET /api/v1/egresspolicies?namespace=` | `list_egress_policies` | no |
 | Skills (`SKILL.md`) of the configured GitHub repositories, grouped by repository with its head commit | `GET /api/v1/skills[?repository=&ref=&refresh=]` | `list_skills` | no |
 | Sessions of an agent, as the caller (`SessionService/ListSessions`; `allCreators` when the controller grants it) | `GET /api/v1/agents/{ns}/{name}/sessions[?allCreators=true]` | `list_sessions` | no |
 | Start a session: create it (in a workspace with `workspaceGrant`), send the first message when one is given and answer once the turn is accepted; without `message` only create it | `POST /api/v1/agents/{ns}/{name}/sessions` | `start_session` | a kagent Session |
@@ -86,7 +87,12 @@ agent may reach besides what its revision compiles: HTTP(S) origins such as
 `tls://<host>:<port>` with a required port, such as `tls://db.example.com:5432`,
 TLS the egress gateway forwards without decrypting it; a host pattern and port
 take one protocol; chart `agent.egress` from 2.2.0, the Agent's `spec.egress`,
-kagent 1.21.0 or later), `labels`, `annotations`,
+kagent 1.21.0 or later), `egressPolicyRefs` (names of the namespace's
+EgressPolicies whose origins, and credential headers, the agent may also
+reach; each must exist, read as the caller, and `list_egress_policies` lists
+them; chart `agent.egressPolicyRefs` from 2.3.0, the Agent's
+`spec.egressPolicyRefs`; a change to a policy reaches the agent from its next
+Session without an update), `labels`, `annotations`,
 `namespace`. It emits only what was set so the chart's defaults apply to
 everything else (the portal's rule) plus the platform's own two values, the
 Harness (`agent.harness`) and, when configured, the muster URL (`muster.url`),
@@ -111,6 +117,7 @@ spec:
       systemMessage: …
       harness: claude
       egress: [https://github.com:443, "https://*.githubusercontent.com"]
+      egressPolicyRefs: [go-modules]
     modelConfig: {name: default-model-config}
     skills:
       - {name: runbooks, path: runbooks, git: {url: https://github.com/giantswarm/agent-skills, commit: 0123456789abcdef0123456789abcdef01234567}}
@@ -122,7 +129,8 @@ spec:
 ```
 
 The chart renders the `Agent` (`spec.harnessRef.name: <agent.harness>`,
-`spec.egress: <agent.egress>`; under
+`spec.egress: <agent.egress>`, `spec.egressPolicyRefs: [{name: …}]` from
+`agent.egressPolicyRefs`; under
 `spec.template` the `description`, `systemPrompt`, `modelConfig`,
 `skills[]`, `plugins[]` and the muster binding; the annotations
 `ui.giantswarm.io/display-name` and `ui.giantswarm.io/icon-url`) and the
@@ -167,7 +175,8 @@ person.
   and the toolchain's registries. agent-manager writes that list into
   `agent.egress` (the Agent's `spec.egress`) on every write and refuses any
   other origin. A coding Harness without an entry is refused with a message
-  naming the missing entry; an empty list is how it reaches no origin.
+  naming the missing entry; an empty list is how it reaches no origin. A
+  coding agent picks no EgressPolicy: `egressPolicyRefs` is refused.
 - **The egress note.** The system prompt ends with a short section, from its
   heading `## Network access (set by the platform)` on, naming those origins
   and saying that a denied request is policy, not an outage; it is rewritten

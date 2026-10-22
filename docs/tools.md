@@ -13,6 +13,7 @@ Generated from the registered tools (`make tools-doc`); through muster every too
 | `get_session` | read-only |
 | `get_session_turn` | read-only |
 | `list_agents` | read-only |
+| `list_egress_policies` | read-only |
 | `list_model_configs` | read-only |
 | `list_sessions` | read-only |
 | `list_skills` | read-only |
@@ -65,6 +66,13 @@ name is the DNS-1123 name the person chose, never derived from displayName. mode
     },
     "egress": {
       "description": "Extra origins the agent may reach: http(s)://<host>[:<port>] or tls://<host>:<port>, at most 64; a wildcard replaces the leftmost label.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "egressPolicyRefs": {
+      "description": "EgressPolicies the agent may also reach: names in the agent's namespace (list_egress_policies), at most 16; none on a coding Harness.",
       "items": {
         "type": "string"
       },
@@ -518,6 +526,35 @@ managed: helmrelease is writable here, gitops changes only with mode commit, non
 }
 ```
 
+## `list_egress_policies`
+
+```text
+List the EgressPolicies of a namespace: the names create_agent and update_agent accept for egressPolicyRefs.
+
+Each with its origins and, where the egress gateway adds a credential, the header's name; never the Secret. Read as you; tenant admins write them, agent-manager never does. A change to a policy reaches every agent that picks it from its next Session on.
+```
+
+```json
+{
+  "properties": {
+    "cluster": {
+      "description": "With organization: the workload cluster the agent runs on; its HelmRelease stays on the installation. namespace is on the cluster.",
+      "type": "string"
+    },
+    "namespace": {
+      "description": "Namespace of the agent; default: the installation's kagent namespace (get_info lists the managed ones).",
+      "type": "string"
+    },
+    "organization": {
+      "description": "With cluster: the organization owning the workload cluster the agent runs on. Omit both for the installation's own cluster.",
+      "type": "string"
+    }
+  },
+  "required": [],
+  "type": "object"
+}
+```
+
 ## `list_model_configs`
 
 ```text
@@ -704,6 +741,13 @@ Lists are skills, plugins, egress and toolset. "" clears a text field back to th
       },
       "type": "array"
     },
+    "egressPolicyRefs": {
+      "description": "Replaces the EgressPolicy list ([] clears it): names in the agent's namespace (list_egress_policies), at most 16; none on a coding Harness.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
     "force": {
       "description": "Write even when the HelmRelease is suspended (default false). A GitOps-owned release is never written live: use mode commit",
       "type": "boolean"
@@ -873,7 +917,7 @@ Lists are skills, plugins, egress and toolset. "" clears a text field back to th
 ```text
 Dry run of create_agent, or of update_agent with update: true: the manifests and every violation. Writes nothing.
 
-Checks the name, modelConfig, harness and toolset (required for a create), pins the skills and plugins, validates the values against the chart schema and has the API server dry-run the rendered Agent and RemoteMCPServer (its field errors are the errors; an object the caller may not write is a note). mode answers as the write would. With update: true, lists, labels and annotations replace the whole value, as in update_agent.
+Checks the name, modelConfig, egressPolicyRefs, harness and toolset (required for a create), pins the skills and plugins, validates the values against the chart schema and has the API server dry-run the rendered Agent and RemoteMCPServer (its field errors are the errors; an object the caller may not write is a note). mode answers as the write would. With update: true, lists, labels and annotations replace the whole value, as in update_agent.
 ```
 
 ```json
@@ -905,6 +949,13 @@ Checks the name, modelConfig, harness and toolset (required for a create), pins 
     },
     "egress": {
       "description": "Extra origins the agent may reach: http(s)://<host>[:<port>] or tls://<host>:<port>, at most 64; a wildcard replaces the leftmost label.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "egressPolicyRefs": {
+      "description": "EgressPolicies the agent may also reach: names in the agent's namespace (list_egress_policies), at most 16; none on a coding Harness.",
       "items": {
         "type": "string"
       },

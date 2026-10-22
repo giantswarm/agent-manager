@@ -12,7 +12,8 @@ chart) and reads everything it reports on: the api.kagent.dev/v1alpha3 Agent
 and the agent's RemoteMCPServer the chart renders, the Harnesses an Agent
 references (a create checks the named one exists and which runtime it is),
 the ModelConfigs an agent may reference (platform-admin owned, never
-written), and the namespace's events for get_agent_status. The Agent and the
+written), the EgressPolicies an agent may pick (tenant-admin owned, never
+written; their Secrets are never read), and the namespace's events for get_agent_status. The Agent and the
 RemoteMCPServer are created and updated only with dryRun=All: the server-side
 dry-run that validates a create or update before its HelmRelease is written.
 Nothing names the kagent.dev group; there is no per-agent Deployment or pod to
@@ -35,7 +36,7 @@ rules:
     resources: ["ocirepositories"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: ["api.kagent.dev"]
-    resources: ["agents", "harnesses", "remotemcpservers", "modelconfigs"]
+    resources: ["agents", "harnesses", "remotemcpservers", "modelconfigs", "egresspolicies"]
     verbs: ["get", "list", "watch"]
   - apiGroups: ["api.kagent.dev"]
     resources: ["agents", "remotemcpservers"]

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `create_agent`, `update_agent` and `validate_agent` (and the REST API) take `egressPolicyRefs`, the names of EgressPolicies in the agent's namespace whose origins the agent may also reach, beside `egress` (`[]` on update clears it); `get_agent` returns them. They render through the agent chart's `agent.egressPolicyRefs` into the Agent's `spec.egressPolicyRefs`. A name with no EgressPolicy in the namespace, read as the caller, is refused, naming the entry and the valid ones; any entry on a coding Harness is refused; the CRD's own limits are the dry-run's answer. New read-only `list_egress_policies` (`GET /api/v1/egresspolicies`) lists a namespace's EgressPolicies as the caller, each origin with its credential header's name, never the Secret. `get_info` reports the capability `egressPolicies`. The binary embeds the agent chart 2.3.0. The ServiceAccount's Role (serviceAccount identity only) reads EgressPolicies ([giantswarm#38744](https://github.com/giantswarm/giantswarm/issues/38744)).
+
+## [2.11.0] - 2026-10-22
+
 ### Fixed
 
 - `start_session` binds a Session with the muster provider for a person who may start Sessions but not read HelmReleases (`agent-platform:user`, `agent-platform:platform-user`): the toolset is read, as the caller, from the Agent and its RemoteMCPServer the release rendered, the toolset the agent runs with, instead of the HelmRelease; such a person's Session was created and deleted again. An `update_agent` toolset change binds Sessions started once its release is rendered; an Agent whose own RemoteMCPServer is missing is refused a Session rather than bound with implicit full access ([agent-manager#239](https://github.com/giantswarm/agent-manager/issues/239)).
@@ -444,7 +450,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Chart: the MCPServer CR carries `agent-platform.giantswarm.io/tool-group: agent-platform` next to `muster.giantswarm.io/type` — the Agent Platform tier of MCP servers (the portal's MCP servers page, the `agent-platform` toolset preset). `muster.mcpServer.labels` still adds or overrides labels. (#23)
 
-[Unreleased]: https://github.com/giantswarm/agent-manager/compare/v2.11.0-rc.2...HEAD
+[Unreleased]: https://github.com/giantswarm/agent-manager/compare/v2.11.0...HEAD
+[2.11.0]: https://github.com/giantswarm/agent-manager/compare/v2.11.0-rc.2...v2.11.0
 [2.11.0-rc.2]: https://github.com/giantswarm/agent-manager/compare/v2.11.0-rc.1...v2.11.0-rc.2
 [2.11.0-rc.1]: https://github.com/giantswarm/agent-manager/compare/v2.10.0...v2.11.0-rc.1
 [2.10.0]: https://github.com/giantswarm/agent-manager/compare/v2.9.1...v2.10.0

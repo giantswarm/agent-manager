@@ -76,6 +76,7 @@ tags:
   - name: info
   - name: agents
   - name: modelconfigs
+  - name: egresspolicies
   - name: skills
   - name: sessions
   - name: health
@@ -375,6 +376,28 @@ paths:
                   modelConfigs:
                     type: array
                     items: { $ref: "#/components/schemas/ModelConfig" }
+  /api/v1/egresspolicies:
+    get:
+      tags: [egresspolicies]
+      summary: List the kagent EgressPolicies of a namespace, read as the caller
+      description: The names an agent's egressPolicyRefs may pick, each with its origins and, where the egress gateway adds a credential, the header's name; never the Secret
+      operationId: listEgressPolicies
+      x-mcp-tool: list_egress_policies
+      parameters:
+        - $ref: "#/components/parameters/namespaceQuery"
+        - $ref: "#/components/parameters/organizationQuery"
+        - $ref: "#/components/parameters/clusterQuery"
+      responses:
+        "200":
+          description: egress policies
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  egressPolicies:
+                    type: array
+                    items: { $ref: "#/components/schemas/EgressPolicy" }
   /api/v1/skills:
     get:
       tags: [skills]
@@ -684,7 +707,7 @@ components:
         capabilities:
           type: object
           additionalProperties: { type: boolean }
-          description: "list, get, create, update, delete, status, validate, modelConfigs, skills, writesAsCaller (true when identity is caller), commit (false: the write tools apply live, there is no pull-request mode), targetCluster, sessions (false: the session operations answer 501)"
+          description: "list, get, create, update, delete, status, validate, modelConfigs, egressPolicies (egressPolicyRefs and list_egress_policies), skills, writesAsCaller (true when identity is caller), commit (false: the write tools apply live, there is no pull-request mode), targetCluster, sessions (false: the session operations answer 501)"
         identity:
           type: string
           enum: [caller, serviceAccount]
@@ -799,6 +822,12 @@ components:
       uniqueItems: true
       description: "Origins the agent may reach besides what its revision compiles (chart agent.egress, the Agent's spec.egress): http(s)://<host>[:<port>], such as https://github.com:443 or https://*.githubusercontent.com, or tls://<host>:<port> with a required port, such as tls://db.example.com:5432, TLS the egress gateway forwards without decrypting it (a wildcard replaces the leftmost label and needs two labels under it; a host pattern and port take one protocol); nothing allows every host"
       items: { type: string, maxLength: 270, pattern: "^(https?://(\\*\\.([a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?\\.)+|([a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?\\.)*)[a-z]([-a-z0-9]{0,61}[a-z0-9])?(:([1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?|tls://(\\*\\.([a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?\\.)+|([a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?\\.)*)[a-z]([-a-z0-9]{0,61}[a-z0-9])?:([1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))$" }
+    EgressPolicyRefs:
+      type: array
+      maxItems: 16
+      uniqueItems: true
+      description: "Names of EgressPolicies in the agent's namespace whose origins the agent may also reach (chart agent.egressPolicyRefs, the Agent's spec.egressPolicyRefs); each must exist, read as the caller (GET /egresspolicies); an agent on a coding Harness takes none"
+      items: { type: string, minLength: 1 }
     Spec:
       type: object
       required: [name, modelConfig, toolset]
@@ -816,6 +845,7 @@ components:
         skills: { $ref: "#/components/schemas/Skills" }
         plugins: { $ref: "#/components/schemas/Plugins" }
         egress: { $ref: "#/components/schemas/Egress" }
+        egressPolicyRefs: { $ref: "#/components/schemas/EgressPolicyRefs" }
         gitAuthSecretName: { type: string, description: "Secret (key token) in the agent's namespace its git skills and plugins are fetched with (chart skillsGitAuthSecretRef.name); omitted, the installation's (GET /info skillsGitAuthSecretName)" }
         toolset: { $ref: "#/components/schemas/Toolset" }
         labels: { type: object, additionalProperties: { type: string } }
@@ -827,7 +857,7 @@ components:
         path: { type: string, description: "mode commit with repository: the directory a Kustomization builds from; files go to its agent-manager/ subdirectory" }
     Update:
       type: object
-      description: Partial change; absent fields stay, "" clears, skills, plugins and egress replace the whole list (skills pinned), toolset replaces the whole list, refreshSkills re-pins every git skill. harness moves the agent to another Harness after the create-time checks on it; "" selects the platform Harness
+      description: Partial change; absent fields stay, "" clears, skills, plugins, egress and egressPolicyRefs replace the whole list (skills pinned), toolset replaces the whole list, refreshSkills re-pins every git skill. harness moves the agent to another Harness after the create-time checks on it; "" selects the platform Harness
       properties:
         displayName: { type: string }
         description: { type: string }
@@ -838,6 +868,7 @@ components:
         skills: { $ref: "#/components/schemas/Skills" }
         plugins: { $ref: "#/components/schemas/Plugins" }
         egress: { $ref: "#/components/schemas/Egress", description: "Replaces the agent's whole egress list; [] clears it" }
+        egressPolicyRefs: { $ref: "#/components/schemas/EgressPolicyRefs", description: "Replaces the agent's whole list of EgressPolicies; [] clears it" }
         gitAuthSecretName: { type: string, description: "Replaces the skills credential Secret; an empty string goes back to the installation's" }
         refreshSkills: { type: boolean, description: Re-resolve every git skill to the head of its repository's default branch (a skill in skills with a ref goes to that ref's head); nothing else changes }
         toolset: { $ref: "#/components/schemas/Toolset" }
@@ -938,6 +969,7 @@ components:
         skills: { $ref: "#/components/schemas/Skills", description: As pinned, git skills by commit, OCI skills by digest }
         plugins: { $ref: "#/components/schemas/Plugins" }
         egress: { $ref: "#/components/schemas/Egress", description: "The Agent's spec.egress (the chart value agent.egress while nothing is rendered)" }
+        egressPolicyRefs: { $ref: "#/components/schemas/EgressPolicyRefs", description: "The names of the Agent's spec.egressPolicyRefs (the chart value agent.egressPolicyRefs while nothing is rendered)" }
         toolset: { $ref: "#/components/schemas/Toolset", description: The declared toolset (the HelmRelease's `toolset` value; for a bare Agent the X-Muster-Toolset header of the agent's RemoteMCPServer); absent when none is declared }
         implicitFullAccess: { type: boolean, description: True when the agent declares no toolset but binds muster — its meta-tools see every tool the gateway exposes to the caller; such agents predate toolsets and still need one (update_agent) }
         tools: { type: array, items: { $ref: "#/components/schemas/ToolBinding" } }
@@ -1077,6 +1109,19 @@ components:
         model: { type: string }
         accepted: { type: [boolean, "null"] }
         message: { type: string }
+        managedBy: { type: string }
+    EgressPolicy:
+      type: object
+      properties:
+        name: { type: string }
+        namespace: { type: string }
+        destinations:
+          type: array
+          items:
+            type: object
+            properties:
+              origin: { type: string }
+              credentialHeader: { type: string, description: The request header the egress gateway fills with the policy's credential; absent without one. The Secret is never reported }
         managedBy: { type: string }
     DiscoveredSkill:
       type: object

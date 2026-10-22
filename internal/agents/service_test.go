@@ -40,9 +40,11 @@ var (
 	serverGVR  = schema.GroupVersionResource{Group: "api.kagent.dev", Version: "v1alpha3", Resource: "remotemcpservers"}
 	harnessGVR = schema.GroupVersionResource{Group: "api.kagent.dev", Version: "v1alpha3", Resource: "harnesses"}
 	mcGVR      = schema.GroupVersionResource{Group: "api.kagent.dev", Version: "v1alpha3", Resource: "modelconfigs"}
+	egressGVR  = schema.GroupVersionResource{Group: "api.kagent.dev", Version: "v1alpha3", Resource: "egresspolicies"}
 	listKinds  = map[schema.GroupVersionResource]string{
 		hrGVR: "HelmReleaseList", ociGVR: "OCIRepositoryList", agentGVR: "AgentList",
 		serverGVR: "RemoteMCPServerList", harnessGVR: "HarnessList", mcGVR: "ModelConfigList",
+		egressGVR: "EgressPolicyList",
 	}
 )
 
