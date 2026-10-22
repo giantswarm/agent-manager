@@ -232,6 +232,7 @@ func BuildValues(spec Spec, cfg ComposeConfig) map[string]any {
 		values["annotations"] = toAnyMap(spec.Annotations)
 	}
 	setDefaultWorkspace(values, spec.DefaultWorkspace)
+	setDefaultToolchains(values, spec.DefaultToolchains)
 	return values
 }
 

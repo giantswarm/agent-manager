@@ -163,6 +163,9 @@ type SessionStart struct {
 	// of its sandbox resolves within it until the session ends. Absent when
 	// none is bound.
 	Toolset []string `json:"toolset,omitempty"`
+	// Toolchains are the toolchains mounted into the session, each at the
+	// digest its version resolved to.
+	Toolchains []Toolchain `json:"toolchains,omitempty"`
 }
 
 // SessionDelete is the answer of delete_session: the session as the
@@ -199,6 +202,13 @@ type StartSession struct {
 	// session starts in the agent's default workspace, authorized as the
 	// caller; an agent without a default starts it without one.
 	NoWorkspace bool `json:"noWorkspace,omitempty"`
+	// Toolchains are mounted into the session, name[@version] each (latest
+	// without one), resolved to their digests now and kept for the
+	// session's life. Empty: the agent's default toolchains.
+	Toolchains []string `json:"toolchains,omitempty"`
+	// NoToolchains starts the session without toolchains, the agent's
+	// defaults included.
+	NoToolchains bool `json:"noToolchains,omitempty"`
 }
 
 var protoJSON = protojson.MarshalOptions{}
@@ -645,7 +655,11 @@ func (s *Service) StartSession(ctx context.Context, in StartSession) (*SessionSt
 			return nil, err
 		}
 	}
-	create := kagent.SessionCreate{Agent: ref, RequestID: requestID, Name: in.SessionName, BindActor: s.cfg.Bindings != nil}
+	toolchains, err := s.sessionToolchains(ctx, ref, in.Toolchains, in.NoToolchains)
+	if err != nil {
+		return nil, err
+	}
+	create := kagent.SessionCreate{Agent: ref, RequestID: requestID, Name: in.SessionName, BindActor: s.cfg.Bindings != nil, ToolImages: toolImages(toolchains)}
 	var workspace *Workspace
 	if grant != "" {
 		if workspace, err = workspaceGrant(ctx, grant, time.Now()); err != nil {
@@ -660,6 +674,10 @@ func (s *Service) StartSession(ctx context.Context, in StartSession) (*SessionSt
 	if err != nil {
 		return nil, kagentError(err, fmt.Sprintf("a session of agent %s", ref.Tenant()))
 	}
+	toolchains, mounted := mountedToolchains(session, toolchains)
+	if !mounted {
+		return nil, s.abandonSession(ctx, token, session, errToolImagesUnsupported)
+	}
 	var bound []string
 	if s.cfg.Bindings != nil {
 		if bound, err = s.bindSession(ctx, token, ref, session); err != nil {
@@ -672,11 +690,14 @@ func (s *Service) StartSession(ctx context.Context, in StartSession) (*SessionSt
 			return nil, err
 		}
 	}
-	out := &SessionStart{Toolset: bound}
+	out := &SessionStart{Toolset: bound, Toolchains: toolchains}
 	attrs := []any{identity.LogAttr(ctx), "agent", ref.Tenant(), "session", session.GetId()}
 	if workspace != nil {
 		out.Workspace = workspace.Name
 		attrs = append(attrs, "workspace", workspace.Name)
+	}
+	for _, t := range toolchains {
+		attrs = append(attrs, "toolchain."+t.Name, t.Image)
 	}
 	s.log.InfoContext(ctx, "session started", attrs...)
 	if out.Session, err = marshalProto(session); err != nil {
@@ -885,15 +906,16 @@ func (s *Service) bindSession(ctx context.Context, token string, ref kagent.Ref,
 	return binding.Toolset, nil
 }
 
-// abandonSession deletes a Session whose bind failed, so no Session with
-// providers runs without its person, and answers the bind's error, naming the
-// Session when the delete failed too.
+// abandonSession deletes a Session that cannot be handed out (its bind
+// failed, so it would run with providers but without its person, or it lacks
+// its toolchains), and answers cause, naming the Session when the delete
+// failed too.
 func (s *Service) abandonSession(ctx context.Context, token string, session *apiv1alpha1.Session, cause error) error {
 	if _, err := s.cfg.Sessions.DeleteSession(ctx, token, session.GetId()); err != nil {
 		s.log.ErrorContext(ctx, "session left behind after a failed bind", identity.LogAttr(ctx), "session", session.GetId(), "error", err)
 		return fmt.Errorf("%w (session %s could not be deleted again: delete it with delete_session: %v)", cause, session.GetId(), kagentError(err, fmt.Sprintf("session %s", session.GetId())))
 	}
-	s.log.InfoContext(ctx, "session deleted after a failed bind", identity.LogAttr(ctx), "session", session.GetId())
+	s.log.InfoContext(ctx, "session deleted after a refused start", identity.LogAttr(ctx), "session", session.GetId())
 	return cause
 }
 
@@ -913,6 +935,8 @@ func bindingError(err error, sessionID string) error {
 }
 
 var errSessionBindingsUnsupported = fmt.Errorf("%w: this installation has no muster session bindings (--muster-bindings-url), so a session cannot be started in a workspace: its sandbox would not act as you", ErrUnsupported)
+
+var errToolImagesUnsupported = fmt.Errorf("%w: the kagent controller created the session without its toolchains: it mounts no session tool images, so the session was deleted again", ErrUnsupported)
 
 var errSessionsUnsupported = fmt.Errorf("%w: this installation has no kagent controller target (--kagent-target), so the session tools are not offered", ErrUnsupported)
 

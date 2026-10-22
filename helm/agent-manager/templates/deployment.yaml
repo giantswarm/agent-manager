@@ -137,6 +137,9 @@ spec:
             - --workspaces-tools-prefix={{ $.Values.muster.workspacesToolsPrefix }}
             {{- end }}
             {{- end }}
+            {{- with $.Values.toolchains.repository }}
+            - --toolchain-repository={{ . }}
+            {{- end }}
             {{- end }}
             {{- if .Values.github.enabled }}
             - --github-authorization-server={{ .Values.github.authorizationServer.issuer }}

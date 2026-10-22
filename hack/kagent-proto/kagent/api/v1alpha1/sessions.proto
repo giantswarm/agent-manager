@@ -79,6 +79,31 @@ message Session {
   // every turn moves it. Unset until the first turn. The owner of a volume
   // source cleans up the session's directory a while after it.
   google.protobuf.Timestamp last_turn_time = 20;
+  // Output only. The tool images the session was created with.
+  repeated SessionToolImage tool_images = 21;
+}
+
+// SessionToolImage is a digest-pinned OCI image mounted read-only into one
+// session's runtime at /opt/kagent/tools/<name>.
+message SessionToolImage {
+  string name = 1 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 58
+    pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+  }];
+  string oci = 2 [(buf.validate.field).string = {
+    max_len: 512
+    pattern: "^[^\\s@]+@sha256:[a-f0-9]{64}$"
+  }];
+  repeated string egress_destinations = 3 [(buf.validate.field).repeated = {
+    max_items: 32
+    items: {
+      string: {
+        min_len: 1
+        max_len: 2048
+      }
+    }
+  }];
 }
 
 // SessionProvider is a host whose credential a session gets: the egress
@@ -218,6 +243,17 @@ message CreateSessionRequest {
   // there, since a provider refuses an actor nobody bound. A session with
   // volume_source gets what its admission admits either way.
   bool bind_actor = 8;
+  // Optional tool images mounted into this session's runtime.
+  repeated SessionToolImage tool_images = 9 [(buf.validate.field) = {
+    repeated: {max_items: 16}
+    cel: [
+      {
+        id: "session.tool_image_names_unique"
+        message: "tool image names must be unique"
+        expression: "this.map(t, t.name).unique()"
+      }
+    ]
+  }];
 }
 
 message CreateSessionResponse {

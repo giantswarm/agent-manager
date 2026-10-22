@@ -48,6 +48,13 @@ name is the DNS-1123 name the person chose, never derived from displayName. mode
       "description": "With organization: the workload cluster the agent runs on; its HelmRelease stays on the installation. namespace is on the cluster.",
       "type": "string"
     },
+    "defaultToolchains": {
+      "description": "Toolchains, name[@version] (default latest), a start_session naming none mounts.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
     "defaultWorkspace": {
       "description": "Workspace <namespace>/<name> of the agent's namespace that a start_session naming none starts in, authorized as its starter.",
       "type": "string"
@@ -667,6 +674,10 @@ Refused with conflict while the agent has no ready revision (get_agent_status). 
       "description": "Namespace of the agent; default: the installation's kagent namespace (get_info lists the managed ones).",
       "type": "string"
     },
+    "noToolchains": {
+      "description": "Start without toolchains, the agent's defaultToolchains included.",
+      "type": "boolean"
+    },
     "noWorkspace": {
       "description": "Start without a workspace. With neither it nor workspaceGrant: the agent's defaultWorkspace, as you; a refusal or auth_required starts nothing.",
       "type": "boolean"
@@ -678,6 +689,13 @@ Refused with conflict while the agent has no ready revision (get_agent_status). 
     "sessionName": {
       "description": "Display name of the conversation (at most 200 characters); default: unnamed",
       "type": "string"
+    },
+    "toolchains": {
+      "description": "Toolchains, name[@version] (default latest), mounted at /opt/kagent/tools/<name>; omitted: the agent's defaultToolchains. A misfit starts nothing.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
     },
     "workspaceGrant": {
       "description": "The grant authorize_workspace returned to you: the session works in that workspace, its sandbox bound to you in muster. Others' are refused.",
@@ -717,6 +735,13 @@ Lists are skills, plugins, egress and toolset. "" clears a text field back to th
     "cluster": {
       "description": "With organization: the workload cluster the agent runs on; its HelmRelease stays on the installation. namespace is on the cluster.",
       "type": "string"
+    },
+    "defaultToolchains": {
+      "description": "Toolchains, name[@version] (default latest), a start_session naming none mounts; [] removes them.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
     },
     "defaultWorkspace": {
       "description": "Workspace <namespace>/<name> of the agent's namespace that a start_session naming none starts in, authorized as its starter; \"\" removes it.",
@@ -934,6 +959,13 @@ Checks the name, modelConfig, egressPolicyRefs, harness and toolset (required fo
     "cluster": {
       "description": "With organization: the workload cluster the agent runs on; its HelmRelease stays on the installation. namespace is on the cluster.",
       "type": "string"
+    },
+    "defaultToolchains": {
+      "description": "Toolchains, name[@version] (default latest), a start_session naming none mounts.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
     },
     "defaultWorkspace": {
       "description": "Workspace <namespace>/<name> of the agent's namespace that a start_session naming none starts in, authorized as its starter.",

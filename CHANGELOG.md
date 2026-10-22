@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `start_session` (and the REST API) takes `toolchains`, `name[@version]` entries (`latest` without a version, at most 16), and `noToolchains`. Each toolchain is the image `<toolchains.repository>/<name>:<version>`, resolved to its digest at the start and passed to kagent's `CreateSession` as a session tool image with the egress origins its `io.giantswarm.toolchain.egress` label declares; kagent mounts it read-only at `/opt/kagent/tools/<name>`. A start that names none gets the agent's default toolchains at their versions (`latest` by default). A toolchain whose `io.giantswarm.toolchain.harnesses` label does not list the agent's Harness runtime, an unpublished version or an image of another name is refused before the Session is created; a controller that creates the Session without its tool images has it deleted again and the start refused as unsupported. The answer lists the mounted toolchains with their digests. `get_info` reports the capability `toolchains` ([giantswarm#38748](https://github.com/giantswarm/giantswarm/issues/38748)).
+- `create_agent`, `update_agent` and `validate_agent` take `defaultToolchains` (`[]` on update removes them), kept as the annotation `agent-platform.giantswarm.io/default-toolchains` in the chart's `annotations` value and checked at write time against the registry and the agent's Harness; `get_agent` and `list_agents` report them, and the annotation is refused through `annotations`.
+- `--toolchain-repository` (chart `toolchains.repository`, default `gsoci.azurecr.io/giantswarm/agent-toolchains`, rendered with `kagent.controllerTarget`) names where the installation's toolchains are published; empty refuses toolchains.
+
+### Changed
+
+- The kagent protos are those of the fork line's `v1.24.0` with the session tool images (`CreateSessionRequest.tool_images`, `Session.tool_images`).
+
+### Removed
+
+- The chart's `harness.egress` defaults for the interim `claude-go` and `claude-node` Harnesses: a session reaches the Go and npm registries through the `go` and `node` toolchains' declared origins.
+
 ## [2.12.0-rc.1] - 2026-10-22
 
 ### Added

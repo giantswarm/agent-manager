@@ -60,6 +60,10 @@ type Controller struct {
 	// provider instances that verify the actor's own JWT (muster), after an
 	// admitted session's Providers.
 	ActorJWTProviders []*apiv1alpha1.SessionProvider
+	// WithoutToolImages makes CreateSession ignore a request's tool images,
+	// as a controller without session tool images does: the session lists
+	// none.
+	WithoutToolImages bool
 
 	mu        sync.Mutex
 	sessions  []*apiv1alpha1.Session
@@ -258,7 +262,8 @@ func (c *Controller) GetSession(ctx context.Context, req *apiv1alpha1.GetSession
 
 // CreateSession implements SessionService: idempotent on request_id, refused
 // for a NotReady Agent, a volume source admitted by Admission and kept on the
-// session (the admission token never is, as on the controller).
+// session (the admission token never is, as on the controller), the tool
+// images kept on it unless WithoutToolImages.
 func (c *Controller) CreateSession(ctx context.Context, req *apiv1alpha1.CreateSessionRequest) (*apiv1alpha1.CreateSessionResponse, error) {
 	if err := c.record(ctx, "CreateSession", req); err != nil {
 		return nil, err
@@ -281,6 +286,9 @@ func (c *Controller) CreateSession(ctx context.Context, req *apiv1alpha1.CreateS
 		}
 	}
 	s := c.newSession(req.GetAgent().GetNamespace(), req.GetAgent().GetName(), req.GetName(), req.GetVolumeSource(), req.GetBindActor())
+	if !c.WithoutToolImages {
+		s.ToolImages = req.GetToolImages()
+	}
 	c.requests[req.GetRequestId()] = s.GetId()
 	return &apiv1alpha1.CreateSessionResponse{Session: s}, nil
 }

@@ -78,6 +78,10 @@ type Config struct {
 	// egress, and the only origins it may name. A coding Harness without an
 	// entry is refused; an empty list reaches none.
 	HarnessEgress map[string][]string
+	// Toolchains is where the installation's toolchains are published, which
+	// start_session mounts into a Session. Nil: a start that names
+	// toolchains, or on an agent with default toolchains, is refused.
+	Toolchains *ToolchainSource
 	// Tenants are the tenant namespaces the tenant reconciler keeps, managed
 	// beside ManagedNamespaces. Nil: no tenants.
 	Tenants TenantSet
@@ -255,6 +259,9 @@ func (s *Service) Info(ctx context.Context) InfoResponse {
 		// defaultWorkspace: start_session starts a session that names no
 		// workspace in the agent's default one, authorized as the caller.
 		"defaultWorkspace": s.SessionsAvailable() && s.cfg.Bindings != nil && s.cfg.Workspaces != nil,
+		// toolchains: start_session mounts the toolchains it names, else
+		// the agent's default ones, into the Session.
+		"toolchains": s.SessionsAvailable() && s.cfg.Toolchains != nil,
 		// egressPolicies: create_agent, update_agent and validate_agent take
 		// egressPolicyRefs, and list_egress_policies lists the names.
 		"egressPolicies": true,
@@ -769,6 +776,12 @@ func checkSpec(spec Spec) []error {
 	if err := ValidateDefaultWorkspace(spec.DefaultWorkspace, spec.Namespace, spec.Target); err != nil {
 		errs = append(errs, err)
 	}
+	if err := refuseDefaultToolchainsAnnotation(spec.Annotations, ""); err != nil {
+		errs = append(errs, err)
+	}
+	if err := ValidateDefaultToolchains(spec.DefaultToolchains, spec.Target); err != nil {
+		errs = append(errs, err)
+	}
 	if err := spec.Validate(); err != nil {
 		errs = append(errs, err)
 	} else if spec.IsSet() {
@@ -833,10 +846,20 @@ func (s *Service) guardUpdate(ctx context.Context, st *site, upd Update, before,
 		}
 	}
 	var accepted Plugins
-	if s.releaseHarnessName(before) == s.releaseHarnessName(after) {
+	sameHarness := s.releaseHarnessName(before) == s.releaseHarnessName(after)
+	if sameHarness {
 		accepted = pluginsFromValues(before)
 	}
-	return append(errs, s.checkPlugins(ctx, harness, runtime, after, accepted)...), nil
+	errs = append(errs, s.checkPlugins(ctx, harness, runtime, after, accepted)...)
+	if upd.DefaultToolchains != nil || !sameHarness {
+		if err := s.checkDefaultToolchains(ctx, harness, runtime, after); err != nil {
+			if !isDomainError(err) {
+				return nil, err
+			}
+			errs = append(errs, err)
+		}
+	}
+	return errs, nil
 }
 
 // leaveCoding drops what a coding Harness set on an agent that moves to a
@@ -959,6 +982,12 @@ func (s *Service) ValidateCreate(ctx context.Context, spec Spec) (*ValidateResul
 	}
 	for _, e := range s.checkPlugins(ctx, harness, runtime, values, nil) {
 		res.addError(e)
+	}
+	if err := s.checkDefaultToolchains(ctx, harness, runtime, values); err != nil {
+		if !isDomainError(err) {
+			return nil, err
+		}
+		res.addError(err)
 	}
 	check, err := s.checkValues(ctx, st, spec.Name, values)
 	if err != nil {
@@ -1173,6 +1202,9 @@ func (s *Service) Create(ctx context.Context, spec Spec) (*CreateResult, error) 
 	}
 	if errs := s.checkPlugins(ctx, harness, runtime, values, nil); len(errs) > 0 {
 		return nil, errs[0]
+	}
+	if err := s.checkDefaultToolchains(ctx, harness, runtime, values); err != nil {
+		return nil, err
 	}
 	if err := s.requireValidValues(ctx, st, spec.Name, values); err != nil {
 		return nil, err
@@ -1458,6 +1490,9 @@ func (s *Service) mergedValues(ctx context.Context, st *site, upd Update, hr *un
 		}
 	}
 	if err := mergeDefaultWorkspace(before, after, upd, st.ns()); err != nil {
+		return after, before, err
+	}
+	if err := mergeDefaultToolchains(before, after, upd); err != nil {
 		return after, before, err
 	}
 	return after, before, firstErr
@@ -1866,6 +1901,7 @@ func agentFromObject(obj, server *unstructured.Unstructured) Agent {
 	a.IconURL = obj.GetAnnotations()[IconURLAnnotation]
 	a.CreatedBy = obj.GetAnnotations()[CreatedByAnnotation]
 	a.DefaultWorkspace = obj.GetAnnotations()[DefaultWorkspaceAnnotation]
+	a.DefaultToolchains = splitList(obj.GetAnnotations()[DefaultToolchainsAnnotation])
 	a.Harness, _, _ = unstructured.NestedString(obj.Object, "spec", "harnessRef", "name")
 	a.Description, _, _ = unstructured.NestedString(obj.Object, "spec", "template", "description")
 	a.ModelConfig, _, _ = unstructured.NestedString(obj.Object, "spec", "template", "modelConfig", "name")
@@ -1971,6 +2007,7 @@ func applyHelmRelease(a *Agent, hr *unstructured.Unstructured) {
 	values, _, _ := unstructured.NestedMap(hr.Object, "spec", "values")
 	a.Values = values
 	a.DefaultWorkspace = defaultWorkspaceOf(values)
+	a.DefaultToolchains = defaultToolchainsOf(values)
 	// The HelmRelease values are the declaration: a declared toolset is
 	// reported as such, a release without one is implicit full access — even
 	// while the Agent has not been rendered yet.
