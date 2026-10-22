@@ -228,6 +228,7 @@ func BuildValues(spec Spec, cfg ComposeConfig) map[string]any {
 	if len(spec.Annotations) > 0 {
 		values["annotations"] = toAnyMap(spec.Annotations)
 	}
+	setDefaultWorkspace(values, spec.DefaultWorkspace)
 	return values
 }
 
