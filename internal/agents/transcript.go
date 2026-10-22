@@ -30,7 +30,7 @@ const (
 	// the answer of get_session and get_session_turn.
 	DefaultSessionMaxBytes = 100_000
 	MinSessionMaxBytes     = 4096
-	MaxSessionMaxBytes     = 1 << 20
+	MaxSessionMaxBytes     = 32 << 20
 	// maxArgsBytes clips a tool call's arguments in a transcript.
 	maxArgsBytes = 500
 	// maxUnwrapDepth bounds how many envelopes a tool response is unwrapped

@@ -6,11 +6,15 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
+	a2apb "github.com/a2aproject/a2a-go/v2/a2apb/v1"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
 	"k8s.io/apimachinery/pkg/runtime"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	kubefake "k8s.io/client-go/kubernetes/fake"
@@ -270,6 +274,77 @@ func TestSessionsOverMCP(t *testing.T) {
 	text, isErr = callTool(t, srv, ToolListSessions, map[string]any{"name": "sre"})
 	assert.True(t, isErr)
 	assert.Contains(t, text, "unauthenticated")
+}
+
+func TestGetSessionAnswersAWholeSessionOverMCP(t *testing.T) {
+	svc, ctrl := newSessionService(t)
+	srv := NewMCPServer(svc, "test")
+	ctx := identity.ContextWithToken(t.Context(), callerToken)
+	// 250 turns of 5 kB each: more turns than a summary reads and more bytes
+	// than the former ceiling.
+	tasks := make([]*a2apb.Task, 250)
+	for i := range tasks {
+		tasks[i] = &a2apb.Task{
+			Id:      fmt.Sprintf("task-%d", i),
+			Status:  &a2apb.TaskStatus{State: a2apb.TaskState_TASK_STATE_COMPLETED},
+			History: []*a2apb.Message{kagenttest.Message(a2apb.Role_ROLE_USER, kagenttest.Text(strings.Repeat("x", 5000)))},
+		}
+	}
+	s := ctrl.AddSession("kagent", "sre", tasks...)
+	type answer struct {
+		Tasks        []json.RawMessage `json:"tasks"`
+		Turns        []json.RawMessage `json:"turns"`
+		TotalTurns   int               `json:"totalTurns"`
+		OmittedTurns int               `json:"omittedTurns"`
+		Truncated    bool              `json:"truncated"`
+	}
+	get := func(args map[string]any) (answer, string) {
+		t.Helper()
+		args["sessionId"] = s.GetId()
+		text, isErr := callToolCtx(t, ctx, srv, ToolGetSession, args)
+		require.False(t, isErr, text)
+		var got answer
+		require.NoError(t, json.Unmarshal([]byte(text), &got))
+		return got, text
+	}
+
+	got, text := get(map[string]any{"detail": "full", "maxBytes": agents.MaxSessionMaxBytes})
+	assert.Greater(t, len(text), 1<<20)
+	assert.False(t, got.Truncated)
+	assert.Zero(t, got.OmittedTurns)
+	assert.Equal(t, 250, got.TotalTurns)
+	stored := ctrl.Tasks(s.GetContextId())
+	require.Len(t, got.Tasks, len(stored))
+	for i, raw := range got.Tasks {
+		var task a2apb.Task
+		require.NoError(t, protojson.Unmarshal(raw, &task))
+		assert.True(t, proto.Equal(stored[i], &task), "turn %d is the task verbatim", i)
+	}
+
+	// The default budget stays small.
+	got, text = get(map[string]any{"detail": "full"})
+	assert.True(t, got.Truncated)
+	assert.LessOrEqual(t, len(text), agents.DefaultSessionMaxBytes)
+
+	// summary and transcript still read at most 200 turns.
+	for _, detail := range []string{"summary", "transcript"} {
+		got, _ = get(map[string]any{"detail": detail, "maxBytes": agents.MaxSessionMaxBytes})
+		assert.Len(t, got.Turns, 200, detail)
+		assert.Equal(t, 50, got.OmittedTurns, detail)
+		assert.True(t, got.Truncated, detail)
+	}
+
+	for _, tool := range []string{ToolGetSession, ToolGetSessionTurn} {
+		text, isErr := callToolCtx(t, ctx, srv, tool, map[string]any{"sessionId": s.GetId(), "turn": "last", "maxBytes": agents.MaxSessionMaxBytes + 1})
+		assert.True(t, isErr, tool)
+		assert.Contains(t, text, "invalid_request", tool)
+		assert.Contains(t, text, fmt.Sprint(32<<20), tool)
+	}
+
+	desc := srv.ListTools()[ToolGetSession].Tool.Description
+	assert.Contains(t, desc, "write it to a file")
+	assert.Contains(t, desc, "--output json")
+	assert.Contains(t, desc, "customer data")
 }
 
 func TestSessionsUnsupportedWithoutATarget(t *testing.T) {

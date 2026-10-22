@@ -379,9 +379,9 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 
 	s.AddTool(mcp.NewTool(ToolGetSession,
 		tooldesc.Describe("Read a conversation's turns, oldest first. To poll, use lastTurns: 1 until the last turn's state is final.",
-			fmt.Sprintf("Final states: COMPLETED, FAILED, CANCELED, REJECTED, INPUT_REQUIRED. detail: summary (default) gives per turn the messages, state and one stub per tool call; transcript every message and artifact, tool results as stubs; full the raw A2A tasks. The oldest turns are dropped to fit maxBytes (default %d; omittedTurns counts them). One turn or tool call whole: get_session_turn.", agents.DefaultSessionMaxBytes)),
+			fmt.Sprintf("Final states: COMPLETED, FAILED, CANCELED, REJECTED, INPUT_REQUIRED. The oldest turns are dropped to fit maxBytes (default %d; omittedTurns counts them). One turn or tool call whole: get_session_turn. detail full with a large maxBytes answers the whole session, one GetTask call per turn, far more than a context window holds: write it to a file (muster call <tool> --output json, after muster auth login). It holds all the agent saw: customer data.", agents.DefaultSessionMaxBytes)),
 		mcp.WithString(argSessionID, mcp.Required(), mcp.Description("Session id (from start_session or list_sessions)")),
-		mcp.WithString(argDetail, mcp.Enum(agents.DetailSummary, agents.DetailTranscript, agents.DetailFull)),
+		mcp.WithString(argDetail, mcp.Enum(agents.DetailSummary, agents.DetailTranscript, agents.DetailFull), mcp.Description("summary (default): per turn messages, state, a stub per tool call; transcript: every message and artifact, tool results as stubs; full: raw A2A tasks")),
 		mcp.WithNumber(argLastTurns, mcp.Description("Only the last n turns")),
 		maxBytesProp,
 		mcp.WithReadOnlyHintAnnotation(true),

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `get_session` (and `GET /api/v1/sessions/{id}`) returns a whole session: `maxBytes` accepts up to 32 MiB (was 1 MiB) for `get_session` and `get_session_turn`, and at `detail: full` the byte budget alone bounds the answer, no longer 200 turns. `summary` and `transcript` keep the 200-turn bound and the default stays 100000. The tool description says such an answer belongs in a file and is customer data ([giantswarm#38577](https://github.com/giantswarm/giantswarm/issues/38577)).
+
+## [2.9.1] - 2026-10-22
+
 ### Fixed
 
 - The image's certs stage builds on alpine 3.24.2 with a current CA bundle instead of `alpine:3.20.3-giantswarm` (2024-09).
@@ -417,7 +423,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Chart: the MCPServer CR carries `agent-platform.giantswarm.io/tool-group: agent-platform` next to `muster.giantswarm.io/type` — the Agent Platform tier of MCP servers (the portal's MCP servers page, the `agent-platform` toolset preset). `muster.mcpServer.labels` still adds or overrides labels. (#23)
 
-[Unreleased]: https://github.com/giantswarm/agent-manager/compare/v2.9.0...HEAD
+[Unreleased]: https://github.com/giantswarm/agent-manager/compare/v2.9.1...HEAD
+[2.9.1]: https://github.com/giantswarm/agent-manager/compare/v2.9.0...v2.9.1
 [2.9.0]: https://github.com/giantswarm/agent-manager/compare/v2.8.0-rc.1...v2.9.0
 [2.8.0-rc.1]: https://github.com/giantswarm/agent-manager/compare/v2.8.0-rc.1...v2.8.0-rc.1
 [2.8.0-rc.1]: https://github.com/giantswarm/agent-manager/compare/v2.7.2...v2.8.0-rc.1

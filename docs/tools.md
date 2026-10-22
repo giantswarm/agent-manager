@@ -399,13 +399,14 @@ Call it first: capabilities says whether this installation offers mode commit, t
 ```text
 Read a conversation's turns, oldest first. To poll, use lastTurns: 1 until the last turn's state is final.
 
-Final states: COMPLETED, FAILED, CANCELED, REJECTED, INPUT_REQUIRED. detail: summary (default) gives per turn the messages, state and one stub per tool call; transcript every message and artifact, tool results as stubs; full the raw A2A tasks. The oldest turns are dropped to fit maxBytes (default 100000; omittedTurns counts them). One turn or tool call whole: get_session_turn.
+Final states: COMPLETED, FAILED, CANCELED, REJECTED, INPUT_REQUIRED. The oldest turns are dropped to fit maxBytes (default 100000; omittedTurns counts them). One turn or tool call whole: get_session_turn. detail full with a large maxBytes answers the whole session, one GetTask call per turn, far more than a context window holds: write it to a file (muster call <tool> --output json, after muster auth login). It holds all the agent saw: customer data.
 ```
 
 ```json
 {
   "properties": {
     "detail": {
+      "description": "summary (default): per turn messages, state, a stub per tool call; transcript: every message and artifact, tool results as stubs; full: raw A2A tasks",
       "enum": [
         "summary",
         "transcript",
@@ -418,7 +419,7 @@ Final states: COMPLETED, FAILED, CANCELED, REJECTED, INPUT_REQUIRED. detail: sum
       "type": "number"
     },
     "maxBytes": {
-      "description": "Max answer size in bytes, 4096-1048576, default 100000",
+      "description": "Max answer size in bytes, 4096-33554432, default 100000",
       "type": "number"
     },
     "sessionId": {
@@ -456,7 +457,7 @@ detail: transcript (default) clips tool arguments and gives tool results as stub
       "type": "number"
     },
     "maxBytes": {
-      "description": "Max answer size in bytes, 4096-1048576, default 100000",
+      "description": "Max answer size in bytes, 4096-33554432, default 100000",
       "type": "number"
     },
     "sessionId": {

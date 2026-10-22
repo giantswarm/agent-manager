@@ -236,7 +236,8 @@ const (
 	// taken (truncated, omitted counts, a short hint) may add.
 	envelopeSlack = 128
 	// fetchBatch turns are read whole at a time, newest first, until the
-	// budget is spent; maxFetchedTurns bounds how many one answer reads.
+	// budget is spent; maxFetchedTurns bounds how many one summary or
+	// transcript reads. In full the budget alone bounds it.
 	fetchBatch      = 8
 	maxFetchedTurns = 200
 )
@@ -274,7 +275,7 @@ func (s *Service) GetSession(ctx context.Context, q SessionQuery) (*SessionDetai
 	fetch := func(batch []*a2apb.Task) ([]*a2apb.Task, error) { return s.fetchTasks(ctx, sc, batch) }
 	clipped := false
 	if detail == DetailFull {
-		out.Tasks, out.OmittedTurns, _, err = packNewestTurns(tasks, first, budget, fetch, func(t *turn) (json.RawMessage, error) {
+		out.Tasks, out.OmittedTurns, _, err = packNewestTurns(tasks, first, len(tasks), budget, fetch, func(t *turn) (json.RawMessage, error) {
 			return marshalProto(t.task)
 		}, nil)
 		if out.Tasks == nil {
@@ -285,7 +286,7 @@ func (s *Service) GetSession(ctx context.Context, q SessionQuery) (*SessionDetai
 		if detail == DetailTranscript {
 			render = func(t *turn) (Turn, error) { return t.transcript(), nil }
 		}
-		out.Turns, out.OmittedTurns, clipped, err = packNewestTurns(tasks, first, budget, fetch, render, func(t *turn, budget int) (Turn, bool) {
+		out.Turns, out.OmittedTurns, clipped, err = packNewestTurns(tasks, first, maxFetchedTurns, budget, fetch, render, func(t *turn, budget int) (Turn, bool) {
 			return fitTurn(t.summary(), budget)
 		})
 		if out.Turns == nil {
@@ -304,18 +305,18 @@ func (s *Service) GetSession(ctx context.Context, q SessionQuery) (*SessionDetai
 	return out, nil
 }
 
-// packNewestTurns reads the turns tasks[first:] whole, newest first and a
-// batch at a time, renders them and keeps those that fit budget bytes. It
-// answers them oldest first and how many older turns it left out. When even
-// the newest does not fit, fit may cut it down (clipped); without fit it is
-// left out too.
-func packNewestTurns[T any](tasks []*a2apb.Task, first, budget int, fetch func([]*a2apb.Task) ([]*a2apb.Task, error), render func(*turn) (T, error), fit func(*turn, int) (T, bool)) (kept []T, omitted int, clipped bool, err error) {
+// packNewestTurns reads the turns tasks[first:] whole, newest first, a batch
+// at a time and at most limit, renders them and keeps those that fit budget
+// bytes. It answers them oldest first and how many older turns it left out.
+// When even the newest does not fit, fit may cut it down (clipped); without
+// fit it is left out too.
+func packNewestTurns[T any](tasks []*a2apb.Task, first, limit, budget int, fetch func([]*a2apb.Task) ([]*a2apb.Task, error), render func(*turn) (T, error), fit func(*turn, int) (T, bool)) (kept []T, omitted int, clipped bool, err error) {
 	used := 0
 	next := len(tasks) - 1
 	fetched := 0
 pack:
-	for next >= first && fetched < maxFetchedTurns {
-		n := min(fetchBatch, next-first+1, maxFetchedTurns-fetched)
+	for next >= first && fetched < limit {
+		n := min(fetchBatch, next-first+1, limit-fetched)
 		batch, err := fetch(tasks[next-n+1 : next+1])
 		if err != nil {
 			return nil, 0, false, err
