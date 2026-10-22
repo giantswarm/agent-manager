@@ -298,7 +298,7 @@ func (s *Service) creatableNamespaces(ctx context.Context) []string {
 	for i, ns := range managed {
 		g.Go(func() error {
 			review := &authorizationv1.SelfSubjectAccessReview{Spec: authorizationv1.SelfSubjectAccessReviewSpec{
-				ResourceAttributes: &authorizationv1.ResourceAttributes{Namespace: ns, Verb: "create", Group: gvr.Group, Resource: gvr.Resource},
+				ResourceAttributes: &authorizationv1.ResourceAttributes{Namespace: ns, Verb: verbCreate, Group: gvr.Group, Resource: gvr.Resource},
 			}}
 			res, err := c.Typed().AuthorizationV1().SelfSubjectAccessReviews().Create(gctx, review, metav1.CreateOptions{})
 			if err != nil {
@@ -958,7 +958,7 @@ func (s *Service) ValidateCreate(ctx context.Context, spec Spec) (*ValidateResul
 func (s *Service) requireCreate(ctx context.Context, st *site, name string) error {
 	gvr := s.helmReleaseGVR()
 	review := &authorizationv1.SelfSubjectAccessReview{Spec: authorizationv1.SelfSubjectAccessReviewSpec{
-		ResourceAttributes: &authorizationv1.ResourceAttributes{Namespace: st.fluxNS, Verb: "create", Group: gvr.Group, Resource: gvr.Resource},
+		ResourceAttributes: &authorizationv1.ResourceAttributes{Namespace: st.fluxNS, Verb: verbCreate, Group: gvr.Group, Resource: gvr.Resource},
 	}}
 	res, err := st.fluxClient.Typed().AuthorizationV1().SelfSubjectAccessReviews().Create(ctx, review, metav1.CreateOptions{})
 	if err != nil {

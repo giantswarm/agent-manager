@@ -14,7 +14,7 @@
             "properties": {
                 "ociUrl": {
                     "type": "string",
-                    "description": "OCI URL of the Generic `agent` chart every agent renders from (2.x: one release renders one api.kagent.dev/v1alpha3 Agent plus the agent's muster RemoteMCPServer). Written into the shared per-namespace OCIRepository, and read at run time for the chart's values.schema.json that validates every create/update before it is applied (the pod needs egress to this registry; the embedded copy of the schema is the offline fallback)."
+                    "description": "OCI URL of the Generic `agent` chart every agent renders from (2.x: one release renders one api.kagent.dev/v1alpha3 Agent plus the agent's muster RemoteMCPServer). Written into the shared per-namespace OCIRepository, and read at run time for the chart's values.schema.json and templates: every create/update is validated against the schema and its rendered objects dry-run before it is applied (the pod needs egress to this registry; the embedded copy of the chart is the offline fallback)."
                 },
                 "refresh": {
                     "type": "string",

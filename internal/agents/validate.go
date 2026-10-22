@@ -155,6 +155,12 @@ func (s *Service) requireValidValues(ctx context.Context, st *site, name string,
 	return check.err()
 }
 
+// The Kubernetes verbs of a write, as access reviews name them.
+const (
+	verbCreate = "create"
+	verbUpdate = "update"
+)
+
 // dryRunWrite writes obj with dryRun=All as the caller, the way an install
 // or upgrade would: a create when no such object exists, else an update of
 // the whole object over the live one (what the render drops is dropped). The
@@ -166,11 +172,11 @@ func dryRunWrite(ctx context.Context, st *site, obj *unstructured.Unstructured) 
 	gvr, _ := meta.UnsafeGuessKindToResource(gvk)
 	what := fmt.Sprintf("%s %s/%s", gvk.Kind, obj.GetNamespace(), obj.GetName())
 	client := st.agent.Resource(gvr).Namespace(obj.GetNamespace())
-	verb := "update"
+	verb := verbUpdate
 	live, err := client.Get(ctx, obj.GetName(), metav1.GetOptions{})
 	switch {
 	case apierrors.IsNotFound(err):
-		verb = "create"
+		verb = verbCreate
 		_, err = client.Create(ctx, obj, metav1.CreateOptions{FieldManager: FieldManager, DryRun: []string{metav1.DryRunAll}})
 	case err == nil:
 		obj = obj.DeepCopy()
@@ -178,13 +184,13 @@ func dryRunWrite(ctx context.Context, st *site, obj *unstructured.Unstructured) 
 		_, err = client.Update(ctx, obj, metav1.UpdateOptions{FieldManager: FieldManager, DryRun: []string{metav1.DryRunAll}})
 	case apierrors.IsForbidden(err):
 		// Without get the live object is unknown; the create answers.
-		verb = "create"
+		verb = verbCreate
 		_, err = client.Create(ctx, obj, metav1.CreateOptions{FieldManager: FieldManager, DryRun: []string{metav1.DryRunAll}})
 	}
 	switch {
 	case err == nil:
 		return "", "", nil
-	case apierrors.IsNotFound(err) && verb == "create":
+	case apierrors.IsNotFound(err) && verb == verbCreate:
 		return "", fmt.Sprintf("%s was not dry-run: the cluster does not serve %s", what, gvr.GroupResource()), nil
 	case apierrors.IsForbidden(err):
 		allowed, reviewErr := mayWrite(ctx, st, gvr, obj.GetNamespace(), verb)
