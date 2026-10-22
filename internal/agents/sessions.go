@@ -860,10 +860,10 @@ func sessionBinding(session *apiv1alpha1.Session) (*muster.Binding, error) {
 
 // bindSession binds a Session's sandbox actor to the caller in muster, as the
 // caller, when kagent gave the Session providers. A Session whose sandbox
-// calls muster itself (the provider muster) is bound with the agent's
-// toolset as get_agent reports it at this moment, which muster resolves every
-// request of the sandbox within; a later update_agent applies to new
-// Sessions. It answers the bound toolset.
+// calls muster itself (the provider muster) is bound with the toolset its
+// agent runs with at this moment (sessionToolset), which muster resolves
+// every request of the sandbox within; a later update_agent applies to
+// Sessions started once its release is rendered. It answers the bound toolset.
 func (s *Service) bindSession(ctx context.Context, token string, ref kagent.Ref, session *apiv1alpha1.Session) ([]string, error) {
 	binding, err := sessionBinding(session)
 	if err != nil {
@@ -874,11 +874,9 @@ func (s *Service) bindSession(ctx context.Context, token string, ref kagent.Ref,
 		return nil, nil
 	}
 	if slices.Contains(binding.Providers, muster.Provider) {
-		agent, err := s.Get(ctx, In(ref.Namespace), ref.Name)
-		if err != nil {
+		if binding.Toolset, err = s.sessionToolset(ctx, ref.Namespace, ref.Name); err != nil {
 			return nil, fmt.Errorf("reading agent %s's toolset to bind session %s to it in muster: %w", ref.Tenant(), session.GetId(), err)
 		}
-		binding.Toolset = BoundToolset(agent)
 	}
 	if err := s.cfg.Bindings.Bind(ctx, token, *binding); err != nil {
 		return nil, bindingError(err, session.GetId())

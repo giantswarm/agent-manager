@@ -1,6 +1,7 @@
 package agents
 
 import (
+	"context"
 	"encoding/json"
 	"regexp"
 	"strings"
@@ -55,6 +56,37 @@ func BoundToolset(a *Agent) []string {
 		return nil
 	}
 	return []string{presetNone}
+}
+
+// sessionToolset is the toolset a Session of agent namespace/name is bound
+// with: the one its release rendered on the Agent and the agent's own
+// RemoteMCPServer, read as the caller — what the agent's Sessions run with.
+// Every role that may create Sessions may read both; the HelmRelease, with
+// all of the agent's values, stays the editors' to read.
+func (s *Service) sessionToolset(ctx context.Context, namespace, name string) ([]string, error) {
+	st, err := s.site(ctx, In(namespace))
+	if err != nil {
+		return nil, err
+	}
+	obj, err := s.getAgentObject(ctx, st.agent, namespace, name)
+	if err != nil {
+		return nil, err
+	}
+	if obj == nil {
+		return nil, notFoundf("agent %s: no Agent of that name", st.describe(name))
+	}
+	server, err := s.getMCPServer(ctx, st.agent, namespace, name)
+	if err != nil {
+		return nil, err
+	}
+	a := Agent{}
+	a.Toolset, a.ImplicitFullAccess = toolsetOf(obj, server)
+	if a.ImplicitFullAccess && server == nil {
+		// Its tools bind a server that is not there (not rendered yet, or
+		// gone): the toolset is unknown, never full access.
+		return nil, conflictf("agent %s binds its RemoteMCPServer, which does not exist, so its toolset is unknown", st.describe(name))
+	}
+	return BoundToolset(&a), nil
 }
 
 // ValidateToolset checks a declared toolset against the inline grammar:
