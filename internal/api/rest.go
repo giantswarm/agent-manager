@@ -235,6 +235,7 @@ type startSessionRequest struct {
 	RequestID      string `json:"requestId,omitempty"`
 	SessionName    string `json:"sessionName,omitempty"`
 	WorkspaceGrant string `json:"workspaceGrant,omitempty"`
+	NoWorkspace    bool   `json:"noWorkspace,omitempty"`
 }
 
 func (h *REST) startSession(w http.ResponseWriter, r *http.Request) {
@@ -245,6 +246,7 @@ func (h *REST) startSession(w http.ResponseWriter, r *http.Request) {
 	res, err := h.svc.StartSession(r.Context(), agents.StartSession{
 		Namespace: r.PathValue("namespace"), Name: r.PathValue("name"),
 		Message: req.Message, RequestID: req.RequestID, SessionName: req.SessionName, WorkspaceGrant: req.WorkspaceGrant,
+		NoWorkspace: req.NoWorkspace,
 	})
 	if err != nil {
 		h.writeError(w, err)
@@ -335,6 +337,7 @@ func SpecToUpdate(s agents.Spec) agents.Update {
 	upd.ModelConfig = str(s.ModelConfig)
 	upd.Harness = str(s.Harness)
 	upd.IconURL = str(s.IconURL)
+	upd.DefaultWorkspace = str(s.DefaultWorkspace)
 	if s.Skills != nil {
 		skills := s.Skills
 		upd.Skills = &skills

@@ -132,6 +132,10 @@ spec:
             {{- if $.Values.muster.actorBearer }}
             - --muster-actor-bearer=true
             {{- end }}
+            {{- if and $.Values.muster.mcpUrl $.Values.muster.workspacesToolsPrefix }}
+            - --muster-mcp-url={{ $.Values.muster.mcpUrl }}
+            - --workspaces-tools-prefix={{ $.Values.muster.workspacesToolsPrefix }}
+            {{- end }}
             {{- end }}
             {{- end }}
             {{- if .Values.github.enabled }}

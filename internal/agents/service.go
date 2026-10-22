@@ -63,6 +63,10 @@ type Config struct {
 	// Session's sandbox to the person who started it. Nil: a Session is
 	// started in no workspace.
 	Bindings SessionBinder
+	// Workspaces is the workspace-manager behind muster, which start_session
+	// asks as the caller for a grant of an agent's default workspace. Nil:
+	// a start on an agent with a default that names no workspace is refused.
+	Workspaces WorkspaceAuthorizer
 	// ToolsetBound says muster trusts the actor JWT of a bound Session:
 	// every Session start_session binds carries the agent's toolset, which
 	// muster resolves every request of the sandbox within. get_agent,
@@ -248,6 +252,9 @@ func (s *Service) Info(ctx context.Context) InfoResponse {
 		// toolsetBound: an agent's toolset is bound to each session at its
 		// start, at muster, for every process of the session's sandbox.
 		"toolsetBound": s.toolsetBound(),
+		// defaultWorkspace: start_session starts a session that names no
+		// workspace in the agent's default one, authorized as the caller.
+		"defaultWorkspace": s.SessionsAvailable() && s.cfg.Bindings != nil && s.cfg.Workspaces != nil,
 	}
 	out.Identity = s.kube.Identity()
 	kagentAPI := KagentAPIGroup + "/" + s.cfg.KagentAPIVersion
@@ -752,6 +759,12 @@ func checkSpec(spec Spec) []error {
 	}
 	if _, ok := spec.Annotations[CreatedByAnnotation]; ok {
 		errs = append(errs, invalidf("annotation %s is set by agent-manager to the caller who creates the agent", CreatedByAnnotation))
+	}
+	if err := refuseDefaultWorkspaceAnnotation(spec.Annotations, ""); err != nil {
+		errs = append(errs, err)
+	}
+	if err := ValidateDefaultWorkspace(spec.DefaultWorkspace, spec.Namespace, spec.Target); err != nil {
+		errs = append(errs, err)
 	}
 	if err := spec.Validate(); err != nil {
 		errs = append(errs, err)
@@ -1420,6 +1433,9 @@ func (s *Service) mergedValues(ctx context.Context, st *site, upd Update, hr *un
 			return after, before, err
 		}
 	}
+	if err := mergeDefaultWorkspace(before, after, upd, st.ns()); err != nil {
+		return after, before, err
+	}
 	return after, before, firstErr
 }
 
@@ -1825,6 +1841,7 @@ func agentFromObject(obj, server *unstructured.Unstructured) Agent {
 	a.DisplayName = obj.GetAnnotations()[DisplayNameAnnotation]
 	a.IconURL = obj.GetAnnotations()[IconURLAnnotation]
 	a.CreatedBy = obj.GetAnnotations()[CreatedByAnnotation]
+	a.DefaultWorkspace = obj.GetAnnotations()[DefaultWorkspaceAnnotation]
 	a.Harness, _, _ = unstructured.NestedString(obj.Object, "spec", "harnessRef", "name")
 	a.Description, _, _ = unstructured.NestedString(obj.Object, "spec", "template", "description")
 	a.ModelConfig, _, _ = unstructured.NestedString(obj.Object, "spec", "template", "modelConfig", "name")
@@ -1928,6 +1945,7 @@ func applyHelmRelease(a *Agent, hr *unstructured.Unstructured) {
 	}
 	values, _, _ := unstructured.NestedMap(hr.Object, "spec", "values")
 	a.Values = values
+	a.DefaultWorkspace = defaultWorkspaceOf(values)
 	// The HelmRelease values are the declaration: a declared toolset is
 	// reported as such, a release without one is implicit full access — even
 	// while the Agent has not been rendered yet.

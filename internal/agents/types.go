@@ -238,6 +238,10 @@ type Spec struct {
 	// tools the agent can use (chart value `toolset`). Required on create;
 	// see ValidateToolset for the grammar.
 	Toolset []string `json:"toolset,omitempty"`
+	// DefaultWorkspace is the workspace, <namespace>/<name> in the agent's
+	// namespace, a start_session that names none starts in
+	// (DefaultWorkspaceAnnotation). Empty: no default.
+	DefaultWorkspace string `json:"defaultWorkspace,omitempty"`
 	// Labels / Annotations are merged onto the Agent object by the chart.
 	Labels      map[string]string `json:"labels,omitempty"`
 	Annotations map[string]string `json:"annotations,omitempty"`
@@ -273,10 +277,13 @@ type Update struct {
 	Egress *[]string `json:"egress,omitempty"`
 	// GitAuthSecretName replaces the skills credential Secret; empty clears it
 	// back to the installation's.
-	GitAuthSecretName *string            `json:"gitAuthSecretName,omitempty"`
-	Toolset           *[]string          `json:"toolset,omitempty"`
-	Labels            *map[string]string `json:"labels,omitempty"`
-	Annotations       *map[string]string `json:"annotations,omitempty"`
+	GitAuthSecretName *string   `json:"gitAuthSecretName,omitempty"`
+	Toolset           *[]string `json:"toolset,omitempty"`
+	// DefaultWorkspace replaces the agent's default workspace; empty
+	// removes it.
+	DefaultWorkspace *string            `json:"defaultWorkspace,omitempty"`
+	Labels           *map[string]string `json:"labels,omitempty"`
+	Annotations      *map[string]string `json:"annotations,omitempty"`
 	// RefreshSkills re-resolves every git skill and git plugin of the agent
 	// to the head of its repository's default branch — an entry passed in
 	// Skills or Plugins with a Ref goes to that ref's head — and changes
@@ -377,10 +384,14 @@ type Agent struct {
 	Description string `json:"description,omitempty"`
 	// CreatedBy is the caller who created the agent (CreatedByAnnotation);
 	// empty for an agent created before it was recorded.
-	CreatedBy     string `json:"createdBy,omitempty"`
-	ModelConfig   string `json:"modelConfig,omitempty"`
-	IconURL       string `json:"iconUrl,omitempty"`
-	SystemMessage string `json:"systemMessage,omitempty"`
+	CreatedBy string `json:"createdBy,omitempty"`
+	// DefaultWorkspace is the workspace a start_session that names none
+	// starts in (DefaultWorkspaceAnnotation); the owning HelmRelease's value,
+	// else the Agent object's.
+	DefaultWorkspace string `json:"defaultWorkspace,omitempty"`
+	ModelConfig      string `json:"modelConfig,omitempty"`
+	IconURL          string `json:"iconUrl,omitempty"`
+	SystemMessage    string `json:"systemMessage,omitempty"`
 	// Harness is the Harness that runs the agent (spec.harnessRef.name, else
 	// the chart value agent.harness while nothing is rendered).
 	Harness string `json:"harness,omitempty"`
@@ -431,6 +442,7 @@ type AgentSummary struct {
 	DisplayName        string   `json:"displayName,omitempty"`
 	Description        string   `json:"description,omitempty"`
 	CreatedBy          string   `json:"createdBy,omitempty"`
+	DefaultWorkspace   string   `json:"defaultWorkspace,omitempty"`
 	ModelConfig        string   `json:"modelConfig,omitempty"`
 	Harness            string   `json:"harness,omitempty"`
 	Toolset            []string `json:"toolset,omitempty"`
@@ -456,6 +468,7 @@ func (a Agent) Summary() AgentSummary {
 		DisplayName:        a.DisplayName,
 		Description:        a.Description,
 		CreatedBy:          a.CreatedBy,
+		DefaultWorkspace:   a.DefaultWorkspace,
 		ModelConfig:        a.ModelConfig,
 		Harness:            a.Harness,
 		Toolset:            a.Toolset,

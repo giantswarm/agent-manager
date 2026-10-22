@@ -110,3 +110,29 @@ tests:
     asserts:
       - notExists:
           path: spec.template.spec.containers[0].args[?(@ =~ /^--muster-actor-bearer/)]
+
+  - it: calls the workspace-manager through muster's MCP endpoint beside the bindings
+    template: templates/deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --muster-mcp-url=http://muster.agent-platform.svc.cluster.local:8090/mcp
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --workspaces-tools-prefix=x_workspace-manager_
+
+  - it: renders no workspace-manager call without a prefix
+    template: templates/deployment.yaml
+    set:
+      muster.workspacesToolsPrefix: ""
+    asserts:
+      - notExists:
+          path: spec.template.spec.containers[0].args[?(@ =~ /^--muster-mcp-url=/)]
+
+  - it: renders no workspace-manager call without the bindings
+    template: templates/deployment.yaml
+    set:
+      muster.bindingsUrl: ""
+    asserts:
+      - notExists:
+          path: spec.template.spec.containers[0].args[?(@ =~ /^--muster-mcp-url=/)]
