@@ -14,13 +14,13 @@ set:
       issuerUrl: https://dex.example.com
       clientId: platform-client
 tests:
-  - it: passes the platform's toolchain repository by default
+  - it: passes none by default
     asserts:
-      - contains:
-          path: spec.template.spec.containers[0].args
-          content: --toolchain-repository=gsoci.azurecr.io/giantswarm/agent-toolchains
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].args[*]
+          pattern: ^--toolchain-repository
 
-  - it: passes another repository
+  - it: passes the repository it is given
     set:
       toolchains.repository: registry.example.com/team/toolchains
     asserts:
@@ -28,16 +28,9 @@ tests:
           path: spec.template.spec.containers[0].args
           content: --toolchain-repository=registry.example.com/team/toolchains
 
-  - it: passes none when it is empty
-    set:
-      toolchains.repository: ""
-    asserts:
-      - notContains:
-          path: spec.template.spec.containers[0].args
-          content: --toolchain-repository=gsoci.azurecr.io/giantswarm/agent-toolchains
-
   - it: passes none without a kagent controller target
     set:
+      toolchains.repository: gsoci.azurecr.io/giantswarm/agent-toolchains
       kagent.controllerTarget: ""
     asserts:
       - notContains:
