@@ -11,7 +11,8 @@ its Harness by name, plus the agent's own muster `RemoteMCPServer`) plus the
 shared per-namespace `OCIRepository` of that chart tracking `2.x`;
 agent-manager composes both the way the portal's create flow does, pins every
 skill to a commit or a digest, validates the values against the chart's
-`values.schema.json` before applying, and reads agents back from the Agent,
+`values.schema.json` and has the API server dry-run the objects the chart
+renders from them before applying, and reads agents back from the Agent,
 the RemoteMCPServer and the HelmRelease. Readiness is the Agent's own
 `status.conditions`.
 
@@ -23,9 +24,9 @@ the RemoteMCPServer and the HelmRelease. Readiness is the Agent's own
   `agent-platform` meta chart); it is the Agent's `spec.harnessRef.name`.
 - `agentChart.ociUrl` / `agentChart.semver` are what the composed
   OCIRepository carries (`2.x`, never a pre-release build); the same registry
-  is read at run time for the latest version and its values schema
-  (`GET /api/v1/info` says which schema is in use — the embedded copy is the
-  offline fallback).
+  is read at run time for the latest version, its values schema and its
+  templates (`GET /api/v1/info` says which chart is in use — the embedded
+  copy is the offline fallback).
 - `muster.url` is the platform's muster MCP URL composed into every agent as
   the chart value `muster.url`; empty leaves the Generic chart's default.
 - `skills.repositories` are the GitHub repositories `list_skills` discovers

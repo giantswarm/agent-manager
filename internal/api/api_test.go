@@ -26,6 +26,7 @@ import (
 	"github.com/giantswarm/agent-manager/internal/agents"
 	"github.com/giantswarm/agent-manager/internal/chart"
 	"github.com/giantswarm/agent-manager/internal/kube"
+	"github.com/giantswarm/agent-manager/internal/kube/kubetest"
 )
 
 const (
@@ -82,6 +83,7 @@ func newServiceAllowed(t *testing.T, allowed bool) (*agents.Service, *dynamicfak
 	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{
 		hrGVR: "HelmReleaseList", ociGVR: "OCIRepositoryList", agentGVR: "AgentList", serverGVR: "RemoteMCPServerList", mcGVR: "ModelConfigList",
 	}, mc)
+	kubetest.AnswerDryRuns(dyn)
 	typed := kubefake.NewClientset()
 	typed.PrependReactor("create", "selfsubjectaccessreviews", func(a k8stesting.Action) (bool, runtime.Object, error) {
 		review := a.(k8stesting.CreateAction).GetObject().(*authorizationv1.SelfSubjectAccessReview)

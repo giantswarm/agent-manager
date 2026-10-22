@@ -149,7 +149,8 @@ type site struct {
 	flux   dynamic.Interface
 	fluxNS string
 	// agent reads the Agents, RemoteMCPServers, ModelConfigs and
-	// Harnesses of loc.Namespace; agentClient the events there.
+	// Harnesses of loc.Namespace and dry-runs the rendered objects there;
+	// agentClient reads the events and reviews the caller's access there.
 	agent       dynamic.Interface
 	agentClient kube.Client
 	fluxClient  kube.Client

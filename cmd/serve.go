@@ -448,8 +448,8 @@ func discoverGroupVersion(flag string, clients kube.Client, group, resource, def
 	return group + "/" + v
 }
 
-// parseHarnessEgress reads --harness-egress: origins by Harness name, each
-// list checked as the Agent CRD checks spec.egress.
+// parseHarnessEgress reads --harness-egress: origins by Harness name. The
+// lists reach the agents on those Harnesses, whose dry-run judges them.
 func parseHarnessEgress(raw string) (map[string][]string, error) {
 	if strings.TrimSpace(raw) == "" {
 		return nil, nil
@@ -457,11 +457,6 @@ func parseHarnessEgress(raw string) (map[string][]string, error) {
 	var out map[string][]string
 	if err := json.Unmarshal([]byte(raw), &out); err != nil {
 		return nil, fmt.Errorf("--harness-egress: a JSON object of origin lists by Harness name: %w", err)
-	}
-	for harness, origins := range out {
-		if err := agents.ValidateEgress(origins); err != nil {
-			return nil, fmt.Errorf("--harness-egress: Harness %s: %w", harness, err)
-		}
 	}
 	return out, nil
 }

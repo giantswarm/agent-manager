@@ -47,10 +47,11 @@ var (
 )
 
 type fixture struct {
-	dyn    *dynamicfake.FakeDynamicClient
-	typed  *kubefake.Clientset
-	pinner *fakePinner
-	svc    *Service
+	dyn     *dynamicfake.FakeDynamicClient
+	dryRuns *dryRuns
+	typed   *kubefake.Clientset
+	pinner  *fakePinner
+	svc     *Service
 }
 
 func newFixture(t *testing.T, dynObjs []runtime.Object, typedObjs ...runtime.Object) *fixture {
@@ -65,7 +66,7 @@ func newFixture(t *testing.T, dynObjs []runtime.Object, typedObjs ...runtime.Obj
 		Compose:       ComposeConfig{MusterURL: "http://muster.agent-platform.svc.cluster.local:8090/mcp"},
 		HarnessEgress: map[string][]string{"claude": {"https://github.com", "https://*.githubusercontent.com"}},
 	}, nil)
-	return &fixture{dyn: dyn, typed: typed, pinner: pinner, svc: svc}
+	return &fixture{dyn: dyn, dryRuns: answerDryRuns(t, dyn), typed: typed, pinner: pinner, svc: svc}
 }
 
 // allowCreate answers every SelfSubjectAccessReview with allowed(namespace).

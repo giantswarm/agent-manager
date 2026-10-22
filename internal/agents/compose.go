@@ -155,8 +155,11 @@ func ValidateSystemMessage(message string) error {
 
 var dns1123 = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
 
-// ValidateName checks the technical name: a DNS-1123 label of at most 63
-// characters, as the Agent object, Helm and the chart's schema require.
+// ValidateName checks the technical name before it is used: a DNS-1123 label
+// of at most 63 characters. The name is a path segment of every request
+// agent-manager makes for the agent (Kubernetes, kagent's API) and of the
+// files a commit writes, so it is checked before any of them; what the
+// Agent object accepts beyond that is the dry-run's answer.
 func ValidateName(name string) error {
 	if name == "" {
 		return invalidf("name is required")

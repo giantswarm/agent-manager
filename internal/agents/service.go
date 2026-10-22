@@ -747,9 +747,6 @@ func checkSpec(spec Spec) []error {
 	if err := validateSkillNames(spec.Skills, spec.Plugins); err != nil {
 		errs = append(errs, err)
 	}
-	if err := ValidateEgress(spec.Egress); err != nil {
-		errs = append(errs, err)
-	}
 	if err := ValidateSystemMessage(spec.SystemMessage); err != nil {
 		errs = append(errs, err)
 	}
@@ -941,9 +938,13 @@ func (s *Service) ValidateCreate(ctx context.Context, spec Spec) (*ValidateResul
 	for _, e := range s.checkPlugins(ctx, harness, runtime, values, nil) {
 		res.addError(e)
 	}
-	sch, violations := ValidateValues(ctx, s.chart, values)
-	res.Errors = append(res.Errors, violations...)
-	res.SchemaVersion, res.SchemaSource = sch.Version, sch.Source
+	check, err := s.checkValues(ctx, st, spec.Name, values)
+	if err != nil {
+		return nil, err
+	}
+	res.Errors = append(res.Errors, check.violations...)
+	res.Notes = append(res.Notes, check.notes...)
+	res.SchemaVersion, res.SchemaSource = check.schema.Version, check.schema.Source
 	res.Manifests = st.manifests(spec.Name, values)
 	res.Valid = len(res.Errors) == 0
 	return res, nil
@@ -1050,9 +1051,13 @@ func (s *Service) ValidateUpdate(ctx context.Context, upd Update) (*ValidateResu
 			res.addError(e)
 		}
 	}
-	sch, violations := ValidateValues(ctx, s.chart, values)
-	res.Errors = append(res.Errors, violations...)
-	res.SchemaVersion, res.SchemaSource = sch.Version, sch.Source
+	check, err := s.checkValues(ctx, st, upd.Name, values)
+	if err != nil {
+		return nil, err
+	}
+	res.Errors = append(res.Errors, check.violations...)
+	res.Notes = append(res.Notes, check.notes...)
+	res.SchemaVersion, res.SchemaSource = check.schema.Version, check.schema.Source
 	res.Manifests = st.manifests(upd.Name, values)
 	res.Valid = len(res.Errors) == 0
 	return res, nil
@@ -1075,7 +1080,8 @@ func isDomainError(err error) bool {
 
 // Create composes and applies the OCIRepository (when missing) and the
 // HelmRelease of a new agent after pinning its skills and plugins and validating the
-// values against the chart schema. Nothing is written when a check fails, or
+// values (checkValues: the chart schema, then the API server's dry-run of the
+// rendered objects). Nothing is written when a check fails, or
 // on a dry run. In commit mode the two land as files of a pull request in the
 // repository that owns the namespace instead.
 func (s *Service) Create(ctx context.Context, spec Spec) (*CreateResult, error) {
@@ -1143,9 +1149,8 @@ func (s *Service) Create(ctx context.Context, spec Spec) (*CreateResult, error) 
 	if errs := s.checkPlugins(ctx, harness, runtime, values, nil); len(errs) > 0 {
 		return nil, errs[0]
 	}
-	sch, violations := ValidateValues(ctx, s.chart, values)
-	if len(violations) > 0 {
-		return nil, invalidf("values do not satisfy the agent chart schema %s (%s): %s", sch.Version, sch.Source, strings.Join(violations, "; "))
+	if err := s.requireValidValues(ctx, st, spec.Name, values); err != nil {
+		return nil, err
 	}
 
 	res := &CreateResult{RequestedBy: identity.Caller(ctx), WriteOutcome: WriteOutcome{Mode: mode, DryRun: spec.DryRun}}
@@ -1322,9 +1327,6 @@ func (s *Service) mergedValues(ctx context.Context, st *site, upd Update, hr *un
 	setOrDelete(agentBlock, "systemMessage", upd.SystemMessage)
 	setOrDelete(agentBlock, "iconUrl", upd.IconURL)
 	if upd.Egress != nil {
-		if err := ValidateEgress(*upd.Egress); err != nil {
-			return after, before, err
-		}
 		if len(*upd.Egress) > 0 {
 			agentBlock["egress"] = toAnySlice(*upd.Egress)
 		} else {
@@ -1433,8 +1435,8 @@ func setOrDelete(m map[string]any, key string, v *string) {
 }
 
 // Update merges the change into the HelmRelease values, validates the result
-// against the chart schema and writes it. The rendered objects are never
-// touched: helm-controller renders the change.
+// (checkValues) and writes it. The rendered objects are only dry-run:
+// helm-controller renders the change.
 //
 // The write is a read-modify-write, retried when the API server answers
 // Conflict: helm-controller writes the release's status while it reconciles
@@ -1488,9 +1490,8 @@ func (s *Service) update(ctx context.Context, st *site, upd Update) (*UpdateResu
 	if len(guardErrs) > 0 {
 		return nil, guardErrs[0]
 	}
-	sch, violations := ValidateValues(ctx, s.chart, after)
-	if len(violations) > 0 {
-		return nil, invalidf("values do not satisfy the agent chart schema %s (%s): %s", sch.Version, sch.Source, strings.Join(violations, "; "))
+	if err := s.requireValidValues(ctx, st, upd.Name, after); err != nil {
+		return nil, err
 	}
 	changed := changedPaths("", before, after)
 	if changed == nil {

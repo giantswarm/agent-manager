@@ -1,13 +1,15 @@
 // Package chart knows the agent chart: where it lives, which version a Flux
 // OCIRepository tracking the configured semver range resolves to right now,
-// and the values.schema.json of that version — the contract every agent's
-// values are validated against before anything is applied. The registry is the
-// source of truth; an embedded copy of the schema (the chart version the
-// service was built against) is the fallback when the registry cannot be
-// reached, and the API says which one is in use.
+// the values.schema.json of that version — the contract every agent's values
+// are validated against before anything is applied — and the objects it
+// renders, which the API server dry-runs. The registry is the source of truth;
+// an embedded copy of the chart (the version the service was built against) is
+// the fallback when the registry cannot be reached, and the API says which one
+// is in use.
 package chart
 
 import (
+	"bytes"
 	"context"
 	_ "embed"
 	"encoding/json"
@@ -19,12 +21,14 @@ import (
 	"time"
 
 	"github.com/Masterminds/semver/v3"
+	chartv2 "helm.sh/helm/v4/pkg/chart/v2"
+	"helm.sh/helm/v4/pkg/chart/v2/loader"
 
 	"github.com/giantswarm/agent-manager/internal/oci"
 )
 
-// EmbeddedSchemaVersion is the agent chart version whose values.schema.json is
-// compiled into the binary (internal/chart/embedded/): the Generic chart 2.x
+// EmbeddedSchemaVersion is the agent chart version whose archive is compiled
+// into the binary (internal/chart/embedded/agent.tgz): the Generic chart 2.x
 // values contract. One release renders an api.kagent.dev/v1alpha3 Agent plus
 // the agent's muster RemoteMCPServer; skills and plugins are lists of commit-
 // or digest-pinned sources (bundled $defs/skill.schema.json and
@@ -33,10 +37,10 @@ import (
 // `muster.discovery`; none of the 0.x runtime keys; `skillsGitAuthSecretRef`,
 // the one read credential of every private git skill and plugin;
 // `agent.egress` takes HTTP(S) origins and tls://<host>:<port>.
-const EmbeddedSchemaVersion = "2.2.0"
+const EmbeddedSchemaVersion = "2.2.8"
 
-//go:embed embedded/agent-values.schema.json
-var embeddedSchema []byte
+//go:embed embedded/agent.tgz
+var embeddedArchive []byte
 
 // Source names where a schema came from.
 const (
@@ -68,11 +72,14 @@ type Info struct {
 	Error string `json:"error,omitempty"`
 }
 
-// Schema is a parsed values.schema.json with its provenance.
+// Schema is a parsed values.schema.json with its provenance, and the chart it
+// belongs to, which Render renders.
 type Schema struct {
 	Document any
 	Version  string
 	Source   string
+
+	chart *chartv2.Chart
 }
 
 // Resolver reads the chart from the registry and caches the result.
@@ -186,15 +193,33 @@ func (r *Resolver) Info(ctx context.Context) Info {
 	return r.info
 }
 
-// EmbeddedSchema is the compiled-in values.schema.json of the agent chart at
-// EmbeddedSchemaVersion — the offline fallback, and what tests validate with.
-func EmbeddedSchema() Schema {
-	var doc any
-	if err := json.Unmarshal(embeddedSchema, &doc); err != nil {
-		// A build-time constant; an invalid document is a programming error.
-		panic(fmt.Sprintf("embedded agent chart schema: %v", err))
+// EmbeddedSchema is the compiled-in agent chart at EmbeddedSchemaVersion —
+// the offline fallback, and what tests validate and render with.
+func EmbeddedSchema() Schema { return embedded() }
+
+var embedded = sync.OnceValue(func() Schema {
+	s, err := load(embeddedArchive, EmbeddedSchemaVersion, SourceEmbedded)
+	if err != nil {
+		// A build-time constant; an invalid archive is a programming error.
+		panic(fmt.Sprintf("embedded agent chart: %v", err))
 	}
-	return Schema{Document: doc, Version: EmbeddedSchemaVersion, Source: SourceEmbedded}
+	return s
+})
+
+// load parses a chart archive and its values.schema.json.
+func load(archive []byte, version, source string) (Schema, error) {
+	c, err := loader.LoadArchive(bytes.NewReader(archive))
+	if err != nil {
+		return Schema{}, fmt.Errorf("load agent chart %s: %w", version, err)
+	}
+	if len(c.Schema) == 0 {
+		return Schema{}, fmt.Errorf("agent chart %s has no values.schema.json", version)
+	}
+	var doc any
+	if err := json.Unmarshal(c.Schema, &doc); err != nil {
+		return Schema{}, fmt.Errorf("values.schema.json of agent chart %s: %w", version, err)
+	}
+	return Schema{Document: doc, Version: version, Source: source, chart: c}, nil
 }
 
 // resolve reads tags and the schema of the newest in-range version.
@@ -238,17 +263,17 @@ func (r *Resolver) resolve(ctx context.Context) error {
 		return nil
 	}
 
-	raw, err := r.registry.ReadChartFile(ctx, r.ref, latest, "values.schema.json")
+	archive, err := r.registry.ReadChart(ctx, r.ref, latest)
 	if err != nil {
 		return r.fail(err)
 	}
-	var doc any
-	if err := json.Unmarshal(raw, &doc); err != nil {
-		return r.fail(fmt.Errorf("values.schema.json of %s:%s: %w", r.ref.Repository, latest, err))
+	s, err := load(archive, latest, SourceRegistry)
+	if err != nil {
+		return r.fail(fmt.Errorf("%s:%s: %w", r.ref.Repository, latest, err))
 	}
 	now := time.Now()
 	r.mu.Lock()
-	r.cached = &Schema{Document: doc, Version: latest, Source: SourceRegistry}
+	r.cached = &s
 	r.fetched = now
 	r.lastErr = nil
 	r.info = Info{OCIURL: r.ociURL, Semver: r.semver, SemverFilter: r.info.SemverFilter, LatestVersion: latest, SchemaVersion: latest, SchemaSource: SourceRegistry, ResolvedAt: &now}

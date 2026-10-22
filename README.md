@@ -14,8 +14,9 @@ own muster `RemoteMCPServer`, from the shared per-namespace `OCIRepository` of
 that chart, tracking it at `2.x`. That is exactly what the portal's create
 flow composes; agent-manager composes the same two objects from a small,
 curated argument set, pins every skill to an immutable source, validates the
-values against the chart's `values.schema.json` **before** anything is applied,
-and reads an agent back from its Agent object, its RemoteMCPServer and its
+values against the chart's `values.schema.json` and has the API server dry-run
+the objects the chart renders from them **before** anything is applied, and
+reads an agent back from its Agent object, its RemoteMCPServer and its
 owning HelmRelease (Flux provenance labels). Readiness is the Agent's own
 `status.conditions`; there is no per-agent Deployment or pod, agents run as
 Substrate actors.
@@ -400,13 +401,24 @@ without uninstalling, so deleting it would leave the rendered objects behind
 
 ## Validation
 
-Every create and update is validated against the `agent` chart's
-`values.schema.json` before it is applied. The schema comes from the chart
+Every create and update is validated before it is applied, in two steps.
+First against the `agent` chart's `values.schema.json`. Then the chart is
+rendered in-process, as helm-controller renders it, and every rendered object
+(the Agent, the agent's RemoteMCPServer) is written with `dryRun=All` as the
+caller: a create where none exists, else an update over the live object. The
+API server's answer is the validation — the CRD schema, its CEL rules
+(`x-kubernetes-validations`), ValidatingAdmissionPolicies and admission
+webhooks — and a refusal is returned with its field errors, for example
+`Agent kagent/dba is invalid: spec.egress[0]: Too long: may not be more than
+270 bytes`. agent-manager copies none of these rules. An object the caller may
+not write, or a kind the cluster does not serve, is not dry-run: it is left to
+Flux's install and named in `validate_agent`'s `notes`. The chart comes from the
+
 registry (`agentChart.ociUrl`, the newest version in `agentChart.semver`,
 `2.x`, the same resolution Flux's OCIRepository performs, so a pre-release
 build never counts) and is re-read every `agentChart.refresh`; when the
 registry cannot be reached the copy compiled into the binary (the chart 2.x
-contract) validates and `get_info` reports `chart.schemaSource: embedded` with
+contract) validates and renders, and `get_info` reports `chart.schemaSource: embedded` with
 the error. The schema refuses every 0.x key the contract removed
 (`agent.runtime`, `replicas`, `resources`, `nodeSelector`, `tolerations`,
 `muster.serverRef`, `muster.allowedHeaders`, `muster.stsWellKnownUri`,
