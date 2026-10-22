@@ -23,9 +23,9 @@ tests:
     asserts:
       - matchRegex:
           path: spec.template.spec.containers[0].args[?(@ =~ /^--harness-egress=/)]
-          pattern: '^--harness-egress=\{"claude":\["https://github.com"\],"claude-go":'
+          pattern: '^--harness-egress=\{"claude":\["https://github.com"\],"codex":'
 
-  - it: ships GitHub and the toolchain registries by default
+  - it: ships GitHub by default
     template: templates/deployment.yaml
     asserts:
       - matchRegex:
@@ -40,39 +40,6 @@ tests:
       - matchRegex:
           path: spec.template.spec.containers[0].args[?(@ =~ /^--harness-egress=/)]
           pattern: '"claude":\[[^]]*"https://\*\.githubusercontent\.com"'
-      - matchRegex:
-          path: spec.template.spec.containers[0].args[?(@ =~ /^--harness-egress=/)]
-          pattern: '"claude-go":\[[^]]*"https://github\.com"'
-      - matchRegex:
-          path: spec.template.spec.containers[0].args[?(@ =~ /^--harness-egress=/)]
-          pattern: '"claude-go":\[[^]]*"https://api\.github\.com"'
-      - matchRegex:
-          path: spec.template.spec.containers[0].args[?(@ =~ /^--harness-egress=/)]
-          pattern: '"claude-go":\[[^]]*"https://codeload\.github\.com"'
-      - matchRegex:
-          path: spec.template.spec.containers[0].args[?(@ =~ /^--harness-egress=/)]
-          pattern: '"claude-go":\[[^]]*"https://\*\.githubusercontent\.com"'
-      - matchRegex:
-          path: spec.template.spec.containers[0].args[?(@ =~ /^--harness-egress=/)]
-          pattern: '"claude-go":\[[^]]*"https://proxy\.golang\.org"'
-      - matchRegex:
-          path: spec.template.spec.containers[0].args[?(@ =~ /^--harness-egress=/)]
-          pattern: '"claude-go":\[[^]]*"https://sum\.golang\.org"'
-      - matchRegex:
-          path: spec.template.spec.containers[0].args[?(@ =~ /^--harness-egress=/)]
-          pattern: '"claude-node":\[[^]]*"https://github\.com"'
-      - matchRegex:
-          path: spec.template.spec.containers[0].args[?(@ =~ /^--harness-egress=/)]
-          pattern: '"claude-node":\[[^]]*"https://api\.github\.com"'
-      - matchRegex:
-          path: spec.template.spec.containers[0].args[?(@ =~ /^--harness-egress=/)]
-          pattern: '"claude-node":\[[^]]*"https://codeload\.github\.com"'
-      - matchRegex:
-          path: spec.template.spec.containers[0].args[?(@ =~ /^--harness-egress=/)]
-          pattern: '"claude-node":\[[^]]*"https://\*\.githubusercontent\.com"'
-      - matchRegex:
-          path: spec.template.spec.containers[0].args[?(@ =~ /^--harness-egress=/)]
-          pattern: '"claude-node":\[[^]]*"https://registry\.npmjs\.org"'
       - matchRegex:
           path: spec.template.spec.containers[0].args[?(@ =~ /^--harness-egress=/)]
           pattern: '"codex":\[[^]]*"https://github\.com"'

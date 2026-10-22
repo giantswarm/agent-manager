@@ -36,6 +36,10 @@ var harnessSpecFields = map[string]bool{"workload": true, "env": true, "substrat
 // is rewritten on every write.
 const egressNoteHeading = "## Network access (set by the platform)"
 
+// toolchainOrigins is the egress note's name for the origins a Session's
+// toolchains bring.
+const toolchainOrigins = "the registries of the toolchains mounted under /opt/kagent/tools"
+
 // harnessRuntime is the runtime a Harness object runs, empty for none (the
 // platform Harness absent).
 func harnessRuntime(h *unstructured.Unstructured) string {
@@ -271,11 +275,12 @@ func withEgressNote(prompt string, origins []string) string {
 }
 
 // egressNote tells the agent what its sandbox reaches, so a denied request
-// reads as policy rather than as an outage.
+// reads as policy rather than as an outage. A Session's toolchains add their
+// own origins, which differ per Session, so the note names them by place.
 func egressNote(origins []string) string {
-	reach := "no other origin"
+	reach := "only " + toolchainOrigins
 	if len(origins) > 0 {
-		reach = "only these origins: " + strings.Join(origins, ", ")
+		reach = "only these origins: " + strings.Join(origins, ", ") + ", and " + toolchainOrigins
 	}
 	return egressNoteHeading + "\n\nBesides your model and your tools, your sandbox reaches " + reach +
 		". A request to any other host is refused by the egress policy and shows up as a failed command or tool call (connection refused, reset or 403). It is not transient: do not retry it or work around it; say which host the task needs."

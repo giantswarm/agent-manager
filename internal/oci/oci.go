@@ -21,6 +21,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -36,6 +37,9 @@ const (
 	// maxChartBytes bounds the archive read: the agent chart is a few KiB.
 	maxChartBytes = 8 << 20
 )
+
+// ErrNotFound is a registry's 404: the repository, tag or blob is not there.
+var ErrNotFound = errors.New("not found")
 
 // digestPattern is a sha256 digest as the registry reports it.
 var digestPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
@@ -124,9 +128,10 @@ func (r Reference) baseURL() string {
 	return scheme + "://" + r.Host
 }
 
-// Registry talks to OCI registries.
+// Registry talks to OCI registries. It is safe for concurrent use.
 type Registry struct {
 	http *http.Client
+	mu   sync.Mutex
 	// tokens caches the anonymous bearer per scope until it expires.
 	tokens map[string]token
 }
@@ -209,6 +214,80 @@ func (c *Registry) ManifestDigest(ctx context.Context, ref Reference, tag string
 	}
 	sum := sha256.Sum256(body)
 	return "sha256:" + hex.EncodeToString(sum[:]), nil
+}
+
+// ImageLabels reads the labels of the image at digest from its config: for an
+// index, the config of its first image manifest (attestations, platform
+// unknown, skipped), since a multi-arch image carries one set of labels per
+// platform, built from one Dockerfile.
+func (c *Registry) ImageLabels(ctx context.Context, ref Reference, digest string) (map[string]string, error) {
+	manifest, err := c.imageManifest(ctx, ref, digest)
+	if err != nil {
+		return nil, err
+	}
+	if len(manifest.Manifests) > 0 {
+		child := ""
+		for _, m := range manifest.Manifests {
+			if m.Platform == nil || m.Platform.OS != "unknown" {
+				child = m.Digest
+				break
+			}
+		}
+		if child == "" {
+			return nil, fmt.Errorf("index %s@%s lists no image manifest", ref.Repository, digest)
+		}
+		if manifest, err = c.imageManifest(ctx, ref, child); err != nil {
+			return nil, err
+		}
+		digest = child
+	}
+	if !digestPattern.MatchString(manifest.Config.Digest) {
+		return nil, fmt.Errorf("manifest %s@%s names no image config", ref.Repository, digest)
+	}
+	var config struct {
+		Config struct {
+			Labels map[string]string `json:"Labels"`
+		} `json:"config"`
+	}
+	if err := c.getJSON(ctx, ref, fmt.Sprintf("%s/v2/%s/blobs/%s", ref.baseURL(), ref.Repository, manifest.Config.Digest), "", &config); err != nil {
+		return nil, err
+	}
+	return config.Config.Labels, nil
+}
+
+// imageManifest is an image manifest or an index, as far as ImageLabels
+// reads it.
+type imageManifest struct {
+	Config struct {
+		Digest string `json:"digest"`
+	} `json:"config"`
+	Manifests []struct {
+		Digest   string `json:"digest"`
+		Platform *struct {
+			OS string `json:"os"`
+		} `json:"platform"`
+	} `json:"manifests"`
+}
+
+func (c *Registry) imageManifest(ctx context.Context, ref Reference, digest string) (*imageManifest, error) {
+	var m imageManifest
+	if err := c.getJSON(ctx, ref, fmt.Sprintf("%s/v2/%s/manifests/%s", ref.baseURL(), ref.Repository, digest), manifestAccept, &m); err != nil {
+		return nil, err
+	}
+	return &m, nil
+}
+
+// getJSON decodes the JSON document at target, at most 1 MiB.
+func (c *Registry) getJSON(ctx context.Context, ref Reference, target, accept string, into any) error {
+	resp, err := c.do(ctx, ref, http.MethodGet, target, accept)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(into); err != nil {
+		return fmt.Errorf("decode %s: %w", target, err)
+	}
+	return nil
 }
 
 // ReadChartFile pulls the chart at tag and returns the named file from the
@@ -310,7 +389,11 @@ func (c *Registry) do(ctx context.Context, ref Reference, method, target, accept
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		_ = resp.Body.Close()
-		return nil, fmt.Errorf("%s %s: HTTP %d: %s", method, target, resp.StatusCode, strings.TrimSpace(string(body)))
+		err := fmt.Errorf("%s %s: HTTP %d: %s", method, target, resp.StatusCode, strings.TrimSpace(string(body)))
+		if resp.StatusCode == http.StatusNotFound {
+			err = fmt.Errorf("%w: %w", ErrNotFound, err)
+		}
+		return nil, err
 	}
 	return resp, nil
 }
@@ -334,6 +417,8 @@ func (c *Registry) request(ctx context.Context, method, target, accept, bearer s
 }
 
 func (c *Registry) cachedToken(scope string) string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if t, ok := c.tokens[scope]; ok && time.Now().Before(t.expires) {
 		return t.value
 	}
@@ -389,7 +474,9 @@ func (c *Registry) fetchToken(ctx context.Context, challenge, fallbackScope stri
 	if ttl <= 0 {
 		ttl = 60 * time.Second
 	}
+	c.mu.Lock()
 	c.tokens[fallbackScope] = token{value: tok, expires: time.Now().Add(ttl - 10*time.Second)}
+	c.mu.Unlock()
 	return tok, nil
 }
 

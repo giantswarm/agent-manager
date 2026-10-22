@@ -2,6 +2,10 @@ package oci_test
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -66,4 +70,42 @@ func TestRegistryResolvesDigestsAndReadsChartFiles(t *testing.T) {
 	require.NoError(t, err)
 	assert.JSONEq(t, `{"type":"object"}`, string(raw))
 	assert.Equal(t, 1, f.TokenHits, "the anonymous token is cached across requests")
+}
+
+func TestImageLabelsReadsTheConfigOfAnIndexsFirstImage(t *testing.T) {
+	const (
+		index       = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+		attestation = "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+		amd64       = "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+		config      = "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+		single      = "sha256:5555555555555555555555555555555555555555555555555555555555555555"
+	)
+	docs := map[string]any{
+		"/v2/tools/go/manifests/" + index: map[string]any{"manifests": []any{
+			map[string]any{"digest": attestation, "platform": map[string]any{"os": "unknown"}},
+			map[string]any{"digest": amd64, "platform": map[string]any{"os": "linux", "architecture": "amd64"}},
+		}},
+		"/v2/tools/go/manifests/" + amd64:  map[string]any{"config": map[string]any{"digest": config}},
+		"/v2/tools/go/manifests/" + single: map[string]any{"config": map[string]any{"digest": config}},
+		"/v2/tools/go/blobs/" + config:     map[string]any{"config": map[string]any{"Labels": map[string]string{"io.giantswarm.toolchain.name": "go"}}},
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		doc, ok := docs[r.URL.Path]
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(doc)
+	}))
+	t.Cleanup(srv.Close)
+	ref := oci.Reference{Host: strings.TrimPrefix(srv.URL, "http://"), Repository: "tools/go", Insecure: true}
+	reg := oci.NewRegistry(nil)
+
+	for _, digest := range []string{index, single} {
+		labels, err := reg.ImageLabels(t.Context(), ref, digest)
+		require.NoError(t, err, digest)
+		assert.Equal(t, map[string]string{"io.giantswarm.toolchain.name": "go"}, labels, digest)
+	}
+	_, err := reg.ImageLabels(t.Context(), ref, "sha256:6666666666666666666666666666666666666666666666666666666666666666")
+	require.ErrorIs(t, err, oci.ErrNotFound)
 }

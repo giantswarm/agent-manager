@@ -33,12 +33,12 @@ test-envtest: ## Run the envtest-backed tests against a real kube-apiserver (dow
 
 ##@ kagent
 
-# Commit of giantswarm/kagent-upstream (tag v1.20.0) the kagent.api.v1alpha1
+# Commit of giantswarm/kagent-upstream the kagent.api.v1alpha1
 # protos under hack/kagent-proto/ are copied from. Bump it, run `make
 # generate-kagent`, and commit hack/kagent-proto/ and internal/kagent/gen/
 # together.
 KAGENT_PROTO_REPO ?= https://github.com/giantswarm/kagent-upstream.git
-KAGENT_PROTO_COMMIT ?= 0acd151a7472987e0493732825e087926491c837
+KAGENT_PROTO_COMMIT ?= 4fe21ee869d7f9d367e60d9a6921eb12299606ba
 KAGENT_PROTO_FILES := common runtime sessions
 
 .PHONY: generate-kagent

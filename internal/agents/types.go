@@ -247,6 +247,10 @@ type Spec struct {
 	// namespace, a start_session that names none starts in
 	// (DefaultWorkspaceAnnotation). Empty: no default.
 	DefaultWorkspace string `json:"defaultWorkspace,omitempty"`
+	// DefaultToolchains are the toolchains, name[@version] (latest without
+	// one), a start_session that names none starts with
+	// (DefaultToolchainsAnnotation). Empty: none.
+	DefaultToolchains []string `json:"defaultToolchains,omitempty"`
 	// Labels / Annotations are merged onto the Agent object by the chart.
 	Labels      map[string]string `json:"labels,omitempty"`
 	Annotations map[string]string `json:"annotations,omitempty"`
@@ -289,9 +293,12 @@ type Update struct {
 	Toolset           *[]string `json:"toolset,omitempty"`
 	// DefaultWorkspace replaces the agent's default workspace; empty
 	// removes it.
-	DefaultWorkspace *string            `json:"defaultWorkspace,omitempty"`
-	Labels           *map[string]string `json:"labels,omitempty"`
-	Annotations      *map[string]string `json:"annotations,omitempty"`
+	DefaultWorkspace *string `json:"defaultWorkspace,omitempty"`
+	// DefaultToolchains replaces the agent's default toolchains; an empty
+	// list removes them.
+	DefaultToolchains *[]string          `json:"defaultToolchains,omitempty"`
+	Labels            *map[string]string `json:"labels,omitempty"`
+	Annotations       *map[string]string `json:"annotations,omitempty"`
 	// RefreshSkills re-resolves every git skill and git plugin of the agent
 	// to the head of its repository's default branch — an entry passed in
 	// Skills or Plugins with a Ref goes to that ref's head — and changes
@@ -397,9 +404,12 @@ type Agent struct {
 	// starts in (DefaultWorkspaceAnnotation); the owning HelmRelease's value,
 	// else the Agent object's.
 	DefaultWorkspace string `json:"defaultWorkspace,omitempty"`
-	ModelConfig      string `json:"modelConfig,omitempty"`
-	IconURL          string `json:"iconUrl,omitempty"`
-	SystemMessage    string `json:"systemMessage,omitempty"`
+	// DefaultToolchains are the toolchains a start_session that names none
+	// starts with (DefaultToolchainsAnnotation), as DefaultWorkspace is read.
+	DefaultToolchains []string `json:"defaultToolchains,omitempty"`
+	ModelConfig       string   `json:"modelConfig,omitempty"`
+	IconURL           string   `json:"iconUrl,omitempty"`
+	SystemMessage     string   `json:"systemMessage,omitempty"`
 	// Harness is the Harness that runs the agent (spec.harnessRef.name, else
 	// the chart value agent.harness while nothing is rendered).
 	Harness string `json:"harness,omitempty"`
@@ -454,6 +464,7 @@ type AgentSummary struct {
 	Description        string   `json:"description,omitempty"`
 	CreatedBy          string   `json:"createdBy,omitempty"`
 	DefaultWorkspace   string   `json:"defaultWorkspace,omitempty"`
+	DefaultToolchains  []string `json:"defaultToolchains,omitempty"`
 	ModelConfig        string   `json:"modelConfig,omitempty"`
 	Harness            string   `json:"harness,omitempty"`
 	Toolset            []string `json:"toolset,omitempty"`
@@ -480,6 +491,7 @@ func (a Agent) Summary() AgentSummary {
 		Description:        a.Description,
 		CreatedBy:          a.CreatedBy,
 		DefaultWorkspace:   a.DefaultWorkspace,
+		DefaultToolchains:  a.DefaultToolchains,
 		ModelConfig:        a.ModelConfig,
 		Harness:            a.Harness,
 		Toolset:            a.Toolset,

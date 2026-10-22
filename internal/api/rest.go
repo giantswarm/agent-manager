@@ -241,11 +241,13 @@ func (h *REST) listSessions(w http.ResponseWriter, r *http.Request) {
 
 // startSessionRequest is the body of POST /agents/{namespace}/{name}/sessions.
 type startSessionRequest struct {
-	Message        string `json:"message,omitempty"`
-	RequestID      string `json:"requestId,omitempty"`
-	SessionName    string `json:"sessionName,omitempty"`
-	WorkspaceGrant string `json:"workspaceGrant,omitempty"`
-	NoWorkspace    bool   `json:"noWorkspace,omitempty"`
+	Message        string   `json:"message,omitempty"`
+	RequestID      string   `json:"requestId,omitempty"`
+	SessionName    string   `json:"sessionName,omitempty"`
+	WorkspaceGrant string   `json:"workspaceGrant,omitempty"`
+	NoWorkspace    bool     `json:"noWorkspace,omitempty"`
+	Toolchains     []string `json:"toolchains,omitempty"`
+	NoToolchains   bool     `json:"noToolchains,omitempty"`
 }
 
 func (h *REST) startSession(w http.ResponseWriter, r *http.Request) {
@@ -256,7 +258,7 @@ func (h *REST) startSession(w http.ResponseWriter, r *http.Request) {
 	res, err := h.svc.StartSession(r.Context(), agents.StartSession{
 		Namespace: r.PathValue("namespace"), Name: r.PathValue("name"),
 		Message: req.Message, RequestID: req.RequestID, SessionName: req.SessionName, WorkspaceGrant: req.WorkspaceGrant,
-		NoWorkspace: req.NoWorkspace,
+		NoWorkspace: req.NoWorkspace, Toolchains: req.Toolchains, NoToolchains: req.NoToolchains,
 	})
 	if err != nil {
 		h.writeError(w, err)
@@ -348,6 +350,10 @@ func SpecToUpdate(s agents.Spec) agents.Update {
 	upd.Harness = str(s.Harness)
 	upd.IconURL = str(s.IconURL)
 	upd.DefaultWorkspace = str(s.DefaultWorkspace)
+	if s.DefaultToolchains != nil {
+		toolchains := s.DefaultToolchains
+		upd.DefaultToolchains = &toolchains
+	}
 	if s.Skills != nil {
 		skills := s.Skills
 		upd.Skills = &skills

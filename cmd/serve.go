@@ -25,6 +25,7 @@ import (
 	"github.com/giantswarm/agent-manager/internal/kagent"
 	"github.com/giantswarm/agent-manager/internal/kube"
 	"github.com/giantswarm/agent-manager/internal/muster"
+	"github.com/giantswarm/agent-manager/internal/oci"
 	"github.com/giantswarm/agent-manager/internal/server"
 	"github.com/giantswarm/agent-manager/internal/skills"
 	"github.com/giantswarm/agent-manager/internal/tenants"
@@ -43,6 +44,7 @@ type serveOptions struct {
 	kagentAPIVersion  string
 	harnessName       string
 	harnessEgress     string
+	toolchainRepo     string
 	musterURL         string
 	targetMusterURL   string
 	musterBindingsURL string
@@ -124,6 +126,7 @@ environment variable named next to it; flags win over the environment.`,
 	f.StringVar(&o.managedNamespaces, "managed-namespaces", envOr("AGENT_MANAGER_MANAGED_NAMESPACES", ""), "Comma-separated additional namespaces agents may live in; RBAC must exist there (AGENT_MANAGER_MANAGED_NAMESPACES)")
 	f.StringVar(&o.kagentAPIVersion, "kagent-api-version", envOr("KAGENT_API_VERSION", "auto"), "api.kagent.dev API version for Agents, Harnesses, RemoteMCPServers and ModelConfigs; auto discovers the version serving agents, default "+agents.DefaultKagentAPIVersion+" (KAGENT_API_VERSION)")
 	f.StringVar(&o.harnessName, "harness-name", envOr("AGENT_HARNESS_NAME", agents.DefaultHarnessName), "Name of the platform Harness an agent runs on unless create_agent names another: composed as the chart value agent.harness, the Agent's spec.harnessRef.name (AGENT_HARNESS_NAME)")
+	f.StringVar(&o.toolchainRepo, "toolchain-repository", envOr("AGENT_MANAGER_TOOLCHAIN_REPOSITORY", ""), "The OCI repository the installation's toolchains are published under, <registry>/<path> (gsoci.azurecr.io/giantswarm/agent-toolchains): toolchain <name> is the image <registry>/<path>/<name>, read anonymously, which start_session mounts into a session. Empty: a start that names toolchains, or on an agent with default toolchains, is refused. Needs --kagent-target (AGENT_MANAGER_TOOLCHAIN_REPOSITORY)")
 	f.StringVar(&o.harnessEgress, "harness-egress", envOr("AGENT_MANAGER_HARNESS_EGRESS", ""), "JSON object of the origins a coding agent (on a Harness whose runtime is not kagent) reaches, by Harness name ({\"claude\": [\"https://github.com\"]}): written into the Agent's spec.egress, and the only origins such an agent may name; a coding Harness without an entry is refused, an empty list reaches none (AGENT_MANAGER_HARNESS_EGRESS)")
 	f.StringVar(&o.musterURL, "muster-url", envOr("AGENT_MUSTER_URL", ""), "The platform's muster MCP URL, composed into every agent as the chart value muster.url; empty composes nothing and the chart default applies (AGENT_MUSTER_URL)")
 	f.BoolVar(&o.musterActorBearer, "muster-actor-bearer", envBool("AGENT_MANAGER_MUSTER_ACTOR_BEARER", false), "muster trusts the actor JWT of a bound session: get_agent, list_agents and get_info report an agent's toolset as bound to each session at its start, which every session start_session binds carries. Needs --muster-bindings-url (AGENT_MANAGER_MUSTER_ACTOR_BEARER)")
@@ -290,6 +293,13 @@ func runServe(ctx context.Context, o *serveOptions) error {
 	if err != nil {
 		return err
 	}
+	toolchains, err := toolchainSource(o.toolchainRepo)
+	if err != nil {
+		return err
+	}
+	if toolchains != nil && o.kagentTarget == "" {
+		return fmt.Errorf("--toolchain-repository needs --kagent-target: toolchains are mounted into sessions started through kagent")
+	}
 
 	var tenantSet *tenants.Set
 	if o.multiTenant {
@@ -388,6 +398,7 @@ func runServe(ctx context.Context, o *serveOptions) error {
 		Workspaces:       workspaceManager,
 		ToolsetBound:     o.musterActorBearer,
 		HarnessEgress:    harnessEgress,
+		Toolchains:       toolchains,
 		Tenants:          tenantSetOrNil(tenantSet),
 	}, log)
 
@@ -479,6 +490,22 @@ func parseHarnessEgress(raw string) (map[string][]string, error) {
 		return nil, fmt.Errorf("--harness-egress: a JSON object of origin lists by Harness name: %w", err)
 	}
 	return out, nil
+}
+
+// toolchainSource reads --toolchain-repository, <registry>/<path>; nil for
+// none.
+func toolchainSource(raw string) (*agents.ToolchainSource, error) {
+	if strings.TrimSpace(raw) == "" {
+		return nil, nil
+	}
+	ref, err := oci.ParseImageReference(raw)
+	if err != nil {
+		return nil, fmt.Errorf("--toolchain-repository: %w", err)
+	}
+	if ref.Tag != "" || ref.Digest != "" {
+		return nil, fmt.Errorf("--toolchain-repository %q: a repository, without a tag or digest: the version is each session's", raw)
+	}
+	return &agents.ToolchainSource{Repository: ref.Reference, Registry: oci.NewRegistry(nil)}, nil
 }
 
 // tenantSetOrNil keeps a nil reconciler a nil interface.

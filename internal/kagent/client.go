@@ -282,6 +282,11 @@ type SessionCreate struct {
 	// list muster as a provider, where the egress gateway hands the actor its
 	// own JWT in place of the caller's credential.
 	BindActor bool
+	// ToolImages are the digest-pinned tool images the session's actor
+	// mounts read-only at /opt/kagent/tools/<name>, each with the egress
+	// origins its tools need; nil for none. A controller without session
+	// tool images ignores them: the created session then lists none.
+	ToolImages []*apiv1alpha1.SessionToolImage
 }
 
 // CreateSession is SessionService/CreateSession.
@@ -297,6 +302,7 @@ func (c *Client) CreateSession(ctx context.Context, token string, in SessionCrea
 		VolumeSource:   in.VolumeSource,
 		AdmissionToken: in.AdmissionToken,
 		BindActor:      in.BindActor,
+		ToolImages:     in.ToolImages,
 	})
 	if err != nil {
 		return nil, err

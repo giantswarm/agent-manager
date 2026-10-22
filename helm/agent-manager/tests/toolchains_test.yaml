@@ -1,0 +1,45 @@
+# The toolchain repository start_session mounts a session's toolchains from.
+#
+# Run with: make helm-test (helm unittest helm/agent-manager)
+suite: toolchains
+templates:
+  - templates/deployment.yaml
+set:
+  oauth:
+    enabled: true
+    existingSecret: platform-oauth
+  global:
+    domain: example.com
+    identity:
+      issuerUrl: https://dex.example.com
+      clientId: platform-client
+tests:
+  - it: passes the platform's toolchain repository by default
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --toolchain-repository=gsoci.azurecr.io/giantswarm/agent-toolchains
+
+  - it: passes another repository
+    set:
+      toolchains.repository: registry.example.com/team/toolchains
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --toolchain-repository=registry.example.com/team/toolchains
+
+  - it: passes none when it is empty
+    set:
+      toolchains.repository: ""
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --toolchain-repository=gsoci.azurecr.io/giantswarm/agent-toolchains
+
+  - it: passes none without a kagent controller target
+    set:
+      kagent.controllerTarget: ""
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --toolchain-repository=gsoci.azurecr.io/giantswarm/agent-toolchains
