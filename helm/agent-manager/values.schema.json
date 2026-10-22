@@ -363,6 +363,14 @@
                     "type": "string",
                     "description": "muster's session bindings endpoint: `start_session` binds a workspace session's sandbox actor to the caller there, as the caller, before its first turn, and `delete_session` unbinds it, so muster releases the person's provider token to that sandbox alone. Rendered with the session tools (`oauth.enabled` and `kagent.controllerTarget`); empty refuses a workspace grant. With `networkPolicy.enabled` the policy opens egress to it: the Service's namespace for an in-cluster host, every address otherwise."
                 },
+                "mcpUrl": {
+                    "type": "string",
+                    "description": "muster's MCP endpoint, the muster Service of `bindingsUrl`: `start_session` calls the workspace-manager's `authorize_workspace` there, as the caller, for an agent's default workspace when the start names no workspace. Rendered with `bindingsUrl` and `workspacesToolsPrefix`."
+                },
+                "workspacesToolsPrefix": {
+                    "type": "string",
+                    "description": "The workspace-manager's tool prefix in muster. Empty: a start that names no workspace on an agent with a default workspace is refused."
+                },
                 "mcpServer": {
                     "type": "object",
                     "additionalProperties": false,

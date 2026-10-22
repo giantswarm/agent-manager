@@ -82,6 +82,8 @@ const (
 	argRequestID      = "requestId"
 	argSessionName    = "sessionName"
 	argWorkspaceGrant = "workspaceGrant"
+	argNoWorkspace    = "noWorkspace"
+	argDefaultWS      = "defaultWorkspace"
 	argDetail         = "detail"
 	argLastTurns      = "lastTurns"
 	argMaxBytes       = "maxBytes"
@@ -152,6 +154,9 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 	annotationsProp := mcp.WithObject(argAnnotations, mcp.Description("Extra annotations on the Agent object (string values)."), mcp.AdditionalProperties(stringSchema))
 	labelsReplaceProp := mcp.WithObject(argLabels, mcp.Description("Replaces all extra labels on the Agent object ({} clears them); pass every label to keep."), mcp.AdditionalProperties(stringSchema))
 	annotationsReplaceProp := mcp.WithObject(argAnnotations, mcp.Description("Replaces all extra annotations on the Agent ({} clears them; the creator annotation always stays); pass every one to keep."), mcp.AdditionalProperties(stringSchema))
+	defaultWSDesc := "Workspace <namespace>/<name> of the agent's namespace that a start_session naming none starts in, authorized as its starter"
+	defaultWSProp := mcp.WithString(argDefaultWS, mcp.Description(defaultWSDesc+"."))
+	defaultWSReplaceProp := mcp.WithString(argDefaultWS, mcp.Description(defaultWSDesc+"; \"\" removes it."))
 	pluginShape := "{git: {url, ref | commit} or oci: <reference>, path, skills} entries, pinned at write time"
 	pluginDesc := "Plugins the agent loads: " + pluginShape + "."
 	pluginEntry := map[string]any{
@@ -242,6 +247,7 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 		pluginsProp,
 		egressProp,
 		gitAuthProp,
+		defaultWSProp,
 		labelsProp,
 		annotationsProp,
 		nsProp,
@@ -270,6 +276,7 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 		gitAuthReplaceProp,
 		refreshSkillsProp,
 		toolsetReplaceProp,
+		defaultWSReplaceProp,
 		labelsReplaceProp,
 		annotationsReplaceProp,
 		mcp.WithBoolean(argForce, mcp.Description("Write even when the HelmRelease is suspended (default false). A GitOps-owned release is never written live: use mode commit")),
@@ -327,6 +334,7 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 		egressProp,
 		gitAuthProp,
 		refreshSkillsProp,
+		defaultWSProp,
 		labelsProp,
 		annotationsProp,
 		mcp.WithBoolean(argUpdate, mcp.Description("Validate as an update of the existing agent instead of a create (default false)")),
@@ -414,6 +422,7 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 		mcp.WithString(argRequestID, mcp.Description("Idempotency key (at most 128 characters): pass one and reuse it on a retry; without it a retry starts a second session.")),
 		mcp.WithString(argSessionName, mcp.Description("Display name of the conversation (at most 200 characters); default: unnamed")),
 		mcp.WithString(argWorkspaceGrant, mcp.Description("The grant authorize_workspace returned to you: the session works in that workspace, its sandbox bound to you in muster. Others' are refused.")),
+		mcp.WithBoolean(argNoWorkspace, mcp.Description("Start without a workspace. With neither it nor workspaceGrant: the agent's defaultWorkspace, as you; a refusal or auth_required starts nothing.")),
 		mcp.WithReadOnlyHintAnnotation(false),
 		mcp.WithDestructiveHintAnnotation(false),
 		mcp.WithIdempotentHintAnnotation(false),

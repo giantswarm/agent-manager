@@ -47,6 +47,10 @@ name is the DNS-1123 name the person chose, never derived from displayName. mode
       "description": "With organization: the workload cluster the agent runs on; its HelmRelease stays on the installation. namespace is on the cluster.",
       "type": "string"
     },
+    "defaultWorkspace": {
+      "description": "Workspace <namespace>/<name> of the agent's namespace that a start_session naming none starts in, authorized as its starter.",
+      "type": "string"
+    },
     "description": {
       "description": "What the agent is for",
       "type": "string"
@@ -626,6 +630,10 @@ Refused with conflict while the agent has no ready revision (get_agent_status). 
       "description": "Namespace of the agent; default: the installation's kagent namespace (get_info lists the managed ones).",
       "type": "string"
     },
+    "noWorkspace": {
+      "description": "Start without a workspace. With neither it nor workspaceGrant: the agent's defaultWorkspace, as you; a refusal or auth_required starts nothing.",
+      "type": "boolean"
+    },
     "requestId": {
       "description": "Idempotency key (at most 128 characters): pass one and reuse it on a retry; without it a retry starts a second session.",
       "type": "string"
@@ -671,6 +679,10 @@ Lists are skills, plugins, egress and toolset. "" clears a text field back to th
     },
     "cluster": {
       "description": "With organization: the workload cluster the agent runs on; its HelmRelease stays on the installation. namespace is on the cluster.",
+      "type": "string"
+    },
+    "defaultWorkspace": {
+      "description": "Workspace <namespace>/<name> of the agent's namespace that a start_session naming none starts in, authorized as its starter; \"\" removes it.",
       "type": "string"
     },
     "description": {
@@ -877,6 +889,10 @@ Checks the name, modelConfig, harness and toolset (required for a create), pins 
     },
     "cluster": {
       "description": "With organization: the workload cluster the agent runs on; its HelmRelease stays on the installation. namespace is on the cluster.",
+      "type": "string"
+    },
+    "defaultWorkspace": {
+      "description": "Workspace <namespace>/<name> of the agent's namespace that a start_session naming none starts in, authorized as its starter.",
       "type": "string"
     },
     "description": {

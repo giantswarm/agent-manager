@@ -193,9 +193,12 @@ type StartSession struct {
 	// SessionName is the conversation's display name; empty leaves it unnamed.
 	SessionName string `json:"sessionName,omitempty"`
 	// WorkspaceGrant starts the session in a workspace: the grant a workspace
-	// manager's authorize_workspace returned to the caller. Empty starts it
-	// without one, as the surfaces do today.
+	// manager's authorize_workspace returned to the caller.
 	WorkspaceGrant string `json:"workspaceGrant,omitempty"`
+	// NoWorkspace starts the session without a workspace. With neither, the
+	// session starts in the agent's default workspace, authorized as the
+	// caller; an agent without a default starts it without one.
+	NoWorkspace bool `json:"noWorkspace,omitempty"`
 }
 
 var protoJSON = protojson.MarshalOptions{}
@@ -633,16 +636,25 @@ func (s *Service) StartSession(ctx context.Context, in StartSession) (*SessionSt
 	if requestID == "" {
 		requestID = uuid.NewString()
 	}
+	if in.NoWorkspace && in.WorkspaceGrant != "" {
+		return nil, invalidf("workspaceGrant and noWorkspace exclude each other")
+	}
+	grant := in.WorkspaceGrant
+	if grant == "" && !in.NoWorkspace {
+		if grant, err = s.defaultWorkspaceGrant(ctx, token, ref); err != nil {
+			return nil, err
+		}
+	}
 	create := kagent.SessionCreate{Agent: ref, RequestID: requestID, Name: in.SessionName, BindActor: s.cfg.Bindings != nil}
 	var workspace *Workspace
-	if in.WorkspaceGrant != "" {
-		if workspace, err = workspaceGrant(ctx, in.WorkspaceGrant, time.Now()); err != nil {
+	if grant != "" {
+		if workspace, err = workspaceGrant(ctx, grant, time.Now()); err != nil {
 			return nil, err
 		}
 		if s.cfg.Bindings == nil {
 			return nil, errSessionBindingsUnsupported
 		}
-		create.VolumeSource, create.AdmissionToken = workspace.Volume, in.WorkspaceGrant
+		create.VolumeSource, create.AdmissionToken = workspace.Volume, grant
 	}
 	session, err := s.cfg.Sessions.CreateSession(ctx, token, create)
 	if err != nil {
@@ -676,6 +688,16 @@ func (s *Service) StartSession(ctx context.Context, in StartSession) (*SessionSt
 		}
 	}
 	return out, nil
+}
+
+// defaultWorkspaceGrant is a grant of the agent's default workspace for the
+// caller, "" when the agent has none.
+func (s *Service) defaultWorkspaceGrant(ctx context.Context, token string, ref kagent.Ref) (string, error) {
+	workspace, err := s.defaultWorkspaceOfAgent(ctx, ref.Namespace, ref.Name)
+	if err != nil || workspace == "" {
+		return "", err
+	}
+	return s.authorizeDefaultWorkspace(ctx, token, workspace)
 }
 
 // firstMessageIDs is the namespace of the first messages' ids: a start's
