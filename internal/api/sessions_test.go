@@ -297,6 +297,7 @@ func TestGetSessionAnswersAWholeSessionOverMCP(t *testing.T) {
 		TotalTurns   int               `json:"totalTurns"`
 		OmittedTurns int               `json:"omittedTurns"`
 		Truncated    bool              `json:"truncated"`
+		Hint         string            `json:"hint"`
 	}
 	get := func(args map[string]any) (answer, string) {
 		t.Helper()
@@ -332,6 +333,8 @@ func TestGetSessionAnswersAWholeSessionOverMCP(t *testing.T) {
 		assert.Len(t, got.Turns, 200, detail)
 		assert.Equal(t, 50, got.OmittedTurns, detail)
 		assert.True(t, got.Truncated, detail)
+		assert.Contains(t, got.Hint, "detail full", detail)
+		assert.NotContains(t, got.Hint, "raise maxBytes", detail)
 	}
 
 	for _, tool := range []string{ToolGetSession, ToolGetSessionTurn} {
@@ -341,9 +344,14 @@ func TestGetSessionAnswersAWholeSessionOverMCP(t *testing.T) {
 		assert.Contains(t, text, fmt.Sprint(32<<20), tool)
 	}
 
-	desc := srv.ListTools()[ToolGetSession].Tool.Description
+	tools := srv.ListTools()
+	desc := tools[ToolGetSession].Tool.Description
 	assert.Contains(t, desc, "write it to a file")
 	assert.Contains(t, desc, "--output json")
+	assert.Contains(t, desc, "customer data")
+	assert.Contains(t, desc, "at most 200 turns")
+	desc = tools[ToolGetSessionTurn].Tool.Description
+	assert.Contains(t, desc, "write it to a file")
 	assert.Contains(t, desc, "customer data")
 }
 

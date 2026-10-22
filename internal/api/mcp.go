@@ -379,7 +379,7 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 
 	s.AddTool(mcp.NewTool(ToolGetSession,
 		tooldesc.Describe("Read a conversation's turns, oldest first. To poll, use lastTurns: 1 until the last turn's state is final.",
-			fmt.Sprintf("Final states: COMPLETED, FAILED, CANCELED, REJECTED, INPUT_REQUIRED. The oldest turns are dropped to fit maxBytes (default %d; omittedTurns counts them). One turn or tool call whole: get_session_turn. detail full with a large maxBytes answers the whole session, one GetTask call per turn, far more than a context window holds: write it to a file (muster call <tool> --output json, after muster auth login). It holds all the agent saw: customer data.", agents.DefaultSessionMaxBytes)),
+			fmt.Sprintf("Final states: COMPLETED, FAILED, CANCELED, REJECTED, INPUT_REQUIRED. Oldest turns are dropped to fit maxBytes (default %d; omittedTurns counts them); summary and transcript answer at most %d turns. One turn or tool call whole: get_session_turn. detail full with a large maxBytes answers the whole session, one GetTask call per turn, far beyond a context window: write it to a file (muster call <tool> --output json, after muster auth login). It holds all the agent saw: customer data.", agents.DefaultSessionMaxBytes, agents.MaxSummaryTurns)),
 		mcp.WithString(argSessionID, mcp.Required(), mcp.Description("Session id (from start_session or list_sessions)")),
 		mcp.WithString(argDetail, mcp.Enum(agents.DetailSummary, agents.DetailTranscript, agents.DetailFull), mcp.Description("summary (default): per turn messages, state, a stub per tool call; transcript: every message and artifact, tool results as stubs; full: raw A2A tasks")),
 		mcp.WithNumber(argLastTurns, mcp.Description("Only the last n turns")),
@@ -392,7 +392,7 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 
 	s.AddTool(mcp.NewTool(ToolGetSessionTurn,
 		tooldesc.Describe("Read one turn of a conversation, or with toolCall one tool call's arguments and full response.",
-			"detail: transcript (default) clips tool arguments and gives tool results as stubs (read one with toolCall); full gives the raw A2A objects. If the answer is cut to fit maxBytes, call again with fromMessage set to nextMessage."),
+			"detail: transcript (default) clips tool arguments and gives tool results as stubs (read one with toolCall); full gives the raw A2A objects. If the answer is cut to fit maxBytes, call again with fromMessage set to nextMessage. A large maxBytes can answer more than a context window holds: write it to a file. It holds all the agent saw: customer data."),
 		mcp.WithString(argSessionID, mcp.Required(), mcp.Description("Session id")),
 		mcp.WithString(argTurn, mcp.Required(), mcp.Description("taskId, index (from 0) or last")),
 		mcp.WithString(argDetail, mcp.Enum(agents.DetailTranscript, agents.DetailFull)),

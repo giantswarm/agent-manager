@@ -399,7 +399,7 @@ Call it first: capabilities says whether this installation offers mode commit, t
 ```text
 Read a conversation's turns, oldest first. To poll, use lastTurns: 1 until the last turn's state is final.
 
-Final states: COMPLETED, FAILED, CANCELED, REJECTED, INPUT_REQUIRED. The oldest turns are dropped to fit maxBytes (default 100000; omittedTurns counts them). One turn or tool call whole: get_session_turn. detail full with a large maxBytes answers the whole session, one GetTask call per turn, far more than a context window holds: write it to a file (muster call <tool> --output json, after muster auth login). It holds all the agent saw: customer data.
+Final states: COMPLETED, FAILED, CANCELED, REJECTED, INPUT_REQUIRED. Oldest turns are dropped to fit maxBytes (default 100000; omittedTurns counts them); summary and transcript answer at most 200 turns. One turn or tool call whole: get_session_turn. detail full with a large maxBytes answers the whole session, one GetTask call per turn, far beyond a context window: write it to a file (muster call <tool> --output json, after muster auth login). It holds all the agent saw: customer data.
 ```
 
 ```json
@@ -439,7 +439,7 @@ Final states: COMPLETED, FAILED, CANCELED, REJECTED, INPUT_REQUIRED. The oldest 
 ```text
 Read one turn of a conversation, or with toolCall one tool call's arguments and full response.
 
-detail: transcript (default) clips tool arguments and gives tool results as stubs (read one with toolCall); full gives the raw A2A objects. If the answer is cut to fit maxBytes, call again with fromMessage set to nextMessage.
+detail: transcript (default) clips tool arguments and gives tool results as stubs (read one with toolCall); full gives the raw A2A objects. If the answer is cut to fit maxBytes, call again with fromMessage set to nextMessage. A large maxBytes can answer more than a context window holds: write it to a file. It holds all the agent saw: customer data.
 ```
 
 ```json

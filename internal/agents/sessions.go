@@ -228,6 +228,7 @@ func (s *Service) ListSessions(ctx context.Context, namespace, name string, allC
 
 var (
 	omittedTurnsHint = fmt.Sprintf("older turns were left out to fit maxBytes: raise maxBytes (at most %d), pick turns with lastTurns, or read one turn with get_session_turn", MaxSessionMaxBytes)
+	turnBoundHint    = fmt.Sprintf("older turns were left out: summary and transcript answer at most %d turns; pick turns with lastTurns, read them all with detail full, or one with get_session_turn", MaxSummaryTurns)
 	clippedTurnHint  = "the newest turn alone exceeds maxBytes and was clipped: read it with get_session_turn"
 )
 
@@ -236,10 +237,11 @@ const (
 	// taken (truncated, omitted counts, a short hint) may add.
 	envelopeSlack = 128
 	// fetchBatch turns are read whole at a time, newest first, until the
-	// budget is spent; maxFetchedTurns bounds how many one summary or
-	// transcript reads. In full the budget alone bounds it.
-	fetchBatch      = 8
-	maxFetchedTurns = 200
+	// budget is spent.
+	fetchBatch = 8
+	// MaxSummaryTurns bounds how many turns one summary or transcript reads.
+	// In full the budget alone bounds it.
+	MaxSummaryTurns = 200
 )
 
 // GetSession is one session and its conversation, the A2A tasks of the
@@ -267,7 +269,7 @@ func (s *Service) GetSession(ctx context.Context, q SessionQuery) (*SessionDetai
 		return nil, err
 	}
 	out := &SessionDetail{Session: sc.raw, Detail: detail, TotalTurns: len(tasks)}
-	budget := maxBytes - jsonSize(out) - len(omittedTurnsHint) - envelopeSlack
+	budget := maxBytes - jsonSize(out) - max(len(omittedTurnsHint), len(turnBoundHint)) - envelopeSlack
 	first := 0
 	if q.LastTurns > 0 {
 		first = max(len(tasks)-q.LastTurns, 0)
@@ -286,7 +288,7 @@ func (s *Service) GetSession(ctx context.Context, q SessionQuery) (*SessionDetai
 		if detail == DetailTranscript {
 			render = func(t *turn) (Turn, error) { return t.transcript(), nil }
 		}
-		out.Turns, out.OmittedTurns, clipped, err = packNewestTurns(tasks, first, maxFetchedTurns, budget, fetch, render, func(t *turn, budget int) (Turn, bool) {
+		out.Turns, out.OmittedTurns, clipped, err = packNewestTurns(tasks, first, MaxSummaryTurns, budget, fetch, render, func(t *turn, budget int) (Turn, bool) {
 			return fitTurn(t.summary(), budget)
 		})
 		if out.Turns == nil {
@@ -297,6 +299,10 @@ func (s *Service) GetSession(ctx context.Context, q SessionQuery) (*SessionDetai
 		return nil, err
 	}
 	switch {
+	case out.OmittedTurns > 0 && len(out.Turns) == MaxSummaryTurns:
+		// Every turn read was kept: the turn bound left the rest out, not
+		// maxBytes.
+		out.Truncated, out.Hint = true, turnBoundHint
 	case out.OmittedTurns > 0:
 		out.Truncated, out.Hint = true, omittedTurnsHint
 	case clipped:

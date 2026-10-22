@@ -128,10 +128,10 @@ func TestPollingTheLastTurnReadsOnlyIt(t *testing.T) {
 	assert.Equal(t, "task-2", gets[0].(*a2apb.GetTaskRequest).GetId())
 }
 
-func TestGetSessionReadsAtMostMaxFetchedTurns(t *testing.T) {
+func TestGetSessionReadsAtMostMaxSummaryTurns(t *testing.T) {
 	svc, ctrl := newSessionFixture(t)
 	ctx := identity.ContextWithToken(t.Context(), callerToken)
-	tasks := make([]*a2apb.Task, maxFetchedTurns+50)
+	tasks := make([]*a2apb.Task, MaxSummaryTurns+50)
 	for i := range tasks {
 		tasks[i] = taskOf(fmt.Sprintf("task-%d", i), a2apb.TaskState_TASK_STATE_COMPLETED, "ok")
 	}
@@ -139,11 +139,11 @@ func TestGetSessionReadsAtMostMaxFetchedTurns(t *testing.T) {
 
 	got, err := svc.GetSession(ctx, SessionQuery{SessionID: s.GetId()})
 	require.NoError(t, err)
-	assert.Len(t, got.Turns, maxFetchedTurns)
+	assert.Len(t, got.Turns, MaxSummaryTurns)
 	assert.Equal(t, 50, got.OmittedTurns)
 	assert.Equal(t, len(tasks)-1, got.Turns[len(got.Turns)-1].Index)
-	assert.Contains(t, got.Hint, "lastTurns")
-	assert.Len(t, methodCalls(ctrl, "GetTask"), maxFetchedTurns)
+	assert.Equal(t, turnBoundHint, got.Hint, "the turn bound, not maxBytes, left the rest out")
+	assert.Len(t, methodCalls(ctrl, "GetTask"), MaxSummaryTurns)
 }
 
 func TestGetSessionRefusesAConversationLongerThanItLists(t *testing.T) {

@@ -506,7 +506,8 @@ paths:
         and `transcript` at most 200, and the older ones counted in
         `omittedTurns`; a newest turn too big on its own is clipped
         (`clipped`), or in `full` left out. `full` with a large `maxBytes`
-        answers the whole session, everything the agent saw (customer data).
+        answers the whole session as far as it fits, everything the agent
+        saw (customer data).
         Read one turn whole with `GET /api/v1/sessions/{id}/turns/{turn}`.
       operationId: getSession
       x-mcp-tool: get_session

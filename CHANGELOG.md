@@ -9,7 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- `get_session` (and `GET /api/v1/sessions/{id}`) returns a whole session: `maxBytes` accepts up to 32 MiB (was 1 MiB) for `get_session` and `get_session_turn`, and at `detail: full` the byte budget alone bounds the answer, no longer 200 turns. `summary` and `transcript` keep the 200-turn bound and the default stays 100000. The tool description says such an answer belongs in a file and is customer data ([giantswarm#38577](https://github.com/giantswarm/giantswarm/issues/38577)).
+- `get_session` (and `GET /api/v1/sessions/{id}`) returns a whole session: `maxBytes` accepts up to 32 MiB (was 1 MiB) for `get_session` and `get_session_turn`, and at `detail: full` the byte budget alone bounds the answer, no longer 200 turns. `summary` and `transcript` keep the 200-turn bound. The default `maxBytes` stays 100000, so `full` without it answers as many turns as fit 100000 bytes rather than at most 200. The tool descriptions of both say such an answer belongs in a file and is customer data ([giantswarm#38577](https://github.com/giantswarm/giantswarm/issues/38577)).
+- A `summary` or `transcript` cut by its 200-turn bound hints at `lastTurns` and `detail: full` instead of raising `maxBytes`, which would change nothing.
+- The chart's memory limit is 512Mi (was 256Mi): a `get_session` answer at the 32 MiB ceiling takes about 130Mi while it is built.
 
 ## [2.9.1] - 2026-10-22
 

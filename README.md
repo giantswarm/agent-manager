@@ -670,11 +670,12 @@ and without the caller's token a session operation is `401 unauthenticated`.
     newest turns that fit are kept, in `summary` and `transcript` at most 200,
     and the older ones are counted in `omittedTurns` with `truncated: true`. A
     newest turn too big on its own is clipped (`clipped: true`), or in `full`
-    left out. `full` with a large `maxBytes` answers the whole session, each
-    turn read with its own `A2AService/GetTask`: far more than a context window
-    holds, so it belongs in a file (`muster call <tool> --output json`, after
-    a one-time `muster auth login`). It holds everything the agent saw and is
-    customer data.
+    left out. `full` with a large `maxBytes` answers the whole session as far
+    as it fits, each turn read with its own `A2AService/GetTask`: far more than
+    a context window holds, so it belongs in a file (`muster call <tool>
+    --output json`, after a one-time `muster auth login`). It holds everything
+    the agent saw and is customer data. A session whose tasks exceed 33554432
+    bytes is still cut (`omittedTurns`). `get_session_turn` shares the ceiling.
 
   Tool calls are read from the A2A data parts the ADK writes, typed
   `function_call` and `function_response` under the metadata key `adk_type`
