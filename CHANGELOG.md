@@ -7,14 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- The image's certs stage builds on alpine 3.24.2 with a current CA bundle instead of `alpine:3.20.3-giantswarm` (2024-09).
+
+## [2.9.0] - 2026-10-21
+
 ### Added
 
 - `start_session` binds the agent's toolset with the session at muster: a Session whose sandbox calls muster with its own actor JWT carries the toolset `get_agent` reports at its start (the declared selectors, `preset:none` for an agent without a muster server entry, none for implicit full access), and muster resolves every request of the sandbox within it, header or not. A toolset agent-manager cannot read deletes the Session again, as a refused bind does; `update_agent` applies to new sessions. `start_session` answers the bound `toolset`. ([#228](https://github.com/giantswarm/agent-manager/issues/228))
 - `--muster-actor-bearer` (chart `muster.actorBearer`): where muster trusts the actor JWT, `get_agent` and `list_agents` report `toolsetBound` for an agent whose toolset is bound to each session at its start (not for implicit full access), and `get_info` the capability `toolsetBound`.
-
-### Fixed
-
-- The image's certs stage builds on alpine 3.24.2 with a current CA bundle instead of `alpine:3.20.3-giantswarm` (2024-09).
 
 ## [2.8.0-rc.1] - 2026-10-20
 
@@ -415,7 +417,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Chart: the MCPServer CR carries `agent-platform.giantswarm.io/tool-group: agent-platform` next to `muster.giantswarm.io/type` — the Agent Platform tier of MCP servers (the portal's MCP servers page, the `agent-platform` toolset preset). `muster.mcpServer.labels` still adds or overrides labels. (#23)
 
-[Unreleased]: https://github.com/giantswarm/agent-manager/compare/v2.8.0-rc.1...HEAD
+[Unreleased]: https://github.com/giantswarm/agent-manager/compare/v2.9.0...HEAD
+[2.9.0]: https://github.com/giantswarm/agent-manager/compare/v2.8.0-rc.1...v2.9.0
+[2.8.0-rc.1]: https://github.com/giantswarm/agent-manager/compare/v2.8.0-rc.1...v2.8.0-rc.1
 [2.8.0-rc.1]: https://github.com/giantswarm/agent-manager/compare/v2.7.2...v2.8.0-rc.1
 [2.7.2]: https://github.com/giantswarm/agent-manager/compare/v2.7.1...v2.7.2
 [2.7.1]: https://github.com/giantswarm/agent-manager/compare/v2.7.0-rc.1...v2.7.1
