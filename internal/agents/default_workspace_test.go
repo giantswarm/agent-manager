@@ -237,9 +237,9 @@ func TestARefusedDefaultWorkspaceStartsNoSession(t *testing.T) {
 		calls []string
 	}{
 		"unreadable repositories": {
-			ws:    &fakeWorkspaces{answer: &workspaces.Authorization{Outcome: workspaces.Refused, Unreadable: []string{"giantswarm/secret", "giantswarm/hidden"}}},
+			ws:    &fakeWorkspaces{answer: &workspaces.Authorization{Outcome: workspaces.Refused, Unreadable: []string{"acme/billing", "acme/payroll"}}},
 			err:   ErrForbidden,
-			wants: []string{"kagent/platform", "giantswarm/secret, giantswarm/hidden", "noWorkspace"},
+			wants: []string{"kagent/platform", "acme/billing, acme/payroll", "noWorkspace"},
 		},
 		"a provider to connect": {
 			ws: &fakeWorkspaces{

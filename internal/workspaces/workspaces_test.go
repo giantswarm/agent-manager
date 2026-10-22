@@ -89,11 +89,11 @@ func TestAuthorizeAnswers(t *testing.T) {
 		check  func(t *testing.T, a *Authorization, err error)
 	}{
 		"refused": {
-			answer: structured(map[string]any{"outcome": "refused", "reason": "you cannot read 1 repository", "unreadable": []string{"giantswarm/secret"}}, "refused"),
+			answer: structured(map[string]any{"outcome": "refused", "reason": "you cannot read 1 repository", "unreadable": []string{"acme/billing"}}, "refused"),
 			check: func(t *testing.T, a *Authorization, err error) {
 				require.NoError(t, err)
 				assert.Equal(t, Refused, a.Outcome)
-				assert.Equal(t, []string{"giantswarm/secret"}, a.Unreadable)
+				assert.Equal(t, []string{"acme/billing"}, a.Unreadable)
 			},
 		},
 		"refused without repositories is unavailable": {
@@ -194,4 +194,3 @@ func TestNewChecksItsConfiguration(t *testing.T) {
 	_, err = (&Client{endpoint: "http://x/mcp", prefix: prefix}).call(t.Context(), "", "any", nil)
 	assert.Error(t, err, "a call without the caller's token never leaves")
 }
-
