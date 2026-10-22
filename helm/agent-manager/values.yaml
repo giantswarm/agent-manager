@@ -68,9 +68,12 @@ toolchains:
   # session at their digests, refuses one whose `io.giantswarm.toolchain.harnesses`
   # label does not list the agent's Harness runtime, and gives the session
   # the origins its `io.giantswarm.toolchain.egress` label declares. The kagent
-  # controller must admit the repository for session tool images. Rendered
-  # with `kagent.controllerTarget`; empty refuses toolchains.
-  repository: gsoci.azurecr.io/giantswarm/agent-toolchains
+  # controller must admit the repository for session tool images
+  # (`KAGENT_SESSION_TOOL_IMAGE_REPOSITORIES`): set both together, on a kagent
+  # line that mounts them (`gsoci.azurecr.io/giantswarm/agent-toolchains`).
+  # Rendered with `kagent.controllerTarget`. Empty (the default) refuses
+  # toolchains and `get_info` reports the capability `toolchains` false.
+  repository: ""
 
 harness:
   # -- Name of the platform Harness an agent runs on unless `create_agent`

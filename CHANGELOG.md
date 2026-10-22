@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The chart's `toolchains.repository` is empty by default: an installation sets it together with the kagent controller's session tool image repositories, on a kagent line that mounts them. Until then `get_info` reports the capability `toolchains` false and a start naming toolchains is refused, instead of a capability that every start refuses as unsupported.
 - The kagent protos are those of the fork line's `v1.24.0` with the session tool images (`CreateSessionRequest.tool_images`, `Session.tool_images`).
 
 ### Removed
