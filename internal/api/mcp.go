@@ -21,28 +21,29 @@ import (
 // MCP tool names. Through muster they appear as x_<server>_<tool>, e.g.
 // x_agent-manager_create_agent.
 const (
-	ToolGetInfo          = "get_info"
-	ToolListAgents       = "list_agents"
-	ToolGetAgent         = "get_agent"
-	ToolCreateAgent      = "create_agent"
-	ToolUpdateAgent      = "update_agent"
-	ToolDeleteAgent      = "delete_agent"
-	ToolGetAgentStatus   = "get_agent_status"
-	ToolValidateAgent    = "validate_agent"
-	ToolListModelConfigs = "list_model_configs"
-	ToolListSkills       = "list_skills"
-	ToolListSessions     = "list_sessions"
-	ToolGetSession       = "get_session"
-	ToolGetSessionTurn   = "get_session_turn"
-	ToolStartSession     = "start_session"
-	ToolDeleteSession    = "delete_session"
+	ToolGetInfo            = "get_info"
+	ToolListAgents         = "list_agents"
+	ToolGetAgent           = "get_agent"
+	ToolCreateAgent        = "create_agent"
+	ToolUpdateAgent        = "update_agent"
+	ToolDeleteAgent        = "delete_agent"
+	ToolGetAgentStatus     = "get_agent_status"
+	ToolValidateAgent      = "validate_agent"
+	ToolListModelConfigs   = "list_model_configs"
+	ToolListEgressPolicies = "list_egress_policies"
+	ToolListSkills         = "list_skills"
+	ToolListSessions       = "list_sessions"
+	ToolGetSession         = "get_session"
+	ToolGetSessionTurn     = "get_session_turn"
+	ToolStartSession       = "start_session"
+	ToolDeleteSession      = "delete_session"
 )
 
 // ToolNames lists every tool the MCP server registers.
 func ToolNames() []string {
 	return []string{
 		ToolGetInfo, ToolListAgents, ToolGetAgent, ToolCreateAgent, ToolUpdateAgent,
-		ToolDeleteAgent, ToolGetAgentStatus, ToolValidateAgent, ToolListModelConfigs, ToolListSkills,
+		ToolDeleteAgent, ToolGetAgentStatus, ToolValidateAgent, ToolListModelConfigs, ToolListEgressPolicies, ToolListSkills,
 		ToolListSessions, ToolGetSession, ToolGetSessionTurn, ToolStartSession, ToolDeleteSession,
 	}
 }
@@ -61,6 +62,7 @@ const (
 	argSkills         = "skills"
 	argPlugins        = "plugins"
 	argEgress         = "egress"
+	argEgressPolicies = "egressPolicyRefs"
 	argGitAuthSecret  = "gitAuthSecretName" // #nosec G101 -- an argument name, not a credential
 	argRefreshSkills  = "refreshSkills"
 	argToolset        = "toolset"
@@ -182,6 +184,9 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 	egressDesc := "Extra origins the agent may reach: " + originShape + "."
 	egressProp := mcp.WithArray(argEgress, mcp.Description(egressDesc), mcp.Items(stringSchema))
 	egressReplaceProp := mcp.WithArray(argEgress, mcp.Description("Replaces the whole egress list ([] clears it): "+originShape+"."), mcp.Items(stringSchema))
+	policiesShape := "names in the agent's namespace (list_egress_policies), at most 16; none on a coding Harness"
+	policiesProp := mcp.WithArray(argEgressPolicies, mcp.Description("EgressPolicies the agent may also reach: "+policiesShape+"."), mcp.Items(stringSchema))
+	policiesReplaceProp := mcp.WithArray(argEgressPolicies, mcp.Description("Replaces the EgressPolicy list ([] clears it): "+policiesShape+"."), mcp.Items(stringSchema))
 	harnessDesc := "Harness that runs the agent; omit for the platform Harness. A coding Harness (claude, codex, …) fixes egress, refuses extra bindings."
 	maxBytesProp := mcp.WithNumber(argMaxBytes, mcp.Description(fmt.Sprintf("Max answer size in bytes, %d-%d, default %d", agents.MinSessionMaxBytes, agents.MaxSessionMaxBytes, agents.DefaultSessionMaxBytes)))
 	nsProp := mcp.WithString(argNamespace, mcp.Description("Namespace of the agent; default: the installation's kagent namespace (get_info lists the managed ones)."))
@@ -246,6 +251,7 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 		skillsProp,
 		pluginsProp,
 		egressProp,
+		policiesProp,
 		gitAuthProp,
 		defaultWSProp,
 		labelsProp,
@@ -273,6 +279,7 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 		skillsReplaceProp,
 		pluginsReplaceProp,
 		egressReplaceProp,
+		policiesReplaceProp,
 		gitAuthReplaceProp,
 		refreshSkillsProp,
 		toolsetReplaceProp,
@@ -320,7 +327,7 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 
 	s.AddTool(mcp.NewTool(ToolValidateAgent,
 		tooldesc.Describe("Dry run of create_agent, or of update_agent with update: true: the manifests and every violation. Writes nothing.",
-			"Checks the name, modelConfig, harness and toolset (required for a create), pins the skills and plugins, validates the values against the chart schema and has the API server dry-run the rendered Agent and RemoteMCPServer (its field errors are the errors; an object the caller may not write is a note). mode answers as the write would. With update: true, lists, labels and annotations replace the whole value, as in update_agent."),
+			"Checks the name, modelConfig, egressPolicyRefs, harness and toolset (required for a create), pins the skills and plugins, validates the values against the chart schema and has the API server dry-run the rendered Agent and RemoteMCPServer (its field errors are the errors; an object the caller may not write is a note). mode answers as the write would. With update: true, lists, labels and annotations replace the whole value, as in update_agent."),
 		mcp.WithString(argName, mcp.Required(), mcp.Description("Agent name")),
 		mcp.WithString(argModelConfig, mcp.Description("ModelConfig name (required for a create)")),
 		mcp.WithString(argHarness, mcp.Description(harnessDesc)),
@@ -332,6 +339,7 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 		skillsProp,
 		pluginsProp,
 		egressProp,
+		policiesProp,
 		gitAuthProp,
 		refreshSkillsProp,
 		defaultWSProp,
@@ -360,6 +368,18 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 		mcp.WithIdempotentHintAnnotation(false),
 		mcp.WithOpenWorldHintAnnotation(false),
 	), t.listModelConfigs)
+
+	s.AddTool(mcp.NewTool(ToolListEgressPolicies,
+		tooldesc.Describe("List the EgressPolicies of a namespace: the names create_agent and update_agent accept for egressPolicyRefs.",
+			"Each with its origins and, where the egress gateway adds a credential, the header's name; never the Secret. Read as you; tenant admins write them, agent-manager never does. A change to a policy reaches every agent that picks it from its next Session on."),
+		nsProp,
+		orgProp,
+		clusterProp,
+		mcp.WithReadOnlyHintAnnotation(true),
+		mcp.WithDestructiveHintAnnotation(false),
+		mcp.WithIdempotentHintAnnotation(false),
+		mcp.WithOpenWorldHintAnnotation(false),
+	), t.listEgressPolicies)
 
 	s.AddTool(mcp.NewTool(ToolListSkills,
 		tooldesc.Describe("List the skills agents can mount, from the configured skill repositories, with each repository's head commit.",
@@ -585,6 +605,14 @@ func (t *tools) listModelConfigs(ctx context.Context, req mcp.CallToolRequest) (
 		return errResult(err), nil
 	}
 	return jsonResult(map[string]any{"modelConfigs": list})
+}
+
+func (t *tools) listEgressPolicies(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	list, err := t.svc.ListEgressPolicies(ctx, locationFromArgs(req))
+	if err != nil {
+		return errResult(err), nil
+	}
+	return jsonResult(map[string]any{"egressPolicies": list})
 }
 
 func (t *tools) listSkills(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {

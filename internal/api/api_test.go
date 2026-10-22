@@ -65,6 +65,7 @@ var (
 	agentGVR  = schema.GroupVersionResource{Group: "api.kagent.dev", Version: "v1alpha3", Resource: "agents"}
 	serverGVR = schema.GroupVersionResource{Group: "api.kagent.dev", Version: "v1alpha3", Resource: "remotemcpservers"}
 	mcGVR     = schema.GroupVersionResource{Group: "api.kagent.dev", Version: "v1alpha3", Resource: "modelconfigs"}
+	egressGVR = schema.GroupVersionResource{Group: "api.kagent.dev", Version: "v1alpha3", Resource: "egresspolicies"}
 )
 
 func newService(t *testing.T) (*agents.Service, *dynamicfake.FakeDynamicClient) {
@@ -82,7 +83,12 @@ func newServiceAllowed(t *testing.T, allowed bool) (*agents.Service, *dynamicfak
 	}}
 	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{
 		hrGVR: "HelmReleaseList", ociGVR: "OCIRepositoryList", agentGVR: "AgentList", serverGVR: "RemoteMCPServerList", mcGVR: "ModelConfigList",
-	}, mc)
+		egressGVR: "EgressPolicyList",
+	}, mc, &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "api.kagent.dev/v1alpha3", "kind": "EgressPolicy",
+		"metadata": map[string]any{"name": "github", "namespace": "kagent"},
+		"spec":     map[string]any{"destinations": []any{map[string]any{"origin": "https://github.com"}}},
+	}})
 	kubetest.AnswerDryRuns(dyn)
 	typed := kubefake.NewClientset()
 	typed.PrependReactor("create", "selfsubjectaccessreviews", func(a k8stesting.Action) (bool, runtime.Object, error) {
@@ -243,6 +249,10 @@ func TestRESTLifecycle(t *testing.T) {
 	assert.Equal(t, http.StatusOK, code)
 	assert.Len(t, body["modelConfigs"], 1)
 
+	code, body = do(t, mux, http.MethodGet, Prefix+"/egresspolicies", nil)
+	assert.Equal(t, http.StatusOK, code)
+	assert.Equal(t, []any{map[string]any{"name": "github", "namespace": "kagent", "destinations": []any{map[string]any{"origin": "https://github.com"}}}}, body["egressPolicies"])
+
 	code, body = do(t, mux, http.MethodGet, Prefix+"/skills", nil)
 	assert.Equal(t, http.StatusNotImplemented, code, body)
 
@@ -318,19 +328,20 @@ const (
 // idempotent; delete is destructive. Open-world is the tools that resolve a
 // caller-named GitHub repository or OCI reference.
 var wantHints = map[string]hints{
-	ToolGetInfo:          annotations(readOnly, additive, notIdempotent, closedWorld),
-	ToolListAgents:       annotations(readOnly, additive, notIdempotent, closedWorld),
-	ToolGetAgent:         annotations(readOnly, additive, notIdempotent, closedWorld),
-	ToolGetAgentStatus:   annotations(readOnly, additive, notIdempotent, closedWorld),
-	ToolListModelConfigs: annotations(readOnly, additive, notIdempotent, closedWorld),
-	ToolValidateAgent:    annotations(readOnly, additive, notIdempotent, openWorld),
-	ToolListSkills:       annotations(readOnly, additive, notIdempotent, openWorld),
-	ToolCreateAgent:      annotations(writes, additive, notIdempotent, openWorld),
-	ToolUpdateAgent:      annotations(writes, destructive, notIdempotent, openWorld),
-	ToolDeleteAgent:      annotations(writes, destructive, notIdempotent, closedWorld),
-	ToolListSessions:     annotations(readOnly, additive, notIdempotent, closedWorld),
-	ToolGetSession:       annotations(readOnly, additive, notIdempotent, closedWorld),
-	ToolGetSessionTurn:   annotations(readOnly, additive, notIdempotent, closedWorld),
+	ToolGetInfo:            annotations(readOnly, additive, notIdempotent, closedWorld),
+	ToolListAgents:         annotations(readOnly, additive, notIdempotent, closedWorld),
+	ToolGetAgent:           annotations(readOnly, additive, notIdempotent, closedWorld),
+	ToolGetAgentStatus:     annotations(readOnly, additive, notIdempotent, closedWorld),
+	ToolListModelConfigs:   annotations(readOnly, additive, notIdempotent, closedWorld),
+	ToolListEgressPolicies: annotations(readOnly, additive, notIdempotent, closedWorld),
+	ToolValidateAgent:      annotations(readOnly, additive, notIdempotent, openWorld),
+	ToolListSkills:         annotations(readOnly, additive, notIdempotent, openWorld),
+	ToolCreateAgent:        annotations(writes, additive, notIdempotent, openWorld),
+	ToolUpdateAgent:        annotations(writes, destructive, notIdempotent, openWorld),
+	ToolDeleteAgent:        annotations(writes, destructive, notIdempotent, closedWorld),
+	ToolListSessions:       annotations(readOnly, additive, notIdempotent, closedWorld),
+	ToolGetSession:         annotations(readOnly, additive, notIdempotent, closedWorld),
+	ToolGetSessionTurn:     annotations(readOnly, additive, notIdempotent, closedWorld),
 	// start_session messages an agent, which acts on the world with its tools.
 	ToolStartSession: annotations(writes, additive, notIdempotent, openWorld),
 	// delete_session ends a conversation for good, so clients ask first.

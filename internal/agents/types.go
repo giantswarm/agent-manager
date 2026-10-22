@@ -229,6 +229,11 @@ type Spec struct {
 	// origins such as https://github.com:443 or https://*.githubusercontent.com,
 	// and TLS passthrough destinations such as tls://db.example.com:5432.
 	Egress []string `json:"egress,omitempty"`
+	// EgressPolicyRefs names EgressPolicies of the agent's namespace whose
+	// origins the agent may also reach (chart value agent.egressPolicyRefs,
+	// the Agent's spec.egressPolicyRefs). Each must exist, read as the
+	// caller (list_egress_policies); an agent on a coding Harness takes none.
+	EgressPolicyRefs []string `json:"egressPolicyRefs,omitempty"`
 	// GitAuthSecretName names the Secret in the agent's namespace whose key
 	// `token` reads the agent's private git skills and plugins (chart value
 	// skillsGitAuthSecretRef.name, fanned out to every git source). Empty
@@ -275,6 +280,9 @@ type Update struct {
 	Plugins *Plugins `json:"plugins,omitempty"`
 	// Egress replaces the agent's whole egress list; empty clears it.
 	Egress *[]string `json:"egress,omitempty"`
+	// EgressPolicyRefs replaces the agent's whole list of EgressPolicy names;
+	// empty clears it.
+	EgressPolicyRefs *[]string `json:"egressPolicyRefs,omitempty"`
 	// GitAuthSecretName replaces the skills credential Secret; empty clears it
 	// back to the installation's.
 	GitAuthSecretName *string   `json:"gitAuthSecretName,omitempty"`
@@ -402,6 +410,9 @@ type Agent struct {
 	// Egress is the Agent's spec.egress (the chart value agent.egress while
 	// nothing is rendered).
 	Egress []string `json:"egress,omitempty"`
+	// EgressPolicyRefs are the names of the Agent's spec.egressPolicyRefs (the
+	// chart value agent.egressPolicyRefs while nothing is rendered).
+	EgressPolicyRefs []string `json:"egressPolicyRefs,omitempty"`
 	// Toolset is the toolset the agent declares: the owning HelmRelease's
 	// `toolset` value, or, for a bare Agent object, the X-Muster-Toolset
 	// header of the agent's RemoteMCPServer. Absent when none is declared.
@@ -507,6 +518,23 @@ type ModelConfig struct {
 	Accepted  *bool  `json:"accepted"`
 	Message   string `json:"message,omitempty"`
 	ManagedBy string `json:"managedBy,omitempty"`
+}
+
+// EgressPolicy is a kagent EgressPolicy as list_egress_policies reports it:
+// the origins an agent that picks it may reach.
+type EgressPolicy struct {
+	Name         string              `json:"name"`
+	Namespace    string              `json:"namespace"`
+	Destinations []EgressDestination `json:"destinations"`
+	ManagedBy    string              `json:"managedBy,omitempty"`
+}
+
+// EgressDestination is one origin of an EgressPolicy. CredentialHeader names
+// the request header the egress gateway fills with a credential, when the
+// origin carries one; the Secret behind it is never reported.
+type EgressDestination struct {
+	Origin           string `json:"origin"`
+	CredentialHeader string `json:"credentialHeader,omitempty"`
 }
 
 // Manifests are the objects a create/update applies, as YAML, plus the values.

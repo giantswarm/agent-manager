@@ -122,6 +122,9 @@ func (s *Service) guardCoding(ctx context.Context, st *site, harness, runtime st
 		errs = append(errs, invalidf("systemMessage with the platform's egress note: %v", err))
 	}
 
+	if err := refuseCodingEgressPolicies(harness, values); err != nil {
+		errs = append(errs, err)
+	}
 	errs = append(errs, refuseApproval(runtime, values)...)
 	if err := s.checkModelProtocol(ctx, st, harness, runtime, values); err != nil {
 		if !isDomainError(err) {

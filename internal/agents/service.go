@@ -255,6 +255,9 @@ func (s *Service) Info(ctx context.Context) InfoResponse {
 		// defaultWorkspace: start_session starts a session that names no
 		// workspace in the agent's default one, authorized as the caller.
 		"defaultWorkspace": s.SessionsAvailable() && s.cfg.Bindings != nil && s.cfg.Workspaces != nil,
+		// egressPolicies: create_agent, update_agent and validate_agent take
+		// egressPolicyRefs, and list_egress_policies lists the names.
+		"egressPolicies": true,
 	}
 	out.Identity = s.kube.Identity()
 	kagentAPI := KagentAPIGroup + "/" + s.cfg.KagentAPIVersion
@@ -903,6 +906,12 @@ func (s *Service) ValidateCreate(ctx context.Context, spec Spec) (*ValidateResul
 		}
 		res.addError(err)
 	}
+	if err := s.requireEgressPolicies(ctx, st, spec.EgressPolicyRefs); err != nil {
+		if !isDomainError(err) {
+			return nil, err
+		}
+		res.addError(err)
+	}
 	harness, runtime, err := s.requireHarness(ctx, st.agent, ns, spec)
 	if err != nil {
 		if !isDomainError(err) {
@@ -1132,6 +1141,9 @@ func (s *Service) Create(ctx context.Context, spec Spec) (*CreateResult, error) 
 	if err := s.requireModelConfig(ctx, st, spec.ModelConfig); err != nil {
 		return nil, err
 	}
+	if err := s.requireEgressPolicies(ctx, st, spec.EgressPolicyRefs); err != nil {
+		return nil, err
+	}
 	harness, runtime, err := s.requireHarness(ctx, st.agent, ns, spec)
 	if err != nil {
 		return nil, err
@@ -1346,6 +1358,13 @@ func (s *Service) mergedValues(ctx context.Context, st *site, upd Update, hr *un
 			delete(agentBlock, "egress")
 		}
 	}
+	if upd.EgressPolicyRefs != nil {
+		if len(*upd.EgressPolicyRefs) > 0 {
+			agentBlock["egressPolicyRefs"] = toAnySlice(*upd.EgressPolicyRefs)
+		} else {
+			delete(agentBlock, "egressPolicyRefs")
+		}
+	}
 	after["agent"] = agentBlock
 
 	if upd.Harness != nil {
@@ -1353,6 +1372,11 @@ func (s *Service) mergedValues(ctx context.Context, st *site, upd Update, hr *un
 	}
 
 	var firstErr error
+	if upd.EgressPolicyRefs != nil {
+		if err := s.requireEgressPolicies(ctx, st, *upd.EgressPolicyRefs); err != nil {
+			firstErr = err
+		}
+	}
 	if upd.ModelConfig != nil {
 		if err := s.requireModelConfig(ctx, st, *upd.ModelConfig); err != nil {
 			firstErr = err
@@ -1849,6 +1873,7 @@ func agentFromObject(obj, server *unstructured.Unstructured) Agent {
 	a.Skills = skillsFromObject(obj)
 	a.Plugins = pluginsFromObject(obj)
 	a.Egress = egressFromObject(obj)
+	a.EgressPolicyRefs = egressPolicyRefsFromObject(obj)
 	a.Tools = toolBindingsOf(obj)
 	a.Toolset, a.ImplicitFullAccess = toolsetOf(obj, server)
 	a.Status = objectStatusOf(obj)
@@ -1980,4 +2005,5 @@ func applyHelmRelease(a *Agent, hr *unstructured.Unstructured) {
 	a.Skills = skillsFromValues(values)
 	a.Plugins = pluginsFromValues(values)
 	a.Egress = egressFromValues(values)
+	a.EgressPolicyRefs = egressPolicyRefsFromValues(values)
 }

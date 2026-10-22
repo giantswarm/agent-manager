@@ -201,6 +201,9 @@ func BuildValues(spec Spec, cfg ComposeConfig) map[string]any {
 	if len(spec.Egress) > 0 {
 		agent["egress"] = toAnySlice(spec.Egress)
 	}
+	if len(spec.EgressPolicyRefs) > 0 {
+		agent["egressPolicyRefs"] = toAnySlice(spec.EgressPolicyRefs)
+	}
 	values := map[string]any{
 		"agent":       agent,
 		"modelConfig": map[string]any{"name": spec.ModelConfig},

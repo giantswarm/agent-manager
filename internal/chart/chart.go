@@ -36,8 +36,9 @@ import (
 // `muster.url`, `muster.tools`,
 // `muster.discovery`; none of the 0.x runtime keys; `skillsGitAuthSecretRef`,
 // the one read credential of every private git skill and plugin;
-// `agent.egress` takes HTTP(S) origins and tls://<host>:<port>.
-const EmbeddedSchemaVersion = "2.2.8"
+// `agent.egress` takes HTTP(S) origins and tls://<host>:<port>;
+// `agent.egressPolicyRefs` names EgressPolicies of the agent's namespace.
+const EmbeddedSchemaVersion = "2.3.0"
 
 //go:embed embedded/agent.tgz
 var embeddedArchive []byte
