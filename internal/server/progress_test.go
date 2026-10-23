@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"sync"
 	"testing"
+	"time"
 
 	mcpclient "github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/mcp"
@@ -67,6 +68,13 @@ func TestToolProgressReachesTheCaller(t *testing.T) {
 	res, err := c.CallTool(ctx, mcp.CallToolRequest{Params: mcp.CallToolParams{Name: "slow", Meta: &mcp.Meta{ProgressToken: "call-1"}}})
 	require.NoError(t, err)
 	assert.False(t, res.IsError)
+	// The client hands notifications to OnNotification on its own goroutine:
+	// the last may follow the result.
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(received) >= 2
+	}, 5*time.Second, 10*time.Millisecond)
 	mu.Lock()
 	defer mu.Unlock()
 	require.Len(t, received, 2)
