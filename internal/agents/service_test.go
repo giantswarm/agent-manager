@@ -102,6 +102,17 @@ func harness(ns, name, runtime string) *unstructured.Unstructured {
 	}}
 }
 
+// ompHarness is a BYO Harness on the kagent line's omp-harness image, as the
+// agent-platform chart renders one.
+func ompHarness(ns, name string) *unstructured.Unstructured {
+	h := harness(ns, name, BYORuntime)
+	h.Object["spec"].(map[string]any)["workload"] = map[string]any{
+		"image":   "gsoci.azurecr.io/giantswarm/kagent/omp-harness@sha256:92c442a23fc482a871c88adddaa4b06c6ca83373c09b171c5a230a20e5055b90",
+		"command": []any{"/usr/local/bin/kagent-omp"},
+	}
+	return h
+}
+
 func ociRepository(ns, semver string) *unstructured.Unstructured {
 	return &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "source.toolkit.fluxcd.io/v1", "kind": "OCIRepository",

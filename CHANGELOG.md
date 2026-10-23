@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - `--muster-mcp-url` needs `--workspaces-tools-prefix` or `--toolchains-tools-prefix`; the chart renders it, and the NetworkPolicy's egress to muster, for either. The calls through muster share one client.
+- `create_agent`, `validate_agent` and `update_agent` refuse a Claude-format git plugin on the omp Harness as on `kagent` and `codex`, a Harness change to omp included, so a revision whose boot the omp adapter would refuse is never written. A `byo` Harness is omp by its workload image, the kagent line's `omp-harness`; a `byo` Harness on any other image is unchanged ([giantswarm#38691](https://github.com/giantswarm/giantswarm/issues/38691)).
 
 ## [2.13.1] - 2026-10-22
 
