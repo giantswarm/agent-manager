@@ -153,7 +153,7 @@ func TestLoadDockerConfig(t *testing.T) {
 		"registry.example.io":     {Username: "u", Password: "p"},
 	}, creds)
 
-	for name, body := range map[string]string{
+	for name, body := range map[string]string{ // #nosec G101 -- malformed Docker config fixtures, no credentials
 		"not json":    `auths`,
 		"no password": `{"auths":{"r.io":{"username":"u"}}}`,
 		"bad auth":    `{"auths":{"r.io":{"auth":"!!"}}}`,
