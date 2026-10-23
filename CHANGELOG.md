@@ -9,9 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- An agent without `defaultToolchains`, every agent created before they existed included, starts its Sessions with the `github` toolchain at its newest version where the installation publishes toolchains, unchanged and without a person's action, since the Harness images no longer carry `gh`. It never fails a start: a `github` that does not resolve (not offered, no grant, the registry down, a misfit) starts the Session without it, and `start_session` says why in `warning`. Named toolchains, an agent's own `defaultToolchains` and `noToolchains` are unchanged. `get_agent` and `list_agents` report it as the agent's `defaultToolchains` with `defaultToolchainsImplicit`, and `toolchain_users` names the agent as a user of `github` ([giantswarm#38806](https://github.com/giantswarm/giantswarm/issues/38806)).
 - The egress note moves out of the person's prompt: `create_agent`, `update_agent` and `validate_agent` set the agent chart's `agent.platformPrompt.egressNote` on an agent on a coding Harness instead of appending the note to `agent.systemMessage`, and the chart renders it after the prompt. A note already in `agent.systemMessage` (a line that is its heading and the paragraph after it, in any line endings) is taken out on the next write, and the text after it, which the previous rewrite cut off, stays. A coding agent created without a prompt of its own, whose prompt was the note alone, gets the chart's default prompt before the note. Every write to an agent on a kagent Harness clears the flag and the note, not only a Harness change. The 20000-character cap counts the person's prompt only, a pasted note left out. Where the agent chart that validates the agents has no `agent.platformPrompt` (an installation held below 2.4.0), the values are written without the flag and without the note. The embedded chart is 2.4.0 ([giantswarm#38803](https://github.com/giantswarm/giantswarm/issues/38803)).
 - `get_agent` and `list_agents` report a managed agent's `systemMessage` from its release's values, without the egress note, instead of the Agent's rendered `systemPrompt`; without one in the values, the rendered prompt without the note (the chart default). An Agent no release renders reports its `systemPrompt` as is.
+
+## [2.16.0] - 2026-10-23
+
+### Changed
+
+- An agent without `defaultToolchains`, every agent created before they existed included, starts its Sessions with the `github` toolchain at its newest version where the installation publishes toolchains, unchanged and without a person's action, since the Harness images no longer carry `gh`. It never fails a start: a `github` that does not resolve (not offered, no grant, the registry down, a misfit) starts the Session without it, and `start_session` says why in `warning`. Named toolchains, an agent's own `defaultToolchains` and `noToolchains` are unchanged. `get_agent` and `list_agents` report it as the agent's `defaultToolchains` with `defaultToolchainsImplicit`, and `toolchain_users` names the agent as a user of `github` ([giantswarm#38806](https://github.com/giantswarm/giantswarm/issues/38806)).
 
 ## [2.16.0-rc.1] - 2026-10-23
 
@@ -508,7 +513,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Chart: the MCPServer CR carries `agent-platform.giantswarm.io/tool-group: agent-platform` next to `muster.giantswarm.io/type` — the Agent Platform tier of MCP servers (the portal's MCP servers page, the `agent-platform` toolset preset). `muster.mcpServer.labels` still adds or overrides labels. (#23)
 
-[Unreleased]: https://github.com/giantswarm/agent-manager/compare/v2.16.0-rc.1...HEAD
+[Unreleased]: https://github.com/giantswarm/agent-manager/compare/v2.16.0...HEAD
+[2.16.0]: https://github.com/giantswarm/agent-manager/compare/v2.16.0-rc.1...v2.16.0
 [2.16.0-rc.1]: https://github.com/giantswarm/agent-manager/compare/v2.15.0...v2.16.0-rc.1
 [2.15.0]: https://github.com/giantswarm/agent-manager/compare/v2.14.0...v2.15.0
 [2.14.0]: https://github.com/giantswarm/agent-manager/compare/v2.13.1...v2.14.0
