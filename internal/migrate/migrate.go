@@ -796,7 +796,13 @@ func (r *Runner) targetFilter(src *source) string {
 // setTargetRef sets the target range and the tag filter on an OCIRepository of
 // the agent chart; an empty filter removes the source's.
 func (r *Runner) setTargetRef(o *unstructured.Unstructured, filter string) {
-	_ = unstructured.SetNestedField(o.Object, r.opts.TargetSemver, "spec", "ref", "semver")
+	setRef(o, r.opts.TargetSemver, filter)
+}
+
+// setRef sets an OCIRepository's range and tag filter; an empty filter
+// removes the source's.
+func setRef(o *unstructured.Unstructured, semver, filter string) {
+	_ = unstructured.SetNestedField(o.Object, semver, "spec", "ref", "semver")
 	if filter == "" {
 		unstructured.RemoveNestedField(o.Object, "spec", "ref", "semverFilter")
 		return

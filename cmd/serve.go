@@ -26,6 +26,7 @@ import (
 	"github.com/giantswarm/agent-manager/internal/chart"
 	"github.com/giantswarm/agent-manager/internal/kagent"
 	"github.com/giantswarm/agent-manager/internal/kube"
+	"github.com/giantswarm/agent-manager/internal/migrate"
 	"github.com/giantswarm/agent-manager/internal/muster"
 	"github.com/giantswarm/agent-manager/internal/oci"
 	"github.com/giantswarm/agent-manager/internal/server"
@@ -314,6 +315,12 @@ func runServe(ctx context.Context, o *serveOptions) error {
 		return fmt.Errorf("--toolchain-repository needs --kagent-target: toolchains are mounted into sessions started through kagent")
 	}
 
+	// The agent chart's source as agent-manager creates it; an existing one
+	// follows a changed range on start.
+	sourceCompose := agents.ComposeConfig{ChartOCIURL: o.chartOCIURL, ChartName: resolver.Name(), ChartSemver: o.chartSemver, ChartSemverFilter: o.chartSemverFilter,
+		OCIRepositoryInterval: o.ociRepositoryInterval, OCIRepositoryAPIVersion: ociRepositoryAPI}
+	migrate.ConvergeSources(ctx, clients.Dynamic(), agents.ManagedNamespaces(o.kagentNamespace, splitList(o.managedNamespaces)), sourceCompose, log)
+
 	var tenantSet *tenants.Set
 	if o.multiTenant {
 		policyGVK, err := networkPolicyGVK(o.tenantNetworkPolicy)
@@ -325,8 +332,6 @@ func runServe(ctx context.Context, o *serveOptions) error {
 			log.Warn("WorkerPool API discovery failed, using default", "default", "v1alpha1", "error", err)
 			poolVersion = "v1alpha1"
 		}
-		compose := agents.ComposeConfig{ChartOCIURL: o.chartOCIURL, ChartName: resolver.Name(), ChartSemver: o.chartSemver, ChartSemverFilter: o.chartSemverFilter,
-			OCIRepositoryInterval: o.ociRepositoryInterval, OCIRepositoryAPIVersion: ociRepositoryAPI}
 		kagentGVK := func(kind string) schema.GroupVersionKind {
 			return schema.GroupVersionKind{Group: agents.KagentAPIGroup, Version: kagentVersion, Kind: kind}
 		}
@@ -340,7 +345,7 @@ func runServe(ctx context.Context, o *serveOptions) error {
 			FluxClusterRole:    o.tenantFluxClusterRole,
 			NetworkPolicies:    splitList(o.tenantNetworkPolicies),
 			NetworkPolicyGVK:   policyGVK,
-			OCIRepository:      func(ns string) *unstructured.Unstructured { return agents.BuildOCIRepository(ns, compose) },
+			OCIRepository:      func(ns string) *unstructured.Unstructured { return agents.BuildOCIRepository(ns, sourceCompose) },
 			ChartName:          resolver.Name(),
 			HelmReleaseGVK:     schema.FromAPIVersionAndKind(helmReleaseAPI, "HelmRelease"),
 			OCIRepositoryGVK:   schema.FromAPIVersionAndKind(ociRepositoryAPI, "OCIRepository"),

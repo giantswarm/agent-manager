@@ -1,0 +1,43 @@
+{{- /*
+The agent chart's shared OCIRepository, one per managed namespace, follows
+agentChart.semver and agentChart.semverFilter when agent-manager starts. With
+oauth.downstream the ServiceAccount holds no other RBAC, so this Role is its
+permission for that one piece of work without a caller: get and update the
+source by name, never create, list or read another. Without downstream OAuth
+the namespace Role (rbac.yaml) already covers it.
+*/}}
+{{- if and .Values.rbac.create (not (include "agent-manager.serviceAccountRBAC" .)) }}
+{{- $name := printf "%s-chart-source" (include "agent-manager.fullname" .) }}
+{{- $source := base .Values.agentChart.ociUrl }}
+{{- range $ns := (include "agent-manager.managedNamespaces" . | fromJsonArray) }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $name }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "agent-manager.labels" $ | nindent 4 }}
+rules:
+  - apiGroups: ["source.toolkit.fluxcd.io"]
+    resources: ["ocirepositories"]
+    resourceNames: [{{ $source | quote }}]
+    verbs: ["get", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $name }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "agent-manager.labels" $ | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $name }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "agent-manager.serviceAccountName" $ }}
+    namespace: {{ $.Release.Namespace }}
+{{- end }}
+{{- end }}
