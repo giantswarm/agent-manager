@@ -67,8 +67,15 @@ func TestOfferedAsTheCaller(t *testing.T) {
 		}
 		return mcp.NewToolResultStructured(map[string]any{
 			"toolchains": []map[string]any{
-				{"name": "go", "source": "acme", "versions": []string{"v0.9.0", "v0.10.0"}},
-				{"name": "go", "source": "platform", "versions": []string{"v0.10.0", "v0.2.0"}},
+				{"name": "go", "source": "acme", "versions": []string{"v0.9.0", "v0.10.0"}, "published": []map[string]any{
+					{"version": "v0.9.0", "image": "registry.acme.io/toolchains/go:0.9.0"},
+					{"version": "v0.10.0", "image": "registry.acme.io/toolchains/go:0.10.0"},
+				}},
+				{"name": "go", "source": "platform", "versions": []string{"v0.10.0", "v0.2.0"}, "published": []map[string]any{
+					{"version": "v0.10.0", "image": "gsoci.azurecr.io/giantswarm/agent-toolchains/go:0.10.0"},
+					{"version": "v0.2.0", "image": "gsoci.azurecr.io/giantswarm/agent-toolchains/go:0.2.0"},
+					{"version": "v0.1.0", "image": "gsoci.azurecr.io/giantswarm/agent-toolchains/go:0.1.0"},
+				}},
 				{"name": "gopls", "versions": []string{"v1.0.0"}},
 			},
 			"message": "3 toolchains",
@@ -79,6 +86,11 @@ func TestOfferedAsTheCaller(t *testing.T) {
 	offer, err := c.Offered(t.Context(), "id-token", "go")
 	require.NoError(t, err)
 	assert.Equal(t, []string{"v0.10.0", "v0.9.0", "v0.2.0"}, offer.Versions, "every source's, newest first, once each")
+	assert.Equal(t, map[string][]string{
+		"v0.10.0": {"registry.acme.io/toolchains/go:0.10.0", "gsoci.azurecr.io/giantswarm/agent-toolchains/go:0.10.0"},
+		"v0.9.0":  {"registry.acme.io/toolchains/go:0.9.0"},
+		"v0.2.0":  {"gsoci.azurecr.io/giantswarm/agent-toolchains/go:0.2.0"},
+	}, offer.Images, "each offered version's images, a version two sources publish with both; an unlisted version none")
 	assert.Equal(t, []map[string]any{{"name": "go"}}, f.args)
 	for _, b := range f.bearers {
 		assert.Equal(t, "Bearer id-token", b)

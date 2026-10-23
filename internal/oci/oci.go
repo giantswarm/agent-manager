@@ -1,6 +1,7 @@
 // Package oci is the minimal OCI distribution client agent-manager needs:
-// anonymous pulls with the registry's bearer-token challenge (RFC 6750 style
-// Www-Authenticate), the tag list of a repository, one file out of a Helm
+// pulls with the registry's bearer-token challenge (RFC 6750 style
+// Www-Authenticate), anonymous unless the registry's host has credentials
+// (WithCredentials), the tag list of a repository, one file out of a Helm
 // chart archive, and the digest a tag resolves to — the way Flux's
 // source-controller reads the agent chart, and the way a tagged skill image is
 // pinned to the digest kagent requires.
@@ -131,9 +132,18 @@ func (r Reference) baseURL() string {
 // Registry talks to OCI registries. It is safe for concurrent use.
 type Registry struct {
 	http *http.Client
-	mu   sync.Mutex
-	// tokens caches the anonymous bearer per scope until it expires.
+	// creds are the Basic credentials the token endpoint of a host is asked
+	// with; a host without any is asked anonymously.
+	creds map[string]Basic
+	mu    sync.Mutex
+	// tokens caches the bearer per host and scope until it expires.
 	tokens map[string]token
+}
+
+// Basic is a registry's username and password.
+type Basic struct {
+	Username string
+	Password string
 }
 
 type token struct {
@@ -147,6 +157,13 @@ func NewRegistry(client *http.Client) *Registry {
 		client = &http.Client{Timeout: 60 * time.Second}
 	}
 	return &Registry{http: client, tokens: map[string]token{}}
+}
+
+// WithCredentials has the registry ask the token endpoint of each host in
+// creds with its credentials: a private registry's pulls.
+func (c *Registry) WithCredentials(creds map[string]Basic) *Registry {
+	c.creds = creds
+	return c
 }
 
 // ListTags returns the repository's tags.
@@ -370,14 +387,14 @@ func extractFile(r io.Reader, chartName, file string) ([]byte, error) {
 // token from the registry's token endpoint (cached per scope).
 func (c *Registry) do(ctx context.Context, ref Reference, method, target, accept string) (*http.Response, error) {
 	scope := "repository:" + ref.Repository + ":pull"
-	resp, err := c.request(ctx, method, target, accept, c.cachedToken(scope))
+	resp, err := c.request(ctx, method, target, accept, c.cachedToken(ref.Host, scope))
 	if err != nil {
 		return nil, err
 	}
 	if resp.StatusCode == http.StatusUnauthorized {
 		challenge := resp.Header.Get("Www-Authenticate")
 		_ = resp.Body.Close()
-		tok, err := c.fetchToken(ctx, challenge, scope)
+		tok, err := c.fetchToken(ctx, ref.Host, challenge, scope)
 		if err != nil {
 			return nil, err
 		}
@@ -416,19 +433,19 @@ func (c *Registry) request(ctx context.Context, method, target, accept, bearer s
 	return resp, nil
 }
 
-func (c *Registry) cachedToken(scope string) string {
+func (c *Registry) cachedToken(host, scope string) string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if t, ok := c.tokens[scope]; ok && time.Now().Before(t.expires) {
+	if t, ok := c.tokens[host+" "+scope]; ok && time.Now().Before(t.expires) {
 		return t.value
 	}
 	return ""
 }
 
 // fetchToken follows a `Bearer realm="…",service="…",scope="…"` challenge
-// anonymously. The challenge's own scope is used when present (a registry may
+// with host's credentials, else anonymously. The challenge's own scope is used when present (a registry may
 // ask for a narrower scope than pull, e.g. metadata_read for the tag list).
-func (c *Registry) fetchToken(ctx context.Context, challenge, fallbackScope string) (string, error) {
+func (c *Registry) fetchToken(ctx context.Context, host, challenge, fallbackScope string) (string, error) {
 	params := parseChallenge(challenge)
 	realm := params["realm"]
 	if realm == "" {
@@ -446,6 +463,9 @@ func (c *Registry) fetchToken(ctx context.Context, challenge, fallbackScope stri
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, realm+"?"+q.Encode(), nil)
 	if err != nil {
 		return "", err
+	}
+	if b, ok := c.creds[host]; ok {
+		req.SetBasicAuth(b.Username, b.Password)
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
@@ -475,7 +495,7 @@ func (c *Registry) fetchToken(ctx context.Context, challenge, fallbackScope stri
 		ttl = 60 * time.Second
 	}
 	c.mu.Lock()
-	c.tokens[fallbackScope] = token{value: tok, expires: time.Now().Add(ttl - 10*time.Second)}
+	c.tokens[host+" "+fallbackScope] = token{value: tok, expires: time.Now().Add(ttl - 10*time.Second)}
 	c.mu.Unlock()
 	return tok, nil
 }

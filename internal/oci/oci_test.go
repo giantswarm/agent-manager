@@ -2,9 +2,11 @@ package oci_test
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 
@@ -108,4 +110,56 @@ func TestImageLabelsReadsTheConfigOfAnIndexsFirstImage(t *testing.T) {
 	}
 	_, err := reg.ImageLabels(t.Context(), ref, "sha256:6666666666666666666666666666666666666666666666666666666666666666")
 	require.ErrorIs(t, err, oci.ErrNotFound)
+}
+
+func TestRegistryAsksAPrivateRegistrysTokenWithItsCredentials(t *testing.T) {
+	f := ocitest.New(t, "giantswarm/agent-toolchains-lab/lint1")
+	f.Tags = []string{"0.1.0"}
+	f.Credentials = &oci.Basic{Username: "puller", Password: "secret"}
+	ctx := context.Background()
+
+	_, err := oci.NewRegistry(nil).ManifestDigest(ctx, f.Reference(), "0.1.0")
+	require.Error(t, err, "anonymously the token endpoint refuses")
+
+	reg := oci.NewRegistry(nil).WithCredentials(map[string]oci.Basic{f.Host(): *f.Credentials})
+	digest, err := reg.ManifestDigest(ctx, f.Reference(), "0.1.0")
+	require.NoError(t, err)
+	assert.Equal(t, ocitest.Digest("0.1.0"), digest)
+}
+
+func TestRegistryCachesTokensPerHost(t *testing.T) {
+	a := ocitest.New(t, "giantswarm/agent-toolchains/go")
+	b := ocitest.New(t, "giantswarm/agent-toolchains/go")
+	a.Tags, b.Tags = []string{"0.1.0"}, []string{"0.1.0"}
+	reg := oci.NewRegistry(nil)
+	ctx := context.Background()
+	for _, f := range []*ocitest.Registry{a, b} {
+		_, err := reg.ManifestDigest(ctx, f.Reference(), "0.1.0")
+		require.NoError(t, err)
+	}
+	assert.Equal(t, 1, a.TokenHits)
+	assert.Equal(t, 1, b.TokenHits, "the same repository on another host has a token of its own")
+}
+
+func TestLoadDockerConfig(t *testing.T) {
+	path := t.TempDir() + "/config.json"
+	require.NoError(t, os.WriteFile(path, []byte(`{"auths":{
+		"gsociprivate.azurecr.io":{"auth":"`+base64.StdEncoding.EncodeToString([]byte("puller:pa:ss"))+`"},
+		"https://registry.example.io/v1/":{"username":"u","password":"p"}}}`), 0o600))
+	creds, err := oci.LoadDockerConfig(path)
+	require.NoError(t, err)
+	assert.Equal(t, map[string]oci.Basic{
+		"gsociprivate.azurecr.io": {Username: "puller", Password: "pa:ss"},
+		"registry.example.io":     {Username: "u", Password: "p"},
+	}, creds)
+
+	for name, body := range map[string]string{
+		"not json":    `auths`,
+		"no password": `{"auths":{"r.io":{"username":"u"}}}`,
+		"bad auth":    `{"auths":{"r.io":{"auth":"!!"}}}`,
+	} {
+		require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
+		_, err := oci.LoadDockerConfig(path)
+		assert.Error(t, err, name)
+	}
 }
