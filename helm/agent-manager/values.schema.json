@@ -397,7 +397,7 @@
                 },
                 "mcpUrl": {
                     "type": "string",
-                    "description": "muster's MCP endpoint, the muster Service of `bindingsUrl`: `start_session` calls the workspace-manager's `authorize_workspace` there, as the caller, for an agent's default workspace when the start names no workspace. Rendered with `bindingsUrl` and `workspacesToolsPrefix`."
+                    "description": "muster's MCP endpoint, the muster Service of `bindingsUrl`: `start_session` calls there, as the caller, the workspace-manager's `authorize_workspace` for an agent's default workspace when the start names no workspace (rendered with `bindingsUrl` and `workspacesToolsPrefix`), and the toolchain-manager's `list_toolchains` (rendered with `toolchains.repository` and `toolchainsToolsPrefix`)."
                 },
                 "targetUrl": {
                     "type": "string",
