@@ -163,3 +163,20 @@ func TestLoadDockerConfig(t *testing.T) {
 		assert.Error(t, err, name)
 	}
 }
+
+func TestRegistrySendsCredentialsOnlyToItsOwnRealm(t *testing.T) {
+	elsewhere := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _, ok := r.BasicAuth()
+		assert.False(t, ok, "no credentials reach another host")
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	t.Cleanup(elsewhere.Close)
+	reg := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Www-Authenticate", `Bearer realm="`+elsewhere.URL+`/token",service="x"`)
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	t.Cleanup(reg.Close)
+	ref := oci.Reference{Host: strings.TrimPrefix(reg.URL, "http://"), Repository: "a/b", Insecure: true}
+	_, err := oci.NewRegistry(nil).WithCredentials(map[string]oci.Basic{ref.Host: {Username: "u", Password: "p"}}).ManifestDigest(context.Background(), ref, "1")
+	require.ErrorContains(t, err, "not on its own host")
+}

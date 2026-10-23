@@ -394,7 +394,7 @@ func (c *Registry) do(ctx context.Context, ref Reference, method, target, accept
 	if resp.StatusCode == http.StatusUnauthorized {
 		challenge := resp.Header.Get("Www-Authenticate")
 		_ = resp.Body.Close()
-		tok, err := c.fetchToken(ctx, ref.Host, challenge, scope)
+		tok, err := c.fetchToken(ctx, ref, challenge, scope)
 		if err != nil {
 			return nil, err
 		}
@@ -443,9 +443,12 @@ func (c *Registry) cachedToken(host, scope string) string {
 }
 
 // fetchToken follows a `Bearer realm="…",service="…",scope="…"` challenge
-// with host's credentials, else anonymously. The challenge's own scope is used when present (a registry may
+// with the registry's credentials, else anonymously. Credentials go only to a
+// realm on the registry's own host, over https unless the reference is
+// insecure: a challenge cannot send them elsewhere. The challenge's own scope is used when present (a registry may
 // ask for a narrower scope than pull, e.g. metadata_read for the tag list).
-func (c *Registry) fetchToken(ctx context.Context, host, challenge, fallbackScope string) (string, error) {
+func (c *Registry) fetchToken(ctx context.Context, ref Reference, challenge, fallbackScope string) (string, error) {
+	host := ref.Host
 	params := parseChallenge(challenge)
 	realm := params["realm"]
 	if realm == "" {
@@ -465,6 +468,9 @@ func (c *Registry) fetchToken(ctx context.Context, host, challenge, fallbackScop
 		return "", err
 	}
 	if b, ok := c.creds[host]; ok {
+		if req.URL.Host != host || (req.URL.Scheme != "https" && !ref.Insecure) {
+			return "", fmt.Errorf("registry %s: its token realm %s is not on its own host over https: its credentials are not sent there", host, realm)
+		}
 		req.SetBasicAuth(b.Username, b.Password)
 	}
 	resp, err := c.http.Do(req)
