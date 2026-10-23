@@ -16,6 +16,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `--muster-mcp-url` needs `--workspaces-tools-prefix` or `--toolchains-tools-prefix`; the chart renders it, and the NetworkPolicy's egress to muster, for either. The calls through muster share one client.
 
+## [2.13.1] - 2026-10-22
+
+### Changed
+
 - The chart's `toolchains.repository` is empty by default: an installation sets it together with the kagent controller's session tool image repositories, on a kagent line that mounts them. Until then `get_info` reports the capability `toolchains` false and a start naming toolchains is refused, instead of a capability that every start refuses as unsupported.
 
 ## [2.13.0] - 2026-10-22
@@ -479,7 +483,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Chart: the MCPServer CR carries `agent-platform.giantswarm.io/tool-group: agent-platform` next to `muster.giantswarm.io/type` — the Agent Platform tier of MCP servers (the portal's MCP servers page, the `agent-platform` toolset preset). `muster.mcpServer.labels` still adds or overrides labels. (#23)
 
-[Unreleased]: https://github.com/giantswarm/agent-manager/compare/v2.13.0...HEAD
+[Unreleased]: https://github.com/giantswarm/agent-manager/compare/v2.13.1...HEAD
+[2.13.1]: https://github.com/giantswarm/agent-manager/compare/v2.13.0...v2.13.1
 [2.13.0]: https://github.com/giantswarm/agent-manager/compare/v2.12.0-rc.1...v2.13.0
 [2.12.0-rc.1]: https://github.com/giantswarm/agent-manager/compare/v2.11.0...v2.12.0-rc.1
 [2.11.0]: https://github.com/giantswarm/agent-manager/compare/v2.11.0-rc.2...v2.11.0
