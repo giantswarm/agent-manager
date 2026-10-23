@@ -193,26 +193,62 @@ func TestClaudeHarnessWithoutEgressEntryIsRefused(t *testing.T) {
 	assert.Contains(t, err.Error(), missing)
 }
 
-func TestClaudeHarnessSystemPromptCarriesTheEgressNote(t *testing.T) {
+// The egress note is the chart's: a coding agent's values ask for it with
+// agent.platformPrompt.egressNote and keep agent.systemMessage the person's.
+func TestCodingAgentAsksTheChartForTheEgressNote(t *testing.T) {
 	f, ctx := claudeFixture(t, nil)
 	_, err := f.svc.Create(ctx, coderSpec("preset:read-only"))
 	require.NoError(t, err)
-	prompt := mustValues(mustGet(t, f, "coder"))["agent"].(map[string]any)["systemMessage"].(string)
-	assert.True(t, strings.HasPrefix(prompt, "You keep the GitOps repositories tidy.\n\n"+egressNoteHeading), prompt)
-	assert.Contains(t, prompt, "only these origins: https://github.com, https://*.githubusercontent.com, and the registries of the toolchains mounted under /opt/kagent/tools.")
+	agentBlock := mustValues(mustGet(t, f, "coder"))["agent"].(map[string]any)
+	assert.Equal(t, "You keep the GitOps repositories tidy.", agentBlock["systemMessage"])
+	assert.Equal(t, map[string]any{"egressNote": true}, agentBlock["platformPrompt"])
 
-	// A new prompt gets the note once, never a second copy.
 	res, err := f.svc.Update(ctx, Update{Name: "coder", SystemMessage: new("You review pull requests.")})
 	require.NoError(t, err)
-	prompt = res.After["agent"].(map[string]any)["systemMessage"].(string)
-	assert.True(t, strings.HasPrefix(prompt, "You review pull requests.\n\n"+egressNoteHeading), prompt)
-	assert.Equal(t, 1, strings.Count(prompt, egressNoteHeading))
+	assert.Equal(t, "You review pull requests.", res.After["agent"].(map[string]any)["systemMessage"])
 	res, err = f.svc.Update(ctx, Update{Name: "coder", Description: new("tidy")})
 	require.NoError(t, err)
-	assert.Equal(t, []string{"agent.description"}, res.Changed, "an unchanged list rewrites nothing")
+	assert.Equal(t, []string{"agent.description"}, res.Changed, "an unchanged agent rewrites nothing")
+}
 
-	// Without a prompt of its own the note is the prompt.
-	assert.Equal(t, egressNote(nil), withEgressNote("", nil))
+// Values that carry the note inside agent.systemMessage lose it on the next
+// write, and the text around it stays.
+func TestCodingAgentWriteDropsTheEgressNoteFromItsPrompt(t *testing.T) {
+	values := coderValues("preset:read-only")
+	values["agent"].(map[string]any)["systemMessage"] = "You keep the GitOps repositories tidy.\n\n" + egressNoteHeading +
+		"\n\nBesides your model and your tools, your sandbox reaches only https://example.com.\n\nOpen one pull request per repository."
+	f, ctx := claudeFixture(t, values)
+
+	res, err := f.svc.Update(ctx, Update{Name: "coder", Description: new("tidy")})
+	require.NoError(t, err)
+	agentBlock := res.After["agent"].(map[string]any)
+	assert.Equal(t, "You keep the GitOps repositories tidy.\n\nOpen one pull request per repository.", agentBlock["systemMessage"])
+	assert.Equal(t, map[string]any{"egressNote": true}, agentBlock["platformPrompt"])
+	assert.Contains(t, res.Changed, "agent.systemMessage")
+}
+
+// The prompt an agent reports is the person's: the egress note the chart
+// rendered into spec.template.systemPrompt is not part of it.
+func TestTheAgentObjectReportsThePromptWithoutTheEgressNote(t *testing.T) {
+	obj := agentObject("kagent", "coder", "", "", true, true)
+	require.NoError(t, unstructured.SetNestedField(obj.Object, "You keep the GitOps repositories tidy.\n\n"+egressNoteHeading+
+		"\n\nBesides your model and your tools, your sandbox reaches only these origins: https://github.com, and the registries of the toolchains mounted under /opt/kagent/tools.",
+		"spec", "template", "systemPrompt"))
+	assert.Equal(t, "You keep the GitOps repositories tidy.", agentFromObject(obj, nil).SystemMessage)
+}
+
+func TestWithoutEgressNote(t *testing.T) {
+	note := egressNoteHeading + "\n\nBesides your model and your tools, your sandbox reaches only the registries of the toolchains mounted under /opt/kagent/tools."
+	for name, tc := range map[string]struct{ prompt, want string }{
+		"no note":         {"You review pull requests.\n", "You review pull requests.\n"},
+		"note at the end": {"You review pull requests.\n\n" + note, "You review pull requests."},
+		"note in between": {"You review pull requests.\n\n" + note + "\n\nBe brief.", "You review pull requests.\n\nBe brief."},
+		"only the note":   {note, ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			assert.Equal(t, tc.want, withoutEgressNote(tc.prompt))
+		})
+	}
 }
 
 func TestDeclarativeAgentsAreUnchanged(t *testing.T) {
@@ -268,7 +304,7 @@ func TestCodingGuardOnEveryNonKagentHarness(t *testing.T) {
 			require.NoError(t, err)
 			agentBlock := mustValues(mustGet(t, f, "coder"))["agent"].(map[string]any)
 			assert.Equal(t, toAnySlice(f.svc.cfg.HarnessEgress[h]), agentBlock["egress"], "the Harness's origins are written")
-			assert.Contains(t, agentBlock["systemMessage"], egressNoteHeading)
+			assert.Equal(t, map[string]any{"egressNote": true}, agentBlock["platformPrompt"], "the chart appends the egress note")
 
 			for field, value := range map[string]any{
 				"muster":         map[string]any{"requireApproval": true},

@@ -866,8 +866,8 @@ func (s *Service) guardUpdate(ctx context.Context, st *site, upd Update, before,
 }
 
 // leaveCoding drops what a coding Harness set on an agent that moves to a
-// kagent one: the egress note in its prompt and, unless the update passes
-// egress of its own, the Harness's origin list.
+// kagent one: the egress note and, unless the update passes egress of its
+// own, the Harness's origin list.
 func (s *Service) leaveCoding(ctx context.Context, st *site, upd Update, before, after map[string]any) error {
 	_, fromHarness, err := s.releaseHarness(ctx, st, before)
 	from := harnessRuntime(fromHarness)
@@ -875,15 +875,7 @@ func (s *Service) leaveCoding(ctx context.Context, st *site, upd Update, before,
 		return err
 	}
 	agentBlock, _ := after["agent"].(map[string]any)
-	if prompt, ok := agentBlock["systemMessage"].(string); ok {
-		if i := strings.Index(prompt, egressNoteHeading); i >= 0 {
-			if prompt = strings.TrimRight(prompt[:i], " \t\n"); prompt != "" {
-				agentBlock["systemMessage"] = prompt
-			} else {
-				delete(agentBlock, "systemMessage")
-			}
-		}
-	}
+	setEgressNote(agentBlock, false)
 	if isCodingRuntime(from) && upd.Egress == nil {
 		delete(agentBlock, "egress")
 	}
@@ -1913,6 +1905,7 @@ func agentFromObject(obj, server *unstructured.Unstructured) Agent {
 	a.Description, _, _ = unstructured.NestedString(obj.Object, "spec", "template", "description")
 	a.ModelConfig, _, _ = unstructured.NestedString(obj.Object, "spec", "template", "modelConfig", "name")
 	a.SystemMessage, _, _ = unstructured.NestedString(obj.Object, "spec", "template", "systemPrompt")
+	a.SystemMessage = withoutEgressNote(a.SystemMessage)
 	a.Skills = skillsFromObject(obj)
 	a.Plugins = pluginsFromObject(obj)
 	a.Egress = egressFromObject(obj)
@@ -2038,6 +2031,7 @@ func applyHelmRelease(a *Agent, hr *unstructured.Unstructured) {
 		a.Description, _ = agentBlock["description"].(string)
 		a.IconURL, _ = agentBlock["iconUrl"].(string)
 		a.SystemMessage, _ = agentBlock["systemMessage"].(string)
+		a.SystemMessage = withoutEgressNote(a.SystemMessage)
 		a.Harness, _ = agentBlock["harness"].(string)
 	}
 	if a.Name == "" {
