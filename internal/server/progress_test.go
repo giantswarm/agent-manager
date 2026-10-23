@@ -21,16 +21,26 @@ import (
 )
 
 // A tool's progress reaches a caller that passed a progress token as
-// notifications/progress on that token, through the whole HTTP stack: muster
-// restarts its tool-call timeout on each.
+// notifications/progress on that token while the call runs, through the
+// whole HTTP stack: muster restarts its tool-call timeout on each.
 func TestToolProgressReachesTheCaller(t *testing.T) {
+	// delivered is signalled per notification the client received; the tool
+	// waits for it before it goes on, as a heartbeat precedes the answer by
+	// seconds. A notification sent at the very end of a call may lose the race
+	// with the result, which is harmless: the call has answered.
+	delivered := make(chan struct{}, 2)
 	dyn := dynamicfake.NewSimpleDynamicClient(runtime.NewScheme())
 	typed := kubefake.NewClientset()
 	svc := agents.New(kube.NewServiceAccountProvider(kube.FromInterfaces(dyn, typed, typed.Discovery())), embeddedChart{}, nil, nil, agents.Config{Version: "test"}, nil)
 	mcpSrv := api.NewMCPServer(svc, "test")
 	mcpSrv.AddTool(mcp.NewTool("slow"), func(ctx context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		agents.ProgressFrom(ctx)("first")
-		agents.ProgressFrom(ctx)("second")
+		for _, message := range []string{"first", "second"} {
+			agents.ProgressFrom(ctx)(message)
+			select {
+			case <-delivered:
+			case <-time.After(300 * time.Millisecond):
+			}
+		}
 		return mcp.NewToolResultText("done"), nil
 	})
 	srv, err := New(Config{Addr: "127.0.0.1:0", MCPEnabled: true}, svc, mcpSrv, nil)
@@ -52,6 +62,7 @@ func TestToolProgressReachesTheCaller(t *testing.T) {
 		mu.Lock()
 		defer mu.Unlock()
 		received = append(received, n.Params.AdditionalFields)
+		delivered <- struct{}{}
 	})
 	ctx := t.Context()
 	require.NoError(t, c.Start(ctx))
@@ -68,13 +79,6 @@ func TestToolProgressReachesTheCaller(t *testing.T) {
 	res, err := c.CallTool(ctx, mcp.CallToolRequest{Params: mcp.CallToolParams{Name: "slow", Meta: &mcp.Meta{ProgressToken: "call-1"}}})
 	require.NoError(t, err)
 	assert.False(t, res.IsError)
-	// The client hands notifications to OnNotification on its own goroutine:
-	// the last may follow the result.
-	require.Eventually(t, func() bool {
-		mu.Lock()
-		defer mu.Unlock()
-		return len(received) >= 2
-	}, 5*time.Second, 10*time.Millisecond)
 	mu.Lock()
 	defer mu.Unlock()
 	require.Len(t, received, 2)
