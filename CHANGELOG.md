@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- A changed `--agent-chart-semver` (or `--agent-chart-semver-filter`) now reaches the shared agent-chart OCIRepository of every managed namespace when agent-manager starts: a source agent-manager created moves to the configured range and tag filter within its major; one already on them is not written, and one on another major, in GitOps or not created by agent-manager is left and logged (a major is the `migrate` command's) ([#245](https://github.com/giantswarm/agent-manager/issues/245)).
+- A changed `--agent-chart-semver` (or `--agent-chart-semver-filter`) now reaches the shared agent-chart OCIRepository of every managed namespace when agent-manager starts: a source agent-manager created moves to the configured range and tag filter within its major; one already on them is not written, and one on another major, in GitOps or not created by agent-manager is left and logged (a major is the `migrate` command's). With `oauth.downstream`, the chart grants the ServiceAccount `get` and `update` on that one OCIRepository by name in each managed namespace for it ([#245](https://github.com/giantswarm/agent-manager/issues/245)).
 
 ## [2.17.1] - 2026-10-23
 

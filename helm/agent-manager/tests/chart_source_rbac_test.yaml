@@ -1,0 +1,57 @@
+# The one permission the ServiceAccount gets with downstream OAuth for the
+# agent chart's shared source.
+#
+# Run with: make helm-test (helm unittest helm/agent-manager)
+suite: chart source RBAC
+templates:
+  - templates/chart-source-rbac.yaml
+set:
+  oauth:
+    enabled: true
+    downstream:
+      enabled: true
+tests:
+  - it: renders nothing while the ServiceAccount holds the namespace Role
+    set:
+      oauth:
+        downstream:
+          enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders nothing without rbac.create
+    set:
+      rbac:
+        create: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: grants get and update on the agent chart's source by name in every managed namespace
+    set:
+      kagent:
+        namespace: kagent
+        additionalNamespaces: [team-a]
+    asserts:
+      - hasDocuments:
+          count: 4
+      - isKind:
+          of: Role
+        documentIndex: 2
+      - equal:
+          path: metadata.namespace
+          value: team-a
+        documentIndex: 2
+      - equal:
+          path: rules
+          value:
+            - apiGroups: ["source.toolkit.fluxcd.io"]
+              resources: ["ocirepositories"]
+              resourceNames: ["agent"]
+              verbs: ["get", "update"]
+        documentIndex: 0
+      - equal:
+          path: subjects[0].name
+          value: RELEASE-NAME-agent-manager
+        documentIndex: 1
