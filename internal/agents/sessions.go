@@ -673,7 +673,7 @@ func (s *Service) StartSession(ctx context.Context, in StartSession) (*SessionSt
 		}
 		create.VolumeSource, create.AdmissionToken = workspace.Volume, grant
 	}
-	session, err := s.cfg.Sessions.CreateSession(ctx, token, create)
+	session, err := s.createSession(ctx, token, create)
 	if err != nil {
 		return nil, kagentError(err, fmt.Sprintf("a session of agent %s", ref.Tenant()))
 	}

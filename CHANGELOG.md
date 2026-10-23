@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `start_session` with a toolchain set no Session has used yet no longer fails at muster's 30s tool-call timeout while kagent prepares the toolset: the call reports MCP progress every 10s while kagent's `CreateSession` waits, which restarts muster's timeout, and a `CreateSession` answered `Unavailable` or `DeadlineExceeded` is retried with the same request id for up to 3 minutes. Every tool call with a progress token can now report progress ([#253](https://github.com/giantswarm/agent-manager/issues/253)).
+
+## [2.17.0] - 2026-10-23
+
 ### Changed
 
 - The egress note moves out of the person's prompt: `create_agent`, `update_agent` and `validate_agent` set the agent chart's `agent.platformPrompt.egressNote` on an agent on a coding Harness instead of appending the note to `agent.systemMessage`, and the chart renders it after the prompt. A note already in `agent.systemMessage` (a line that is its heading and the paragraph after it, in any line endings) is taken out on the next write, and the text after it, which the previous rewrite cut off, stays. A coding agent created without a prompt of its own, whose prompt was the note alone, gets the chart's default prompt before the note. Every write to an agent on a kagent Harness clears the flag and the note, not only a Harness change. The 20000-character cap counts the person's prompt only, a pasted note left out. Where the agent chart that validates the agents has no `agent.platformPrompt` (an installation held below 2.4.0), the values are written without the flag and without the note. The embedded chart is 2.4.0 ([giantswarm#38803](https://github.com/giantswarm/giantswarm/issues/38803)).
@@ -513,7 +519,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Chart: the MCPServer CR carries `agent-platform.giantswarm.io/tool-group: agent-platform` next to `muster.giantswarm.io/type` — the Agent Platform tier of MCP servers (the portal's MCP servers page, the `agent-platform` toolset preset). `muster.mcpServer.labels` still adds or overrides labels. (#23)
 
-[Unreleased]: https://github.com/giantswarm/agent-manager/compare/v2.16.0...HEAD
+[Unreleased]: https://github.com/giantswarm/agent-manager/compare/v2.17.0...HEAD
+[2.17.0]: https://github.com/giantswarm/agent-manager/compare/v2.16.0...v2.17.0
 [2.16.0]: https://github.com/giantswarm/agent-manager/compare/v2.16.0-rc.1...v2.16.0
 [2.16.0-rc.1]: https://github.com/giantswarm/agent-manager/compare/v2.15.0...v2.16.0-rc.1
 [2.15.0]: https://github.com/giantswarm/agent-manager/compare/v2.14.0...v2.15.0

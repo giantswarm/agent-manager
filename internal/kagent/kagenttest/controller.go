@@ -64,6 +64,10 @@ type Controller struct {
 	// as a controller without session tool images does: the session lists
 	// none.
 	WithoutToolImages bool
+	// Prepare runs before CreateSession creates a session, as the controller
+	// prepares a toolset no session has used yet: its error is the answer,
+	// nil lets the create go on. Nil prepares nothing.
+	Prepare func(ctx context.Context, req *apiv1alpha1.CreateSessionRequest) error
 
 	mu        sync.Mutex
 	sessions  []*apiv1alpha1.Session
@@ -270,6 +274,11 @@ func (c *Controller) CreateSession(ctx context.Context, req *apiv1alpha1.CreateS
 	}
 	if req.GetRequestId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "request_id: value length must be at least 1 characters")
+	}
+	if c.Prepare != nil {
+		if err := c.Prepare(ctx, req); err != nil {
+			return nil, err
+		}
 	}
 	tenant := tenantOf(req.GetAgent())
 	c.mu.Lock()
