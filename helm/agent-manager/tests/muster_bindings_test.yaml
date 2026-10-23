@@ -136,3 +136,58 @@ tests:
     asserts:
       - notExists:
           path: spec.template.spec.containers[0].args[?(@ =~ /^--muster-mcp-url=/)]
+
+  - it: calls the toolchain-manager through muster's MCP endpoint with toolchains
+    template: templates/deployment.yaml
+    set:
+      toolchains.repository: gsoci.azurecr.io/giantswarm/agent-toolchains
+      muster.toolchainsToolsPrefix: x_toolchain-manager_
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --toolchains-tools-prefix=x_toolchain-manager_
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --muster-mcp-url=http://muster.agent-platform.svc.cluster.local:8090/mcp
+
+  - it: renders no toolchain-manager call by default
+    template: templates/deployment.yaml
+    set:
+      toolchains.repository: gsoci.azurecr.io/giantswarm/agent-toolchains
+    asserts:
+      - notExists:
+          path: spec.template.spec.containers[0].args[?(@ =~ /^--toolchains-tools-prefix=/)]
+
+  - it: renders no toolchain-manager call without toolchains
+    template: templates/deployment.yaml
+    set:
+      muster.toolchainsToolsPrefix: x_toolchain-manager_
+    asserts:
+      - notExists:
+          path: spec.template.spec.containers[0].args[?(@ =~ /^--toolchains-tools-prefix=/)]
+
+  - it: calls the toolchain-manager without the bindings, egress open to muster
+    set:
+      muster.bindingsUrl: ""
+      toolchains.repository: gsoci.azurecr.io/giantswarm/agent-toolchains
+      muster.toolchainsToolsPrefix: x_toolchain-manager_
+      networkPolicy.enabled: true
+    asserts:
+      - template: templates/deployment.yaml
+        contains:
+          path: spec.template.spec.containers[0].args
+          content: --muster-mcp-url=http://muster.agent-platform.svc.cluster.local:8090/mcp
+      - template: templates/deployment.yaml
+        notExists:
+          path: spec.template.spec.containers[0].args[?(@ =~ /^--workspaces-tools-prefix=/)]
+      - template: templates/networkpolicy.yaml
+        contains:
+          path: spec.egress
+          content:
+            to:
+              - namespaceSelector:
+                  matchLabels:
+                    kubernetes.io/metadata.name: agent-platform
+            ports:
+              - protocol: TCP
+                port: 8090

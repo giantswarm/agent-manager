@@ -56,6 +56,7 @@ func (h *REST) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET "+Prefix+"/sessions/{id}", h.getSession)
 	mux.HandleFunc("GET "+Prefix+"/sessions/{id}/turns/{turn}", h.getSessionTurn)
 	mux.HandleFunc("DELETE "+Prefix+"/sessions/{id}", h.deleteSession)
+	mux.HandleFunc("GET "+Prefix+"/toolchains/{name}/users", h.toolchainUsers)
 }
 
 type errorBody struct {
@@ -232,6 +233,15 @@ func (h *REST) listSkills(w http.ResponseWriter, r *http.Request) {
 
 func (h *REST) listSessions(w http.ResponseWriter, r *http.Request) {
 	res, err := h.svc.ListSessions(r.Context(), r.PathValue("namespace"), r.PathValue("name"), strings.EqualFold(r.URL.Query().Get("allCreators"), "true"))
+	if err != nil {
+		h.writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
+func (h *REST) toolchainUsers(w http.ResponseWriter, r *http.Request) {
+	res, err := h.svc.ToolchainUsers(r.Context(), r.PathValue("name"), r.URL.Query().Get("version"))
 	if err != nil {
 		h.writeError(w, err)
 		return

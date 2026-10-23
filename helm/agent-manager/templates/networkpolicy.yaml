@@ -95,7 +95,8 @@ spec:
           port: {{ .port }}
     {{- end }}
     {{- with include "agent-manager.musterBindingsEgress" . | fromYaml }}
-    # muster's session bindings (a workspace session bound to its person).
+    # muster: its session bindings (a workspace session bound to its person)
+    # and its MCP endpoint (the workspace-manager and the toolchain-manager).
     - to:
         {{- if .namespace }}
         - namespaceSelector:

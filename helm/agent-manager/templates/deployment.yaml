@@ -132,13 +132,20 @@ spec:
             {{- if $.Values.muster.actorBearer }}
             - --muster-actor-bearer=true
             {{- end }}
-            {{- if and $.Values.muster.mcpUrl $.Values.muster.workspacesToolsPrefix }}
-            - --muster-mcp-url={{ $.Values.muster.mcpUrl }}
-            - --workspaces-tools-prefix={{ $.Values.muster.workspacesToolsPrefix }}
             {{- end }}
+            {{- $workspaces := and $.Values.muster.bindingsUrl $.Values.muster.mcpUrl $.Values.muster.workspacesToolsPrefix }}
+            {{- $toolchainList := and $.Values.toolchains.repository $.Values.muster.mcpUrl $.Values.muster.toolchainsToolsPrefix }}
+            {{- if or $workspaces $toolchainList }}
+            - --muster-mcp-url={{ $.Values.muster.mcpUrl }}
+            {{- end }}
+            {{- if $workspaces }}
+            - --workspaces-tools-prefix={{ $.Values.muster.workspacesToolsPrefix }}
             {{- end }}
             {{- with $.Values.toolchains.repository }}
             - --toolchain-repository={{ . }}
+            {{- end }}
+            {{- if $toolchainList }}
+            - --toolchains-tools-prefix={{ $.Values.muster.toolchainsToolsPrefix }}
             {{- end }}
             {{- end }}
             {{- if .Values.github.enabled }}

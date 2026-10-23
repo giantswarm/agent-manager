@@ -7,7 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `start_session` holds a Session's toolchains to the toolchain-manager's `list_toolchains`, asked through muster as the caller (`--toolchains-tools-prefix`, chart `muster.toolchainsToolsPrefix`, rendered with `toolchains.repository` and `muster.mcpUrl`): a named version must be listed, `vX.Y.Z` or its tag `X.Y.Z`, and none names the newest listed one, so a deprecated or never published version, or a toolchain the installation does not offer, starts nothing. The answer reports the listed version. The caller's missing grant of the toolchain-manager's GitHub App, or muster's sign-in to it, is `auth_required`. Empty keeps any version the registry carries ([giantswarm#38751](https://github.com/giantswarm/giantswarm/issues/38751)).
+- `toolchain_users` (`GET /api/v1/toolchains/{name}/users`): the agents whose default toolchains name a toolchain, or one version, and the Sessions that mount it, by digest for a version, read as the caller in every managed namespace; the toolchain-manager's `deprecate_toolchain` names them before a toolchain leaves the offered list.
+
 ### Changed
+
+- `--muster-mcp-url` needs `--workspaces-tools-prefix` or `--toolchains-tools-prefix`; the chart renders it, and the NetworkPolicy's egress to muster, for either. The calls through muster share one client.
 
 - The chart's `toolchains.repository` is empty by default: an installation sets it together with the kagent controller's session tool image repositories, on a kagent line that mounts them. Until then `get_info` reports the capability `toolchains` false and a start naming toolchains is refused, instead of a capability that every start refuses as unsupported.
 

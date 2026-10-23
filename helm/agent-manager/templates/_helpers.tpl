@@ -242,16 +242,22 @@ port: {{ $port }}
 {{- end -}}
 
 {{/*
-muster's session bindings endpoint as egress: the Service's namespace for an
-in-cluster host (<name>.<namespace>.svc...), the port the URL names or its
+muster as egress, its session bindings endpoint, else its MCP endpoint when
+start_session asks the toolchain-manager there: the Service's namespace for
+an in-cluster host (<name>.<namespace>.svc...), the port the URL names or its
 scheme's. Rendered with the session tools only (oauth and a controller
-target), as the flag is.
+target), as the flags are.
 */}}
 {{- define "agent-manager.musterBindingsEgress" -}}
-{{- if and .Values.oauth.enabled .Values.kagent.controllerTarget .Values.muster.bindingsUrl -}}
-{{- $url := urlParse .Values.muster.bindingsUrl -}}
+{{- $toolchainList := and .Values.toolchains.repository .Values.muster.mcpUrl .Values.muster.toolchainsToolsPrefix -}}
+{{- $musterURL := .Values.muster.bindingsUrl | default (ternary .Values.muster.mcpUrl "" (not (empty $toolchainList))) -}}
+{{- if and .Values.oauth.enabled .Values.kagent.controllerTarget $musterURL -}}
+{{- $url := urlParse $musterURL -}}
 {{- if not (has $url.scheme (list "http" "https")) -}}
-{{- fail (printf "muster.bindingsUrl %q must be http(s)://host[:port]/session-bindings" .Values.muster.bindingsUrl) -}}
+{{- if .Values.muster.bindingsUrl -}}
+{{- fail (printf "muster.bindingsUrl %q must be http(s)://host[:port]/session-bindings" $musterURL) -}}
+{{- end -}}
+{{- fail (printf "muster.mcpUrl %q must be http(s)://host[:port]/mcp" $musterURL) -}}
 {{- end -}}
 {{- $hostPort := splitList ":" $url.host -}}
 {{- $port := ternary (last $hostPort) (ternary "443" "80" (eq $url.scheme "https")) (gt (len $hostPort) 1) -}}
