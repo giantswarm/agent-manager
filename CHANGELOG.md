@@ -16,6 +16,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The registry client caches its bearer tokens per host and scope, no longer per scope alone, so the same repository path on two registries no longer shares a token.
 
+### Fixed
+
+- `start_session` with a toolchain set no Session has used yet no longer fails at muster's 30s tool-call timeout while kagent prepares the toolset: the call reports MCP progress every 10s while kagent's `CreateSession` waits, which restarts muster's timeout, and a `CreateSession` answered `Unavailable` or `DeadlineExceeded` is retried with the same request id for up to 3 minutes. Every tool call with a progress token can now report progress ([#253](https://github.com/giantswarm/agent-manager/issues/253)).
+
 ## [2.15.0] - 2026-10-23
 
 ### Changed

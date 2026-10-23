@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync/atomic"
 
 	"github.com/giantswarm/mcp-toolkit/tooldesc"
 	"github.com/mark3labs/mcp-go/mcp"
@@ -112,12 +113,35 @@ func genAIToolName(next mcpserver.ToolHandlerFunc) mcpserver.ToolHandlerFunc {
 	}
 }
 
+// reportProgress lets a tool call whose caller passed a progress token
+// report that it is still working (agents.Progress): each report is a
+// notifications/progress on that token, its progress counting up. muster
+// passes every call a token and restarts its timeout on each notification.
+func reportProgress(next mcpserver.ToolHandlerFunc) mcpserver.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		srv := mcpserver.ServerFromContext(ctx)
+		if req.Params.Meta == nil || req.Params.Meta.ProgressToken == nil || srv == nil {
+			return next(ctx, req)
+		}
+		token := req.Params.Meta.ProgressToken
+		var progress atomic.Int64
+		return next(agents.WithProgress(ctx, func(message string) {
+			_ = srv.SendNotificationToClient(ctx, string(mcp.MethodNotificationProgress), map[string]any{
+				"progressToken": token,
+				"progress":      progress.Add(1),
+				"message":       message,
+			})
+		}), req)
+	}
+}
+
 // NewMCPServer builds an MCP server exposing the same operations as the REST
 // API as tools. Results are JSON text with the same shapes as the REST bodies.
 func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 	s := mcpserver.NewMCPServer("agent-manager", version,
 		mcpserver.WithToolHandlerMiddleware(genAIToolName),
 		mcpserver.WithToolHandlerMiddleware(toolDuration(otel.Meter(tracerName))),
+		mcpserver.WithToolHandlerMiddleware(reportProgress),
 		// The HTTP server span already joined the inbound traceparent, so the
 		// MCP spans nest under it instead of extracting it a second time.
 		mcpotel.WithServerTracingPropagator(otel.Tracer(tracerName), propagation.NewCompositeTextMapPropagator()),
