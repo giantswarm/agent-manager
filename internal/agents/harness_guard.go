@@ -3,8 +3,10 @@ package agents
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
+	"unicode"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
@@ -31,14 +33,21 @@ const (
 // harnessSpecFields are the Harness spec fields that are no runtime.
 var harnessSpecFields = map[string]bool{"workload": true, "env": true, "substrate": true}
 
-// egressNoteHeading opens the egress note agent-manager composes into a
-// coding agent's system prompt; everything from it on is the platform's and
-// is rewritten on every write.
+// egressNoteHeading opens the egress note, the section the agent chart
+// appends to a coding agent's system prompt when agent.platformPrompt.egressNote
+// is set. The section is the chart's: the person's prompt never carries it.
 const egressNoteHeading = "## Network access (set by the platform)"
 
-// toolchainOrigins is the egress note's name for the origins a Session's
-// toolchains bring.
-const toolchainOrigins = "the registries of the toolchains mounted under /opt/kagent/tools"
+// egressNotePattern matches an egress note inside a prompt: a line that is
+// its heading and the paragraph after it, up to the next blank line, in any
+// line endings. agent-manager wrote the note into agent.systemMessage before
+// the chart rendered it, so values and prompts pasted from them still carry
+// it; the chart takes such a note out of agent.systemMessage the same way.
+var egressNotePattern = regexp.MustCompile(`(?m)\s*^[ \t]*` + regexp.QuoteMeta(egressNoteHeading) + `[ \t]*\r?$(?:\n[ \t]*\r?$)*(?:\n[^\r\n]*\S[^\r\n]*\r?$)*`)
+
+// leadingBlankLines are the empty lines a prompt starts with once a note at
+// its top is taken out.
+var leadingBlankLines = regexp.MustCompile(`\A(?:[ \t]*\r?\n)+`)
 
 // harnessRuntime is the runtime a Harness object runs, empty for none (the
 // platform Harness absent).
@@ -92,7 +101,8 @@ func (s *Service) harnessEgress(harness string) (origins []string, listed bool) 
 
 // guardCoding checks and completes the values of an agent on a coding
 // Harness: the egress becomes the Harness's list (requested origins outside
-// it are refused), the system prompt carries the egress note, and the model
+// it are refused), the chart appends the egress note to the system prompt
+// (agent.platformPrompt.egressNote, never agent.systemMessage), and the model
 // and plugins are ones the runtime takes. requested is the egress the caller
 // asked for, nil when the write leaves it alone. A Harness the platform has
 // no origin entry for is refused: its agents would silently reach nothing.
@@ -120,10 +130,8 @@ func (s *Service) guardCoding(ctx context.Context, st *site, harness, runtime st
 		delete(agentBlock, "egress")
 	}
 
-	prompt, _ := agentBlock["systemMessage"].(string)
-	agentBlock["systemMessage"] = withEgressNote(prompt, allowed)
-	if err := ValidateSystemMessage(agentBlock["systemMessage"].(string)); err != nil {
-		errs = append(errs, invalidf("systemMessage with the platform's egress note: %v", err))
+	if s.chartRendersEgressNote(ctx) {
+		setEgressNote(agentBlock, true)
 	}
 
 	if err := refuseCodingEgressPolicies(harness, values); err != nil {
@@ -287,30 +295,59 @@ func (p Plugin) samePin(o Plugin) bool {
 	return p.Git != nil && o.Git != nil && p.Git.URL == o.Git.URL && p.Git.Commit == o.Git.Commit && p.Path == o.Path
 }
 
-// withEgressNote is prompt with the platform's egress note in place of any
-// earlier one.
-func withEgressNote(prompt string, origins []string) string {
-	if i := strings.Index(prompt, egressNoteHeading); i >= 0 {
-		prompt = prompt[:i]
+// withoutEgressNote is prompt without an egress note: the person's part of a
+// prompt the chart rendered, or of values that still carry a note in
+// agent.systemMessage. The person's leading indentation stays.
+func withoutEgressNote(prompt string) string {
+	own := egressNotePattern.ReplaceAllString(prompt, "")
+	if own == prompt {
+		return prompt
 	}
-	prompt = strings.TrimRight(prompt, " \t\n")
-	note := egressNote(origins)
-	if prompt == "" {
-		return note
-	}
-	return prompt + "\n\n" + note
+	return strings.TrimRightFunc(leadingBlankLines.ReplaceAllString(own, ""), unicode.IsSpace)
 }
 
-// egressNote tells the agent what its sandbox reaches, so a denied request
-// reads as policy rather than as an outage. A Session's toolchains add their
-// own origins, which differ per Session, so the note names them by place.
-func egressNote(origins []string) string {
-	reach := "only " + toolchainOrigins
-	if len(origins) > 0 {
-		reach = "only these origins: " + strings.Join(origins, ", ") + ", and " + toolchainOrigins
+// chartRendersEgressNote reports whether the agent chart that validates and
+// renders the agents takes agent.platformPrompt (2.4.0 on). An installation
+// held on an older chart keeps its values as they are: the older chart's
+// schema refuses the key.
+func (s *Service) chartRendersEgressNote(ctx context.Context) bool {
+	doc, _ := s.chart.Schema(ctx).Document.(map[string]any)
+	_, found, _ := unstructured.NestedFieldNoCopy(doc, "properties", "agent", "properties", "platformPrompt")
+	return found
+}
+
+// dropEgressNote takes the egress note off the values of an agent on a kagent
+// Harness: the flag and a note in agent.systemMessage.
+func dropEgressNote(values map[string]any) {
+	agentBlock, _ := values["agent"].(map[string]any)
+	setEgressNote(agentBlock, false)
+}
+
+// setEgressNote sets or clears agent.platformPrompt.egressNote, the chart
+// value that appends the egress note, and drops a note from
+// agent.systemMessage, deleting a prompt that held nothing else so the chart
+// default applies.
+func setEgressNote(agentBlock map[string]any, on bool) {
+	if prompt, ok := agentBlock["systemMessage"].(string); ok {
+		if own := withoutEgressNote(prompt); own == "" {
+			delete(agentBlock, "systemMessage")
+		} else {
+			agentBlock["systemMessage"] = own
+		}
 	}
-	return egressNoteHeading + "\n\nBesides your model and your tools, your sandbox reaches " + reach +
-		". A request to any other host is refused by the egress policy and shows up as a failed command or tool call (connection refused, reset or 403). It is not transient: do not retry it or work around it; say which host the task needs."
+	platform, _ := agentBlock["platformPrompt"].(map[string]any)
+	if on {
+		if platform == nil {
+			platform = map[string]any{}
+			agentBlock["platformPrompt"] = platform
+		}
+		platform["egressNote"] = true
+		return
+	}
+	delete(platform, "egressNote")
+	if platform != nil && len(platform) == 0 {
+		delete(agentBlock, "platformPrompt")
+	}
 }
 
 func listOrNone(list []string) string {

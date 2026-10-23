@@ -145,9 +145,10 @@ func skillsGitAuth(own string, skills Skills, plugins Plugins, cfg ComposeConfig
 const MaxSystemMessageLength = 20000
 
 // ValidateSystemMessage checks the system prompt against the chart's cap,
-// counted in characters (code points), as the chart schema counts it.
+// counted in characters (code points), as the chart schema counts it. An
+// egress note in it does not count: the write takes it out.
 func ValidateSystemMessage(message string) error {
-	if length := utf8.RuneCountInString(message); length > MaxSystemMessageLength {
+	if length := utf8.RuneCountInString(withoutEgressNote(message)); length > MaxSystemMessageLength {
 		return invalidf("systemMessage is %d characters; the agent chart accepts at most %d. Move long reference material into a skill", length, MaxSystemMessageLength)
 	}
 	return nil
