@@ -23,7 +23,7 @@ func TestUpdateMovesAnAgentToAnotherHarness(t *testing.T) {
 	assert.Equal(t, "claude", agentBlock["harness"])
 	assert.Equal(t, "verifier", agentBlock["name"], "the name stays")
 	assert.Equal(t, toAnySlice(f.svc.cfg.HarnessEgress["claude"]), agentBlock["egress"], "the new Harness's origins are written")
-	assert.Contains(t, agentBlock["systemMessage"], egressNoteHeading)
+	assert.Equal(t, map[string]any{"egressNote": true}, agentBlock["platformPrompt"], "the chart appends the egress note")
 }
 
 func TestUpdateRefusesAHarnessItsChecksFail(t *testing.T) {
@@ -195,6 +195,7 @@ func TestUpdateFromACodingHarnessDropsThePlatformsEgress(t *testing.T) {
 	assert.Equal(t, "kagent", agentBlock["harness"])
 	assert.NotContains(t, agentBlock, "egress")
 	assert.Equal(t, "You keep the GitOps repositories tidy.", agentBlock["systemMessage"])
+	assert.NotContains(t, agentBlock, "platformPrompt")
 
 	// Egress passed with the change is the agent's own and stays.
 	_, err = f.svc.Update(ctx, Update{Name: "coder", Harness: new("claude")})
