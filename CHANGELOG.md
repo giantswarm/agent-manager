@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.15.0] - 2026-10-23
+
 ### Changed
 
 - `create_agent`, `validate_agent` and `update_agent` refuse a Claude-format git plugin on the omp Harness as on `kagent` and `codex`, a Harness change to omp included, so a revision whose boot the omp adapter would refuse is never written. A `byo` Harness is omp by its workload image, the kagent line's `omp-harness`; a `byo` Harness on any other image is unchanged ([giantswarm#38691](https://github.com/giantswarm/giantswarm/issues/38691)).
@@ -489,7 +491,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Chart: the MCPServer CR carries `agent-platform.giantswarm.io/tool-group: agent-platform` next to `muster.giantswarm.io/type` — the Agent Platform tier of MCP servers (the portal's MCP servers page, the `agent-platform` toolset preset). `muster.mcpServer.labels` still adds or overrides labels. (#23)
 
-[Unreleased]: https://github.com/giantswarm/agent-manager/compare/v2.14.0...HEAD
+[Unreleased]: https://github.com/giantswarm/agent-manager/compare/v2.15.0...HEAD
+[2.15.0]: https://github.com/giantswarm/agent-manager/compare/v2.14.0...v2.15.0
 [2.14.0]: https://github.com/giantswarm/agent-manager/compare/v2.13.1...v2.14.0
 [2.13.1]: https://github.com/giantswarm/agent-manager/compare/v2.13.0...v2.13.1
 [2.13.0]: https://github.com/giantswarm/agent-manager/compare/v2.12.0-rc.1...v2.13.0
