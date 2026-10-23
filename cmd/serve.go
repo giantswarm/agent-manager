@@ -29,6 +29,7 @@ import (
 	"github.com/giantswarm/agent-manager/internal/server"
 	"github.com/giantswarm/agent-manager/internal/skills"
 	"github.com/giantswarm/agent-manager/internal/tenants"
+	"github.com/giantswarm/agent-manager/internal/toolchainmanager"
 	"github.com/giantswarm/agent-manager/internal/workspaces"
 )
 
@@ -51,6 +52,7 @@ type serveOptions struct {
 	musterActorBearer bool
 	musterMCPURL      string
 	workspacesPrefix  string
+	toolchainsPrefix  string
 	helmReleaseAPI    string
 	ociRepositoryAPI  string
 
@@ -131,8 +133,9 @@ environment variable named next to it; flags win over the environment.`,
 	f.StringVar(&o.musterURL, "muster-url", envOr("AGENT_MUSTER_URL", ""), "The platform's muster MCP URL, composed into every agent as the chart value muster.url; empty composes nothing and the chart default applies (AGENT_MUSTER_URL)")
 	f.BoolVar(&o.musterActorBearer, "muster-actor-bearer", envBool("AGENT_MANAGER_MUSTER_ACTOR_BEARER", false), "muster trusts the actor JWT of a bound session: get_agent, list_agents and get_info report an agent's toolset as bound to each session at its start, which every session start_session binds carries. Needs --muster-bindings-url (AGENT_MANAGER_MUSTER_ACTOR_BEARER)")
 	f.StringVar(&o.musterBindingsURL, "muster-bindings-url", envOr("AGENT_MANAGER_MUSTER_BINDINGS_URL", ""), "muster's session bindings endpoint (http(s)://host[:port]/session-bindings), which start_session binds a workspace session's sandbox to the caller at and delete_session unbinds it from, as the caller. Empty: start_session refuses a workspace grant. Needs --kagent-target (AGENT_MANAGER_MUSTER_BINDINGS_URL)")
-	f.StringVar(&o.musterMCPURL, "muster-mcp-url", envOr("AGENT_MANAGER_MUSTER_MCP_URL", ""), "muster's MCP endpoint (http(s)://host[:port]/mcp), which start_session calls the workspace-manager's authorize_workspace at, as the caller, for an agent's default workspace when the start names no workspace. Needs --workspaces-tools-prefix and --muster-bindings-url (AGENT_MANAGER_MUSTER_MCP_URL)")
-	f.StringVar(&o.workspacesPrefix, "workspaces-tools-prefix", envOr("AGENT_MANAGER_WORKSPACES_TOOLS_PREFIX", ""), "The workspace-manager's tool prefix in muster (x_workspace-manager_). Empty: a start_session on an agent with a default workspace that names no workspace is refused. Needs --muster-mcp-url (AGENT_MANAGER_WORKSPACES_TOOLS_PREFIX)")
+	f.StringVar(&o.musterMCPURL, "muster-mcp-url", envOr("AGENT_MANAGER_MUSTER_MCP_URL", ""), "muster's MCP endpoint (http(s)://host[:port]/mcp), where start_session calls, as the caller, the workspace-manager's authorize_workspace for an agent's default workspace when the start names no workspace, and the toolchain-manager's list_toolchains. Needs --workspaces-tools-prefix or --toolchains-tools-prefix (AGENT_MANAGER_MUSTER_MCP_URL)")
+	f.StringVar(&o.workspacesPrefix, "workspaces-tools-prefix", envOr("AGENT_MANAGER_WORKSPACES_TOOLS_PREFIX", ""), "The workspace-manager's tool prefix in muster (x_workspace-manager_). Empty: a start_session on an agent with a default workspace that names no workspace is refused. Needs --muster-mcp-url and --muster-bindings-url (AGENT_MANAGER_WORKSPACES_TOOLS_PREFIX)")
+	f.StringVar(&o.toolchainsPrefix, "toolchains-tools-prefix", envOr("AGENT_MANAGER_TOOLCHAINS_TOOLS_PREFIX", ""), "The toolchain-manager's tool prefix in muster (x_toolchain-manager_): start_session asks its list_toolchains, as the caller, and starts a toolchain only at a version it lists, the newest listed when none is named. Empty: any version the registry carries starts. Needs --muster-mcp-url and --toolchain-repository (AGENT_MANAGER_TOOLCHAINS_TOOLS_PREFIX)")
 	f.StringVar(&o.targetMusterURL, "target-muster-url", envOr("AGENT_TARGET_MUSTER_URL", ""), "The muster MCP URL composed into an agent on a workload cluster: one those clusters reach (the installation's public muster endpoint); empty refuses target clusters (AGENT_TARGET_MUSTER_URL)")
 	f.StringVar(&o.helmReleaseAPI, "flux-helmrelease-api-version", envOr("FLUX_HELMRELEASE_API_VERSION", "auto"), "helm.toolkit.fluxcd.io API version composed into HelmReleases; auto discovers it (FLUX_HELMRELEASE_API_VERSION)")
 	f.StringVar(&o.ociRepositoryAPI, "flux-ocirepository-api-version", envOr("FLUX_OCIREPOSITORY_API_VERSION", "auto"), "source.toolkit.fluxcd.io API version composed into OCIRepositories; auto discovers it (FLUX_OCIREPOSITORY_API_VERSION)")
@@ -209,11 +212,17 @@ func runServe(ctx context.Context, o *serveOptions) error {
 	if o.musterBindingsURL != "" && o.kagentTarget == "" {
 		return fmt.Errorf("--muster-bindings-url needs --kagent-target: only a session started through kagent is bound in muster")
 	}
-	if (o.musterMCPURL == "") != (o.workspacesPrefix == "") {
-		return fmt.Errorf("--muster-mcp-url and --workspaces-tools-prefix go together: the workspace-manager is called through muster under its prefix")
+	if (o.workspacesPrefix != "" || o.toolchainsPrefix != "") && o.musterMCPURL == "" {
+		return fmt.Errorf("--workspaces-tools-prefix and --toolchains-tools-prefix need --muster-mcp-url: the workspace-manager and the toolchain-manager are called through muster under their prefixes")
 	}
-	if o.musterMCPURL != "" && o.musterBindingsURL == "" {
-		return fmt.Errorf("--muster-mcp-url needs --muster-bindings-url: a Session in a default workspace is bound in muster as any workspace Session")
+	if o.musterMCPURL != "" && o.workspacesPrefix == "" && o.toolchainsPrefix == "" {
+		return fmt.Errorf("--muster-mcp-url needs --workspaces-tools-prefix or --toolchains-tools-prefix: it names no server to call")
+	}
+	if o.workspacesPrefix != "" && o.musterBindingsURL == "" {
+		return fmt.Errorf("--workspaces-tools-prefix needs --muster-bindings-url: a Session in a default workspace is bound in muster as any workspace Session")
+	}
+	if o.toolchainsPrefix != "" && o.toolchainRepo == "" {
+		return fmt.Errorf("--toolchains-tools-prefix needs --toolchain-repository: it holds the toolchains a Session mounts to the toolchain-manager's list")
 	}
 	if o.downstreamOAuth && !o.oauthEnabled {
 		return fmt.Errorf("--downstream-oauth needs --enable-oauth: without OAuth there is no caller token to present to the Kubernetes API")
@@ -362,12 +371,20 @@ func runServe(ctx context.Context, o *serveOptions) error {
 		bindings = client
 	}
 	var workspaceManager agents.WorkspaceAuthorizer
-	if o.musterMCPURL != "" {
+	if o.workspacesPrefix != "" {
 		client, err := workspaces.New(o.musterMCPURL, o.workspacesPrefix, build.Version)
 		if err != nil {
 			return fmt.Errorf("--muster-mcp-url: %w", err)
 		}
 		workspaceManager = client
+	}
+	var toolchainCatalog agents.ToolchainCatalog
+	if o.toolchainsPrefix != "" {
+		client, err := toolchainmanager.New(o.musterMCPURL, o.toolchainsPrefix, build.Version)
+		if err != nil {
+			return fmt.Errorf("--toolchains-tools-prefix: %w", err)
+		}
+		toolchainCatalog = client
 	}
 
 	svc := agents.New(provider, resolver, discoverer, pinner, agents.Config{
@@ -396,6 +413,7 @@ func runServe(ctx context.Context, o *serveOptions) error {
 		Sessions:         sessions,
 		Bindings:         bindings,
 		Workspaces:       workspaceManager,
+		ToolchainCatalog: toolchainCatalog,
 		ToolsetBound:     o.musterActorBearer,
 		HarnessEgress:    harnessEgress,
 		Toolchains:       toolchains,

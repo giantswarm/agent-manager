@@ -345,7 +345,8 @@ var wantHints = map[string]hints{
 	// start_session messages an agent, which acts on the world with its tools.
 	ToolStartSession: annotations(writes, additive, notIdempotent, openWorld),
 	// delete_session ends a conversation for good, so clients ask first.
-	ToolDeleteSession: annotations(writes, destructive, notIdempotent, closedWorld),
+	ToolDeleteSession:  annotations(writes, destructive, notIdempotent, closedWorld),
+	ToolToolchainUsers: annotations(readOnly, additive, notIdempotent, closedWorld),
 }
 
 func TestMCPToolsMirrorREST(t *testing.T) {

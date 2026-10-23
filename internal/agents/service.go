@@ -82,6 +82,10 @@ type Config struct {
 	// start_session mounts into a Session. Nil: a start that names
 	// toolchains, or on an agent with default toolchains, is refused.
 	Toolchains *ToolchainSource
+	// ToolchainCatalog is the toolchain-manager behind muster, whose list
+	// start_session holds a Session's toolchains to, asked as the caller.
+	// Nil: any version the registry carries starts.
+	ToolchainCatalog ToolchainCatalog
 	// Tenants are the tenant namespaces the tenant reconciler keeps, managed
 	// beside ManagedNamespaces. Nil: no tenants.
 	Tenants TenantSet

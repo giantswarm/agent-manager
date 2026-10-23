@@ -18,6 +18,7 @@ Generated from the registered tools (`make tools-doc`); through muster every too
 | `list_sessions` | read-only |
 | `list_skills` | read-only |
 | `start_session` | write |
+| `toolchain_users` | read-only |
 | `update_agent` | write, destructive |
 | `validate_agent` | read-only |
 
@@ -699,6 +700,33 @@ Refused with conflict while the agent has no ready revision (get_agent_status). 
     },
     "workspaceGrant": {
       "description": "The grant authorize_workspace returned to you: the session works in that workspace, its sandbox bound to you in muster. Others' are refused.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "name"
+  ],
+  "type": "object"
+}
+```
+
+## `toolchain_users`
+
+```text
+Name who uses a toolchain: the agents whose defaultToolchains name it and the sessions that mount it.
+
+Read as you in every managed namespace, every person's sessions where the controller lets you; what you cannot read is under unreadable. With version only the agents naming that version and the sessions holding its digest. The toolchain-manager's deprecate_toolchain asks it first.
+```
+
+```json
+{
+  "properties": {
+    "name": {
+      "description": "Toolchain name",
+      "type": "string"
+    },
+    "version": {
+      "description": "One version, vX.Y.Z or its image tag X.Y.Z; default every version",
       "type": "string"
     }
   },

@@ -189,8 +189,8 @@ func TestNewChecksItsConfiguration(t *testing.T) {
 		_, err := New(test.url, test.prefix, "test")
 		assert.Error(t, err, test)
 	}
-	_, err := New("http://muster.agent-platform.svc.cluster.local:8090/mcp", prefix, "test")
-	assert.NoError(t, err)
-	_, err = (&Client{endpoint: "http://x/mcp", prefix: prefix}).call(t.Context(), "", "any", nil)
+	c, err := New("http://muster.agent-platform.svc.cluster.local:8090/mcp", prefix, "test")
+	require.NoError(t, err)
+	_, err = c.Authorize(t.Context(), "", "platform")
 	assert.Error(t, err, "a call without the caller's token never leaves")
 }

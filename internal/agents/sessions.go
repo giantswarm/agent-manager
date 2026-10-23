@@ -655,7 +655,7 @@ func (s *Service) StartSession(ctx context.Context, in StartSession) (*SessionSt
 			return nil, err
 		}
 	}
-	toolchains, err := s.sessionToolchains(ctx, ref, in.Toolchains, in.NoToolchains)
+	toolchains, err := s.sessionToolchains(ctx, token, ref, in.Toolchains, in.NoToolchains)
 	if err != nil {
 		return nil, err
 	}

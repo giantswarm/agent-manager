@@ -37,6 +37,7 @@ const (
 	ToolGetSessionTurn     = "get_session_turn"
 	ToolStartSession       = "start_session"
 	ToolDeleteSession      = "delete_session"
+	ToolToolchainUsers     = "toolchain_users"
 )
 
 // ToolNames lists every tool the MCP server registers.
@@ -44,7 +45,7 @@ func ToolNames() []string {
 	return []string{
 		ToolGetInfo, ToolListAgents, ToolGetAgent, ToolCreateAgent, ToolUpdateAgent,
 		ToolDeleteAgent, ToolGetAgentStatus, ToolValidateAgent, ToolListModelConfigs, ToolListEgressPolicies, ToolListSkills,
-		ToolListSessions, ToolGetSession, ToolGetSessionTurn, ToolStartSession, ToolDeleteSession,
+		ToolListSessions, ToolGetSession, ToolGetSessionTurn, ToolStartSession, ToolDeleteSession, ToolToolchainUsers,
 	}
 }
 
@@ -87,6 +88,7 @@ const (
 	argNoWorkspace    = "noWorkspace"
 	argDefaultWS      = "defaultWorkspace"
 	argToolchains     = "toolchains"
+	argVersion        = "version"
 	argNoToolchains   = "noToolchains"
 	argDefaultTC      = "defaultToolchains"
 	argDetail         = "detail"
@@ -470,7 +472,30 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 		mcp.WithOpenWorldHintAnnotation(false),
 	), t.deleteSession)
 
+	s.AddTool(mcp.NewTool(ToolToolchainUsers,
+		tooldesc.Describe("Name who uses a toolchain: the agents whose defaultToolchains name it and the sessions that mount it.",
+			"Read as you in every managed namespace, every person's sessions where the controller lets you; what you cannot read is under unreadable. With version only the agents naming that version and the sessions holding its digest. The toolchain-manager's deprecate_toolchain asks it first."),
+		mcp.WithString(argName, mcp.Required(), mcp.Description("Toolchain name")),
+		mcp.WithString(argVersion, mcp.Description("One version, vX.Y.Z or its image tag X.Y.Z; default every version")),
+		mcp.WithReadOnlyHintAnnotation(true),
+		mcp.WithDestructiveHintAnnotation(false),
+		mcp.WithIdempotentHintAnnotation(false),
+		mcp.WithOpenWorldHintAnnotation(false),
+	), t.toolchainUsers)
+
 	return s
+}
+
+func (t *tools) toolchainUsers(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	name, err := req.RequireString(argName)
+	if err != nil {
+		return errResult(fmt.Errorf("%w: %v", agents.ErrInvalid, err)), nil
+	}
+	res, err := t.svc.ToolchainUsers(ctx, name, req.GetString(argVersion, ""))
+	if err != nil {
+		return errResult(err), nil
+	}
+	return jsonResult(res)
 }
 
 type tools struct {

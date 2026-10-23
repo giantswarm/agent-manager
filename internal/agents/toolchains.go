@@ -13,6 +13,7 @@ import (
 	"github.com/giantswarm/agent-manager/internal/kagent"
 	apiv1alpha1 "github.com/giantswarm/agent-manager/internal/kagent/gen/kagent/api/v1alpha1"
 	"github.com/giantswarm/agent-manager/internal/oci"
+	"github.com/giantswarm/agent-manager/internal/toolchainmanager"
 )
 
 // A toolchain is a named set of tools published as its own OCI image,
@@ -66,6 +67,13 @@ type ToolchainRegistry interface {
 	ImageLabels(ctx context.Context, ref oci.Reference, digest string) (map[string]string, error)
 }
 
+// ToolchainCatalog is the toolchain-manager's list of the offered
+// toolchains, asked as the caller whose IdP token bearer is
+// (toolchainmanager.Client).
+type ToolchainCatalog interface {
+	Offered(ctx context.Context, bearer, name string) (toolchainmanager.Offer, error)
+}
+
 // ToolchainSource is where the installation's toolchains are published: the
 // repository <name> is appended to, and the registry it is read from.
 type ToolchainSource struct {
@@ -84,9 +92,12 @@ type Toolchain struct {
 	Egress  []string `json:"egress,omitempty"`
 }
 
-// toolchainRef is a toolchain as a request names it: name[@version].
+// toolchainRef is a toolchain as a request names it: name[@version]. listed
+// is the version of the toolchain-manager's list it stands for, once
+// checked.
 type toolchainRef struct {
 	name, version string
+	listed        string
 }
 
 func (r toolchainRef) String() string {
@@ -245,7 +256,7 @@ func (s *Service) resolveToolchains(ctx context.Context, harness, runtime string
 		if len(egress) > maxToolchainEgress {
 			return nil, invalidf("toolchain %s@%s declares %d egress origins, more than %d", ref.name, version, len(egress), maxToolchainEgress)
 		}
-		out = append(out, Toolchain{Name: ref.name, Version: version, Image: image.Pinned(), Egress: egress})
+		out = append(out, Toolchain{Name: ref.name, Version: orDefault(ref.listed, version), Image: image.Pinned(), Egress: egress})
 	}
 	return out, nil
 }
@@ -273,7 +284,9 @@ func (s *Service) checkDefaultToolchains(ctx context.Context, harness, runtime s
 
 // sessionToolchains resolves the toolchains a start names, else the agent's
 // defaults, unless noToolchains: the tool images CreateSession is given.
-func (s *Service) sessionToolchains(ctx context.Context, ref kagent.Ref, named []string, noToolchains bool) ([]Toolchain, error) {
+// Each is held to the toolchain-manager's list, as the caller whose IdP
+// token is token.
+func (s *Service) sessionToolchains(ctx context.Context, token string, ref kagent.Ref, named []string, noToolchains bool) ([]Toolchain, error) {
 	if noToolchains && len(named) > 0 {
 		return nil, invalidf("toolchains and noToolchains exclude each other")
 	}
@@ -296,7 +309,48 @@ func (s *Service) sessionToolchains(ctx context.Context, ref kagent.Ref, named [
 	if err != nil {
 		return nil, err
 	}
+	if refs, err = s.offeredToolchains(ctx, token, what, refs); err != nil {
+		return nil, err
+	}
 	return s.resolveToolchains(ctx, harness, runtime, refs)
+}
+
+// offeredToolchains holds each toolchain to the versions the
+// toolchain-manager lists for the caller: a named version must be listed,
+// and none names the newest listed. The version becomes its image tag,
+// X.Y.Z of the listed vX.Y.Z. A toolchain or a version not listed,
+// deprecated or never published, starts nothing. Without a catalog the refs
+// stand as named.
+func (s *Service) offeredToolchains(ctx context.Context, token, what string, refs []toolchainRef) ([]toolchainRef, error) {
+	catalog := s.cfg.ToolchainCatalog
+	if catalog == nil || len(refs) == 0 {
+		return refs, nil
+	}
+	out := slices.Clone(refs)
+	for i, ref := range out {
+		offer, err := catalog.Offered(ctx, token, ref.name)
+		var grant *toolchainmanager.GrantRequiredError
+		var challenge *toolchainmanager.AuthRequiredError
+		switch {
+		case errors.As(err, &grant):
+			return nil, authRequiredf("%s: toolchain %s: the toolchain-manager reads the offered toolchains as you: %s", what, ref.name, grant.Message)
+		case errors.As(err, &challenge):
+			return nil, authRequiredf("%s: toolchain %s: sign in to muster server %s first%s (the toolchain-manager's sign-in, not agent-manager's)", what, ref.name, challenge.Server, linkSuffix(challenge.LoginURL))
+		case err != nil:
+			return nil, fmt.Errorf("%s: toolchain %s: the toolchain-manager's list could not be read: %w", what, ref.name, err)
+		case len(offer.Versions) == 0:
+			return nil, invalidf("%s: toolchain %s is not offered: the toolchain-manager's list_toolchains lists the offered toolchains", what, ref.name)
+		}
+		listed := offer.Versions[0]
+		if ref.version != "" && ref.version != latestToolchainVersion {
+			listed = "v" + strings.TrimPrefix(ref.version, "v")
+			if !slices.Contains(offer.Versions, listed) {
+				return nil, invalidf("%s: toolchain %s: version %s is not offered (deprecated, or never published); offered: %s", what, ref.name, ref.version, strings.Join(offer.Versions, ", "))
+			}
+		}
+		out[i].version, out[i].listed = strings.TrimPrefix(listed, "v"), listed
+	}
+	return out, nil
 }
 
 // defaultToolchainsOfAgent is the default toolchains of the agent as its
