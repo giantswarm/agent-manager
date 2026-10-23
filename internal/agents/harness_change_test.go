@@ -53,24 +53,28 @@ func TestUpdateRefusesAHarnessItsChecksFail(t *testing.T) {
 	require.ErrorIs(t, err, ErrInvalid)
 }
 
-// A Claude-format plugin goes with an agent to claude, never to codex.
+// A Claude-format plugin goes with an agent to claude, never to codex or omp.
 func TestUpdateHarnessChecksThePlugins(t *testing.T) {
 	f, ctx := codingFixture(t)
 	spec := coderSpec("preset:full")
 	spec.Plugins = Plugins{{Path: "claude-format", Git: &GitSkill{URL: skillsRepo, Commit: tagHead}}}
 	_, err := f.svc.Create(ctx, spec)
 	require.NoError(t, err)
+	before := mustValues(mustGet(t, f, "coder"))
 
-	toCodex := Update{Name: "coder", Harness: new("codex"), ModelConfig: new("gpt-responses")}
-	dry, err := f.svc.ValidateUpdate(ctx, toCodex)
-	require.NoError(t, err)
-	assert.False(t, dry.Valid)
-	assert.True(t, containsLine(dry.Errors, "is a Claude-format plugin"), dry.Errors)
-	_, err = f.svc.Update(ctx, toCodex)
-	require.ErrorIs(t, err, ErrInvalid)
-	assert.Contains(t, err.Error(), "is a Claude-format plugin")
-	_, err = f.svc.Update(ctx, Update{Name: "coder", Harness: new("omp")})
-	require.NoError(t, err)
+	for _, upd := range []Update{
+		{Name: "coder", Harness: new("codex"), ModelConfig: new("gpt-responses")},
+		{Name: "coder", Harness: new("omp")},
+	} {
+		dry, err := f.svc.ValidateUpdate(ctx, upd)
+		require.NoError(t, err)
+		assert.False(t, dry.Valid)
+		assert.True(t, containsLine(dry.Errors, "plugins[0] ("+skillsRepo+") is a Claude-format plugin (.claude-plugin/plugin.json): Harness "+*upd.Harness+" runs"), dry.Errors)
+		_, err = f.svc.Update(ctx, upd)
+		require.ErrorIs(t, err, ErrInvalid, *upd.Harness)
+		assert.Contains(t, err.Error(), "is a Claude-format plugin")
+		assert.Equal(t, before, mustValues(mustGet(t, f, "coder")), "a refused change to %s writes nothing", *upd.Harness)
+	}
 }
 
 // A claude agent binding a Claude-format plugin does not move to kagent,

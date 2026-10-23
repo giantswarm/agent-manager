@@ -500,6 +500,40 @@ paths:
         "409": { $ref: "#/components/responses/Error" }
         "501": { $ref: "#/components/responses/Error" }
         "502": { $ref: "#/components/responses/Error" }
+  /api/v1/toolchains/{name}/users:
+    parameters:
+      - name: name
+        in: path
+        required: true
+        description: Toolchain name
+        schema: { type: string }
+    get:
+      tags: [sessions]
+      summary: Name who uses a toolchain
+      description: |
+        The agents whose default toolchains name the toolchain and the
+        sessions that mount it, read as the caller in every managed namespace
+        (every person's sessions where the controller grants the caller that).
+        With `version` only the agents naming that version and the sessions
+        holding its digest. What the caller cannot read is under `unreadable`.
+        The toolchain-manager's `deprecate_toolchain` asks it before a
+        toolchain leaves the offered list.
+      operationId: toolchainUsers
+      x-mcp-tool: toolchain_users
+      parameters:
+        - name: version
+          in: query
+          description: One version, vX.Y.Z or its image tag X.Y.Z; default every version
+          schema: { type: string }
+      responses:
+        "200":
+          description: who uses it
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ToolchainUsage" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "501": { $ref: "#/components/responses/Error" }
   /api/v1/sessions/{id}:
     parameters:
       - name: id
@@ -1178,6 +1212,30 @@ components:
       type: object
       description: An lf.a2a.v1.StreamResponse in proto3 JSON, one of task, message, statusUpdate, artifactUpdate
       additionalProperties: true
+    ToolchainUsage:
+      type: object
+      properties:
+        agents:
+          type: array
+          description: The agents whose default toolchains name it
+          items:
+            type: object
+            properties:
+              namespace: { type: string }
+              name: { type: string }
+              toolchain: { type: string, description: "The default toolchain entry, name[@version]" }
+        sessions:
+          type: array
+          description: The sessions that mount it; a suspended one resumes only on its digest
+          items:
+            type: object
+            properties:
+              id: { type: string }
+              namespace: { type: string }
+              agent: { type: string }
+              image: { type: string, description: The digest-pinned image the session mounts }
+              state: { type: string }
+        unreadable: { type: array, items: { type: string }, description: What could not be read as the caller, with why }
     SessionList:
       type: object
       properties:
