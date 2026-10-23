@@ -143,6 +143,9 @@ spec:
             {{- end }}
             {{- with $.Values.toolchains.repository }}
             - --toolchain-repository={{ . }}
+            {{- if $.Values.toolchains.registryConfig.secretName }}
+            - --toolchain-registry-config=/etc/agent-manager/toolchain-registry/config.json
+            {{- end }}
             {{- end }}
             {{- if $toolchainList }}
             - --toolchains-tools-prefix={{ $.Values.muster.toolchainsToolsPrefix }}
@@ -303,6 +306,7 @@ spec:
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           {{- $idpCA := "" }}
+          {{- $toolchainRegistry := and .Values.kagent.controllerTarget .Values.toolchains.repository .Values.toolchains.registryConfig.secretName }}
           {{- if and .Values.oauth.enabled (eq .Values.oauth.provider "dex") }}{{ $idpCA = include "agent-manager.oauthDexCASecretName" . }}{{ end }}
           volumeMounts:
             - name: tmp
@@ -315,6 +319,11 @@ spec:
             {{- if .Values.skills.github.app.secretName }}
             - name: skills-github-app
               mountPath: /etc/agent-manager/skills-github-app
+              readOnly: true
+            {{- end }}
+            {{- if $toolchainRegistry }}
+            - name: toolchain-registry
+              mountPath: /etc/agent-manager/toolchain-registry
               readOnly: true
             {{- end }}
       volumes:
@@ -335,6 +344,15 @@ spec:
             items:
               - key: private-key
                 path: private-key
+        {{- end }}
+        {{- if $toolchainRegistry }}
+        - name: toolchain-registry
+          secret:
+            secretName: {{ .Values.toolchains.registryConfig.secretName }}
+            optional: true
+            items:
+              - key: .dockerconfigjson
+                path: config.json
         {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:

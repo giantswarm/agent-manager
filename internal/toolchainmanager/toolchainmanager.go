@@ -63,6 +63,11 @@ type Offer struct {
 	// Versions are the offered versions, vX.Y.Z, newest first, of every
 	// source that publishes the toolchain; none when it is not offered.
 	Versions []string
+	// Images are each version's images, <registry>/<name>:X.Y.Z, in the
+	// list's order: one per source that publishes the version, so more than
+	// one names a version two sources publish. A version the list gives no
+	// image for has none.
+	Images map[string][]string
 }
 
 // Offered asks which versions of toolchain name the caller, whose IdP token
@@ -78,8 +83,12 @@ func (c *Client) Offered(ctx context.Context, bearer, name string) (Offer, error
 		Apps       []string `json:"apps"`
 		Message    string   `json:"message"`
 		Toolchains []struct {
-			Name     string   `json:"name"`
-			Versions []string `json:"versions"`
+			Name      string   `json:"name"`
+			Versions  []string `json:"versions"`
+			Published []struct {
+				Version string `json:"version"`
+				Image   string `json:"image"`
+			} `json:"published"`
 		} `json:"toolchains"`
 	}
 	raw := res.JSON()
@@ -92,7 +101,7 @@ func (c *Client) Offered(ctx context.Context, bearer, name string) (Offer, error
 	if out.Status != "" {
 		return Offer{}, fmt.Errorf("%s: %w: status %q: %s", tool, mustermcp.ErrMalformed, out.Status, out.Message)
 	}
-	var offer Offer
+	offer := Offer{Images: map[string][]string{}}
 	for _, t := range out.Toolchains {
 		if t.Name != name {
 			continue
@@ -100,6 +109,11 @@ func (c *Client) Offered(ctx context.Context, bearer, name string) (Offer, error
 		for _, v := range t.Versions {
 			if !slices.Contains(offer.Versions, v) {
 				offer.Versions = append(offer.Versions, v)
+			}
+		}
+		for _, p := range t.Published {
+			if p.Image != "" && slices.Contains(t.Versions, p.Version) && !slices.Contains(offer.Images[p.Version], p.Image) {
+				offer.Images[p.Version] = append(offer.Images[p.Version], p.Image)
 			}
 		}
 	}

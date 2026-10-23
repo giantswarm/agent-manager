@@ -69,15 +69,16 @@ func (s *Service) ToolchainUsers(ctx context.Context, name, version string) (*To
 	out := &ToolchainUsage{Agents: []ToolchainAgent{}, Sessions: []ToolchainSession{}}
 	holds := func(image *apiv1alpha1.SessionToolImage) bool { return image.GetName() == name }
 	if tag != "" {
-		digest, err := s.toolchainDigest(ctx, name, tag)
-		if err != nil {
+		digests, err := s.toolchainDigests(ctx, token, name, tag)
+		switch {
+		case err != nil && len(digests) == 0:
 			// No digest, no Session can be matched to the version.
 			out.Unreadable = append(out.Unreadable, fmt.Sprintf("toolchain %s %s: %v; Sessions holding it are not named", name, version, err))
-			holds = func(*apiv1alpha1.SessionToolImage) bool { return false }
-		} else {
-			holds = func(image *apiv1alpha1.SessionToolImage) bool {
-				return image.GetName() == name && strings.HasSuffix(image.GetOci(), "@"+digest)
-			}
+		case err != nil:
+			out.Unreadable = append(out.Unreadable, fmt.Sprintf("toolchain %s %s: %v; Sessions holding the main source's image are named", name, version, err))
+		}
+		holds = func(image *apiv1alpha1.SessionToolImage) bool {
+			return image.GetName() == name && slices.ContainsFunc(digests, func(d string) bool { return strings.HasSuffix(image.GetOci(), "@"+d) })
 		}
 	}
 	for _, ns := range s.Managed() {
@@ -137,18 +138,43 @@ func (s *Service) sessionsOfAgent(ctx context.Context, token string, agent kagen
 	return sessions, nil
 }
 
-// toolchainDigest is the digest toolchain name's image tag resolves to in
-// the installation's toolchain repository.
-func (s *Service) toolchainDigest(ctx context.Context, name, tag string) (string, error) {
+// toolchainDigests are the digests toolchain name's image tag resolves to:
+// in the repository of every source the toolchain-manager lists the version
+// of for the caller, whose IdP token is token, and the main source's. A list
+// that cannot be read leaves the main source's, with the error.
+func (s *Service) toolchainDigests(ctx context.Context, token, name, tag string) ([]string, error) {
 	src := s.cfg.Toolchains
 	if src == nil {
-		return "", errToolchainsUnsupported
+		return nil, errToolchainsUnsupported
 	}
-	repo := src.Repository
-	repo.Repository += "/" + name
-	digest, err := src.Registry.ManifestDigest(ctx, repo, tag)
-	if errors.Is(err, oci.ErrNotFound) {
-		return "", fmt.Errorf("%s/%s:%s is not published", repo.Host, repo.Repository, tag)
+	repos := []oci.Reference{src.repositoryOf(name)}
+	var listErr error
+	if catalog := s.cfg.ToolchainCatalog; catalog != nil {
+		offer, err := catalog.Offered(ctx, token, name)
+		if err != nil {
+			listErr = fmt.Errorf("the toolchain-manager's list could not be read: %w", err)
+		}
+		for _, image := range offer.Images["v"+tag] {
+			if ref, err := oci.ParseImageReference(image); err == nil && !slices.Contains(repos, ref.Reference) {
+				repos = append(repos, ref.Reference)
+			}
+		}
 	}
-	return digest, err
+	var digests []string
+	var missing []string
+	for _, repo := range repos {
+		digest, err := src.Registry.ManifestDigest(ctx, repo, tag)
+		switch {
+		case errors.Is(err, oci.ErrNotFound):
+			missing = append(missing, fmt.Sprintf("%s/%s:%s", repo.Host, repo.Repository, tag))
+		case err != nil:
+			return digests, err
+		default:
+			digests = append(digests, digest)
+		}
+	}
+	if len(digests) == 0 {
+		return nil, errors.Join(listErr, fmt.Errorf("%s is not published", strings.Join(missing, ", ")))
+	}
+	return digests, listErr
 }

@@ -32,6 +32,9 @@ type Registry struct {
 	TokenHits int
 	// FailTags makes the tag list answer 500.
 	FailTags bool
+	// Credentials, when set, are the only ones the token endpoint answers:
+	// a private registry.
+	Credentials *oci.Basic
 
 	t      *testing.T
 	server *httptest.Server
@@ -74,6 +77,12 @@ func (f *Registry) handler() http.Handler {
 	mux.HandleFunc("/oauth2/token", func(w http.ResponseWriter, r *http.Request) {
 		f.TokenHits++
 		require.Equal(f.t, "repository:"+f.Repo+":pull", r.URL.Query().Get("scope"))
+		if c := f.Credentials; c != nil {
+			if user, pass, ok := r.BasicAuth(); !ok || user != c.Username || pass != c.Password {
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"access_token": "anon", "expires_in": 300})
 	})
 	mux.HandleFunc("/v2/"+f.Repo+"/tags/list", func(w http.ResponseWriter, r *http.Request) {

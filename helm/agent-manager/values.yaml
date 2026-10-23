@@ -63,7 +63,10 @@ kagent:
 toolchains:
   # -- The OCI repository the installation's toolchains are published under:
   # toolchain `<name>` is the image `<repository>/<name>`, its versions its
-  # tags (`latest` the newest), read anonymously. `start_session` mounts the
+  # tags (`latest` the newest), read anonymously unless `registryConfig` has
+  # credentials for its host. A version the toolchain-manager's
+  # `list_toolchains` lists (`muster.toolchainsToolsPrefix`) is read from the
+  # image of the source that offers it, another registry too. `start_session` mounts the
   # toolchains it names, else the agent's `defaultToolchains`, into the
   # session at their digests, refuses one whose `io.giantswarm.toolchain.harnesses`
   # label does not list the agent's Harness runtime, and gives the session
@@ -74,6 +77,15 @@ toolchains:
   # Rendered with `kagent.controllerTarget`. Empty (the default) refuses
   # toolchains and `get_info` reports the capability `toolchains` false.
   repository: ""
+  registryConfig:
+    # -- A `kubernetes.io/dockerconfigjson` Secret in the release namespace:
+    # agent-manager reads the toolchains of a registry host its
+    # `.dockerconfigjson` has credentials for with them, a private source's
+    # (`--toolchain-registry-config`). The kagent controller pulls the images
+    # with its own pull secret. Optional: until the Secret exists, and when
+    # empty (the default), every registry is read anonymously. Read when the
+    # pod starts. Rendered with `repository`.
+    secretName: ""
 
 harness:
   # -- Name of the platform Harness an agent runs on unless `create_agent`

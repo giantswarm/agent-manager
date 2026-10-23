@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -21,10 +22,12 @@ import (
 
 const toolchainRepo = "gsoci.azurecr.io/giantswarm/agent-toolchains"
 
-// fakeToolchains is a toolchain registry: per toolchain its tags and the
-// labels of each tag's image.
+// fakeToolchains is a toolchain registry: per toolchain of the main source
+// its tags and the labels of each tag's image, and the same per repository,
+// <host>/<repository>, of another source.
 type fakeToolchains struct {
 	images map[string]map[string]map[string]string // name -> tag -> labels
+	others map[string]map[string]map[string]string // <host>/<repository> -> tag -> labels
 	err    error
 	reads  []string
 	// salt moves every tag to another digest.
@@ -40,8 +43,13 @@ func toolchainImage(name, tag string) string {
 	return toolchainRepo + "/" + name + "@" + toolchainDigest(name, tag)
 }
 
+// lookup is the repository's tags, keyed for its digests by the
+// toolchain's name in the main source, else by the repository.
 func (f *fakeToolchains) lookup(ref oci.Reference) (string, map[string]map[string]string) {
-	name := ref.Repository[len("giantswarm/agent-toolchains/"):]
+	if tags, ok := f.others[ref.Host+"/"+ref.Repository]; ok {
+		return ref.Host + "/" + ref.Repository, tags
+	}
+	name, _ := strings.CutPrefix(ref.Repository, "giantswarm/agent-toolchains/")
 	return name, f.images[name]
 }
 

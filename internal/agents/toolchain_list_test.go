@@ -13,9 +13,10 @@ import (
 )
 
 // fakeCatalog is the toolchain-manager's list: per toolchain its offered
-// versions, newest first.
+// versions, newest first, and per version the images its sources list.
 type fakeCatalog struct {
 	offers  map[string][]string
+	images  map[string]map[string][]string
 	err     error
 	bearers []string
 }
@@ -25,7 +26,7 @@ func (f *fakeCatalog) Offered(_ context.Context, bearer, name string) (toolchain
 	if f.err != nil {
 		return toolchainmanager.Offer{}, f.err
 	}
-	return toolchainmanager.Offer{Versions: f.offers[name]}, nil
+	return toolchainmanager.Offer{Versions: f.offers[name], Images: f.images[name]}, nil
 }
 
 func TestStartSessionStartsOnlyWhatTheListCarries(t *testing.T) {
@@ -158,4 +159,74 @@ func TestToolchainUsersNamesTheAgentsAndTheSessions(t *testing.T) {
 	require.ErrorIs(t, err, ErrInvalid)
 	_, err = svc.ToolchainUsers(t.Context(), "go", "")
 	require.ErrorIs(t, err, ErrUnauthenticated, "read as the caller only")
+}
+
+const privateRepo = "private.example.io/team/toolchains"
+
+// withPrivateSource has the private source publish lint 0.1.0 and go 0.2.0,
+// the latter as the platform does, and offers both with their images.
+func withPrivateSource(svc *Service, reg *fakeToolchains) *fakeCatalog {
+	labels := map[string]string{ToolchainNameLabel: "lint", ToolchainHarnessesLabel: "claude", ToolchainEgressLabel: "https://lint.example.io"}
+	reg.others = map[string]map[string]map[string]string{
+		privateRepo + "/lint":   {"0.1.0": labels},
+		privateRepo + "/go":     {"0.2.0": reg.images["go"]["0.2.0"]},
+		"other.example.io/x/go": {"0.2.0": reg.images["go"]["0.2.0"]},
+	}
+	catalog := &fakeCatalog{
+		offers: map[string][]string{"lint": {"v0.1.0"}, "go": {"v0.2.0", "v0.1.0"}},
+		images: map[string]map[string][]string{
+			"lint": {"v0.1.0": {privateRepo + "/lint:0.1.0"}},
+			"go":   {"v0.2.0": {privateRepo + "/go:0.2.0", toolchainRepo + "/go:0.2.0"}, "v0.1.0": {toolchainRepo + "/go:0.1.0"}},
+		},
+	}
+	svc.cfg.ToolchainCatalog = catalog
+	return catalog
+}
+
+func TestStartSessionReadsAToolchainFromTheSourceThatOffersIt(t *testing.T) {
+	svc, _, reg := newToolchainFixture(t, "")
+	withPrivateSource(svc, reg)
+	ctx := asPerson(t.Context(), "admin@lab.local")
+
+	started, err := svc.StartSession(ctx, StartSession{Name: "sre", Toolchains: []string{"lint", "go"}})
+	require.NoError(t, err)
+	assert.Equal(t, []string{privateRepo + "/lint:0.1.0", toolchainRepo + "/go:0.2.0"}, reg.reads,
+		"lint from the private source's registry; go, which both publish, from the main source's")
+	assert.Equal(t, []Toolchain{
+		{Name: "lint", Version: "v0.1.0", Image: privateRepo + "/lint@" + toolchainDigest(privateRepo+"/lint", "0.1.0"), Egress: []string{"https://lint.example.io"}},
+		{Name: "go", Version: "v0.2.0", Image: toolchainImage("go", "0.2.0"), Egress: []string{"https://proxy.golang.org", "https://sum.golang.org"}},
+	}, started.Toolchains)
+}
+
+func TestAVersionOfTwoOtherSourcesStartsFromNone(t *testing.T) {
+	svc, ctrl, reg := newToolchainFixture(t, "")
+	catalog := withPrivateSource(svc, reg)
+	ctx := asPerson(t.Context(), "admin@lab.local")
+
+	catalog.images["go"]["v0.2.0"] = []string{privateRepo + "/go:0.2.0", "other.example.io/x/go:0.2.0"}
+	_, err := svc.StartSession(ctx, StartSession{Name: "sre", Toolchains: []string{"go@0.2.0"}})
+	require.ErrorIs(t, err, ErrInvalid)
+	assert.Contains(t, err.Error(), "toolchains: toolchain go: version v0.2.0 is published by more than one source")
+
+	catalog.images["lint"]["v0.1.0"] = []string{privateRepo + "/lint:0.2.0"}
+	_, err = svc.StartSession(ctx, StartSession{Name: "sre", Toolchains: []string{"lint"}})
+	require.Error(t, err)
+	assert.False(t, isDomainError(err), "the list's defect is no refusal of the caller: %v", err)
+	assert.Contains(t, err.Error(), `lists the image "private.example.io/team/toolchains/lint:0.2.0", not <registry>/lint:0.1.0`)
+	assert.Empty(t, reg.reads)
+	assert.Empty(t, createRequests(ctrl))
+}
+
+func TestToolchainUsersMatchesEverySourcesDigest(t *testing.T) {
+	svc, _, reg := newToolchainFixture(t, "")
+	withPrivateSource(svc, reg)
+	ctx := asPerson(t.Context(), "admin@lab.local")
+	_, err := svc.StartSession(ctx, StartSession{Name: "sre", Toolchains: []string{"lint"}})
+	require.NoError(t, err)
+
+	users, err := svc.ToolchainUsers(ctx, "lint", "v0.1.0")
+	require.NoError(t, err)
+	require.Len(t, users.Sessions, 1, "the session holding the private source's digest")
+	assert.Equal(t, privateRepo+"/lint@"+toolchainDigest(privateRepo+"/lint", "0.1.0"), users.Sessions[0].Image)
+	assert.Empty(t, users.Unreadable)
 }

@@ -75,7 +75,10 @@ type ToolchainCatalog interface {
 }
 
 // ToolchainSource is where the installation's toolchains are published: the
-// repository <name> is appended to, and the registry it is read from.
+// main source's repository <name> is appended to, and the registry client
+// every source is read with. A toolchain the toolchain-manager lists is read
+// from the image of the source that offers it, which may be another
+// registry.
 type ToolchainSource struct {
 	Repository oci.Reference
 	Registry   ToolchainRegistry
@@ -94,10 +97,12 @@ type Toolchain struct {
 
 // toolchainRef is a toolchain as a request names it: name[@version]. listed
 // is the version of the toolchain-manager's list it stands for, once
-// checked.
+// checked, and repository the repository of the source that offers it; nil
+// is the main source's.
 type toolchainRef struct {
 	name, version string
 	listed        string
+	repository    *oci.Reference
 }
 
 func (r toolchainRef) String() string {
@@ -231,8 +236,10 @@ func (s *Service) resolveToolchains(ctx context.Context, harness, runtime string
 	out := make([]Toolchain, 0, len(refs))
 	for _, ref := range refs {
 		version := orDefault(ref.version, latestToolchainVersion)
-		repo := src.Repository
-		repo.Repository += "/" + ref.name
+		repo := src.repositoryOf(ref.name)
+		if ref.repository != nil {
+			repo = *ref.repository
+		}
 		image := oci.ImageReference{Reference: repo, Tag: version}
 		digest, err := src.Registry.ManifestDigest(ctx, repo, version)
 		if errors.Is(err, oci.ErrNotFound) {
@@ -259,6 +266,13 @@ func (s *Service) resolveToolchains(ctx context.Context, harness, runtime string
 		out = append(out, Toolchain{Name: ref.name, Version: orDefault(ref.listed, version), Image: image.Pinned(), Egress: egress})
 	}
 	return out, nil
+}
+
+// repositoryOf is toolchain name's repository in the main source.
+func (src *ToolchainSource) repositoryOf(name string) oci.Reference {
+	repo := src.Repository
+	repo.Repository += "/" + name
+	return repo
 }
 
 // checkDefaultToolchains refuses default toolchains of values that are not
@@ -318,7 +332,8 @@ func (s *Service) sessionToolchains(ctx context.Context, token string, ref kagen
 // offeredToolchains holds each toolchain to the versions the
 // toolchain-manager lists for the caller: a named version must be listed,
 // and none names the newest listed. The version becomes its image tag,
-// X.Y.Z of the listed vX.Y.Z. A toolchain or a version not listed,
+// X.Y.Z of the listed vX.Y.Z, read from the repository of the source that
+// offers it (offeredRepository). A toolchain or a version not listed,
 // deprecated or never published, starts nothing. Without a catalog the refs
 // stand as named.
 func (s *Service) offeredToolchains(ctx context.Context, token, what string, refs []toolchainRef) ([]toolchainRef, error) {
@@ -349,8 +364,39 @@ func (s *Service) offeredToolchains(ctx context.Context, token, what string, ref
 			}
 		}
 		out[i].version, out[i].listed = strings.TrimPrefix(listed, "v"), listed
+		if out[i].repository, err = s.offeredRepository(what, ref.name, listed, offer.Images[listed]); err != nil {
+			return nil, err
+		}
 	}
 	return out, nil
+}
+
+// offeredRepository is the repository version listed of toolchain name is
+// read from (what prefixes every refusal): that of the image the one source publishing it lists, the main
+// source's when the list names no image. A version two sources publish is
+// the main source's when it is one of them, else refused: which image would
+// start is not the caller's to guess.
+func (s *Service) offeredRepository(what, name, listed string, images []string) (*oci.Reference, error) {
+	repos := make([]oci.Reference, 0, len(images))
+	for _, image := range images {
+		ref, err := oci.ParseImageReference(image)
+		if err != nil || ref.Name() != name || ref.Tag != strings.TrimPrefix(listed, "v") {
+			return nil, fmt.Errorf("%s: toolchain %s %s: the toolchain-manager lists the image %q, not <registry>/%s:%s", what, name, listed, image, name, strings.TrimPrefix(listed, "v"))
+		}
+		repos = append(repos, ref.Reference)
+	}
+	switch {
+	case len(repos) == 0:
+		return nil, nil
+	case len(repos) == 1:
+		return &repos[0], nil
+	}
+	if src := s.cfg.Toolchains; src != nil {
+		if main := src.repositoryOf(name); slices.Contains(repos, main) {
+			return &main, nil
+		}
+	}
+	return nil, invalidf("%s: toolchain %s: version %s is published by more than one source (%s): it starts from none of them", what, name, listed, strings.Join(images, ", "))
 }
 
 // defaultToolchainsOfAgent is the default toolchains of the agent as its
