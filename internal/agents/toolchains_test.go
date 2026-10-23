@@ -18,6 +18,7 @@ import (
 	apiv1alpha1 "github.com/giantswarm/agent-manager/internal/kagent/gen/kagent/api/v1alpha1"
 	"github.com/giantswarm/agent-manager/internal/kagent/kagenttest"
 	"github.com/giantswarm/agent-manager/internal/oci"
+	"github.com/giantswarm/agent-manager/internal/toolchainmanager"
 )
 
 const toolchainRepo = "gsoci.azurecr.io/giantswarm/agent-toolchains"
@@ -216,6 +217,107 @@ func TestAnAgentWithoutDefaultsStartsWithoutToolchains(t *testing.T) {
 	assert.Empty(t, createRequests(ctrl)[0].GetToolImages())
 }
 
+func TestAnAgentWithoutDefaultsStartsWithGithub(t *testing.T) {
+	// sre carries no default-toolchains annotation: an agent created before
+	// defaultToolchains existed, unchanged.
+	svc, ctrl, reg := newToolchainFixture(t, "")
+	ctx := asPerson(t.Context(), "admin@lab.local")
+
+	started, err := svc.StartSession(ctx, StartSession{Name: "sre"})
+	require.NoError(t, err)
+	assert.Equal(t, []string{toolchainRepo + "/github:latest"}, reg.reads)
+	images := createRequests(ctrl)[0].GetToolImages()
+	require.Len(t, images, 1)
+	assert.Equal(t, "github", images[0].GetName())
+	assert.Equal(t, toolchainImage("github", "latest"), images[0].GetOci())
+	assert.Equal(t, []Toolchain{{Name: "github", Version: "latest", Image: toolchainImage("github", "latest")}}, started.Toolchains)
+	assert.Empty(t, started.Warning)
+
+	_, err = svc.StartSession(ctx, StartSession{Name: "sre", NoToolchains: true})
+	require.NoError(t, err)
+	assert.Empty(t, createRequests(ctrl)[1].GetToolImages(), "noToolchains drops the implicit default too")
+
+	_, err = svc.StartSession(ctx, StartSession{Name: "sre", Toolchains: []string{"go"}})
+	require.NoError(t, err)
+	images = createRequests(ctrl)[2].GetToolImages()
+	require.Len(t, images, 1, "named toolchains replace it")
+	assert.Equal(t, "go", images[0].GetName())
+
+	reg.images["github"]["0.1.0"] = reg.images["github"]["latest"]
+	catalog := &fakeCatalog{offers: map[string][]string{"github": {"v0.1.0"}}}
+	svc.cfg.ToolchainCatalog = catalog
+	started, err = svc.StartSession(ctx, StartSession{Name: "sre"})
+	require.NoError(t, err)
+	assert.Equal(t, []string{callerToken}, catalog.bearers, "held to the list as the caller")
+	assert.Equal(t, "v0.1.0", started.Toolchains[0].Version, "the newest listed version")
+}
+
+func TestAnAgentWithDefaultsKeepsThem(t *testing.T) {
+	svc, ctrl, _ := newToolchainFixture(t, "go")
+	started, err := svc.StartSession(asPerson(t.Context(), "admin@lab.local"), StartSession{Name: "sre"})
+	require.NoError(t, err)
+	images := createRequests(ctrl)[0].GetToolImages()
+	require.Len(t, images, 1)
+	assert.Equal(t, "go", images[0].GetName(), "an explicit default list holds, without github")
+	assert.Empty(t, started.Warning)
+}
+
+func TestTheImplicitDefaultNeverFailsAStart(t *testing.T) {
+	for name, test := range map[string]struct {
+		regErr  error
+		catalog *fakeCatalog
+		misfit  bool
+		want    string
+	}{
+		"the registry down":        {regErr: errors.New("dial tcp: connection refused"), want: "connection refused"},
+		"github not offered":       {catalog: &fakeCatalog{offers: map[string][]string{}}, want: "toolchain github is not offered"},
+		"no grant of the App":      {catalog: &fakeCatalog{err: &toolchainmanager.GrantRequiredError{Message: "grant the App"}}, want: "grant the App"},
+		"a Harness github misfits": {misfit: true, want: "does not fit Harness claude"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			svc, ctrl, reg := newToolchainFixture(t, "")
+			reg.err = test.regErr
+			if test.catalog != nil {
+				svc.cfg.ToolchainCatalog = test.catalog
+			}
+			if test.misfit {
+				reg.images["github"]["latest"][ToolchainHarnessesLabel] = "kagent"
+			}
+			started, err := svc.StartSession(asPerson(t.Context(), "admin@lab.local"), StartSession{Name: "sre", Message: "hello"})
+			require.NoError(t, err, "the session starts as before the implicit default")
+			require.Len(t, createRequests(ctrl), 1)
+			assert.Empty(t, createRequests(ctrl)[0].GetToolImages())
+			assert.Empty(t, started.Toolchains)
+			assert.Contains(t, started.Warning, "started without toolchain github")
+			assert.Contains(t, started.Warning, test.want)
+		})
+	}
+}
+
+func TestGetAndListReportTheEffectiveDefaultToolchains(t *testing.T) {
+	svc, _, _ := newToolchainFixture(t, "")
+	ctx := asPerson(t.Context(), "admin@lab.local")
+	got, err := svc.Get(ctx, In("kagent"), "sre")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"github"}, got.DefaultToolchains)
+	assert.True(t, got.DefaultToolchainsImplicit)
+	list, err := svc.List(ctx, In("kagent"))
+	require.NoError(t, err)
+	require.Len(t, list, 1)
+	assert.Equal(t, []string{"github"}, list[0].Summary().DefaultToolchains)
+	assert.True(t, list[0].Summary().DefaultToolchainsImplicit)
+
+	svc.cfg.Toolchains = nil
+	got, err = svc.Get(ctx, In("kagent"), "sre")
+	require.NoError(t, err)
+	assert.Empty(t, got.DefaultToolchains, "an installation without toolchains has no default")
+
+	svc.cfg.Toolchains = &ToolchainSource{}
+	onWC := Agent{Target: Target{Organization: "acme", Cluster: "wc1"}}
+	svc.effectiveDefaultToolchains(&onWC)
+	assert.Empty(t, onWC.DefaultToolchains, "Sessions start only on the installation's own cluster")
+}
+
 func TestAToolchainThatCannotBeMountedStartsNoSession(t *testing.T) {
 	for name, test := range map[string]struct {
 		named    []string
@@ -342,6 +444,7 @@ func TestCreateAndUpdateKeepTheDefaultToolchainsAsAnAnnotation(t *testing.T) {
 	got, err := f.svc.Get(ctx, In(""), "sre")
 	require.NoError(t, err)
 	assert.Equal(t, []string{"go", "github@latest"}, got.DefaultToolchains)
+	assert.False(t, got.DefaultToolchainsImplicit, "the agent's own")
 
 	_, err = f.svc.Update(ctx, Update{Name: "sre", Annotations: &map[string]string{"team": "sre"}})
 	require.NoError(t, err)
@@ -354,6 +457,10 @@ func TestCreateAndUpdateKeepTheDefaultToolchainsAsAnAnnotation(t *testing.T) {
 	_, err = f.svc.Update(ctx, Update{Name: "sre", DefaultToolchains: &[]string{}})
 	require.NoError(t, err)
 	assert.Equal(t, map[string]string{"team": "sre"}, annotationsOf(), "[] removes them")
+	got, err = f.svc.Get(ctx, In(""), "sre")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"github"}, got.DefaultToolchains, "and github is the default again")
+	assert.True(t, got.DefaultToolchainsImplicit)
 }
 
 func TestTheAgentObjectReportsItsDefaultToolchains(t *testing.T) {

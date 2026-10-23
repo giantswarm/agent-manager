@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- An agent without `defaultToolchains`, every agent created before they existed included, starts its Sessions with the `github` toolchain at its newest version where the installation publishes toolchains, unchanged and without a person's action, since the Harness images no longer carry `gh`. It never fails a start: a `github` that does not resolve (not offered, no grant, the registry down, a misfit) starts the Session without it, and `start_session` says why in `warning`. Named toolchains, an agent's own `defaultToolchains` and `noToolchains` are unchanged. `get_agent` and `list_agents` report it as the agent's `defaultToolchains` with `defaultToolchainsImplicit`, and `toolchain_users` names the agent as a user of `github` ([giantswarm#38806](https://github.com/giantswarm/giantswarm/issues/38806)).
 - The registry client caches its bearer tokens per host and scope, no longer per scope alone, so the same repository path on two registries no longer shares a token.
 
 ## [2.15.0] - 2026-10-23

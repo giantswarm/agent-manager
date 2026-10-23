@@ -482,6 +482,7 @@ func (s *Service) List(ctx context.Context, loc Location) ([]Agent, error) {
 	}
 	for i := range out {
 		s.markToolsetBound(&out[i])
+		s.effectiveDefaultToolchains(&out[i])
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, nil
@@ -516,6 +517,7 @@ func (s *Service) get(ctx context.Context, st *site, name string) (*Agent, error
 		applyHelmRelease(&a, hr)
 	}
 	s.markToolsetBound(&a)
+	s.effectiveDefaultToolchains(&a)
 	return &a, nil
 }
 
@@ -1603,6 +1605,7 @@ func (s *Service) update(ctx context.Context, st *site, upd Update) (*UpdateResu
 	if err != nil {
 		agent = &Agent{Name: upd.Name, Namespace: ns, Target: st.loc.Target, Managed: ManagedHelmRelease}
 		applyHelmRelease(agent, updated)
+		s.effectiveDefaultToolchains(agent)
 	}
 	res.Agent = *agent
 	s.log.Info("agent updated", identity.LogAttr(ctx), "namespace", ns, "name", upd.Name, "changed", changed, "refreshSkills", upd.RefreshSkills)

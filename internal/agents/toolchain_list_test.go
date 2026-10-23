@@ -149,6 +149,11 @@ func TestToolchainUsersNamesTheAgentsAndTheSessions(t *testing.T) {
 	assert.Equal(t, []ToolchainAgent{{Namespace: "kagent", Name: "sre", Toolchain: "github"}}, github.Agents)
 	assert.Len(t, github.Sessions, 1)
 
+	implicit, _, _ := newToolchainFixture(t, "")
+	github, err = implicit.ToolchainUsers(ctx, "github", "")
+	require.NoError(t, err)
+	assert.Equal(t, []ToolchainAgent{{Namespace: "kagent", Name: "sre", Toolchain: "github"}}, github.Agents, "an agent without defaults uses the implicit github")
+
 	gone, err := svc.ToolchainUsers(ctx, "go", "9.9.9")
 	require.NoError(t, err)
 	assert.Empty(t, gone.Sessions)

@@ -164,7 +164,7 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 	defaultWSDesc := "Workspace <namespace>/<name> of the agent's namespace that a start_session naming none starts in, authorized as its starter"
 	defaultWSProp := mcp.WithString(argDefaultWS, mcp.Description(defaultWSDesc+"."))
 	defaultWSReplaceProp := mcp.WithString(argDefaultWS, mcp.Description(defaultWSDesc+"; \"\" removes it."))
-	defaultTCDesc := "Toolchains, name[@version] (default latest), a start_session naming none mounts"
+	defaultTCDesc := "Toolchains, name[@version] (default latest), a start_session naming none mounts; none: github"
 	defaultTCProp := mcp.WithArray(argDefaultTC, mcp.Description(defaultTCDesc+"."), mcp.Items(stringSchema))
 	defaultTCReplaceProp := mcp.WithArray(argDefaultTC, mcp.Description(defaultTCDesc+"; [] removes them."), mcp.Items(stringSchema))
 	pluginShape := "{git: {url, ref | commit} or oci: <reference>, path, skills} entries, pinned at write time"
@@ -454,7 +454,7 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 		mcp.WithString(argSessionName, mcp.Description("Display name of the conversation (at most 200 characters); default: unnamed")),
 		mcp.WithString(argWorkspaceGrant, mcp.Description("The grant authorize_workspace returned to you: the session works in that workspace, its sandbox bound to you in muster. Others' are refused.")),
 		mcp.WithBoolean(argNoWorkspace, mcp.Description("Start without a workspace. With neither it nor workspaceGrant: the agent's defaultWorkspace, as you; a refusal or auth_required starts nothing.")),
-		mcp.WithArray(argToolchains, mcp.Description("Toolchains, name[@version] (default latest), mounted at /opt/kagent/tools/<name>; omitted: the agent's defaultToolchains. A misfit starts nothing."), mcp.Items(stringSchema)),
+		mcp.WithArray(argToolchains, mcp.Description("Toolchains, name[@version] (default latest), mounted at /opt/kagent/tools/<name>; omitted: defaultToolchains, else github. A misfit starts nothing."), mcp.Items(stringSchema)),
 		mcp.WithBoolean(argNoToolchains, mcp.Description("Start without toolchains, the agent's defaultToolchains included.")),
 		mcp.WithReadOnlyHintAnnotation(false),
 		mcp.WithDestructiveHintAnnotation(false),
