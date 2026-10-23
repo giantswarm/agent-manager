@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `start_session` with a toolchain set no Session has used yet no longer fails at muster's 30s tool-call timeout while kagent prepares the toolset: the call reports MCP progress every 10s while kagent's `CreateSession` waits, which restarts muster's timeout, and a `CreateSession` answered `Unavailable` or `DeadlineExceeded` is retried with the same request id for up to 3 minutes. Every tool call with a progress token can now report progress ([#253](https://github.com/giantswarm/agent-manager/issues/253)).
 
-## [2.16.0] - 2026-10-23
+## [2.17.0] - 2026-10-23
 
 ### Changed
 
@@ -519,7 +519,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Chart: the MCPServer CR carries `agent-platform.giantswarm.io/tool-group: agent-platform` next to `muster.giantswarm.io/type` — the Agent Platform tier of MCP servers (the portal's MCP servers page, the `agent-platform` toolset preset). `muster.mcpServer.labels` still adds or overrides labels. (#23)
 
-[Unreleased]: https://github.com/giantswarm/agent-manager/compare/v2.16.0...HEAD
+[Unreleased]: https://github.com/giantswarm/agent-manager/compare/v2.17.0...HEAD
+[2.17.0]: https://github.com/giantswarm/agent-manager/compare/v2.16.0...v2.17.0
 [2.16.0]: https://github.com/giantswarm/agent-manager/compare/v2.16.0-rc.1...v2.16.0
 [2.16.0-rc.1]: https://github.com/giantswarm/agent-manager/compare/v2.15.0...v2.16.0-rc.1
 [2.15.0]: https://github.com/giantswarm/agent-manager/compare/v2.14.0...v2.15.0
