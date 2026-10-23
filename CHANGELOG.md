@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - An agent without `defaultToolchains`, every agent created before they existed included, starts its Sessions with the `github` toolchain at its newest version where the installation publishes toolchains, unchanged and without a person's action, since the Harness images no longer carry `gh`. It never fails a start: a `github` that does not resolve (not offered, no grant, the registry down, a misfit) starts the Session without it, and `start_session` says why in `warning`. Named toolchains, an agent's own `defaultToolchains` and `noToolchains` are unchanged. `get_agent` and `list_agents` report it as the agent's `defaultToolchains` with `defaultToolchainsImplicit`, and `toolchain_users` names the agent as a user of `github` ([giantswarm#38806](https://github.com/giantswarm/giantswarm/issues/38806)).
 
+### Fixed
+
+- `start_session` with a toolchain set no Session has used yet no longer fails at muster's 30s tool-call timeout while kagent prepares the toolset: the call reports MCP progress every 10s while kagent's `CreateSession` waits, which restarts muster's timeout, and a `CreateSession` answered `Unavailable` or `DeadlineExceeded` is retried with the same request id for up to 3 minutes. Every tool call with a progress token can now report progress ([#253](https://github.com/giantswarm/agent-manager/issues/253)).
+
 ## [2.16.0-rc.1] - 2026-10-23
 
 ### Added
@@ -21,10 +25,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - The registry client caches its bearer tokens per host and scope, no longer per scope alone, so the same repository path on two registries no longer shares a token.
-
-### Fixed
-
-- `start_session` with a toolchain set no Session has used yet no longer fails at muster's 30s tool-call timeout while kagent prepares the toolset: the call reports MCP progress every 10s while kagent's `CreateSession` waits, which restarts muster's timeout, and a `CreateSession` answered `Unavailable` or `DeadlineExceeded` is retried with the same request id for up to 3 minutes. Every tool call with a progress token can now report progress ([#253](https://github.com/giantswarm/agent-manager/issues/253)).
 
 ## [2.15.0] - 2026-10-23
 
