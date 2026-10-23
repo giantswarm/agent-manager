@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - `start_session` with a toolchain set no Session has used yet no longer fails at muster's 30s tool-call timeout while kagent prepares the toolset: the call reports MCP progress every 10s while kagent's `CreateSession` waits, which restarts muster's timeout, and a `CreateSession` answered `Unavailable` or `DeadlineExceeded` is retried with the same request id for up to 3 minutes. Every tool call with a progress token can now report progress ([#253](https://github.com/giantswarm/agent-manager/issues/253)).
+- A changed `--agent-chart-semver` (or `--agent-chart-semver-filter`) now reaches the shared agent-chart OCIRepository of every managed namespace when agent-manager starts: a source agent-manager created moves to the configured range and tag filter within its major; one already on them is not written, and one on another major, in GitOps or not created by agent-manager is left and logged (a major is the `migrate` command's) ([#245](https://github.com/giantswarm/agent-manager/issues/245)).
 
 ## [2.17.0] - 2026-10-23
 
