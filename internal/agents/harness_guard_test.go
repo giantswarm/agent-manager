@@ -232,13 +232,13 @@ func TestDeclarativeAgentsAreUnchanged(t *testing.T) {
 }
 
 // codingFixture is the seeded namespace plus the three coding Harnesses,
-// claude, codex and omp (a byo runtime), each with its egress entry, and the
-// ModelConfigs each runtime takes.
+// claude, codex and omp (a byo runtime on the omp-harness image), each with
+// its egress entry, and the ModelConfigs each runtime takes.
 func codingFixture(t *testing.T) (*fixture, context.Context) {
 	t.Helper()
 	f, ctx := claudeFixture(t, nil)
 	mustCreate(t, f, f.svc.harnessGVR(), harness("kagent", "codex", CodexRuntime))
-	mustCreate(t, f, f.svc.harnessGVR(), harness("kagent", "omp", BYORuntime))
+	mustCreate(t, f, f.svc.harnessGVR(), ompHarness("kagent", "omp"))
 	f.svc.cfg.HarnessEgress["codex"] = []string{"https://github.com"}
 	f.svc.cfg.HarnessEgress["omp"] = []string{"https://github.com", "https://registry.npmjs.org"}
 	responses := modelConfig("kagent", "gpt-responses", "OpenAI", "gpt-5.1-codex")
@@ -429,6 +429,53 @@ func TestKagentHarnessRefusesClaudeFormatPlugins(t *testing.T) {
 	_, err = f.svc.Create(ctx, spec)
 	require.NoError(t, err)
 	assert.Empty(t, f.pinner.calls, "an OCI plugin's format is not looked up")
+}
+
+// omp's adapter refuses a Claude-format plugin at boot, so agent-manager
+// refuses one on the omp Harness at write time, naming the root plugin.json
+// fix. A BYO Harness on another image is no omp and keeps the plugin.
+func TestOmpHarnessRefusesClaudeFormatPlugins(t *testing.T) {
+	f, ctx := codingFixture(t)
+	mustCreate(t, f, f.svc.harnessGVR(), harness("kagent", "byo-other", BYORuntime))
+	f.svc.cfg.HarnessEgress["byo-other"] = []string{"https://github.com"}
+
+	spec := coderSpec("preset:read-only")
+	spec.Harness = "omp"
+	spec.Plugins = Plugins{{Path: "claude-format", Git: &GitSkill{URL: skillsRepo, Commit: tagHead}}}
+	dry, err := f.svc.ValidateCreate(ctx, spec)
+	require.NoError(t, err)
+	assert.False(t, dry.Valid)
+	assert.True(t, containsLine(dry.Errors, "plugins[0] ("+skillsRepo+") is a Claude-format plugin (.claude-plugin/plugin.json): Harness omp runs oh-my-pi, which reads the Agent Plugins format only (plugin.json at the plugin root)"), dry.Errors)
+	_, err = f.svc.Create(ctx, spec)
+	require.ErrorIs(t, err, ErrInvalid)
+	assert.Contains(t, err.Error(), "is a Claude-format plugin")
+
+	spec.Plugins = Plugins{{Path: "bundles/sre", Git: &GitSkill{URL: skillsRepo, Commit: tagHead}, Skills: []string{"triage"}}}
+	dry, err = f.svc.ValidateCreate(ctx, spec)
+	require.NoError(t, err)
+	assert.True(t, dry.Valid, "an Agent Plugins package is taken on omp: %v", dry.Errors)
+
+	spec.Harness = "byo-other"
+	spec.Plugins = Plugins{{Path: "claude-format", Git: &GitSkill{URL: skillsRepo, Commit: tagHead}}}
+	f.pinner.calls = nil
+	_, err = f.svc.Create(ctx, spec)
+	require.NoError(t, err, "a BYO Harness without the omp-harness image is unchanged")
+	assert.Empty(t, f.pinner.calls, "no plugin format lookup on it")
+}
+
+// An image reference's repository name drops the registry, the path, the tag
+// and the digest.
+func TestImageRepositoryName(t *testing.T) {
+	for image, want := range map[string]string{
+		"gsoci.azurecr.io/giantswarm/kagent/omp-harness@sha256:92c442a23fc482a871c88adddaa4b06c6ca83373c09b171c5a230a20e5055b90": "omp-harness",
+		"gsoci.azurecr.io/giantswarm/kagent/omp-harness:1.19.0@sha256:92c442a2":                                                  "omp-harness",
+		"localhost:5000/omp-harness:dev":     "omp-harness",
+		"ghcr.io/example/omp-harness-fork:1": "omp-harness-fork",
+		"omp-harness":                        "omp-harness",
+		"":                                   "",
+	} {
+		assert.Equal(t, want, imageRepositoryName(image), image)
+	}
 }
 
 // A plugin accepted on a write is not looked up again by an update that

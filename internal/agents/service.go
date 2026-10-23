@@ -796,20 +796,16 @@ func checkSpec(spec Spec) []error {
 	return errs
 }
 
-// requireHarness checks the Harness a create names and returns it, with its
-// runtime.
-func (s *Service) requireHarness(ctx context.Context, dyn dynamic.Interface, ns string, spec Spec) (string, string, error) {
-	harness, obj, err := s.harnessFor(ctx, dyn, ns, spec.Harness)
-	return harness, harnessRuntime(obj), err
+// requireHarness checks the Harness a create names and returns it.
+func (s *Service) requireHarness(ctx context.Context, dyn dynamic.Interface, ns string, spec Spec) (string, *unstructured.Unstructured, error) {
+	return s.harnessFor(ctx, dyn, ns, spec.Harness)
 }
 
 // releaseHarness is the Harness an existing release runs on (its
-// agent.harness value, else the platform's), with its runtime. A Harness the
-// release names that is gone is refused: whether its guards apply cannot be
-// told.
-func (s *Service) releaseHarness(ctx context.Context, st *site, values map[string]any) (string, string, error) {
-	harness, obj, err := s.harnessFor(ctx, st.agent, st.ns(), s.releaseHarnessName(values))
-	return harness, harnessRuntime(obj), err
+// agent.harness value, else the platform's). A Harness the release names that
+// is gone is refused: whether its guards apply cannot be told.
+func (s *Service) releaseHarness(ctx context.Context, st *site, values map[string]any) (string, *unstructured.Unstructured, error) {
+	return s.harnessFor(ctx, st.agent, st.ns(), s.releaseHarnessName(values))
 }
 
 // releaseHarnessName is the Harness a release's values name, empty for the
@@ -828,7 +824,8 @@ func (s *Service) releaseHarnessName(values map[string]any) string {
 // change or a plugin pin the update adds or changes. An agent that leaves a
 // coding Harness leaves its platform-set egress and prompt note behind.
 func (s *Service) guardUpdate(ctx context.Context, st *site, upd Update, before, after map[string]any) ([]error, error) {
-	harness, runtime, err := s.releaseHarness(ctx, st, after)
+	harness, h, err := s.releaseHarness(ctx, st, after)
+	runtime := harnessRuntime(h)
 	if err != nil {
 		if isDomainError(err) {
 			return []error{err}, nil
@@ -854,7 +851,7 @@ func (s *Service) guardUpdate(ctx context.Context, st *site, upd Update, before,
 	if sameHarness {
 		accepted = pluginsFromValues(before)
 	}
-	errs = append(errs, s.checkPlugins(ctx, harness, runtime, after, accepted)...)
+	errs = append(errs, s.checkPlugins(ctx, harness, h, after, accepted)...)
 	if upd.DefaultToolchains != nil || !sameHarness {
 		if err := s.checkDefaultToolchains(ctx, harness, runtime, after); err != nil {
 			if !isDomainError(err) {
@@ -870,7 +867,8 @@ func (s *Service) guardUpdate(ctx context.Context, st *site, upd Update, before,
 // kagent one: the egress note in its prompt and, unless the update passes
 // egress of its own, the Harness's origin list.
 func (s *Service) leaveCoding(ctx context.Context, st *site, upd Update, before, after map[string]any) error {
-	_, from, err := s.releaseHarness(ctx, st, before)
+	_, fromHarness, err := s.releaseHarness(ctx, st, before)
+	from := harnessRuntime(fromHarness)
 	if err != nil && !isDomainError(err) {
 		return err
 	}
@@ -939,7 +937,8 @@ func (s *Service) ValidateCreate(ctx context.Context, spec Spec) (*ValidateResul
 		}
 		res.addError(err)
 	}
-	harness, runtime, err := s.requireHarness(ctx, st.agent, ns, spec)
+	harness, h, err := s.requireHarness(ctx, st.agent, ns, spec)
+	runtime := harnessRuntime(h)
 	if err != nil {
 		if !isDomainError(err) {
 			return nil, err
@@ -984,7 +983,7 @@ func (s *Service) ValidateCreate(ctx context.Context, spec Spec) (*ValidateResul
 			res.addError(e)
 		}
 	}
-	for _, e := range s.checkPlugins(ctx, harness, runtime, values, nil) {
+	for _, e := range s.checkPlugins(ctx, harness, h, values, nil) {
 		res.addError(e)
 	}
 	if err := s.checkDefaultToolchains(ctx, harness, runtime, values); err != nil {
@@ -1177,7 +1176,8 @@ func (s *Service) Create(ctx context.Context, spec Spec) (*CreateResult, error) 
 	if err := s.requireEgressPolicies(ctx, st, spec.EgressPolicyRefs); err != nil {
 		return nil, err
 	}
-	harness, runtime, err := s.requireHarness(ctx, st.agent, ns, spec)
+	harness, h, err := s.requireHarness(ctx, st.agent, ns, spec)
+	runtime := harnessRuntime(h)
 	if err != nil {
 		return nil, err
 	}
@@ -1204,7 +1204,7 @@ func (s *Service) Create(ctx context.Context, spec Spec) (*CreateResult, error) 
 			return nil, errs[0]
 		}
 	}
-	if errs := s.checkPlugins(ctx, harness, runtime, values, nil); len(errs) > 0 {
+	if errs := s.checkPlugins(ctx, harness, h, values, nil); len(errs) > 0 {
 		return nil, errs[0]
 	}
 	if err := s.checkDefaultToolchains(ctx, harness, runtime, values); err != nil {

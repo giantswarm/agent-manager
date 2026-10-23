@@ -17,7 +17,7 @@ import (
 // writes: a HelmRelease applied directly bypasses it. Which muster tools the
 // agent reaches is its toolset, the person's choice as on any other agent. An
 // agent on a kagent Harness is not touched, except that its plugins are held
-// to the Agent Plugins format, as a codex agent's are.
+// to the Agent Plugins format, as a codex or omp agent's are.
 
 // The runtimes of a Harness: the one key of its spec besides the workload,
 // the environment and the Substrate policy.
@@ -222,15 +222,16 @@ type PluginFormats interface {
 	ClaudeFormatPlugin(ctx context.Context, repoURL, commit, path string) (bool, error)
 }
 
-// checkPlugins refuses a Claude-format git plugin on the runtimes that read
-// Agent Plugins only, kagent and codex, which fail such an agent at boot; it
-// is never converted. A plugin in accepted (the pins of a release that keeps
-// its Harness) is not looked up again. An OCI plugin's format is known only
-// once pulled: the runtime reports it. The rule is kagent's materialiser's,
-// which ClaudeFormatPlugin copies.
-func (s *Service) checkPlugins(ctx context.Context, harness, runtime string, values map[string]any, accepted Plugins) []error {
+// checkPlugins refuses a Claude-format git plugin on the Harnesses that read
+// Agent Plugins only, kagent, codex and omp, which fail such an agent at
+// boot; it is never converted. A plugin in accepted (the pins of a release
+// that keeps its Harness) is not looked up again. An OCI plugin's format is
+// known only once pulled: the runtime reports it. The rule is kagent's
+// materialiser's, which ClaudeFormatPlugin copies.
+func (s *Service) checkPlugins(ctx context.Context, harness string, h *unstructured.Unstructured, values map[string]any, accepted Plugins) []error {
 	formats, ok := s.pinner.(PluginFormats)
-	if !readsAgentPluginsOnly(runtime) || !ok {
+	runs, only := agentPluginsReader(h)
+	if !only || !ok {
 		return nil
 	}
 	var errs []error
@@ -243,16 +244,42 @@ func (s *Service) checkPlugins(ctx context.Context, harness, runtime string, val
 		case err != nil:
 			errs = append(errs, invalidf("plugins[%d] (%s): its format could not be checked for Harness %s, which reads Agent Plugins only: %v", i, p.Git.URL, harness, err))
 		case claude:
-			errs = append(errs, invalidf("plugins[%d] (%s) is a Claude-format plugin (.claude-plugin/plugin.json): Harness %s runs %s, which reads the Agent Plugins format only (plugin.json at the plugin root); drop it or use its skills as skills", i, p.Git.URL, harness, runtimeLabel(runtime)))
+			errs = append(errs, invalidf("plugins[%d] (%s) is a Claude-format plugin (.claude-plugin/plugin.json): Harness %s runs %s, which reads the Agent Plugins format only (plugin.json at the plugin root); drop it or use its skills as skills", i, p.Git.URL, harness, runs))
 		}
 	}
 	return errs
 }
 
-// readsAgentPluginsOnly reports whether a runtime skips a Claude-format
-// plugin's Claude part and so cannot load one.
-func readsAgentPluginsOnly(runtime string) bool {
-	return runtime == KagentRuntime || runtime == CodexRuntime
+// ompHarnessImage is the repository name of the kagent line's omp-harness
+// image, the one a BYO Harness runs oh-my-pi from.
+const ompHarnessImage = "omp-harness"
+
+// agentPluginsReader names what a Harness runs and reports whether it skips
+// a Claude-format plugin's Claude part and so cannot load one: the kagent
+// runtime, codex, and omp, whose adapter refuses a Claude-format plugin at
+// boot. omp is a byo runtime, and spec.byo says nothing about what runs: a
+// BYO Harness is omp by its workload image, the kagent line's omp-harness. Any
+// other BYO image may read Claude-format plugins and is left alone.
+func agentPluginsReader(h *unstructured.Unstructured) (string, bool) {
+	switch runtime := harnessRuntime(h); runtime {
+	case KagentRuntime, CodexRuntime:
+		return runtimeLabel(runtime), true
+	case BYORuntime:
+		image, _, _ := unstructured.NestedString(h.Object, "spec", "workload", "image")
+		if imageRepositoryName(image) == ompHarnessImage {
+			return "oh-my-pi", true
+		}
+	}
+	return "", false
+}
+
+// imageRepositoryName is the last path element of an image reference's
+// repository, without its tag or digest.
+func imageRepositoryName(image string) string {
+	image, _, _ = strings.Cut(image, "@")
+	name := image[strings.LastIndex(image, "/")+1:]
+	name, _, _ = strings.Cut(name, ":")
+	return name
 }
 
 // samePin reports whether o is p's git source at the same commit and path.
