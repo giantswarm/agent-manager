@@ -47,8 +47,8 @@ type ToolchainSession struct {
 }
 
 // ToolchainUsers names the agents whose default toolchains name toolchain
-// name and the Sessions that mount it, in every managed namespace the caller
-// reads. With version (vX.Y.Z or its tag X.Y.Z) only those naming that
+// name, ImplicitDefaultToolchain an agent's without them, and the Sessions
+// that mount it, in every managed namespace the caller reads. With version (vX.Y.Z or its tag X.Y.Z) only those naming that
 // version and those holding its digest: an agent whose default names no
 // version takes the newest offered one at each start, and does not name it.
 func (s *Service) ToolchainUsers(ctx context.Context, name, version string) (*ToolchainUsage, error) {
@@ -94,7 +94,11 @@ func (s *Service) ToolchainUsers(ctx context.Context, name, version string) (*To
 		}
 		for _, obj := range objects.Items {
 			agent := kagent.Ref{Namespace: ns, Name: obj.GetName()}
-			for _, entry := range splitList(obj.GetAnnotations()[DefaultToolchainsAnnotation]) {
+			defaults := splitList(obj.GetAnnotations()[DefaultToolchainsAnnotation])
+			if len(defaults) == 0 && s.cfg.Toolchains != nil {
+				defaults = []string{ImplicitDefaultToolchain}
+			}
+			for _, entry := range defaults {
 				n, v, _ := strings.Cut(entry, "@")
 				if n == name && (tag == "" || strings.TrimPrefix(v, "v") == tag) {
 					out.Agents = append(out.Agents, ToolchainAgent{Namespace: ns, Name: agent.Name, Toolchain: entry})

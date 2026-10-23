@@ -10,6 +10,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
+	"github.com/giantswarm/agent-manager/internal/identity"
 	"github.com/giantswarm/agent-manager/internal/kagent"
 	apiv1alpha1 "github.com/giantswarm/agent-manager/internal/kagent/gen/kagent/api/v1alpha1"
 	"github.com/giantswarm/agent-manager/internal/oci"
@@ -27,7 +28,14 @@ import (
 // is in its labels: its name, the Harness runtimes it serves, and the egress
 // origins its tools need, which the Session's actor reaches beside its
 // agent's. A toolchain that does not declare the agent's runtime is refused
-// before the Session is created.
+// before the Session is created. An agent without default toolchains, one
+// created before they existed among them, starts with ImplicitDefaultToolchain
+// when the installation publishes toolchains, as far as it resolves: the
+// Harness images carry no gh of their own.
+
+// ImplicitDefaultToolchain is the default toolchain of an agent that names
+// none, at its newest version.
+const ImplicitDefaultToolchain = "github"
 
 // DefaultToolchainsAnnotation lists the agent's default toolchains,
 // comma-separated name[@version] entries, on the Agent object through the
@@ -297,24 +305,61 @@ func (s *Service) checkDefaultToolchains(ctx context.Context, harness, runtime s
 }
 
 // sessionToolchains resolves the toolchains a start names, else the agent's
-// defaults, unless noToolchains: the tool images CreateSession is given.
-// Each is held to the toolchain-manager's list, as the caller whose IdP
-// token is token.
-func (s *Service) sessionToolchains(ctx context.Context, token string, ref kagent.Ref, named []string, noToolchains bool) ([]Toolchain, error) {
+// defaults, else the implicit default, unless noToolchains: the tool images
+// CreateSession is given. Each is held to the toolchain-manager's list, as
+// the caller whose IdP token is token. The implicit default never fails a
+// start: what keeps it out is the warning, and the Session starts without.
+func (s *Service) sessionToolchains(ctx context.Context, token string, ref kagent.Ref, named []string, noToolchains bool) ([]Toolchain, string, error) {
 	if noToolchains && len(named) > 0 {
-		return nil, invalidf("toolchains and noToolchains exclude each other")
+		return nil, "", invalidf("toolchains and noToolchains exclude each other")
 	}
 	if noToolchains {
-		return nil, nil
+		return nil, "", nil
 	}
 	what := "toolchains"
 	if len(named) == 0 {
 		defaults, err := s.defaultToolchainsOfAgent(ctx, ref.Namespace, ref.Name)
-		if err != nil || len(defaults) == 0 {
-			return nil, err
+		if err != nil {
+			return nil, "", err
+		}
+		if len(defaults) == 0 {
+			return s.implicitToolchains(ctx, token, ref)
 		}
 		named, what = defaults, "the agent's defaultToolchains"
 	}
+	toolchains, err := s.resolveSessionToolchains(ctx, token, ref, what, named)
+	return toolchains, "", err
+}
+
+// implicitToolchains resolves ImplicitDefaultToolchain for a Session of an
+// agent without default toolchains; none, with the reason as the warning,
+// when it does not resolve, and none without one when the installation
+// publishes no toolchains.
+func (s *Service) implicitToolchains(ctx context.Context, token string, ref kagent.Ref) ([]Toolchain, string, error) {
+	if s.cfg.Toolchains == nil {
+		return nil, "", nil
+	}
+	toolchains, err := s.resolveSessionToolchains(ctx, token, ref, "the default toolchain", []string{ImplicitDefaultToolchain})
+	if err != nil {
+		s.log.WarnContext(ctx, "session starts without the default toolchain", identity.LogAttr(ctx), "agent", ref.Tenant(), "toolchain", ImplicitDefaultToolchain, "error", err)
+		return nil, fmt.Sprintf("started without toolchain %s, the default of an agent without defaultToolchains: %s", ImplicitDefaultToolchain, strings.TrimPrefix(err.Error(), ErrInvalid.Error()+": ")), nil
+	}
+	return toolchains, "", nil
+}
+
+// effectiveDefaultToolchains reports ImplicitDefaultToolchain as the default
+// toolchains of an agent without them that Sessions start on, when the
+// installation publishes toolchains.
+func (s *Service) effectiveDefaultToolchains(a *Agent) {
+	if len(a.DefaultToolchains) > 0 || a.IsSet() || s.cfg.Toolchains == nil {
+		return
+	}
+	a.DefaultToolchains, a.DefaultToolchainsImplicit = []string{ImplicitDefaultToolchain}, true
+}
+
+// resolveSessionToolchains resolves named, held to the toolchain-manager's
+// list, for a Session of agent ref; what prefixes every refusal.
+func (s *Service) resolveSessionToolchains(ctx context.Context, token string, ref kagent.Ref, what string, named []string) ([]Toolchain, error) {
 	refs, err := parseToolchains(what, named)
 	if err != nil {
 		return nil, err
