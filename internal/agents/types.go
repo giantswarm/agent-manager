@@ -405,11 +405,15 @@ type Agent struct {
 	// else the Agent object's.
 	DefaultWorkspace string `json:"defaultWorkspace,omitempty"`
 	// DefaultToolchains are the toolchains a start_session that names none
-	// starts with (DefaultToolchainsAnnotation), as DefaultWorkspace is read.
+	// starts with (DefaultToolchainsAnnotation), as DefaultWorkspace is read;
+	// ImplicitDefaultToolchain for an agent without them.
 	DefaultToolchains []string `json:"defaultToolchains,omitempty"`
-	ModelConfig       string   `json:"modelConfig,omitempty"`
-	IconURL           string   `json:"iconUrl,omitempty"`
-	SystemMessage     string   `json:"systemMessage,omitempty"`
+	// DefaultToolchainsImplicit is true when DefaultToolchains is the
+	// installation's default, the agent naming none.
+	DefaultToolchainsImplicit bool   `json:"defaultToolchainsImplicit,omitempty"`
+	ModelConfig               string `json:"modelConfig,omitempty"`
+	IconURL                   string `json:"iconUrl,omitempty"`
+	SystemMessage             string `json:"systemMessage,omitempty"`
 	// Harness is the Harness that runs the agent (spec.harnessRef.name, else
 	// the chart value agent.harness while nothing is rendered).
 	Harness string `json:"harness,omitempty"`
@@ -459,19 +463,20 @@ type AgentSummary struct {
 	Name      string `json:"name"`
 	Namespace string `json:"namespace"`
 	Target
-	Exists             bool     `json:"exists"`
-	DisplayName        string   `json:"displayName,omitempty"`
-	Description        string   `json:"description,omitempty"`
-	CreatedBy          string   `json:"createdBy,omitempty"`
-	DefaultWorkspace   string   `json:"defaultWorkspace,omitempty"`
-	DefaultToolchains  []string `json:"defaultToolchains,omitempty"`
-	ModelConfig        string   `json:"modelConfig,omitempty"`
-	Harness            string   `json:"harness,omitempty"`
-	Toolset            []string `json:"toolset,omitempty"`
-	ImplicitFullAccess bool     `json:"implicitFullAccess,omitempty"`
-	ToolsetBound       bool     `json:"toolsetBound,omitempty"`
-	Ready              *bool    `json:"ready"`
-	Managed            string   `json:"managed"`
+	Exists                    bool     `json:"exists"`
+	DisplayName               string   `json:"displayName,omitempty"`
+	Description               string   `json:"description,omitempty"`
+	CreatedBy                 string   `json:"createdBy,omitempty"`
+	DefaultWorkspace          string   `json:"defaultWorkspace,omitempty"`
+	DefaultToolchains         []string `json:"defaultToolchains,omitempty"`
+	DefaultToolchainsImplicit bool     `json:"defaultToolchainsImplicit,omitempty"`
+	ModelConfig               string   `json:"modelConfig,omitempty"`
+	Harness                   string   `json:"harness,omitempty"`
+	Toolset                   []string `json:"toolset,omitempty"`
+	ImplicitFullAccess        bool     `json:"implicitFullAccess,omitempty"`
+	ToolsetBound              bool     `json:"toolsetBound,omitempty"`
+	Ready                     *bool    `json:"ready"`
+	Managed                   string   `json:"managed"`
 	// The owning HelmRelease's state, when it needs attention: suspended,
 	// being uninstalled, or not Ready (its reason and message).
 	Suspended      bool   `json:"suspended,omitempty"`
@@ -483,22 +488,23 @@ type AgentSummary struct {
 // Summary is the agent as an AgentSummary.
 func (a Agent) Summary() AgentSummary {
 	s := AgentSummary{
-		Name:               a.Name,
-		Namespace:          a.Namespace,
-		Target:             a.Target,
-		Exists:             a.Exists,
-		DisplayName:        a.DisplayName,
-		Description:        a.Description,
-		CreatedBy:          a.CreatedBy,
-		DefaultWorkspace:   a.DefaultWorkspace,
-		DefaultToolchains:  a.DefaultToolchains,
-		ModelConfig:        a.ModelConfig,
-		Harness:            a.Harness,
-		Toolset:            a.Toolset,
-		ImplicitFullAccess: a.ImplicitFullAccess,
-		ToolsetBound:       a.ToolsetBound,
-		Ready:              a.Ready,
-		Managed:            a.Managed,
+		Name:                      a.Name,
+		Namespace:                 a.Namespace,
+		Target:                    a.Target,
+		Exists:                    a.Exists,
+		DisplayName:               a.DisplayName,
+		Description:               a.Description,
+		CreatedBy:                 a.CreatedBy,
+		DefaultWorkspace:          a.DefaultWorkspace,
+		DefaultToolchains:         a.DefaultToolchains,
+		DefaultToolchainsImplicit: a.DefaultToolchainsImplicit,
+		ModelConfig:               a.ModelConfig,
+		Harness:                   a.Harness,
+		Toolset:                   a.Toolset,
+		ImplicitFullAccess:        a.ImplicitFullAccess,
+		ToolsetBound:              a.ToolsetBound,
+		Ready:                     a.Ready,
+		Managed:                   a.Managed,
 	}
 	if hr := a.HelmRelease; hr != nil {
 		s.Suspended = hr.Suspended

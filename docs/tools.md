@@ -50,7 +50,7 @@ name is the DNS-1123 name the person chose, never derived from displayName. mode
       "type": "string"
     },
     "defaultToolchains": {
-      "description": "Toolchains, name[@version] (default latest), a start_session naming none mounts.",
+      "description": "Toolchains, name[@version] (default latest), a start_session naming none mounts; none: github.",
       "items": {
         "type": "string"
       },
@@ -692,7 +692,7 @@ Refused with conflict while the agent has no ready revision (get_agent_status). 
       "type": "string"
     },
     "toolchains": {
-      "description": "Toolchains, name[@version] (default latest), mounted at /opt/kagent/tools/<name>; omitted: the agent's defaultToolchains. A misfit starts nothing.",
+      "description": "Toolchains, name[@version] (default latest), mounted at /opt/kagent/tools/<name>; omitted: defaultToolchains, else github. A misfit starts nothing.",
       "items": {
         "type": "string"
       },
@@ -765,7 +765,7 @@ Lists are skills, plugins, egress and toolset. "" clears a text field back to th
       "type": "string"
     },
     "defaultToolchains": {
-      "description": "Toolchains, name[@version] (default latest), a start_session naming none mounts; [] removes them.",
+      "description": "Toolchains, name[@version] (default latest), a start_session naming none mounts; none: github; [] removes them.",
       "items": {
         "type": "string"
       },
@@ -989,7 +989,7 @@ Checks the name, modelConfig, egressPolicyRefs, harness and toolset (required fo
       "type": "string"
     },
     "defaultToolchains": {
-      "description": "Toolchains, name[@version] (default latest), a start_session naming none mounts.",
+      "description": "Toolchains, name[@version] (default latest), a start_session naming none mounts; none: github.",
       "items": {
         "type": "string"
       },

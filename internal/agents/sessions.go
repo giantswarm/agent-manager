@@ -166,6 +166,9 @@ type SessionStart struct {
 	// Toolchains are the toolchains mounted into the session, each at the
 	// digest its version resolved to.
 	Toolchains []Toolchain `json:"toolchains,omitempty"`
+	// Warning says why the session started without the default toolchain
+	// of an agent without defaultToolchains (ImplicitDefaultToolchain).
+	Warning string `json:"warning,omitempty"`
 }
 
 // SessionDelete is the answer of delete_session: the session as the
@@ -655,7 +658,7 @@ func (s *Service) StartSession(ctx context.Context, in StartSession) (*SessionSt
 			return nil, err
 		}
 	}
-	toolchains, err := s.sessionToolchains(ctx, token, ref, in.Toolchains, in.NoToolchains)
+	toolchains, warning, err := s.sessionToolchains(ctx, token, ref, in.Toolchains, in.NoToolchains)
 	if err != nil {
 		return nil, err
 	}
@@ -690,7 +693,7 @@ func (s *Service) StartSession(ctx context.Context, in StartSession) (*SessionSt
 			return nil, err
 		}
 	}
-	out := &SessionStart{Toolset: bound, Toolchains: toolchains}
+	out := &SessionStart{Toolset: bound, Toolchains: toolchains, Warning: warning}
 	attrs := []any{identity.LogAttr(ctx), "agent", ref.Tenant(), "session", session.GetId()}
 	if workspace != nil {
 		out.Workspace = workspace.Name

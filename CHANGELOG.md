@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- An agent without `defaultToolchains`, every agent created before they existed included, starts its Sessions with the `github` toolchain at its newest version where the installation publishes toolchains, unchanged and without a person's action, since the Harness images no longer carry `gh`. It never fails a start: a `github` that does not resolve (not offered, no grant, the registry down, a misfit) starts the Session without it, and `start_session` says why in `warning`. Named toolchains, an agent's own `defaultToolchains` and `noToolchains` are unchanged. `get_agent` and `list_agents` report it as the agent's `defaultToolchains` with `defaultToolchainsImplicit`, and `toolchain_users` names the agent as a user of `github` ([giantswarm#38806](https://github.com/giantswarm/giantswarm/issues/38806)).
+
+## [2.16.0-rc.1] - 2026-10-23
+
 ### Added
 
 - `start_session` reads a toolchain version the toolchain-manager's `list_toolchains` lists from the image of the source that offers it, the main source (`--toolchain-repository`) or any other, another registry too. A version two sources publish starts from the main source's image when it is one of them, else it is refused. `toolchain_users` matches a version's Sessions by the digest of every source's image ([giantswarm#38450](https://github.com/giantswarm/giantswarm/issues/38450)).
@@ -504,7 +510,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Chart: the MCPServer CR carries `agent-platform.giantswarm.io/tool-group: agent-platform` next to `muster.giantswarm.io/type` — the Agent Platform tier of MCP servers (the portal's MCP servers page, the `agent-platform` toolset preset). `muster.mcpServer.labels` still adds or overrides labels. (#23)
 
-[Unreleased]: https://github.com/giantswarm/agent-manager/compare/v2.15.0...HEAD
+[Unreleased]: https://github.com/giantswarm/agent-manager/compare/v2.16.0-rc.1...HEAD
+[2.16.0-rc.1]: https://github.com/giantswarm/agent-manager/compare/v2.15.0...v2.16.0-rc.1
 [2.15.0]: https://github.com/giantswarm/agent-manager/compare/v2.14.0...v2.15.0
 [2.14.0]: https://github.com/giantswarm/agent-manager/compare/v2.13.1...v2.14.0
 [2.13.1]: https://github.com/giantswarm/agent-manager/compare/v2.13.0...v2.13.1
