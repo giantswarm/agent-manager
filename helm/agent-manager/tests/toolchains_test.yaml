@@ -36,3 +36,54 @@ tests:
       - notContains:
           path: spec.template.spec.containers[0].args
           content: --toolchain-repository=gsoci.azurecr.io/giantswarm/agent-toolchains
+
+  - it: mounts no registry config by default
+    set:
+      toolchains.repository: gsoci.azurecr.io/giantswarm/agent-toolchains
+    asserts:
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].args[*]
+          pattern: ^--toolchain-registry-config
+      - notContains:
+          path: spec.template.spec.volumes
+          content:
+            name: toolchain-registry
+          any: true
+
+  - it: reads the registry config of the Secret it is given, optional
+    set:
+      toolchains.repository: gsoci.azurecr.io/giantswarm/agent-toolchains
+      toolchains.registryConfig.secretName: toolchain-pull
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --toolchain-registry-config=/etc/agent-manager/toolchain-registry/config.json
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: toolchain-registry
+            mountPath: /etc/agent-manager/toolchain-registry
+            readOnly: true
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: toolchain-registry
+            secret:
+              secretName: toolchain-pull
+              optional: true
+              items:
+                - key: .dockerconfigjson
+                  path: config.json
+
+  - it: mounts none without a repository
+    set:
+      toolchains.registryConfig.secretName: toolchain-pull
+    asserts:
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].args[*]
+          pattern: ^--toolchain-registry-config
+      - notContains:
+          path: spec.template.spec.volumes
+          content:
+            name: toolchain-registry
+          any: true

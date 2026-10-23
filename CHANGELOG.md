@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `start_session` reads a toolchain version the toolchain-manager's `list_toolchains` lists from the image of the source that offers it, the main source (`--toolchain-repository`) or any other, another registry too. A version two sources publish starts from the main source's image when it is one of them, else it is refused. `toolchain_users` matches a version's Sessions by the digest of every source's image ([giantswarm#38450](https://github.com/giantswarm/giantswarm/issues/38450)).
+- `--toolchain-registry-config` (chart `toolchains.registryConfig.secretName`, a `kubernetes.io/dockerconfigjson` Secret, mounted optional): the toolchains of a registry host it has credentials for are read with them, a private source's. Credentials go only to a token realm on the registry's own host over https. Empty, or the Secret absent, reads every registry anonymously as before.
+
+### Changed
+
+- The registry client caches its bearer tokens per host and scope, no longer per scope alone, so the same repository path on two registries no longer shares a token.
+
 ## [2.15.0] - 2026-10-23
 
 ### Changed
