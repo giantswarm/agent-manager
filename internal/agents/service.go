@@ -823,8 +823,9 @@ func (s *Service) releaseHarnessName(values map[string]any) string {
 
 // guardUpdate applies the coding-agent guards to an update's merged values,
 // none for an agent on a kagent Harness, and the plugin check to a Harness
-// change or a plugin pin the update adds or changes. An agent that leaves a
-// coding Harness leaves its platform-set egress and prompt note behind.
+// change or a plugin pin the update adds or changes. An agent on a kagent
+// Harness carries no egress note, however its Harness came to be one, and an
+// agent that leaves a coding Harness leaves its platform-set egress behind.
 func (s *Service) guardUpdate(ctx context.Context, st *site, upd Update, before, after map[string]any) ([]error, error) {
 	harness, h, err := s.releaseHarness(ctx, st, after)
 	runtime := harnessRuntime(h)
@@ -843,9 +844,12 @@ func (s *Service) guardUpdate(ctx context.Context, st *site, upd Update, before,
 		if errs, err = s.guardCoding(ctx, st, harness, runtime, after, requested); err != nil {
 			return nil, err
 		}
-	} else if upd.Harness != nil {
-		if err := s.leaveCoding(ctx, st, upd, before, after); err != nil {
-			return nil, err
+	} else {
+		dropEgressNote(after)
+		if upd.Harness != nil {
+			if err := s.leaveCoding(ctx, st, upd, before, after); err != nil {
+				return nil, err
+			}
 		}
 	}
 	var accepted Plugins
@@ -865,9 +869,8 @@ func (s *Service) guardUpdate(ctx context.Context, st *site, upd Update, before,
 	return errs, nil
 }
 
-// leaveCoding drops what a coding Harness set on an agent that moves to a
-// kagent one: the egress note and, unless the update passes egress of its
-// own, the Harness's origin list.
+// leaveCoding drops the Harness's origin list from an agent that moves from a
+// coding Harness to a kagent one, unless the update passes egress of its own.
 func (s *Service) leaveCoding(ctx context.Context, st *site, upd Update, before, after map[string]any) error {
 	_, fromHarness, err := s.releaseHarness(ctx, st, before)
 	from := harnessRuntime(fromHarness)
@@ -875,7 +878,6 @@ func (s *Service) leaveCoding(ctx context.Context, st *site, upd Update, before,
 		return err
 	}
 	agentBlock, _ := after["agent"].(map[string]any)
-	setEgressNote(agentBlock, false)
 	if isCodingRuntime(from) && upd.Egress == nil {
 		delete(agentBlock, "egress")
 	}
@@ -968,6 +970,9 @@ func (s *Service) ValidateCreate(ctx context.Context, spec Spec) (*ValidateResul
 	}
 	values := BuildValues(spec, st.compose)
 	setCreator(values, identity.Caller(ctx))
+	if !isCodingRuntime(runtime) {
+		dropEgressNote(values)
+	}
 	if isCodingRuntime(runtime) {
 		errs, err := s.guardCoding(ctx, st, harness, runtime, values, spec.Egress)
 		if err != nil {
@@ -1189,6 +1194,9 @@ func (s *Service) Create(ctx context.Context, spec Spec) (*CreateResult, error) 
 	}
 	values := BuildValues(spec, st.compose)
 	setCreator(values, identity.Caller(ctx))
+	if !isCodingRuntime(runtime) {
+		dropEgressNote(values)
+	}
 	if isCodingRuntime(runtime) {
 		errs, err := s.guardCoding(ctx, st, harness, runtime, values, spec.Egress)
 		if err != nil {
@@ -1905,7 +1913,6 @@ func agentFromObject(obj, server *unstructured.Unstructured) Agent {
 	a.Description, _, _ = unstructured.NestedString(obj.Object, "spec", "template", "description")
 	a.ModelConfig, _, _ = unstructured.NestedString(obj.Object, "spec", "template", "modelConfig", "name")
 	a.SystemMessage, _, _ = unstructured.NestedString(obj.Object, "spec", "template", "systemPrompt")
-	a.SystemMessage = withoutEgressNote(a.SystemMessage)
 	a.Skills = skillsFromObject(obj)
 	a.Plugins = pluginsFromObject(obj)
 	a.Egress = egressFromObject(obj)
@@ -2018,11 +2025,19 @@ func applyHelmRelease(a *Agent, hr *unstructured.Unstructured) {
 			a.Toolset, a.ImplicitFullAccess = nil, true
 		}
 	}
+	// The values hold the person's prompt. The Agent's rendered prompt adds
+	// the chart's egress note, and is the chart default when the values set
+	// none.
+	agentBlock, _ := values["agent"].(map[string]any)
+	if prompt, ok := agentBlock["systemMessage"].(string); ok {
+		a.SystemMessage = withoutEgressNote(prompt)
+	} else {
+		a.SystemMessage = withoutEgressNote(a.SystemMessage)
+	}
 	if a.Exists || values == nil {
 		return
 	}
 	// No Agent yet: the values are what the agent will be.
-	agentBlock, _ := values["agent"].(map[string]any)
 	if agentBlock != nil {
 		if name, _ := agentBlock["name"].(string); name != "" {
 			a.Name = name
@@ -2030,8 +2045,6 @@ func applyHelmRelease(a *Agent, hr *unstructured.Unstructured) {
 		a.DisplayName, _ = agentBlock["displayName"].(string)
 		a.Description, _ = agentBlock["description"].(string)
 		a.IconURL, _ = agentBlock["iconUrl"].(string)
-		a.SystemMessage, _ = agentBlock["systemMessage"].(string)
-		a.SystemMessage = withoutEgressNote(a.SystemMessage)
 		a.Harness, _ = agentBlock["harness"].(string)
 	}
 	if a.Name == "" {

@@ -10,7 +10,9 @@ import (
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 
+	"github.com/giantswarm/agent-manager/internal/chart"
 	"github.com/giantswarm/agent-manager/internal/identity"
 )
 
@@ -227,14 +229,78 @@ func TestCodingAgentWriteDropsTheEgressNoteFromItsPrompt(t *testing.T) {
 	assert.Contains(t, res.Changed, "agent.systemMessage")
 }
 
-// The prompt an agent reports is the person's: the egress note the chart
-// rendered into spec.template.systemPrompt is not part of it.
-func TestTheAgentObjectReportsThePromptWithoutTheEgressNote(t *testing.T) {
+// The prompt a managed agent reports is the person's, from its release's
+// values: the egress note the chart rendered into spec.template.systemPrompt
+// is not part of it. An Agent no release renders reports its prompt as is.
+func TestAgentReportsThePromptWithoutTheEgressNote(t *testing.T) {
+	rendered := "You keep the GitOps repositories tidy.\n\n" + egressNoteHeading +
+		"\n\nBesides your model and your tools, your sandbox reaches only these origins: https://github.com, and the registries of the toolchains mounted under /opt/kagent/tools."
 	obj := agentObject("kagent", "coder", "", "", true, true)
-	require.NoError(t, unstructured.SetNestedField(obj.Object, "You keep the GitOps repositories tidy.\n\n"+egressNoteHeading+
-		"\n\nBesides your model and your tools, your sandbox reaches only these origins: https://github.com, and the registries of the toolchains mounted under /opt/kagent/tools.",
-		"spec", "template", "systemPrompt"))
-	assert.Equal(t, "You keep the GitOps repositories tidy.", agentFromObject(obj, nil).SystemMessage)
+	require.NoError(t, unstructured.SetNestedField(obj.Object, rendered, "spec", "template", "systemPrompt"))
+	assert.Equal(t, rendered, agentFromObject(obj, nil).SystemMessage, "an unmanaged Agent's prompt is reported as is")
+
+	values := coderValues()
+	values["agent"].(map[string]any)["platformPrompt"] = map[string]any{"egressNote": true}
+	a := agentFromObject(obj, nil)
+	applyHelmRelease(&a, helmRelease("kagent", "coder", values, true, nil))
+	assert.Equal(t, "You keep the GitOps repositories tidy.", a.SystemMessage, "the values' prompt")
+
+	delete(values["agent"].(map[string]any), "systemMessage")
+	require.NoError(t, unstructured.SetNestedField(obj.Object, "You are a helpful agent.\n\n"+egressNoteHeading+"\n\nBesides your model and your tools, your sandbox reaches only these origins.", "spec", "template", "systemPrompt"))
+	a = agentFromObject(obj, nil)
+	applyHelmRelease(&a, helmRelease("kagent", "coder", values, true, nil))
+	assert.Equal(t, "You are a helpful agent.", a.SystemMessage, "the chart default, without the note")
+}
+
+// An agent on a kagent Harness carries no egress note, also when its Harness
+// became a kagent one without an update of agent.harness.
+func TestKagentAgentWriteDropsTheEgressNote(t *testing.T) {
+	values := map[string]any{
+		"agent": map[string]any{
+			"name": "helper", "systemMessage": "Help.\n\n" + egressNoteHeading + "\n\nBesides your model and your tools, your sandbox reaches only https://example.com.",
+			"platformPrompt": map[string]any{"egressNote": true},
+		},
+		"modelConfig": map[string]any{"name": "default-model-config"},
+	}
+	f, ctx := claudeFixture(t, nil)
+	mustCreate(t, f, hrGVR, helmRelease("kagent", "helper", values, true, nil))
+
+	res, err := f.svc.Update(ctx, Update{Name: "helper", Description: new("helps")})
+	require.NoError(t, err)
+	agentBlock := res.After["agent"].(map[string]any)
+	assert.Equal(t, "Help.", agentBlock["systemMessage"])
+	assert.NotContains(t, agentBlock, "platformPrompt")
+}
+
+// oldChart is an agent chart from before agent.platformPrompt: its schema
+// refuses the key.
+type oldChart struct{ embeddedChart }
+
+func (oldChart) Schema(context.Context) chart.Schema {
+	s := chart.EmbeddedSchema()
+	doc := runtime.DeepCopyJSON(s.Document.(map[string]any))
+	unstructured.RemoveNestedField(doc, "properties", "agent", "properties", "platformPrompt")
+	s.Document, s.Version = doc, "2.3.0"
+	return s
+}
+
+// On an installation held on a chart without agent.platformPrompt a coding
+// agent's values are written as the chart takes them: no flag, the prompt as
+// given.
+func TestCodingAgentOnAnOlderChartGetsNoFlag(t *testing.T) {
+	f, ctx := claudeFixture(t, nil)
+	f.svc.chart = oldChart{}
+	_, err := f.svc.Create(ctx, coderSpec("preset:read-only"))
+	require.NoError(t, err)
+	agentBlock := mustValues(mustGet(t, f, "coder"))["agent"].(map[string]any)
+	assert.NotContains(t, agentBlock, "platformPrompt")
+	assert.Equal(t, "You keep the GitOps repositories tidy.", agentBlock["systemMessage"])
+}
+
+// A prompt pasted with the note in it fits the cap the person's part fits.
+func TestSystemMessageCapLeavesTheEgressNoteOut(t *testing.T) {
+	prompt := strings.Repeat("a", MaxSystemMessageLength) + "\n\n" + egressNoteHeading + "\n\nBesides your model and your tools, your sandbox reaches only https://example.com."
+	require.NoError(t, ValidateSystemMessage(prompt))
 }
 
 func TestWithoutEgressNote(t *testing.T) {
@@ -244,6 +310,17 @@ func TestWithoutEgressNote(t *testing.T) {
 		"note at the end": {"You review pull requests.\n\n" + note, "You review pull requests."},
 		"note in between": {"You review pull requests.\n\n" + note + "\n\nBe brief.", "You review pull requests.\n\nBe brief."},
 		"only the note":   {note, ""},
+		"CRLF":            {"You review pull requests.\r\n\r\n" + strings.ReplaceAll(note, "\n", "\r\n") + "\r\n", "You review pull requests."},
+		"no blank line after the heading": {
+			"You review pull requests.\n\n" + egressNoteHeading + "\nBesides your model and your tools.", "You review pull requests.",
+		},
+		"a wrapped paragraph": {
+			"You review pull requests.\n\n" + egressNoteHeading + "\n\nBesides your model and your tools,\nyour sandbox reaches only these origins.\n\nBe brief.", "You review pull requests.\n\nBe brief.",
+		},
+		"the heading inside a line": {
+			"Never write ## Network access (set by the platform)\n\nyourself.", "Never write ## Network access (set by the platform)\n\nyourself.",
+		},
+		"leading indentation": {"    make test\nRun this first.\n\n" + note, "    make test\nRun this first."},
 	} {
 		t.Run(name, func(t *testing.T) {
 			assert.Equal(t, tc.want, withoutEgressNote(tc.prompt))

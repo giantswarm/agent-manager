@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"unicode"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
@@ -37,10 +38,16 @@ var harnessSpecFields = map[string]bool{"workload": true, "env": true, "substrat
 // is set. The section is the chart's: the person's prompt never carries it.
 const egressNoteHeading = "## Network access (set by the platform)"
 
-// egressNotePattern matches an egress note inside a prompt, its heading and
-// the paragraph after it, as the chart renders it and drops it from
-// agent.systemMessage.
-var egressNotePattern = regexp.MustCompile(`\s*` + regexp.QuoteMeta(egressNoteHeading) + `\n\n[^\n]*`)
+// egressNotePattern matches an egress note inside a prompt: a line that is
+// its heading and the paragraph after it, up to the next blank line, in any
+// line endings. agent-manager wrote the note into agent.systemMessage before
+// the chart rendered it, so values and prompts pasted from them still carry
+// it; the chart takes such a note out of agent.systemMessage the same way.
+var egressNotePattern = regexp.MustCompile(`(?m)\s*^[ \t]*` + regexp.QuoteMeta(egressNoteHeading) + `[ \t]*\r?$(?:\n[ \t]*\r?$)*(?:\n[^\r\n]*\S[^\r\n]*\r?$)*`)
+
+// leadingBlankLines are the empty lines a prompt starts with once a note at
+// its top is taken out.
+var leadingBlankLines = regexp.MustCompile(`\A(?:[ \t]*\r?\n)+`)
 
 // harnessRuntime is the runtime a Harness object runs, empty for none (the
 // platform Harness absent).
@@ -123,7 +130,9 @@ func (s *Service) guardCoding(ctx context.Context, st *site, harness, runtime st
 		delete(agentBlock, "egress")
 	}
 
-	setEgressNote(agentBlock, true)
+	if s.chartRendersEgressNote(ctx) {
+		setEgressNote(agentBlock, true)
+	}
 
 	if err := refuseCodingEgressPolicies(harness, values); err != nil {
 		errs = append(errs, err)
@@ -288,13 +297,30 @@ func (p Plugin) samePin(o Plugin) bool {
 
 // withoutEgressNote is prompt without an egress note: the person's part of a
 // prompt the chart rendered, or of values that still carry a note in
-// agent.systemMessage.
+// agent.systemMessage. The person's leading indentation stays.
 func withoutEgressNote(prompt string) string {
 	own := egressNotePattern.ReplaceAllString(prompt, "")
 	if own == prompt {
 		return prompt
 	}
-	return strings.TrimSpace(own)
+	return strings.TrimRightFunc(leadingBlankLines.ReplaceAllString(own, ""), unicode.IsSpace)
+}
+
+// chartRendersEgressNote reports whether the agent chart that validates and
+// renders the agents takes agent.platformPrompt (2.4.0 on). An installation
+// held on an older chart keeps its values as they are: the older chart's
+// schema refuses the key.
+func (s *Service) chartRendersEgressNote(ctx context.Context) bool {
+	doc, _ := s.chart.Schema(ctx).Document.(map[string]any)
+	_, found, _ := unstructured.NestedFieldNoCopy(doc, "properties", "agent", "properties", "platformPrompt")
+	return found
+}
+
+// dropEgressNote takes the egress note off the values of an agent on a kagent
+// Harness: the flag and a note in agent.systemMessage.
+func dropEgressNote(values map[string]any) {
+	agentBlock, _ := values["agent"].(map[string]any)
+	setEgressNote(agentBlock, false)
 }
 
 // setEgressNote sets or clears agent.platformPrompt.egressNote, the chart

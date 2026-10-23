@@ -181,9 +181,11 @@ person.
   and the agent chart appends a short section to the system prompt, headed
   `## Network access (set by the platform)`, naming those origins and saying
   that a denied request is policy, not an outage. The chart owns its wording,
-  so a chart release updates it on every agent. `agent.systemMessage` stays
-  the person's prompt: a note found in it is dropped on write, and
-  `get_agent` reports the prompt without the note.
+  so a chart release updates it on every agent, and replaces a note it finds
+  in `agent.systemMessage`. `agent.systemMessage` stays the person's prompt:
+  a note found in it is taken out on write, and `get_agent` reports the
+  values' prompt without the note. An installation held on a chart below
+  2.4.0, which has no `agent.platformPrompt`, gets no flag and no note.
 - **A model the runtime reaches**, by the rules kagent's compiler for it
   enforces: on `claude` an Anthropic, Bedrock or AnthropicVertexAI
   ModelConfig; on `codex` an OpenAI ModelConfig with `openAI.apiFormat:
