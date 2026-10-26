@@ -352,9 +352,9 @@ muster:
   # (create_agent with organization and cluster): one those clusters reach,
   # the installation's public muster endpoint. Empty refuses target clusters.
   targetUrl: ""
-  # -- muster's session bindings endpoint: `start_session` binds a workspace
-  # session's sandbox actor to the caller there, as the caller, before its
-  # first turn, and `delete_session` unbinds it, so muster releases the
+  # -- muster's session bindings endpoint: `start_session` binds the sandbox
+  # actor of every Session with providers to the caller there, as the caller,
+  # before its first turn, and `delete_session` unbinds it, so muster releases the
   # person's provider token to that sandbox alone. Rendered with the session
   # tools (`oauth.enabled` and `kagent.controllerTarget`); empty refuses a
   # workspace grant. With `networkPolicy.enabled` the policy opens egress to
