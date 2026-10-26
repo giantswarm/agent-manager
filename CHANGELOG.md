@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- The `--muster-bindings-url` help and the chart's `muster.bindingsUrl` description say that `start_session` binds the sandbox of every Session with providers and `delete_session` unbinds it, not only a workspace session's.
+
 ## [2.17.2] - 2026-10-23
 
 ### Fixed
