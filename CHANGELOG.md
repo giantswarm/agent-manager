@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.17.2] - 2026-10-23
+
 ### Fixed
 
 - A changed `--agent-chart-semver` (or `--agent-chart-semver-filter`) now reaches the shared agent-chart OCIRepository of every managed namespace when agent-manager starts: a source agent-manager created moves to the configured range and tag filter within its major; one already on them is not written, and one on another major, in GitOps or not created by agent-manager is left and logged (a major is the `migrate` command's). With `oauth.downstream`, the chart grants the ServiceAccount `get` and `update` on that one OCIRepository by name in each managed namespace for it ([#245](https://github.com/giantswarm/agent-manager/issues/245)).
@@ -525,7 +527,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Chart: the MCPServer CR carries `agent-platform.giantswarm.io/tool-group: agent-platform` next to `muster.giantswarm.io/type` — the Agent Platform tier of MCP servers (the portal's MCP servers page, the `agent-platform` toolset preset). `muster.mcpServer.labels` still adds or overrides labels. (#23)
 
-[Unreleased]: https://github.com/giantswarm/agent-manager/compare/v2.17.1...HEAD
+[Unreleased]: https://github.com/giantswarm/agent-manager/compare/v2.17.2...HEAD
+[2.17.2]: https://github.com/giantswarm/agent-manager/compare/v2.17.1...v2.17.2
 [2.17.1]: https://github.com/giantswarm/agent-manager/compare/v2.17.0...v2.17.1
 [2.17.0]: https://github.com/giantswarm/agent-manager/compare/v2.16.0...v2.17.0
 [2.16.0]: https://github.com/giantswarm/agent-manager/compare/v2.16.0-rc.1...v2.16.0
