@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.17.7] - 2026-10-26
+
 ### Fixed
 
 - The `--muster-bindings-url` help and the chart's `muster.bindingsUrl` description say that `start_session` binds the sandbox of every Session with providers and `delete_session` unbinds it, not only a workspace session's.
@@ -531,7 +533,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Chart: the MCPServer CR carries `agent-platform.giantswarm.io/tool-group: agent-platform` next to `muster.giantswarm.io/type` — the Agent Platform tier of MCP servers (the portal's MCP servers page, the `agent-platform` toolset preset). `muster.mcpServer.labels` still adds or overrides labels. (#23)
 
-[Unreleased]: https://github.com/giantswarm/agent-manager/compare/v2.17.2...HEAD
+[Unreleased]: https://github.com/giantswarm/agent-manager/compare/v2.17.7...HEAD
+[2.17.7]: https://github.com/giantswarm/agent-manager/compare/v2.17.2...v2.17.7
 [2.17.2]: https://github.com/giantswarm/agent-manager/compare/v2.17.1...v2.17.2
 [2.17.1]: https://github.com/giantswarm/agent-manager/compare/v2.17.0...v2.17.1
 [2.17.0]: https://github.com/giantswarm/agent-manager/compare/v2.16.0...v2.17.0
