@@ -61,6 +61,9 @@
         "clusterID": {
             "type": "string"
         },
+        "externalDNSIP": {
+            "type": "string"
+        },
         "extraArgs": {
             "type": "array",
             "description": "Extra container arguments."
@@ -178,7 +181,14 @@
         },
         "global": {
             "type": "object",
-            "additionalProperties": true
+            "description": "Global values shared between all subcharts and the platform.",
+            "additionalProperties": true,
+            "properties": {
+                "podSecurityStandards": {
+                    "type": "object",
+                    "additionalProperties": true
+                }
+            }
         },
         "harness": {
             "type": "object",
@@ -214,6 +224,10 @@
                     "description": "Name of the platform Harness an agent runs on unless `create_agent` names another (the connectivity chart renders it): composed as the chart value `agent.harness`, the Agent's `spec.harnessRef.name`."
                 }
             }
+        },
+        "helm": {
+            "type": "object",
+            "additionalProperties": true
         },
         "httpRoute": {
             "type": "object",
@@ -324,6 +338,9 @@
                     "description": "Enable debug logging."
                 }
             }
+        },
+        "managementCluster": {
+            "type": "string"
         },
         "mcp": {
             "type": "object",
