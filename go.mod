@@ -8,7 +8,7 @@ require (
 	github.com/a2aproject/a2a-go/v2 v2.7.0
 	github.com/giantswarm/gitops-commit v0.11.10
 	github.com/giantswarm/mcp-oauth v1.9.4
-	github.com/giantswarm/mcp-toolkit v0.4.7
+	github.com/giantswarm/mcp-toolkit v0.4.8
 	github.com/go-jose/go-jose/v4 v4.1.6
 	github.com/go-logr/logr v1.4.4
 	github.com/golang-jwt/jwt/v5 v5.3.1
