@@ -9,7 +9,7 @@ require (
 	github.com/giantswarm/gitops-commit v0.11.10
 	github.com/giantswarm/mcp-oauth v1.9.4
 	github.com/giantswarm/mcp-toolkit v0.4.8
-	github.com/go-jose/go-jose/v4 v4.1.6
+	github.com/go-jose/go-jose/v4 v4.1.7
 	github.com/go-logr/logr v1.4.4
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/uuid v1.6.0
