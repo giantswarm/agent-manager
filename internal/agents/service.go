@@ -23,6 +23,7 @@ import (
 	"github.com/giantswarm/agent-manager/internal/identity"
 	"github.com/giantswarm/agent-manager/internal/kube"
 	"github.com/giantswarm/agent-manager/internal/skills"
+	"github.com/giantswarm/agent-manager/internal/tags"
 	"github.com/giantswarm/agent-manager/internal/tenants"
 )
 
@@ -269,6 +270,8 @@ func (s *Service) Info(ctx context.Context) InfoResponse {
 		// egressPolicies: create_agent, update_agent and validate_agent take
 		// egressPolicyRefs, and list_egress_policies lists the names.
 		"egressPolicies": true,
+		// tags: create_agent, update_agent and the reads carry tags.
+		"tags": true,
 	}
 	out.Identity = s.kube.Identity()
 	kagentAPI := KagentAPIGroup + "/" + s.cfg.KagentAPIVersion
@@ -1386,6 +1389,13 @@ func (s *Service) mergedValues(ctx context.Context, st *site, upd Update, hr *un
 		agentBlock["name"] = upd.Name
 	}
 	setOrDelete(agentBlock, "displayName", upd.DisplayName)
+	if upd.Tags != nil {
+		if list := tags.Normalize(*upd.Tags); len(list) > 0 {
+			agentBlock["tags"] = toAnySlice(list)
+		} else {
+			delete(agentBlock, "tags")
+		}
+	}
 	setOrDelete(agentBlock, "description", upd.Description)
 	setOrDelete(agentBlock, "systemMessage", upd.SystemMessage)
 	setOrDelete(agentBlock, "iconUrl", upd.IconURL)
@@ -1905,6 +1915,7 @@ func chartRefOf(hr *unstructured.Unstructured) *ChartRef {
 func agentFromObject(obj, server *unstructured.Unstructured) Agent {
 	a := Agent{Name: obj.GetName(), Namespace: obj.GetNamespace(), Exists: true, Managed: ManagedNone}
 	a.DisplayName = obj.GetAnnotations()[DisplayNameAnnotation]
+	a.Tags = tags.Parse(obj.GetAnnotations()[TagsAnnotation])
 	a.IconURL = obj.GetAnnotations()[IconURLAnnotation]
 	a.CreatedBy = obj.GetAnnotations()[CreatedByAnnotation]
 	a.DefaultWorkspace = obj.GetAnnotations()[DefaultWorkspaceAnnotation]
@@ -2043,6 +2054,7 @@ func applyHelmRelease(a *Agent, hr *unstructured.Unstructured) {
 			a.Name = name
 		}
 		a.DisplayName, _ = agentBlock["displayName"].(string)
+		a.Tags = tags.ParseList(stringSlice(agentBlock["tags"]))
 		a.Description, _ = agentBlock["description"].(string)
 		a.IconURL, _ = agentBlock["iconUrl"].(string)
 		a.Harness, _ = agentBlock["harness"].(string)

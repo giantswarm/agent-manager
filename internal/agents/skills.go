@@ -12,6 +12,7 @@ import (
 	"github.com/giantswarm/agent-manager/internal/identity"
 	"github.com/giantswarm/agent-manager/internal/oci"
 	"github.com/giantswarm/agent-manager/internal/skills"
+	"github.com/giantswarm/agent-manager/internal/tags"
 )
 
 // A skill or a plugin is an immutable source: a git repository at a full
@@ -324,3 +325,27 @@ func PinSkills(ctx context.Context, p SkillPinner, list Skills) (Skills, error) 
 // SkillsValues renders a pinned skills list as the chart's `skills` value;
 // nil when the list is empty.
 func SkillsValues(list Skills) []any { return skillsValues(list) }
+
+// FilterSkillsByTags keeps the skills that carry any of filter (normalized
+// first); every repository stays, with what matched. No tags keeps them all.
+func FilterSkillsByTags(res *skills.Result, filter []string) *skills.Result {
+	want := tags.Normalize(filter)
+	if res == nil || len(want) == 0 {
+		return res
+	}
+	out := &skills.Result{Repositories: make([]skills.Repository, 0, len(res.Repositories))}
+	for _, repo := range res.Repositories {
+		var kept []skills.Skill
+		if repo.Skills != nil {
+			kept = []skills.Skill{}
+		}
+		for _, sk := range repo.Skills {
+			if tags.HasAny(sk.Tags, want) {
+				kept = append(kept, sk)
+			}
+		}
+		repo.Skills = kept
+		out.Repositories = append(out.Repositories, repo)
+	}
+	return out
+}

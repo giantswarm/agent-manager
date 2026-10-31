@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `tags` on `create_agent`, `update_agent`, `get_agent` and `list_agents` (REST and MCP), stored as the `ui.giantswarm.io/tags` annotation, and the `get_info` capability `tags`. Requires agent chart 2.5.0 or later. `list_agents` and `list_skills` take a `tags` filter (any of them); `list_skills` reports a skill's tags from its `SKILL.md` frontmatter `metadata.tags` (comma-joined; a malformed tag is dropped) (giantswarm/giantswarm#38901).
+
 ## [2.17.7] - 2026-10-26
 
 ### Fixed

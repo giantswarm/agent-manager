@@ -134,6 +134,7 @@ func TestRESTLifecycle(t *testing.T) {
 	assert.Equal(t, "api.kagent.dev/v1alpha3", info["apiVersions"].(map[string]any)["agentTemplate"])
 	assert.Equal(t, "kagent", info["harness"].(map[string]any)["name"])
 	assert.Equal(t, false, info["capabilities"].(map[string]any)["commit"])
+	assert.Equal(t, true, info["capabilities"].(map[string]any)["tags"])
 
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, Prefix+"/openapi.yaml", nil))
@@ -178,7 +179,7 @@ func TestRESTLifecycle(t *testing.T) {
 	assert.Equal(t, true, body["valid"], body["errors"])
 	assert.Equal(t, []any{"preset:read-only"}, body["manifests"].(map[string]any)["values"].(map[string]any)["toolset"])
 
-	code, body = do(t, mux, http.MethodPost, Prefix+"/agents", map[string]any{"name": "sre", "modelConfig": "default-model-config", "displayName": "SRE", "toolset": readOnly,
+	code, body = do(t, mux, http.MethodPost, Prefix+"/agents", map[string]any{"name": "sre", "modelConfig": "default-model-config", "displayName": "SRE", "toolset": readOnly, "tags": []string{"ops", "triage"},
 		"skills": []map[string]any{{"git": map[string]any{"url": skillsRepo, "ref": "main"}, "path": "runbooks"}}})
 	require.Equal(t, http.StatusCreated, code, body)
 	assert.Equal(t, true, body["created"].(map[string]any)["helmRelease"])
@@ -205,6 +206,23 @@ func TestRESTLifecycle(t *testing.T) {
 	assert.Equal(t, http.StatusOK, code)
 	require.Len(t, body["agents"], 1)
 	assert.Contains(t, body["agents"].([]any)[0], "values")
+	for _, tc := range []struct {
+		name  string
+		query string
+		want  int
+	}{
+		{name: "no filter", query: "", want: 1},
+		{name: "empty filter", query: "&tags=", want: 1},
+		{name: "any of them matches", query: "&tags=nope&tags=triage", want: 1},
+		{name: "comma-joined, case and spaces ignored", query: "&tags=nope,%20OPS%20", want: 1},
+		{name: "none matches", query: "&tags=nope", want: 0},
+	} {
+		t.Run("tags filter/"+tc.name, func(t *testing.T) {
+			code, body := do(t, mux, http.MethodGet, Prefix+"/agents?namespace=kagent"+tc.query, nil)
+			assert.Equal(t, http.StatusOK, code)
+			assert.Len(t, body["agents"], tc.want)
+		})
+	}
 
 	code, body = do(t, mux, http.MethodGet, Prefix+"/agents/kagent/sre", nil)
 	assert.Equal(t, http.StatusOK, code)
@@ -392,6 +410,13 @@ func TestMCPToolsMirrorREST(t *testing.T) {
 			assert.NotContains(t, tool.InputSchema.Required, "toolset")
 		}
 		switch tool.Name {
+		case ToolCreateAgent, ToolUpdateAgent, ToolValidateAgent:
+			tags, ok := tool.InputSchema.Properties["tags"].(map[string]any)
+			require.True(t, ok, "%s takes tags", tool.Name)
+			assert.Equal(t, "array", tags["type"], "%s: tags is a list", tool.Name)
+			assert.NotContains(t, tool.InputSchema.Required, "tags")
+		}
+		switch tool.Name {
 		case ToolCreateAgent, ToolUpdateAgent, ToolDeleteAgent:
 			for _, arg := range []string{"mode", "dryRun", "repository", "branch", "path"} {
 				assert.Contains(t, tool.InputSchema.Properties, arg, "%s takes %s", tool.Name, arg)
@@ -444,7 +469,7 @@ func TestMCPToolsMirrorREST(t *testing.T) {
 	assert.Contains(t, text, "reserved")
 
 	text, isErr = callTool(t, srv, ToolCreateAgent, map[string]any{
-		"name": "sre", "modelConfig": "default-model-config", "displayName": "SRE",
+		"name": "sre", "modelConfig": "default-model-config", "displayName": "SRE", "tags": []string{"ops"},
 		"skills":  []map[string]any{{"git": map[string]any{"url": skillsRepo, "ref": "main"}, "path": "runbooks"}},
 		"toolset": []string{"preset:read-only", "workflow:incident-triage"},
 	})
@@ -510,6 +535,32 @@ func TestMCPToolsMirrorREST(t *testing.T) {
 	require.False(t, isErr, text)
 	assert.Contains(t, text, `"values"`, "details reports every agent in full")
 	assert.Contains(t, text, `"commit":"`+mainHead+`"`)
+	for _, tc := range []struct {
+		name string
+		tags any
+		want bool
+	}{
+		{name: "no filter", tags: nil, want: true},
+		{name: "empty filter", tags: []string{}, want: true},
+		{name: "any of them, case and spaces ignored", tags: []string{"nope", " OPS "}, want: true},
+		{name: "none matches", tags: []string{"nope"}, want: false},
+		{name: "one string", tags: "OPS", want: true},
+		{name: "one string, none matches", tags: "nope", want: false},
+		{name: "comma-joined string", tags: "nope, ops", want: true},
+		{name: "comma-joined element", tags: []string{"nope,ops"}, want: true},
+	} {
+		args := map[string]any{}
+		if tc.tags != nil {
+			args["tags"] = tc.tags
+		}
+		text, isErr = callTool(t, srv, ToolListAgents, args)
+		require.False(t, isErr, text)
+		if tc.want {
+			assert.Contains(t, text, `"name":"sre"`, tc.name)
+		} else {
+			assert.Equal(t, `{"agents":[]}`, text, tc.name)
+		}
+	}
 
 	text, isErr = callTool(t, srv, ToolDeleteAgent, map[string]any{"name": "sre"})
 	require.False(t, isErr, text)
@@ -566,4 +617,21 @@ func TestMCPErrorsCarryTheCodeOnce(t *testing.T) {
 	}
 	got := errResult(errors.New("boom")).Content[0].(mcp.TextContent).Text
 	assert.Equal(t, "backend_error: boom", got)
+}
+
+func TestSpecToUpdateTags(t *testing.T) {
+	tests := []struct {
+		name string
+		tags []string
+		want *[]string
+	}{
+		{name: "absent leaves them", tags: nil, want: nil},
+		{name: "empty clears", tags: []string{}, want: &[]string{}},
+		{name: "replaced", tags: []string{"util"}, want: &[]string{"util"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, SpecToUpdate(agents.Spec{Name: "sre", Tags: tc.tags}).Tags)
+		})
+	}
 }

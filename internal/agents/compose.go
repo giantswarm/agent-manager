@@ -9,6 +9,8 @@ import (
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/yaml"
+
+	"github.com/giantswarm/agent-manager/internal/tags"
 )
 
 // The composition mirrors the portal's composeManifests.ts: an agent is a Flux
@@ -154,6 +156,22 @@ func ValidateSystemMessage(message string) error {
 	return nil
 }
 
+// FilterByTags keeps the agents that carry any of filter (normalized first);
+// no tags keeps them all.
+func FilterByTags(list []Agent, filter []string) []Agent {
+	want := tags.Normalize(filter)
+	if len(want) == 0 {
+		return list
+	}
+	out := []Agent{}
+	for _, a := range list {
+		if tags.HasAny(a.Tags, want) {
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
 var dns1123 = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
 
 // ValidateName checks the technical name before it is used: a DNS-1123 label
@@ -186,6 +204,9 @@ func BuildValues(spec Spec, cfg ComposeConfig) map[string]any {
 	}
 	if strings.TrimSpace(spec.DisplayName) != "" {
 		agent["displayName"] = spec.DisplayName
+	}
+	if list := tags.Normalize(spec.Tags); len(list) > 0 {
+		agent["tags"] = toAnySlice(list)
 	}
 	if strings.TrimSpace(spec.Description) != "" {
 		agent["description"] = spec.Description

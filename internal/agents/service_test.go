@@ -1003,6 +1003,7 @@ func TestListModelConfigsAndInfo(t *testing.T) {
 	assert.Equal(t, []string{"kagent", "tenant"}, info.Namespaces.Managed)
 	assert.Equal(t, "serviceAccount", info.Identity)
 	assert.True(t, info.Capabilities["create"])
+	assert.True(t, info.Capabilities["tags"])
 	assert.False(t, info.Capabilities["skills"], "no repositories configured")
 	assert.False(t, info.Capabilities["writesAsCaller"])
 	commit, declared := info.Capabilities["commit"]
