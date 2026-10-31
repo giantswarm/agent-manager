@@ -16,6 +16,7 @@ import (
 
 	spec "github.com/giantswarm/agent-manager/api"
 	"github.com/giantswarm/agent-manager/internal/agents"
+	"github.com/giantswarm/agent-manager/internal/tags"
 )
 
 // Prefix is the REST base path.
@@ -102,6 +103,7 @@ func (h *REST) listAgents(w http.ResponseWriter, r *http.Request) {
 		h.writeError(w, err)
 		return
 	}
+	list = agents.FilterByTags(list, tagsQuery(q))
 	if strings.EqualFold(q.Get("details"), "true") {
 		writeJSON(w, http.StatusOK, map[string]any{"agents": list})
 		return
@@ -228,8 +230,12 @@ func (h *REST) listSkills(w http.ResponseWriter, r *http.Request) {
 		h.writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, res)
+	writeJSON(w, http.StatusOK, agents.FilterSkillsByTags(res, tagsQuery(q)))
 }
+
+// tagsQuery reads the tags filter: repeated (tags=a&tags=b), comma-joined
+// (tags=a,b) or both.
+func tagsQuery(q url.Values) []string { return tags.Split(q["tags"]) }
 
 func (h *REST) listSessions(w http.ResponseWriter, r *http.Request) {
 	res, err := h.svc.ListSessions(r.Context(), r.PathValue("namespace"), r.PathValue("name"), strings.EqualFold(r.URL.Query().Get("allCreators"), "true"))
@@ -360,6 +366,10 @@ func SpecToUpdate(s agents.Spec) agents.Update {
 	upd.Harness = str(s.Harness)
 	upd.IconURL = str(s.IconURL)
 	upd.DefaultWorkspace = str(s.DefaultWorkspace)
+	if s.Tags != nil {
+		tags := s.Tags
+		upd.Tags = &tags
+	}
 	if s.DefaultToolchains != nil {
 		toolchains := s.DefaultToolchains
 		upd.DefaultToolchains = &toolchains

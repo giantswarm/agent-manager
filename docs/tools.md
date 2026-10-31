@@ -227,6 +227,13 @@ name is the DNS-1123 name the person chose, never derived from displayName. mode
       "description": "System prompt; omit for the chart's default prompt. At most 20000 characters; put long reference material in a skill.",
       "type": "string"
     },
+    "tags": {
+      "description": "Tags: lowercase letters and digits, '-'-separated, max 63 chars each; lowercased and deduplicated.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
     "toolset": {
       "description": "Gateway tools the agent may use: preset:<name>, server:<name>, workflow:<name> or tool:<name> selectors, at most 32; preset:none means no tools.",
       "items": {
@@ -527,6 +534,13 @@ managed: helmrelease is writable here, gitops changes only with mode commit, non
     "organization": {
       "description": "With cluster: the organization owning the workload cluster the agent runs on. Omit both for the installation's own cluster.",
       "type": "string"
+    },
+    "tags": {
+      "description": "Only those with any of these tags",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
     }
   },
   "required": [],
@@ -628,7 +642,7 @@ Read through agentgateway as you. allCreators includes every person's sessions, 
 ```text
 List the skills agents can mount, from the configured skill repositories, with each repository's head commit.
 
-Per repository: the ref read, the commit it resolved to (what a skills entry pins) and each SKILL.md's name, description and path. Cached briefly; refresh re-reads GitHub.
+Per repository: the ref read, the commit it resolved to (what a skills entry pins) and each SKILL.md's name, description, path and tags (metadata.tags). Cached briefly; refresh re-reads GitHub.
 ```
 
 ```json
@@ -645,6 +659,13 @@ Per repository: the ref read, the commit it resolved to (what a skills entry pin
     "repository": {
       "description": "Only this repository (https://github.com/<owner>/<repo>); default: every configured one",
       "type": "string"
+    },
+    "tags": {
+      "description": "Only those with any of these tags",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
     }
   },
   "required": [],
@@ -950,6 +971,13 @@ Lists are skills, plugins, egress and toolset. "" clears a text field back to th
       "description": "New system prompt; \"\" restores the chart default. At most 20000 characters; put long reference material in a skill.",
       "type": "string"
     },
+    "tags": {
+      "description": "Replaces the whole tag list ([] clears it). Tags: lowercase letters and digits, '-'-separated, max 63 chars each; lowercased and deduplicated.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
     "toolset": {
       "description": "Replaces the whole toolset: preset:<name>, server:<name>, workflow:<name> or tool:<name> selectors, at most 32; [] is refused: use preset:none.",
       "items": {
@@ -1161,6 +1189,13 @@ Checks the name, modelConfig, egressPolicyRefs, harness and toolset (required fo
     "systemMessage": {
       "description": "System prompt. At most 20000 characters; put long reference material in a skill.",
       "type": "string"
+    },
+    "tags": {
+      "description": "Tags: lowercase letters and digits, '-'-separated, max 63 chars each; lowercased and deduplicated.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
     },
     "toolset": {
       "description": "Gateway tools the agent may use: preset:<name>, server:<name>, workflow:<name> or tool:<name> selectors, at most 32; preset:none means no tools.",

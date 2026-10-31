@@ -79,6 +79,9 @@ const (
 	// read by the Dev Portal, Swarmgeist and agent-manager.
 	DisplayNameAnnotation = "ui.giantswarm.io/display-name"
 	IconURLAnnotation     = "ui.giantswarm.io/icon-url"
+	// TagsAnnotation is the agent chart's contract for the agent's tags
+	// (chart agent.tags, comma-joined).
+	TagsAnnotation = "ui.giantswarm.io/tags"
 	// CreatedByAnnotation records who created an agent: on the HelmRelease
 	// and, through the chart's annotations value, on the Agent object. Set
 	// on create, never changed, and read for display and filtering only,
@@ -206,6 +209,10 @@ type Spec struct {
 	Name string `json:"name"`
 	// DisplayName is the friendly Unicode name (max 63 chars).
 	DisplayName string `json:"displayName,omitempty"`
+	// Tags are free-form keywords (chart agent.tags, rendered as the
+	// ui.giantswarm.io/tags annotation), normalized by tags.Normalize; the
+	// chart schema judges their form.
+	Tags []string `json:"tags,omitempty"`
 	// Description goes to spec.template.description.
 	Description string `json:"description,omitempty"`
 	// SystemMessage is the system prompt (spec.template.systemPrompt); empty
@@ -275,6 +282,8 @@ type Update struct {
 	Description   *string `json:"description,omitempty"`
 	SystemMessage *string `json:"systemMessage,omitempty"`
 	ModelConfig   *string `json:"modelConfig,omitempty"`
+	// Tags replaces the agent's whole tag list; empty clears it.
+	Tags *[]string `json:"tags,omitempty"`
 	// Harness moves the agent to another Harness of its namespace after the
 	// checks a create on it runs; "" selects the platform Harness. Sessions
 	// that exist keep the revision they started on.
@@ -396,7 +405,10 @@ type Agent struct {
 	// object yet (or failed to).
 	Exists      bool   `json:"exists"`
 	DisplayName string `json:"displayName,omitempty"`
-	Description string `json:"description,omitempty"`
+	// Tags are the agent's tags (TagsAnnotation; the chart value agent.tags
+	// while nothing is rendered).
+	Tags        []string `json:"tags,omitempty"`
+	Description string   `json:"description,omitempty"`
 	// CreatedBy is the caller who created the agent (CreatedByAnnotation);
 	// empty for an agent created before it was recorded.
 	CreatedBy string `json:"createdBy,omitempty"`
@@ -465,6 +477,7 @@ type AgentSummary struct {
 	Target
 	Exists                    bool     `json:"exists"`
 	DisplayName               string   `json:"displayName,omitempty"`
+	Tags                      []string `json:"tags,omitempty"`
 	Description               string   `json:"description,omitempty"`
 	CreatedBy                 string   `json:"createdBy,omitempty"`
 	DefaultWorkspace          string   `json:"defaultWorkspace,omitempty"`
@@ -493,6 +506,7 @@ func (a Agent) Summary() AgentSummary {
 		Target:                    a.Target,
 		Exists:                    a.Exists,
 		DisplayName:               a.DisplayName,
+		Tags:                      a.Tags,
 		Description:               a.Description,
 		CreatedBy:                 a.CreatedBy,
 		DefaultWorkspace:          a.DefaultWorkspace,

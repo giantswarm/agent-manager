@@ -17,6 +17,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/giantswarm/agent-manager/internal/agents"
+	"github.com/giantswarm/agent-manager/internal/tags"
 )
 
 // MCP tool names. Through muster they appear as x_<server>_<tool>, e.g.
@@ -56,6 +57,7 @@ const (
 	argCluster        = "cluster"
 	argName           = "name"
 	argDisplayName    = "displayName"
+	argTags           = "tags"
 	argDescription    = "description"
 	argSystemMessage  = "systemMessage"
 	argModelConfig    = "modelConfig"
@@ -188,6 +190,10 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 	defaultWSDesc := "Workspace <namespace>/<name> of the agent's namespace that a start_session naming none starts in, authorized as its starter"
 	defaultWSProp := mcp.WithString(argDefaultWS, mcp.Description(defaultWSDesc+"."))
 	defaultWSReplaceProp := mcp.WithString(argDefaultWS, mcp.Description(defaultWSDesc+"; \"\" removes it."))
+	tagsDesc := "Tags: lowercase letters and digits, '-'-separated, max 63 chars each; lowercased and deduplicated"
+	tagsProp := mcp.WithArray(argTags, mcp.Description(tagsDesc+"."), mcp.Items(stringSchema))
+	tagsFilterProp := mcp.WithArray(argTags, mcp.Description("Only those with any of these tags"), mcp.Items(stringSchema))
+	tagsReplaceProp := mcp.WithArray(argTags, mcp.Description("Replaces the whole tag list ([] clears it). "+tagsDesc+"."), mcp.Items(stringSchema))
 	defaultTCDesc := "Toolchains, name[@version] (default latest), a start_session naming none mounts; none: github"
 	defaultTCProp := mcp.WithArray(argDefaultTC, mcp.Description(defaultTCDesc+"."), mcp.Items(stringSchema))
 	defaultTCReplaceProp := mcp.WithArray(argDefaultTC, mcp.Description(defaultTCDesc+"; [] removes them."), mcp.Items(stringSchema))
@@ -250,6 +256,7 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 		orgProp,
 		clusterProp,
 		mcp.WithBoolean(argDetails, mcp.Description("Report every agent in full, as get_agent does (default false). Large: prefer get_agent for the agents you need.")),
+		tagsFilterProp,
 		mcp.WithReadOnlyHintAnnotation(true),
 		mcp.WithDestructiveHintAnnotation(false),
 		mcp.WithIdempotentHintAnnotation(false),
@@ -276,6 +283,7 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 		mcp.WithString(argModelConfig, mcp.Required(), mcp.Description("Name of an existing kagent ModelConfig in the namespace (list_model_configs)")),
 		mcp.WithString(argHarness, mcp.Description(harnessDesc)),
 		mcp.WithString(argDisplayName, mcp.Description("Friendly Unicode name (max 63 chars), shown by the portal")),
+		tagsProp,
 		mcp.WithString(argDescription, mcp.Description("What the agent is for")),
 		mcp.WithString(argSystemMessage, mcp.Description("System prompt; omit for the chart's default prompt. "+systemMessageLimit)),
 		mcp.WithString(argIconURL, mcp.Description("Avatar URL (chart agent.iconUrl, rendered as the ui.giantswarm.io/icon-url annotation); omit unless the installation serves avatars")),
@@ -304,6 +312,7 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 			"Lists are skills, plugins, egress and toolset. \"\" clears a text field back to the chart default; gitAuthSecretName \"\" goes back to the installation's. "+presetsSentence+" refreshSkills re-pins every git skill and git plugin. harness re-runs the create-time checks on the new Harness. Returns the values before and after. A suspended release is refused unless force is true; a GitOps-owned one needs mode commit."),
 		mcp.WithString(argName, mcp.Required(), mcp.Description("Agent name")),
 		mcp.WithString(argDisplayName, mcp.Description("New friendly name; \"\" clears it")),
+		tagsReplaceProp,
 		mcp.WithString(argDescription, mcp.Description("New description; \"\" clears it")),
 		mcp.WithString(argSystemMessage, mcp.Description("New system prompt; \"\" restores the chart default. "+systemMessageLimit)),
 		mcp.WithString(argModelConfig, mcp.Description("Name of an existing ModelConfig in the namespace")),
@@ -366,6 +375,7 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 		mcp.WithString(argModelConfig, mcp.Description("ModelConfig name (required for a create)")),
 		mcp.WithString(argHarness, mcp.Description(harnessDesc)),
 		mcp.WithString(argDisplayName, mcp.Description("Friendly name")),
+		tagsProp,
 		mcp.WithString(argDescription, mcp.Description("Description")),
 		mcp.WithString(argSystemMessage, mcp.Description("System prompt. "+systemMessageLimit)),
 		mcp.WithString(argIconURL, mcp.Description("Avatar URL")),
@@ -418,10 +428,11 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 
 	s.AddTool(mcp.NewTool(ToolListSkills,
 		tooldesc.Describe("List the skills agents can mount, from the configured skill repositories, with each repository's head commit.",
-			"Per repository: the ref read, the commit it resolved to (what a skills entry pins) and each SKILL.md's name, description and path. Cached briefly; refresh re-reads GitHub."),
+			"Per repository: the ref read, the commit it resolved to (what a skills entry pins) and each SKILL.md's name, description, path and tags (metadata.tags). Cached briefly; refresh re-reads GitHub."),
 		mcp.WithString(argRepository, mcp.Description("Only this repository (https://github.com/<owner>/<repo>); default: every configured one")),
 		mcp.WithString(argRef, mcp.Description("Git ref to read; default: the default branch (the ref refreshSkills follows)")),
 		mcp.WithBoolean(argRefresh, mcp.Description("Bypass the cache (default false)")),
+		tagsFilterProp,
 		mcp.WithReadOnlyHintAnnotation(true),
 		mcp.WithDestructiveHintAnnotation(false),
 		mcp.WithIdempotentHintAnnotation(false),
@@ -543,6 +554,7 @@ func (t *tools) listAgents(ctx context.Context, req mcp.CallToolRequest) (*mcp.C
 	if err != nil {
 		return errResult(err), nil
 	}
+	list = agents.FilterByTags(list, tagsArg(req))
 	if req.GetBool(argDetails, false) {
 		return jsonResult(map[string]any{"agents": list})
 	}
@@ -680,7 +692,7 @@ func (t *tools) listSkills(ctx context.Context, req mcp.CallToolRequest) (*mcp.C
 	if err != nil {
 		return errResult(err), nil
 	}
-	return jsonResult(res)
+	return jsonResult(agents.FilterSkillsByTags(res, tagsArg(req)))
 }
 
 func (t *tools) listSessions(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -761,4 +773,23 @@ func errResult(err error) *mcp.CallToolResult {
 		msg = strings.TrimPrefix(msg, sentinel.Error()+": ")
 	}
 	return mcp.NewToolResultError(code + ": " + msg)
+}
+
+// tagsArg reads the tags filter of list_agents and list_skills: a list or one
+// string, each value split on commas, as the REST query is.
+func tagsArg(req mcp.CallToolRequest) []string {
+	var values []string
+	switch v := req.GetArguments()[argTags].(type) {
+	case string:
+		values = []string{v}
+	case []any:
+		for _, item := range v {
+			if s, ok := item.(string); ok {
+				values = append(values, s)
+			}
+		}
+	case []string:
+		values = v
+	}
+	return tags.Split(values)
 }

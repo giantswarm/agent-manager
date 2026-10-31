@@ -20,6 +20,8 @@ import (
 	"time"
 
 	"sigs.k8s.io/yaml"
+
+	"github.com/giantswarm/agent-manager/internal/tags"
 )
 
 // Skill is one discovered skill. Its repository carries the URL, the ref and
@@ -31,6 +33,10 @@ type Skill struct {
 	Description string `json:"description"`
 	// Path is the skill directory; "" at the repository root.
 	Path string `json:"path"`
+	// Tags are the frontmatter's metadata.tags, comma-joined there; a tag
+	// that is not a lowercase '-'-separated word of at most 63 characters is
+	// dropped.
+	Tags []string `json:"tags,omitempty"`
 }
 
 // Repository is the discovery result of one configured repository.
@@ -260,7 +266,8 @@ func (d *Discoverer) read(ctx context.Context, repoURL, ref string) (Repository,
 		}
 		content := contents[i]
 		dir := skillDir(path)
-		fm := parseFrontmatter(content)
+		doc := frontmatter(content)
+		fm := scalars(doc)
 		skillName := strings.TrimSpace(fm["name"])
 		if skillName == "" {
 			if dir != "" {
@@ -274,6 +281,7 @@ func (d *Discoverer) read(ctx context.Context, repoURL, ref string) (Repository,
 			Name:        skillName,
 			Description: strings.TrimSpace(fm["description"]),
 			Path:        dir,
+			Tags:        metadataTags(doc),
 		})
 	}
 	sort.Slice(repo.Skills, func(i, j int) bool {
@@ -288,11 +296,16 @@ func (d *Discoverer) read(ctx context.Context, repoURL, ref string) (Repository,
 // parseFrontmatter reads the YAML block between the leading `---` lines and
 // returns its scalar string fields; anything else yields an empty map.
 func parseFrontmatter(content string) map[string]string {
-	out := map[string]string{}
+	return scalars(frontmatter(content))
+}
+
+// frontmatter parses the YAML block between the leading `---` lines; nil
+// when there is none or it does not parse.
+func frontmatter(content string) map[string]any {
 	content = strings.TrimPrefix(content, "\uFEFF")
 	lines := strings.Split(content, "\n")
 	if len(lines) == 0 || strings.TrimSpace(lines[0]) != "---" {
-		return out
+		return nil
 	}
 	end := -1
 	for i := 1; i < len(lines); i++ {
@@ -302,16 +315,31 @@ func parseFrontmatter(content string) map[string]string {
 		}
 	}
 	if end < 0 {
-		return out
+		return nil
 	}
 	var doc map[string]any
 	if err := yaml.Unmarshal([]byte(strings.Join(lines[1:end], "\n")), &doc); err != nil {
-		return out
+		return nil
 	}
+	return doc
+}
+
+// scalars keeps the frontmatter's string fields.
+func scalars(doc map[string]any) map[string]string {
+	out := map[string]string{}
 	for k, v := range doc {
 		if s, ok := v.(string); ok {
 			out[k] = s
 		}
 	}
 	return out
+}
+
+// metadataTags reads metadata.tags, a comma-joined string (the Agent Skills
+// spec allows only string values in metadata), with tags.Parse: a malformed
+// tag is dropped, never the skill.
+func metadataTags(doc map[string]any) []string {
+	metadata, _ := doc["metadata"].(map[string]any)
+	raw, _ := metadata["tags"].(string)
+	return tags.Parse(raw)
 }

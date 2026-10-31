@@ -149,6 +149,7 @@ paths:
           in: query
           description: Report every agent in full, system prompt and HelmRelease values included
           schema: { type: boolean }
+        - $ref: "#/components/parameters/tagsQuery"
       responses:
         "200":
           description: agents
@@ -423,6 +424,7 @@ paths:
         - name: refresh
           in: query
           schema: { type: boolean }
+        - $ref: "#/components/parameters/tagsQuery"
       responses:
         "200":
           description: skills
@@ -692,6 +694,11 @@ components:
       in: query
       description: With organization, the workload cluster the agent runs on (namespace is then the namespace there)
       schema: { type: string }
+    tagsQuery:
+      name: tags
+      in: query
+      description: Only those with any of these tags (repeated or comma-joined; case and spaces ignored)
+      schema: { type: array, items: { type: string } }
     namespacePath:
       name: namespace
       in: path
@@ -741,7 +748,7 @@ components:
         capabilities:
           type: object
           additionalProperties: { type: boolean }
-          description: "list, get, create, update, delete, status, validate, modelConfigs, egressPolicies (egressPolicyRefs and list_egress_policies), skills, writesAsCaller (true when identity is caller), commit (false: the write tools apply live, there is no pull-request mode), targetCluster, sessions (false: the session operations answer 501)"
+          description: "list, get, create, update, delete, status, validate, modelConfigs, egressPolicies (egressPolicyRefs and list_egress_policies), tags (agents carry tags), skills, writesAsCaller (true when identity is caller), commit (false: the write tools apply live, there is no pull-request mode), targetCluster, sessions (false: the session operations answer 501)"
         identity:
           type: string
           enum: [caller, serviceAccount]
@@ -862,6 +869,10 @@ components:
       uniqueItems: true
       description: "Names of EgressPolicies in the agent's namespace whose origins the agent may also reach (chart agent.egressPolicyRefs, the Agent's spec.egressPolicyRefs); each must exist, read as the caller (GET /egresspolicies); an agent on a coding Harness takes none"
       items: { type: string, minLength: 1 }
+    Tags:
+      type: array
+      description: "Free-form keywords (chart agent.tags, the ui.giantswarm.io/tags annotation): lowercase letters and digits in groups joined by single '-', max 63 chars each; trimmed, lowercased and deduplicated, order kept"
+      items: { type: string, maxLength: 63 }
     Spec:
       type: object
       required: [name, modelConfig, toolset]
@@ -871,6 +882,7 @@ components:
         cluster: { type: string, description: "With organization: the workload cluster the agent runs on; absent on the installation's own cluster" }
         name: { type: string, description: DNS-1123 technical name (HelmRelease and Agent name), max 63 chars }
         displayName: { type: string, maxLength: 63 }
+        tags: { $ref: "#/components/schemas/Tags" }
         description: { type: string }
         systemMessage: { type: string }
         modelConfig: { type: string, description: An existing ModelConfig of the namespace }
@@ -891,9 +903,10 @@ components:
         path: { type: string, description: "mode commit with repository: the directory a Kustomization builds from; files go to its agent-manager/ subdirectory" }
     Update:
       type: object
-      description: Partial change; absent fields stay, "" clears, skills, plugins, egress and egressPolicyRefs replace the whole list (skills pinned), toolset replaces the whole list, refreshSkills re-pins every git skill. harness moves the agent to another Harness after the create-time checks on it; "" selects the platform Harness
+      description: Partial change; absent fields stay, "" clears, tags, skills, plugins, egress and egressPolicyRefs replace the whole list (skills pinned), toolset replaces the whole list, refreshSkills re-pins every git skill. harness moves the agent to another Harness after the create-time checks on it; "" selects the platform Harness
       properties:
         displayName: { type: string }
+        tags: { $ref: "#/components/schemas/Tags", description: "Replaces the agent's whole tag list; [] clears it" }
         description: { type: string }
         systemMessage: { type: string }
         modelConfig: { type: string }
@@ -974,6 +987,7 @@ components:
         cluster: { type: string }
         exists: { type: boolean }
         displayName: { type: string }
+        tags: { $ref: "#/components/schemas/Tags" }
         description: { type: string }
         createdBy: { type: string, description: The caller who created the agent (agent-platform.giantswarm.io/created-by); for display and filtering only }
         modelConfig: { type: string }
@@ -994,6 +1008,7 @@ components:
         cluster: { type: string, description: "With organization: the workload cluster the agent runs on; absent on the installation's own cluster" }
         exists: { type: boolean, description: The Agent exists (false while the HelmRelease has not rendered it) }
         displayName: { type: string, description: From the ui.giantswarm.io/display-name annotation }
+        tags: { $ref: "#/components/schemas/Tags", description: "From the ui.giantswarm.io/tags annotation (the chart value agent.tags while nothing is rendered)" }
         description: { type: string }
         createdBy: { type: string, description: "The caller who created the agent: the agent-platform.giantswarm.io/created-by annotation of the Agent, else of the HelmRelease. Set on create, never changed; for display and filtering only, never for authorization" }
         modelConfig: { type: string }
@@ -1164,6 +1179,10 @@ components:
         name: { type: string }
         description: { type: string }
         path: { type: string, description: The skill directory; empty at the repository root }
+        tags:
+          type: array
+          items: { type: string }
+          description: Frontmatter metadata.tags (comma-joined), normalized; malformed tags dropped
     SkillsResult:
       type: object
       properties:
