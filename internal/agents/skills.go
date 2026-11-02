@@ -326,11 +326,10 @@ func PinSkills(ctx context.Context, p SkillPinner, list Skills) (Skills, error) 
 // nil when the list is empty.
 func SkillsValues(list Skills) []any { return skillsValues(list) }
 
-// FilterSkillsByTags keeps the skills that carry any of filter (normalized
-// first); every repository stays, with what matched. No tags keeps them all.
-func FilterSkillsByTags(res *skills.Result, filter []string) *skills.Result {
-	want := tags.Normalize(filter)
-	if res == nil || len(want) == 0 {
+// FilterSkillsByTags keeps the skills that carry any tag of filter; every
+// repository stays, with what matched. An empty filter keeps them all.
+func FilterSkillsByTags(res *skills.Result, filter tags.Filter) *skills.Result {
+	if res == nil || len(filter) == 0 {
 		return res
 	}
 	out := &skills.Result{Repositories: make([]skills.Repository, 0, len(res.Repositories))}
@@ -340,7 +339,7 @@ func FilterSkillsByTags(res *skills.Result, filter []string) *skills.Result {
 			kept = []skills.Skill{}
 		}
 		for _, sk := range repo.Skills {
-			if tags.HasAny(sk.Tags, want) {
+			if filter.Matches(sk.Tags) {
 				kept = append(kept, sk)
 			}
 		}

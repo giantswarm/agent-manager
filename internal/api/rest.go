@@ -235,7 +235,7 @@ func (h *REST) listSkills(w http.ResponseWriter, r *http.Request) {
 
 // tagsQuery reads the tags filter: repeated (tags=a&tags=b), comma-joined
 // (tags=a,b) or both.
-func tagsQuery(q url.Values) []string { return tags.Split(q["tags"]) }
+func tagsQuery(q url.Values) tags.Filter { return tags.NewFilter(q["tags"]) }
 
 func (h *REST) listSessions(w http.ResponseWriter, r *http.Request) {
 	res, err := h.svc.ListSessions(r.Context(), r.PathValue("namespace"), r.PathValue("name"), strings.EqualFold(r.URL.Query().Get("allCreators"), "true"))

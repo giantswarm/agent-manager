@@ -44,23 +44,6 @@ func TestParse(t *testing.T) {
 	}
 }
 
-func TestHasAny(t *testing.T) {
-	tests := []struct {
-		name       string
-		have, want []string
-		match      bool
-	}{
-		{name: "one shared", have: []string{"a", "b"}, want: []string{"x", "b"}, match: true},
-		{name: "none shared", have: []string{"a"}, want: []string{"x"}},
-		{name: "no tags", have: nil, want: []string{"x"}},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.match, HasAny(tc.have, tc.want))
-		})
-	}
-}
-
 func TestParseList(t *testing.T) {
 	tests := []struct {
 		name string
@@ -78,20 +61,23 @@ func TestParseList(t *testing.T) {
 	}
 }
 
-func TestSplit(t *testing.T) {
+func TestFilter(t *testing.T) {
 	tests := []struct {
-		name string
-		in   []string
-		want []string
+		name   string
+		values []string
+		have   []string
+		match  bool
 	}{
-		{name: "nil", in: nil, want: nil},
-		{name: "one empty value", in: []string{""}, want: nil},
-		{name: "repeated", in: []string{"a", "B"}, want: []string{"a", "b"}},
-		{name: "comma-joined and repeated", in: []string{"a, B", " c ,a"}, want: []string{"a", "b", "c"}},
+		{name: "nil matches everything", values: nil, have: nil, match: true},
+		{name: "only blanks match everything", values: []string{"", " , "}, have: []string{"a"}, match: true},
+		{name: "repeated", values: []string{"x", "B"}, have: []string{"a", "b"}, match: true},
+		{name: "comma-joined, case and spaces ignored", values: []string{"x, A "}, have: []string{"a"}, match: true},
+		{name: "none shared", values: []string{"x"}, have: []string{"a"}},
+		{name: "no tags", values: []string{"x"}, have: nil},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, Split(tc.in))
+			assert.Equal(t, tc.match, NewFilter(tc.values).Matches(tc.have))
 		})
 	}
 }

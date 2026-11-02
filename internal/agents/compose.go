@@ -156,16 +156,15 @@ func ValidateSystemMessage(message string) error {
 	return nil
 }
 
-// FilterByTags keeps the agents that carry any of filter (normalized first);
-// no tags keeps them all.
-func FilterByTags(list []Agent, filter []string) []Agent {
-	want := tags.Normalize(filter)
-	if len(want) == 0 {
+// FilterByTags keeps the agents that carry any tag of filter; an empty
+// filter keeps them all.
+func FilterByTags(list []Agent, filter tags.Filter) []Agent {
+	if len(filter) == 0 {
 		return list
 	}
 	out := []Agent{}
 	for _, a := range list {
-		if tags.HasAny(a.Tags, want) {
+		if filter.Matches(a.Tags) {
 			out = append(out, a)
 		}
 	}

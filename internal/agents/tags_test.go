@@ -1,7 +1,6 @@
 package agents
 
 import (
-	"context"
 	"strings"
 	"testing"
 
@@ -10,6 +9,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/giantswarm/agent-manager/internal/skills"
+	"github.com/giantswarm/agent-manager/internal/tags"
 )
 
 func TestBuildValuesComposesTags(t *testing.T) {
@@ -52,7 +52,7 @@ func TestMergedValuesTags(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			f := seeded(t)
-			ctx := context.Background()
+			ctx := t.Context()
 			hr, err := f.dyn.Resource(hrGVR).Namespace("kagent").Get(ctx, "verifier", metav1.GetOptions{})
 			require.NoError(t, err)
 			values := mustValues(hr)
@@ -141,7 +141,7 @@ func TestFilterByTags(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			got := []string{}
-			for _, a := range FilterByTags(list, tc.tags) {
+			for _, a := range FilterByTags(list, tags.NewFilter(tc.tags)) {
 				got = append(got, a.Name)
 			}
 			assert.Equal(t, tc.want, got)
@@ -171,7 +171,7 @@ func TestFilterSkillsByTags(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := FilterSkillsByTags(res, tc.tags)
+			got := FilterSkillsByTags(res, tags.NewFilter(tc.tags))
 			require.Len(t, got.Repositories, 3)
 			assert.Nil(t, got.Repositories[2].Skills, "nil stays nil, as unfiltered")
 			assert.Equal(t, "c1", got.Repositories[0].Commit)
@@ -187,3 +187,4 @@ func TestFilterSkillsByTags(t *testing.T) {
 	}
 	assert.Len(t, res.Repositories[0].Skills, 3, "the input (the discoverer's cache) is not changed")
 }
+

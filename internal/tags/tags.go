@@ -3,7 +3,6 @@ package tags
 
 import (
 	"regexp"
-	"slices"
 	"strings"
 )
 
@@ -16,24 +15,19 @@ var pattern = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
 // and keeps the order of first appearance.
 func Normalize(list []string) []string {
 	var out []string
+	seen := make(map[string]struct{}, len(list))
 	for _, tag := range list {
 		tag = strings.ToLower(strings.TrimSpace(tag))
-		if tag == "" || slices.Contains(out, tag) {
+		if tag == "" {
 			continue
 		}
+		if _, dup := seen[tag]; dup {
+			continue
+		}
+		seen[tag] = struct{}{}
 		out = append(out, tag)
 	}
 	return out
-}
-
-// Split splits every value on commas and normalizes the result: how a filter
-// is read, whether it came as one comma-joined value or several.
-func Split(values []string) []string {
-	var all []string
-	for _, v := range values {
-		all = append(all, strings.Split(v, ",")...)
-	}
-	return Normalize(all)
 }
 
 // ParseList normalizes list and drops every tag that is not a lowercase
@@ -54,7 +48,34 @@ func Parse(joined string) []string {
 	return ParseList(strings.Split(joined, ","))
 }
 
-// HasAny reports whether have holds any of want (both normalized).
-func HasAny(have, want []string) bool {
-	return slices.ContainsFunc(want, func(tag string) bool { return slices.Contains(have, tag) })
+// Filter is the set of tags a list request asks for; an item matches when it
+// carries any of them.
+type Filter map[string]struct{}
+
+// NewFilter splits every value on commas and normalizes the result, whether
+// the filter came as one comma-joined value or several.
+func NewFilter(values []string) Filter {
+	f := Filter{}
+	for _, v := range values {
+		for _, tag := range strings.Split(v, ",") {
+			if tag = strings.ToLower(strings.TrimSpace(tag)); tag != "" {
+				f[tag] = struct{}{}
+			}
+		}
+	}
+	return f
+}
+
+// Matches reports whether have holds any tag of f; an empty filter matches
+// everything.
+func (f Filter) Matches(have []string) bool {
+	if len(f) == 0 {
+		return true
+	}
+	for _, tag := range have {
+		if _, ok := f[tag]; ok {
+			return true
+		}
+	}
+	return false
 }

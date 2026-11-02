@@ -635,3 +635,58 @@ func TestSpecToUpdateTags(t *testing.T) {
 		})
 	}
 }
+
+func TestTagsArgRefusesWhatIsNotAString(t *testing.T) {
+	tests := []struct {
+		name    string
+		args    map[string]any
+		want    []string
+		invalid bool
+	}{
+		{name: "absent", args: map[string]any{}},
+		{name: "null", args: map[string]any{"tags": nil}},
+		{name: "one string, comma-joined", args: map[string]any{"tags": "a, B"}, want: []string{"a", "b"}},
+		{name: "list", args: map[string]any{"tags": []any{"a", "b,c"}}, want: []string{"a", "b", "c"}},
+		{name: "number", args: map[string]any{"tags": 1}, invalid: true},
+		{name: "object", args: map[string]any{"tags": map[string]any{"a": "b"}}, invalid: true},
+		{name: "list of numbers", args: map[string]any{"tags": []any{"a", 1}}, invalid: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var req mcp.CallToolRequest
+			req.Params.Arguments = tc.args
+			got, err := tagsArg(req)
+			if tc.invalid {
+				require.ErrorIs(t, err, agents.ErrInvalid)
+				return
+			}
+			require.NoError(t, err)
+			for _, tag := range tc.want {
+				assert.Contains(t, got, tag)
+			}
+			assert.Len(t, got, len(tc.want))
+		})
+	}
+}
+
+func TestUpdateAgentArgumentsKeepOrClearTags(t *testing.T) {
+	tests := []struct {
+		name string
+		args map[string]any
+		want *[]string
+	}{
+		{name: "absent keeps them", args: map[string]any{"name": "sre"}, want: nil},
+		{name: "null keeps them", args: map[string]any{"name": "sre", "tags": nil}, want: nil},
+		{name: "empty list clears them", args: map[string]any{"name": "sre", "tags": []any{}}, want: &[]string{}},
+		{name: "list replaces them", args: map[string]any{"name": "sre", "tags": []any{"ops"}}, want: &[]string{"ops"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var req mcp.CallToolRequest
+			req.Params.Arguments = tc.args
+			var upd agents.Update
+			require.NoError(t, req.BindArguments(&upd))
+			assert.Equal(t, tc.want, upd.Tags)
+		})
+	}
+}

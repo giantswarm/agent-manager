@@ -550,11 +550,15 @@ func (t *tools) getInfo(ctx context.Context, _ mcp.CallToolRequest) (*mcp.CallTo
 }
 
 func (t *tools) listAgents(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	filter, err := tagsArg(req)
+	if err != nil {
+		return errResult(err), nil
+	}
 	list, err := t.svc.List(ctx, locationFromArgs(req))
 	if err != nil {
 		return errResult(err), nil
 	}
-	list = agents.FilterByTags(list, tagsArg(req))
+	list = agents.FilterByTags(list, filter)
 	if req.GetBool(argDetails, false) {
 		return jsonResult(map[string]any{"agents": list})
 	}
@@ -688,11 +692,15 @@ func (t *tools) listEgressPolicies(ctx context.Context, req mcp.CallToolRequest)
 }
 
 func (t *tools) listSkills(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	filter, err := tagsArg(req)
+	if err != nil {
+		return errResult(err), nil
+	}
 	res, err := t.svc.ListSkills(ctx, req.GetString(argRepository, ""), req.GetString(argRef, ""), req.GetBool(argRefresh, false))
 	if err != nil {
 		return errResult(err), nil
 	}
-	return jsonResult(agents.FilterSkillsByTags(res, tagsArg(req)))
+	return jsonResult(agents.FilterSkillsByTags(res, filter))
 }
 
 func (t *tools) listSessions(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -775,21 +783,26 @@ func errResult(err error) *mcp.CallToolResult {
 	return mcp.NewToolResultError(code + ": " + msg)
 }
 
-// tagsArg reads the tags filter of list_agents and list_skills: a list or one
-// string, each value split on commas, as the REST query is.
-func tagsArg(req mcp.CallToolRequest) []string {
-	var values []string
+// tagsArg reads the tags filter of list_agents and list_skills: a list of
+// strings or one string, each value split on commas, as the REST query is.
+// Any other type is refused, so a malformed filter never lists everything.
+func tagsArg(req mcp.CallToolRequest) (tags.Filter, error) {
 	switch v := req.GetArguments()[argTags].(type) {
+	case nil:
+		return nil, nil
 	case string:
-		values = []string{v}
+		return tags.NewFilter([]string{v}), nil
 	case []any:
+		values := make([]string, 0, len(v))
 		for _, item := range v {
-			if s, ok := item.(string); ok {
-				values = append(values, s)
+			s, ok := item.(string)
+			if !ok {
+				return nil, fmt.Errorf("%w: tags must be strings", agents.ErrInvalid)
 			}
+			values = append(values, s)
 		}
-	case []string:
-		values = v
+		return tags.NewFilter(values), nil
+	default:
+		return nil, fmt.Errorf("%w: tags must be a list of strings or a string", agents.ErrInvalid)
 	}
-	return tags.Split(values)
 }
