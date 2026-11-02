@@ -270,8 +270,9 @@ func (s *Service) Info(ctx context.Context) InfoResponse {
 		// egressPolicies: create_agent, update_agent and validate_agent take
 		// egressPolicyRefs, and list_egress_policies lists the names.
 		"egressPolicies": true,
-		// tags: create_agent, update_agent and the reads carry tags.
-		"tags": true,
+		// tags: create_agent, update_agent and the reads carry tags; only
+		// a chart whose schema takes agent.tags accepts a write that sets them.
+		"tags": s.chartTakesTags(ctx),
 	}
 	out.Identity = s.kube.Identity()
 	kagentAPI := KagentAPIGroup + "/" + s.cfg.KagentAPIVersion
@@ -751,6 +752,14 @@ func (s *Service) ListSkills(ctx context.Context, repository, ref string, refres
 		out.Repositories = append(out.Repositories, repo)
 	}
 	return out, nil
+}
+
+// chartTakesTags reports whether the agent chart that validates the agents
+// declares agent.tags (2.5.0 on); an older chart's schema refuses the key.
+func (s *Service) chartTakesTags(ctx context.Context) bool {
+	doc, _ := s.chart.Schema(ctx).Document.(map[string]any)
+	_, found, _ := unstructured.NestedFieldNoCopy(doc, "properties", "agent", "properties", "tags")
+	return found
 }
 
 // ---- validate ------------------------------------------------------------------

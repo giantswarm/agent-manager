@@ -748,7 +748,7 @@ components:
         capabilities:
           type: object
           additionalProperties: { type: boolean }
-          description: "list, get, create, update, delete, status, validate, modelConfigs, egressPolicies (egressPolicyRefs and list_egress_policies), tags (agents carry tags), skills, writesAsCaller (true when identity is caller), commit (false: the write tools apply live, there is no pull-request mode), targetCluster, sessions (false: the session operations answer 501)"
+          description: "list, get, create, update, delete, status, validate, modelConfigs, egressPolicies (egressPolicyRefs and list_egress_policies), tags (agents carry tags; false when the agent chart in use does not take agent.tags), skills, writesAsCaller (true when identity is caller), commit (false: the write tools apply live, there is no pull-request mode), targetCluster, sessions (false: the session operations answer 501)"
         identity:
           type: string
           enum: [caller, serviceAccount]

@@ -1,13 +1,17 @@
 package agents
 
 import (
+	"context"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 
+	"github.com/giantswarm/agent-manager/internal/chart"
 	"github.com/giantswarm/agent-manager/internal/skills"
 	"github.com/giantswarm/agent-manager/internal/tags"
 )
@@ -188,3 +192,30 @@ func TestFilterSkillsByTags(t *testing.T) {
 	assert.Len(t, res.Repositories[0].Skills, 3, "the input (the discoverer's cache) is not changed")
 }
 
+// tagsChart is the embedded agent chart with agent.tags declared or not.
+type tagsChart struct {
+	embeddedChart
+	declares bool
+}
+
+func (c tagsChart) Schema(context.Context) chart.Schema {
+	s := chart.EmbeddedSchema()
+	doc := runtime.DeepCopyJSON(s.Document.(map[string]any))
+	if c.declares {
+		if err := unstructured.SetNestedField(doc, map[string]any{"type": "array"}, "properties", "agent", "properties", "tags"); err != nil {
+			panic(err)
+		}
+	} else {
+		unstructured.RemoveNestedField(doc, "properties", "agent", "properties", "tags")
+	}
+	s.Document = doc
+	return s
+}
+
+func TestInfoTagsCapabilityFollowsTheChart(t *testing.T) {
+	for _, declares := range []bool{true, false} {
+		f := seeded(t)
+		f.svc.chart = tagsChart{declares: declares}
+		assert.Equal(t, declares, f.svc.Info(t.Context()).Capabilities["tags"])
+	}
+}
