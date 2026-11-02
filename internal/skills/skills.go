@@ -293,12 +293,6 @@ func (d *Discoverer) read(ctx context.Context, repoURL, ref string) (Repository,
 	return repo, nil
 }
 
-// parseFrontmatter reads the YAML block between the leading `---` lines and
-// returns its scalar string fields; anything else yields an empty map.
-func parseFrontmatter(content string) map[string]string {
-	return scalars(frontmatter(content))
-}
-
 // frontmatter parses the YAML block between the leading `---` lines; nil
 // when there is none or it does not parse.
 func frontmatter(content string) map[string]any {

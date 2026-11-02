@@ -263,9 +263,9 @@ func (r *Resolver) resolveInsecure(ctx context.Context, ref string) (string, err
 }
 
 func TestParseFrontmatter(t *testing.T) {
-	assert.Equal(t, map[string]string{"name": "a", "description": "b c"}, parseFrontmatter("---\nname: a\ndescription: b c\nlist: [1]\n---\nrest"))
-	assert.Empty(t, parseFrontmatter("no frontmatter"))
-	assert.Empty(t, parseFrontmatter("---\nname: unterminated\n"))
+	assert.Equal(t, map[string]string{"name": "a", "description": "b c"}, scalars(frontmatter("---\nname: a\ndescription: b c\nlist: [1]\n---\nrest")))
+	assert.Empty(t, scalars(frontmatter("no frontmatter")))
+	assert.Empty(t, scalars(frontmatter("---\nname: unterminated\n")))
 }
 
 func TestMetadataTags(t *testing.T) {
@@ -288,7 +288,7 @@ func TestMetadataTags(t *testing.T) {
 			assert.Equal(t, tc.want, metadataTags(frontmatter(tc.content)))
 		})
 	}
-	assert.Equal(t, map[string]string{"name": "a"}, parseFrontmatter("---\nname: a\nmetadata:\n  tags: x\n---\n"), "metadata stays out of the scalar fields")
+	assert.Equal(t, map[string]string{"name": "a"}, scalars(frontmatter("---\nname: a\nmetadata:\n  tags: x\n---\n")), "metadata stays out of the scalar fields")
 }
 
 func TestRequireReadableGatesPrivateRepositoriesOnThePerson(t *testing.T) {
