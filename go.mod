@@ -7,9 +7,9 @@ require (
 	github.com/Masterminds/semver/v3 v3.5.0
 	github.com/a2aproject/a2a-go/v2 v2.7.0
 	github.com/giantswarm/gitops-commit v0.11.10
-	github.com/giantswarm/mcp-oauth v1.9.4
-	github.com/giantswarm/mcp-toolkit v0.4.8
-	github.com/go-jose/go-jose/v4 v4.1.7
+	github.com/giantswarm/mcp-oauth v1.9.6
+	github.com/giantswarm/mcp-toolkit v0.4.9
+	github.com/go-jose/go-jose/v4 v4.1.8
 	github.com/go-logr/logr v1.4.4
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/uuid v1.6.0
@@ -127,7 +127,7 @@ require (
 	github.com/go-viper/mapstructure/v2 v2.5.0 // indirect
 	github.com/gobwas/glob v0.2.3 // indirect
 	github.com/goccy/go-yaml v1.19.2 // indirect
-	github.com/google/cel-go v0.29.2 // indirect
+	github.com/google/cel-go v0.30.0 // indirect
 	github.com/google/gnostic-models v0.7.0 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/google/go-github/v93 v93.0.0 // indirect
