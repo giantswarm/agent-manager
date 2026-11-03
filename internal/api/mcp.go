@@ -190,7 +190,7 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 	defaultWSDesc := "Workspace <namespace>/<name> of the agent's namespace that a start_session naming none starts in, authorized as its starter"
 	defaultWSProp := mcp.WithString(argDefaultWS, mcp.Description(defaultWSDesc+"."))
 	defaultWSReplaceProp := mcp.WithString(argDefaultWS, mcp.Description(defaultWSDesc+"; \"\" removes it."))
-	tagsDesc := "Tags: lowercase letters and digits, '-'-separated, max 63 chars each; lowercased and deduplicated"
+	tagsDesc := "Tags as the agent chart takes them (get_info capabilities.tags); lowercased and deduplicated"
 	tagsProp := mcp.WithArray(argTags, mcp.Description(tagsDesc+"."), mcp.Items(stringSchema))
 	tagsFilterProp := mcp.WithArray(argTags, mcp.Description("Only those with any of these tags"), mcp.Items(stringSchema))
 	tagsReplaceProp := mcp.WithArray(argTags, mcp.Description("Replaces the whole tag list ([] clears it). "+tagsDesc+"."), mcp.Items(stringSchema))
@@ -554,11 +554,10 @@ func (t *tools) listAgents(ctx context.Context, req mcp.CallToolRequest) (*mcp.C
 	if err != nil {
 		return errResult(err), nil
 	}
-	list, err := t.svc.List(ctx, locationFromArgs(req))
+	list, err := t.svc.List(ctx, locationFromArgs(req), filter)
 	if err != nil {
 		return errResult(err), nil
 	}
-	list = agents.FilterByTags(list, filter)
 	if req.GetBool(argDetails, false) {
 		return jsonResult(map[string]any{"agents": list})
 	}
@@ -696,11 +695,11 @@ func (t *tools) listSkills(ctx context.Context, req mcp.CallToolRequest) (*mcp.C
 	if err != nil {
 		return errResult(err), nil
 	}
-	res, err := t.svc.ListSkills(ctx, req.GetString(argRepository, ""), req.GetString(argRef, ""), req.GetBool(argRefresh, false))
+	res, err := t.svc.ListSkills(ctx, req.GetString(argRepository, ""), req.GetString(argRef, ""), req.GetBool(argRefresh, false), filter)
 	if err != nil {
 		return errResult(err), nil
 	}
-	return jsonResult(agents.FilterSkillsByTags(res, filter))
+	return jsonResult(res)
 }
 
 func (t *tools) listSessions(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {

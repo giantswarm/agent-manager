@@ -21,6 +21,7 @@ import (
 
 	"github.com/giantswarm/agent-manager/internal/oci"
 	"github.com/giantswarm/agent-manager/internal/oci/ocitest"
+	"github.com/giantswarm/agent-manager/internal/tags/tagstest"
 )
 
 // The commits the fake's refs resolve to.
@@ -117,7 +118,7 @@ func fakeGitHub(t *testing.T) (*httptest.Server, *int) {
 
 func TestDiscoverMirrorsThePortalSemantics(t *testing.T) {
 	ts, hits := fakeGitHub(t)
-	d := New(Config{Repositories: []string{"https://github.com/giantswarm/agent-skills.git"}, APIURL: ts.URL, Tokens: StaticToken("secret"), CacheTTL: time.Minute}, nil)
+	d := New(Config{Repositories: []string{"https://github.com/giantswarm/agent-skills.git"}, APIURL: ts.URL, Tokens: StaticToken("secret"), CacheTTL: time.Minute, Tags: tagstest.Rule()}, nil)
 
 	res, err := d.List(context.Background(), "", "", false)
 	require.NoError(t, err)
@@ -285,9 +286,10 @@ func TestMetadataTags(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, metadataTags(frontmatter(tc.content)))
+			assert.Equal(t, tc.want, metadataTags(frontmatter(tc.content), tagstest.Rule()))
 		})
 	}
+	assert.Nil(t, metadataTags(frontmatter("---\nmetadata:\n  tags: ok\n---\n"), nil), "a chart without tags: no skill tags")
 	assert.Equal(t, map[string]string{"name": "a"}, scalars(frontmatter("---\nname: a\nmetadata:\n  tags: x\n---\n")), "metadata stays out of the scalar fields")
 }
 

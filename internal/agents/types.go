@@ -405,8 +405,9 @@ type Agent struct {
 	// object yet (or failed to).
 	Exists      bool   `json:"exists"`
 	DisplayName string `json:"displayName,omitempty"`
-	// Tags are the agent's tags (TagsAnnotation; the chart value agent.tags
-	// while nothing is rendered).
+	// Tags are the agent's tags: the release's agent.tags, which an update
+	// writes, else the Agent's TagsAnnotation; empty when the embedded
+	// chart has no tag rule.
 	Tags        []string `json:"tags,omitempty"`
 	Description string   `json:"description,omitempty"`
 	// CreatedBy is the caller who created the agent (CreatedByAnnotation);

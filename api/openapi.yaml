@@ -871,8 +871,8 @@ components:
       items: { type: string, minLength: 1 }
     Tags:
       type: array
-      description: "Free-form keywords (chart agent.tags, the ui.giantswarm.io/tags annotation): lowercase letters and digits in groups joined by single '-', max 63 chars each; trimmed, lowercased and deduplicated, order kept"
-      items: { type: string, maxLength: 63 }
+      description: "Free-form keywords as the agent chart's agent.tags takes them (its tag.schema.json; GET /info capabilities.tags), rendered as the ui.giantswarm.io/tags annotation; trimmed, lowercased and deduplicated, order kept"
+      items: { type: string }
     Spec:
       type: object
       required: [name, modelConfig, toolset]

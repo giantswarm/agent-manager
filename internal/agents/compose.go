@@ -156,21 +156,6 @@ func ValidateSystemMessage(message string) error {
 	return nil
 }
 
-// FilterByTags keeps the agents that carry any tag of filter; an empty
-// filter keeps them all.
-func FilterByTags(list []Agent, filter tags.Filter) []Agent {
-	if len(filter) == 0 {
-		return list
-	}
-	out := []Agent{}
-	for _, a := range list {
-		if filter.Matches(a.Tags) {
-			out = append(out, a)
-		}
-	}
-	return out
-}
-
 var dns1123 = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
 
 // ValidateName checks the technical name before it is used: a DNS-1123 label

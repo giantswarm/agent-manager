@@ -287,9 +287,13 @@ func runServe(ctx context.Context, o *serveOptions) error {
 		return err
 	}
 
+	// The tag rule of agents and skills is the embedded chart's: nil when it
+	// takes no tags.
+	tagRule := chart.EmbeddedSchema().Tags
+
 	var discoverer *skills.Discoverer
 	if repos := splitList(o.skillsRepositories); len(repos) > 0 {
-		discoverer = skills.New(skills.Config{Repositories: repos, APIURL: o.skillsGitHubAPI, Tokens: skillsTokens, CacheTTL: o.skillsCacheTTL}, log)
+		discoverer = skills.New(skills.Config{Repositories: repos, APIURL: o.skillsGitHubAPI, Tokens: skillsTokens, CacheTTL: o.skillsCacheTTL, Tags: tagRule}, log)
 	}
 	// Skills are pinned before they are written: a branch or tag to its head
 	// commit through the GitHub API, an image tag to its digest.
@@ -397,6 +401,7 @@ func runServe(ctx context.Context, o *serveOptions) error {
 	}
 
 	svc := agents.New(provider, resolver, discoverer, pinner, agents.Config{
+		Tags:              tagRule,
 		DefaultNamespace:  o.kagentNamespace,
 		ManagedNamespaces: splitList(o.managedNamespaces),
 		Compose: agents.ComposeConfig{

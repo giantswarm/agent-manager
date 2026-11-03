@@ -1,11 +1,24 @@
 package tags
 
 import (
+	"os"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+// chartRule is the agent chart's rule from tagstest's copy of tag.schema.json
+// (tagstest imports this package, so it is read from the file here).
+func chartRule(t *testing.T, maxItems int) *Rule {
+	t.Helper()
+	schema, err := os.ReadFile("tagstest/tag.schema.json")
+	require.NoError(t, err)
+	r, err := NewRule(schema, maxItems)
+	require.NoError(t, err)
+	return r
+}
 
 func TestNormalize(t *testing.T) {
 	tests := []struct {
@@ -39,7 +52,7 @@ func TestParse(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, Parse(tc.in))
+			assert.Equal(t, tc.want, chartRule(t, 50).Parse(tc.in))
 		})
 	}
 }
@@ -56,9 +69,20 @@ func TestParseList(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, ParseList(tc.in))
+			assert.Equal(t, tc.want, chartRule(t, 50).ParseList(tc.in))
 		})
 	}
+}
+
+func TestRuleLimits(t *testing.T) {
+	var none *Rule
+	assert.Nil(t, none.ParseList([]string{"ok"}), "a chart without a tag schema keeps no tag")
+	assert.Equal(t, []string{"a", "b"}, chartRule(t, 2).ParseList([]string{"a", "bad_tag", "b", "c"}), "at most maxItems valid tags")
+
+	_, err := NewRule([]byte(`{"pattern": "(?<=a)"}`), 0)
+	assert.Error(t, err, "a pattern Go cannot compile")
+	_, err = NewRule([]byte(`[`), 0)
+	assert.Error(t, err)
 }
 
 func TestFilter(t *testing.T) {

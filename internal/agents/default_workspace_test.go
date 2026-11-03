@@ -68,7 +68,7 @@ func TestCreateKeepsTheDefaultWorkspaceAsAnAnnotation(t *testing.T) {
 	got, err := f.svc.Get(ctx, In(""), "sre")
 	require.NoError(t, err)
 	assert.Equal(t, "kagent/platform", got.DefaultWorkspace)
-	list, err := f.svc.List(ctx, In(""))
+	list, err := f.svc.List(ctx, In(""), nil)
 	require.NoError(t, err)
 	for _, s := range Summaries(list) {
 		if s.Name == "sre" {
@@ -82,7 +82,7 @@ func TestCreateKeepsTheDefaultWorkspaceAsAnAnnotation(t *testing.T) {
 func TestTheAgentObjectReportsItsDefaultWorkspace(t *testing.T) {
 	obj := agentObject("kagent", "bare", "", "", true, true)
 	obj.SetAnnotations(map[string]string{DefaultWorkspaceAnnotation: "kagent/platform"})
-	assert.Equal(t, "kagent/platform", agentFromObject(obj, nil).DefaultWorkspace)
+	assert.Equal(t, "kagent/platform", agentFromObject(obj, nil, nil).DefaultWorkspace)
 }
 
 func TestUpdateChangesOrRemovesTheDefaultWorkspace(t *testing.T) {

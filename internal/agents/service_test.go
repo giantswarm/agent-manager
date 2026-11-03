@@ -28,6 +28,7 @@ import (
 	"github.com/giantswarm/agent-manager/internal/chart"
 	"github.com/giantswarm/agent-manager/internal/identity"
 	"github.com/giantswarm/agent-manager/internal/kube"
+	"github.com/giantswarm/agent-manager/internal/tags/tagstest"
 	"github.com/giantswarm/agent-manager/internal/tenants"
 )
 
@@ -67,6 +68,7 @@ func newFixture(t *testing.T, dynObjs []runtime.Object, typedObjs ...runtime.Obj
 		DefaultNamespace: "kagent", ManagedNamespaces: []string{"tenant"}, Version: "test",
 		Compose:       ComposeConfig{MusterURL: "http://muster.agent-platform.svc.cluster.local:8090/mcp"},
 		HarnessEgress: map[string][]string{"claude": {"https://github.com", "https://*.githubusercontent.com"}},
+		Tags:          tagstest.Rule(),
 	}, nil)
 	return &fixture{dyn: dyn, dryRuns: answerDryRuns(t, dyn), typed: typed, pinner: pinner, svc: svc}
 }
@@ -253,7 +255,7 @@ func loadFixture(t *testing.T, name string) *unstructured.Unstructured {
 
 func TestReadModelFromTheRenderedObjects(t *testing.T) {
 	obj, server := loadFixture(t, "agent-full.yaml"), loadFixture(t, "remotemcpserver.yaml")
-	a := agentFromObject(obj, server)
+	a := agentFromObject(obj, server, nil)
 	assert.Equal(t, "SRE Assistant", a.DisplayName, "display name from the annotation")
 	assert.Equal(t, "https://avatars.example/v1/sre.png", a.IconURL, "icon URL from the annotation")
 	assert.Equal(t, "helps", a.Description)
@@ -281,16 +283,16 @@ func TestReadModelFromTheRenderedObjects(t *testing.T) {
 
 	// A carrier without the header is implicit full access; no carrier bound
 	// at all (preset:none) is neither.
-	implicit := agentFromObject(obj, remoteMCPServer("kagent", "sre"))
+	implicit := agentFromObject(obj, remoteMCPServer("kagent", "sre"), nil)
 	assert.Nil(t, implicit.Toolset)
 	assert.True(t, implicit.ImplicitFullAccess)
-	none := agentFromObject(agentObject("kagent", "quiet", "quiet", "kagent", true, false), nil)
+	none := agentFromObject(agentObject("kagent", "quiet", "quiet", "kagent", true, false), nil, nil)
 	assert.Nil(t, none.Toolset)
 	assert.False(t, none.ImplicitFullAccess)
 
 	// The owning release wins on the declaration and folds in the ownership.
 	hr := helmRelease("kagent", "sre", map[string]any{"agent": map[string]any{"name": "sre"}, "modelConfig": map[string]any{"name": "default-model-config"}, ToolsetValuesKey: []any{"preset:read-only"}}, true, map[string]any{KustomizationNameLabel: "flux-giantswarm"})
-	applyHelmRelease(&a, hr)
+	applyHelmRelease(&a, hr, nil)
 	assert.Equal(t, ManagedGitOps, a.Managed)
 	assert.Equal(t, []string{"preset:read-only"}, a.Toolset)
 	assert.Equal(t, "1.0.0", a.HelmRelease.ChartVersion)
@@ -312,7 +314,7 @@ func TestListMergesTemplatesAndHelmReleases(t *testing.T) {
 	mustCreate(t, f, agentGVR, agentObject("kagent", "scoped", "scoped", "kagent", true, true))
 	mustCreate(t, f, serverGVR, remoteMCPServer("kagent", "scoped", "preset:infrastructure"))
 
-	list, err := f.svc.List(ctx, In(""))
+	list, err := f.svc.List(ctx, In(""), nil)
 	require.NoError(t, err)
 	require.Len(t, list, 4)
 	byName := map[string]Agent{}
@@ -365,7 +367,7 @@ func TestListMergesTemplatesAndHelmReleases(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, got.ImplicitFullAccess)
 
-	_, err = f.svc.List(ctx, In("other"))
+	_, err = f.svc.List(ctx, In("other"), nil)
 	assert.ErrorIs(t, err, ErrInvalid, "unmanaged namespaces are refused")
 }
 
@@ -391,7 +393,7 @@ func TestGitOpsOwnedReleaseInAnotherNamespace(t *testing.T) {
 	assert.True(t, got.HelmRelease.GitOpsOwned)
 	assert.Equal(t, []string{"preset:infrastructure"}, got.Toolset)
 
-	list, err := f.svc.List(ctx, In(""))
+	list, err := f.svc.List(ctx, In(""), nil)
 	require.NoError(t, err)
 	var listed *Agent
 	for i := range list {
@@ -948,7 +950,7 @@ func TestStatusVerdictsComeFromTheAgentObject(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, VerdictReady, st.Verdict, st.Summary)
 	assert.Contains(t, st.Summary, "Harness claude")
-	listed, err := f.svc.List(ctx, In(""))
+	listed, err := f.svc.List(ctx, In(""), nil)
 	require.NoError(t, err)
 	require.Len(t, listed, 1)
 	require.NotNil(t, listed[0].Ready)
@@ -1019,7 +1021,7 @@ func TestListModelConfigsAndInfo(t *testing.T) {
 	assert.Equal(t, DefaultChartOCIURL, info.Chart.OCIURL)
 	assert.Equal(t, "2.x", info.Chart.Semver)
 
-	_, err = f.svc.ListSkills(ctx, "", "", false)
+	_, err = f.svc.ListSkills(ctx, "", "", false, nil)
 	assert.ErrorIs(t, err, ErrUnsupported)
 }
 
@@ -1052,7 +1054,7 @@ func TestMutationsCarryTheCaller(t *testing.T) {
 	callerOnly := New(kube.NewCallerProvider(kube.FromInterfaces(f.dyn, f.typed, f.typed.Discovery()), nil), embeddedChart{}, nil, nil, Config{DefaultNamespace: "kagent", Version: "test"}, nil)
 	assert.True(t, callerOnly.Info(context.Background()).Capabilities["writesAsCaller"])
 	assert.Equal(t, kube.IdentityCaller, callerOnly.Info(context.Background()).Identity)
-	_, err = callerOnly.List(context.Background(), In(""))
+	_, err = callerOnly.List(context.Background(), In(""), nil)
 	assert.ErrorIs(t, err, ErrUnauthenticated)
 	_, err = callerOnly.Create(context.Background(), Spec{Name: "sre", ModelConfig: "default-model-config", Toolset: []string{"preset:read-only"}})
 	assert.ErrorIs(t, err, ErrUnauthenticated)

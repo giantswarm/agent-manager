@@ -1,15 +1,45 @@
-// Package tags normalizes the free-form keywords agents and skills carry.
+// Package tags normalizes the free-form keywords agents and skills carry. The
+// rule a tag must satisfy is not kept here: it is the agent chart's, loaded
+// as a Rule from the chart's tag.schema.json and agent.tags.
 package tags
 
 import (
+	"encoding/json"
+	"fmt"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 )
 
-// maxLen is the longest tag Parse keeps.
-const maxLen = 63
+// Rule is the agent chart's rule for one tag (tag.schema.json: pattern and
+// maxLength) and for a tag list (agent.tags: maxItems). A nil Rule is a chart
+// without tags: it keeps no tag.
+type Rule struct {
+	pattern   *regexp.Regexp
+	maxLength int
+	maxItems  int
+}
 
-var pattern = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
+// NewRule reads the chart's tag.schema.json and the maxItems of agent.tags;
+// zero maxLength or maxItems means no limit.
+func NewRule(tagSchema []byte, maxItems int) (*Rule, error) {
+	var doc struct {
+		Pattern   string `json:"pattern"`
+		MaxLength int    `json:"maxLength"`
+	}
+	if err := json.Unmarshal(tagSchema, &doc); err != nil {
+		return nil, fmt.Errorf("tag schema: %w", err)
+	}
+	r := &Rule{maxLength: doc.MaxLength, maxItems: maxItems}
+	if doc.Pattern != "" {
+		re, err := regexp.Compile(doc.Pattern)
+		if err != nil {
+			return nil, fmt.Errorf("tag schema pattern %q: %w", doc.Pattern, err)
+		}
+		r.pattern = re
+	}
+	return r, nil
+}
 
 // Normalize trims and lowercases every tag, drops empty ones and duplicates,
 // and keeps the order of first appearance.
@@ -30,13 +60,19 @@ func Normalize(list []string) []string {
 	return out
 }
 
-// ParseList normalizes list and drops every tag that is not a lowercase
-// '-'-separated word of at most 63 characters. A reader never fails on a bad
-// tag.
-func ParseList(list []string) []string {
+// ParseList normalizes list, drops every tag the rule refuses and keeps at
+// most the rule's maxItems. A reader never fails on a bad tag; a nil Rule
+// keeps none.
+func (r *Rule) ParseList(list []string) []string {
+	if r == nil {
+		return nil
+	}
 	var out []string
 	for _, tag := range Normalize(list) {
-		if len(tag) <= maxLen && pattern.MatchString(tag) {
+		if r.maxItems > 0 && len(out) == r.maxItems {
+			break
+		}
+		if r.allows(tag) {
 			out = append(out, tag)
 		}
 	}
@@ -44,8 +80,15 @@ func ParseList(list []string) []string {
 }
 
 // Parse is ParseList for a comma-joined tag list.
-func Parse(joined string) []string {
-	return ParseList(strings.Split(joined, ","))
+func (r *Rule) Parse(joined string) []string {
+	return r.ParseList(strings.Split(joined, ","))
+}
+
+func (r *Rule) allows(tag string) bool {
+	if r.maxLength > 0 && utf8.RuneCountInString(tag) > r.maxLength {
+		return false
+	}
+	return r.pattern == nil || r.pattern.MatchString(tag)
 }
 
 // Filter is the set of tags a list request asks for; an item matches when it

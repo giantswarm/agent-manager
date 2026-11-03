@@ -34,8 +34,7 @@ type Skill struct {
 	// Path is the skill directory; "" at the repository root.
 	Path string `json:"path"`
 	// Tags are the frontmatter's metadata.tags, comma-joined there; a tag
-	// that is not a lowercase '-'-separated word of at most 63 characters is
-	// dropped.
+	// the agent chart's tag rule refuses is dropped.
 	Tags []string `json:"tags,omitempty"`
 }
 
@@ -76,6 +75,9 @@ type Config struct {
 	CacheTTL time.Duration
 	// HTTPClient overrides the client (tests).
 	HTTPClient *http.Client
+	// Tags is the agent chart's tag rule, which a skill's tags follow as an
+	// agent's do; nil: skills carry no tags.
+	Tags *tags.Rule
 }
 
 // Discoverer reads skills from GitHub with a per-repository cache.
@@ -281,7 +283,7 @@ func (d *Discoverer) read(ctx context.Context, repoURL, ref string) (Repository,
 			Name:        skillName,
 			Description: strings.TrimSpace(fm["description"]),
 			Path:        dir,
-			Tags:        metadataTags(doc),
+			Tags:        metadataTags(doc, d.cfg.Tags),
 		})
 	}
 	sort.Slice(repo.Skills, func(i, j int) bool {
@@ -330,10 +332,10 @@ func scalars(doc map[string]any) map[string]string {
 }
 
 // metadataTags reads metadata.tags, a comma-joined string (the Agent Skills
-// spec allows only string values in metadata), with tags.Parse: a malformed
-// tag is dropped, never the skill.
-func metadataTags(doc map[string]any) []string {
+// spec allows only string values in metadata), with the chart's tag rule: a
+// malformed tag is dropped, never the skill.
+func metadataTags(doc map[string]any, rule *tags.Rule) []string {
 	metadata, _ := doc["metadata"].(map[string]any)
 	raw, _ := metadata["tags"].(string)
-	return tags.Parse(raw)
+	return rule.Parse(raw)
 }

@@ -23,8 +23,10 @@ import (
 	"github.com/Masterminds/semver/v3"
 	chartv2 "helm.sh/helm/v4/pkg/chart/v2"
 	"helm.sh/helm/v4/pkg/chart/v2/loader"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/giantswarm/agent-manager/internal/oci"
+	"github.com/giantswarm/agent-manager/internal/tags"
 )
 
 // EmbeddedSchemaVersion is the agent chart version whose archive is compiled
@@ -80,6 +82,9 @@ type Schema struct {
 	Document any
 	Version  string
 	Source   string
+	// Tags is the chart's tag rule (tag.schema.json and agent.tags); nil
+	// when the chart takes no tags (below 2.5.0).
+	Tags *tags.Rule
 
 	chart *chartv2.Chart
 }
@@ -221,7 +226,32 @@ func load(archive []byte, version, source string) (Schema, error) {
 	if err := json.Unmarshal(c.Schema, &doc); err != nil {
 		return Schema{}, fmt.Errorf("values.schema.json of agent chart %s: %w", version, err)
 	}
-	return Schema{Document: doc, Version: version, Source: source, chart: c}, nil
+	rule, err := tagRule(c, doc)
+	if err != nil {
+		return Schema{}, fmt.Errorf("agent chart %s: %w", version, err)
+	}
+	return Schema{Document: doc, Version: version, Source: source, Tags: rule, chart: c}, nil
+}
+
+// tagSchemaFile is the chart's schema of one agent.tags entry.
+const tagSchemaFile = "tag.schema.json"
+
+// tagRule reads the chart's tag rule: tag.schema.json for one tag, the
+// values schema's agent.tags for the list. Nil when the chart has either
+// missing.
+func tagRule(c *chartv2.Chart, doc any) (*tags.Rule, error) {
+	values, _ := doc.(map[string]any)
+	list, found, _ := unstructured.NestedMap(values, "properties", "agent", "properties", "tags")
+	if !found {
+		return nil, nil
+	}
+	for _, f := range c.Files {
+		if f.Name == tagSchemaFile {
+			maxItems, _ := list["maxItems"].(float64)
+			return tags.NewRule(f.Data, int(maxItems))
+		}
+	}
+	return nil, nil
 }
 
 // resolve reads tags and the schema of the newest in-range version.

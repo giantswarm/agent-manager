@@ -2,6 +2,7 @@ package chart
 
 import (
 	"context"
+	"os"
 	"regexp"
 	"testing"
 	"time"
@@ -155,5 +156,30 @@ func TestEmbeddedSchemaIsTheChartContract(t *testing.T) {
 	assert.NotContains(t, plugin, "required", "the skill selection is optional: a Claude Code format plugin loads whole")
 	for _, kept := range []string{"toolset", "extraTools", "extraAgentSpec", "labels", "annotations", "modelConfig"} {
 		assert.Contains(t, props, kept)
+	}
+}
+
+// TestSchemaCarriesTheChartTagRule reads the tag rule from the chart: its
+// tag.schema.json and agent.tags maxItems; a chart without either takes no
+// tags.
+func TestSchemaCarriesTheChartTagRule(t *testing.T) {
+	tagSchema, err := os.ReadFile("../tags/tagstest/tag.schema.json")
+	require.NoError(t, err)
+	f := ocitest.New(t, "charts/giantswarm/agent")
+	f.Tags = []string{"2.4.0", "2.5.0"}
+	f.Files["2.4.0"] = map[string]string{"Chart.yaml": "name: agent\nversion: 2.4.0\n", "values.schema.json": `{"type":"object","properties":{"agent":{"type":"object"}}}`}
+	f.Files["2.5.0"] = map[string]string{
+		"Chart.yaml":         "name: agent\nversion: 2.5.0\n",
+		"values.schema.json": `{"type":"object","properties":{"agent":{"type":"object","properties":{"tags":{"type":"array","maxItems":2}}}}}`,
+		"tag.schema.json":    string(tagSchema),
+	}
+	chartURL := "oci://" + f.Host() + "/" + f.Repo
+	for semver, want := range map[string][]string{"2.4.x": nil, "2.5.x": {"ok", "fine"}} {
+		r, err := NewResolver(chartURL, semver, time.Hour, oci.NewRegistry(nil), nil)
+		require.NoError(t, err)
+		r.ref.Insecure = true
+		s := r.Schema(context.Background())
+		require.Equal(t, SourceRegistry, s.Source)
+		assert.Equal(t, want, s.Tags.ParseList([]string{"OK", "bad_tag", "fine", "third"}), semver)
 	}
 }

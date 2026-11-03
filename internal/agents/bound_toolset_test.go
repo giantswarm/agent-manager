@@ -167,7 +167,7 @@ func TestTheToolsetIsReportedBoundWhereMusterTrustsTheActorJWT(t *testing.T) {
 	ctx := asPerson(t.Context(), "admin@lab.local")
 
 	bound := func() map[string]bool {
-		list, err := svc.List(ctx, In("kagent"))
+		list, err := svc.List(ctx, In("kagent"), nil)
 		require.NoError(t, err)
 		out := map[string]bool{}
 		for _, a := range list {

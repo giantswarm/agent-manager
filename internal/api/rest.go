@@ -98,12 +98,11 @@ func location(r *http.Request, ns string) agents.Location {
 
 func (h *REST) listAgents(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	list, err := h.svc.List(r.Context(), location(r, q.Get("namespace")))
+	list, err := h.svc.List(r.Context(), location(r, q.Get("namespace")), tagsQuery(q))
 	if err != nil {
 		h.writeError(w, err)
 		return
 	}
-	list = agents.FilterByTags(list, tagsQuery(q))
 	if strings.EqualFold(q.Get("details"), "true") {
 		writeJSON(w, http.StatusOK, map[string]any{"agents": list})
 		return
@@ -225,12 +224,12 @@ func (h *REST) listEgressPolicies(w http.ResponseWriter, r *http.Request) {
 
 func (h *REST) listSkills(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	res, err := h.svc.ListSkills(r.Context(), q.Get("repository"), q.Get("ref"), strings.EqualFold(q.Get("refresh"), "true"))
+	res, err := h.svc.ListSkills(r.Context(), q.Get("repository"), q.Get("ref"), strings.EqualFold(q.Get("refresh"), "true"), tagsQuery(q))
 	if err != nil {
 		h.writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, agents.FilterSkillsByTags(res, tagsQuery(q)))
+	writeJSON(w, http.StatusOK, res)
 }
 
 // tagsQuery reads the tags filter: repeated (tags=a&tags=b), comma-joined

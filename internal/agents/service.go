@@ -90,6 +90,10 @@ type Config struct {
 	// Tenants are the tenant namespaces the tenant reconciler keeps, managed
 	// beside ManagedNamespaces. Nil: no tenants.
 	Tenants TenantSet
+	// Tags is the agent chart's tag rule, loaded from the embedded chart
+	// (chart.EmbeddedSchema().Tags). Nil: the chart takes no tags; agents
+	// are read without them and capabilities.tags is false.
+	Tags *tags.Rule
 }
 
 // TenantSet is the tenant reconciler as the service sees it.
@@ -272,7 +276,7 @@ func (s *Service) Info(ctx context.Context) InfoResponse {
 		"egressPolicies": true,
 		// tags: create_agent, update_agent and the reads carry tags; only
 		// a chart whose schema takes agent.tags accepts a write that sets them.
-		"tags": s.chartTakesTags(ctx),
+		"tags": s.cfg.Tags != nil && s.chartTakesTags(ctx),
 	}
 	out.Identity = s.kube.Identity()
 	kagentAPI := KagentAPIGroup + "/" + s.cfg.KagentAPIVersion
@@ -424,8 +428,9 @@ func wrapKube(err error, what string) error {
 
 // List returns the agents of a namespace: every Agent object (with its
 // RemoteMCPServer and its owning HelmRelease when Flux labels name one) plus
-// every HelmRelease of the agent chart that has not rendered one yet.
-func (s *Service) List(ctx context.Context, loc Location) ([]Agent, error) {
+// every HelmRelease of the agent chart that has not rendered one yet. With a
+// filter, only the agents that carry any of its tags.
+func (s *Service) List(ctx context.Context, loc Location, filter tags.Filter) ([]Agent, error) {
 	st, err := s.site(ctx, loc)
 	if err != nil {
 		return nil, err
@@ -450,7 +455,7 @@ func (s *Service) List(ctx context.Context, loc Location) ([]Agent, error) {
 	byName := map[string]*Agent{}
 	for i := range objects.Items {
 		obj := &objects.Items[i]
-		a := agentFromObject(obj, serverByName[obj.GetName()])
+		a := agentFromObject(obj, serverByName[obj.GetName()], s.cfg.Tags)
 		a.Target = st.loc.Target
 		if hrName, hrNs := ownerOf(obj); hrName != "" {
 			hr := hrs[hrName]
@@ -458,7 +463,7 @@ func (s *Service) List(ctx context.Context, loc Location) ([]Agent, error) {
 				hr, _ = s.getHelmRelease(ctx, st.flux, orDefault(hrNs, st.fluxNS), hrName)
 			}
 			if hr != nil {
-				applyHelmRelease(&a, hr)
+				applyHelmRelease(&a, hr, s.cfg.Tags)
 				delete(hrs, hrName)
 			}
 		}
@@ -466,7 +471,7 @@ func (s *Service) List(ctx context.Context, loc Location) ([]Agent, error) {
 	}
 	for _, hr := range hrs {
 		a := Agent{Namespace: ns, Target: st.loc.Target, Managed: ManagedHelmRelease}
-		applyHelmRelease(&a, hr)
+		applyHelmRelease(&a, hr, s.cfg.Tags)
 		if a.Name == "" {
 			a.Name = hr.GetName()
 		}
@@ -474,7 +479,7 @@ func (s *Service) List(ctx context.Context, loc Location) ([]Agent, error) {
 			// A HelmRelease whose Agent carries no provenance labels (an
 			// older helm-controller): attach by name.
 			if existing.HelmRelease == nil {
-				applyHelmRelease(existing, hr)
+				applyHelmRelease(existing, hr, s.cfg.Tags)
 			}
 			continue
 		}
@@ -482,7 +487,9 @@ func (s *Service) List(ctx context.Context, loc Location) ([]Agent, error) {
 	}
 	out := make([]Agent, 0, len(byName))
 	for _, a := range byName {
-		out = append(out, *a)
+		if filter.Matches(a.Tags) {
+			out = append(out, *a)
+		}
 	}
 	for i := range out {
 		s.markToolsetBound(&out[i])
@@ -512,13 +519,13 @@ func (s *Service) get(ctx context.Context, st *site, name string) (*Agent, error
 		if err != nil {
 			return nil, err
 		}
-		a = agentFromObject(obj, server)
+		a = agentFromObject(obj, server, s.cfg.Tags)
 	} else {
 		a = Agent{Name: name, Namespace: st.ns(), Managed: ManagedNone}
 	}
 	a.Target = st.loc.Target
 	if hr != nil {
-		applyHelmRelease(&a, hr)
+		applyHelmRelease(&a, hr, s.cfg.Tags)
 	}
 	s.markToolsetBound(&a)
 	s.effectiveDefaultToolchains(&a)
@@ -733,7 +740,9 @@ func (s *Service) harnessFor(ctx context.Context, dyn dynamic.Interface, ns, nam
 // ---- skills -------------------------------------------------------------------
 
 // ListSkills discovers skills in the configured (or the given) repository.
-func (s *Service) ListSkills(ctx context.Context, repository, ref string, refresh bool) (*skills.Result, error) {
+// With a filter, every repository stays with only the skills that carry any
+// of its tags.
+func (s *Service) ListSkills(ctx context.Context, repository, ref string, refresh bool, filter tags.Filter) (*skills.Result, error) {
 	if s.skills == nil {
 		return nil, fmt.Errorf("%w: no skill repositories are configured", ErrUnsupported)
 	}
@@ -749,9 +758,26 @@ func (s *Service) ListSkills(ctx context.Context, repository, ref string, refres
 				repo = skills.Repository{RepoURL: repo.RepoURL, Private: true, Skills: []skills.Skill{}, Error: err.Error(), FetchedAt: repo.FetchedAt}
 			}
 		}
+		repo.Skills = skillsTagged(repo.Skills, filter)
 		out.Repositories = append(out.Repositories, repo)
 	}
 	return out, nil
+}
+
+// skillsTagged keeps the skills that carry any tag of filter, in a new
+// slice (list is the discoverer's cache); nil stays nil, an empty filter
+// keeps list.
+func skillsTagged(list []skills.Skill, filter tags.Filter) []skills.Skill {
+	if len(filter) == 0 || list == nil {
+		return list
+	}
+	kept := []skills.Skill{}
+	for _, sk := range list {
+		if filter.Matches(sk.Tags) {
+			kept = append(kept, sk)
+		}
+	}
+	return kept
 }
 
 // chartTakesTags reports whether the agent chart that validates the agents
@@ -1264,7 +1290,7 @@ func (s *Service) Create(ctx context.Context, spec Spec) (*CreateResult, error) 
 	if spec.DryRun {
 		res.Created.HelmRelease = true
 		res.Agent = Agent{Name: spec.Name, Namespace: ns, Target: spec.Target, Managed: ManagedHelmRelease}
-		applyHelmRelease(&res.Agent, hr)
+		applyHelmRelease(&res.Agent, hr, s.cfg.Tags)
 		return res, nil
 	}
 	created, err := st.flux.Resource(s.helmReleaseGVR()).Namespace(fluxNS).Create(ctx, hr, metav1.CreateOptions{FieldManager: FieldManager})
@@ -1273,7 +1299,7 @@ func (s *Service) Create(ctx context.Context, spec Spec) (*CreateResult, error) 
 	}
 	res.Created.HelmRelease = true
 	agent := Agent{Name: spec.Name, Namespace: ns, Target: spec.Target, Managed: ManagedHelmRelease}
-	applyHelmRelease(&agent, created)
+	applyHelmRelease(&agent, created, s.cfg.Tags)
 	res.Agent = agent
 	if status, err := s.status(ctx, st, spec.Name); err == nil {
 		res.Status = status
@@ -1322,7 +1348,7 @@ func (s *Service) createCommit(ctx context.Context, st *site, spec Spec, values 
 		return nil, err
 	}
 	res.Agent = Agent{Name: spec.Name, Namespace: st.ns(), Target: spec.Target}
-	applyHelmRelease(&res.Agent, st.helmRelease(spec.Name, values))
+	applyHelmRelease(&res.Agent, st.helmRelease(spec.Name, values), s.cfg.Tags)
 	res.Agent.Managed = ManagedGitOps
 	s.log.Info("agent create committed", identity.LogAttr(ctx), "namespace", ns, "name", spec.Name, "repository", res.Commit.Repository, "pullRequest", res.Commit.PullRequest, "dryRun", spec.DryRun)
 	return res, nil
@@ -1620,7 +1646,7 @@ func (s *Service) update(ctx context.Context, st *site, upd Update) (*UpdateResu
 	agent, err := s.get(ctx, st, upd.Name)
 	if err != nil {
 		agent = &Agent{Name: upd.Name, Namespace: ns, Target: st.loc.Target, Managed: ManagedHelmRelease}
-		applyHelmRelease(agent, updated)
+		applyHelmRelease(agent, updated, s.cfg.Tags)
 		s.effectiveDefaultToolchains(agent)
 	}
 	res.Agent = *agent
@@ -1918,10 +1944,10 @@ func chartRefOf(hr *unstructured.Unstructured) *ChartRef {
 // agentFromObject reads the Agent object (its inline template, its Harness
 // reference and its status) and the agent's RemoteMCPServer (nil when absent)
 // into the view.
-func agentFromObject(obj, server *unstructured.Unstructured) Agent {
+func agentFromObject(obj, server *unstructured.Unstructured, rule *tags.Rule) Agent {
 	a := Agent{Name: obj.GetName(), Namespace: obj.GetNamespace(), Exists: true, Managed: ManagedNone}
 	a.DisplayName = obj.GetAnnotations()[DisplayNameAnnotation]
-	a.Tags = tags.Parse(obj.GetAnnotations()[TagsAnnotation])
+	a.Tags = rule.Parse(obj.GetAnnotations()[TagsAnnotation])
 	a.IconURL = obj.GetAnnotations()[IconURLAnnotation]
 	a.CreatedBy = obj.GetAnnotations()[CreatedByAnnotation]
 	a.DefaultWorkspace = obj.GetAnnotations()[DefaultWorkspaceAnnotation]
@@ -1999,7 +2025,7 @@ func headerOf(server *unstructured.Unstructured, name string) string {
 
 // applyHelmRelease folds the owning release into the view and, when the
 // Agent object is absent, reads the identity fields from the values.
-func applyHelmRelease(a *Agent, hr *unstructured.Unstructured) {
+func applyHelmRelease(a *Agent, hr *unstructured.Unstructured, rule *tags.Rule) {
 	ref := &HelmReleaseRef{Name: hr.GetName(), Namespace: hr.GetNamespace()}
 	conds := conditionsOfObject(hr)
 	ref.Ready = conditionStatus(conds, conditionReady)
@@ -2046,6 +2072,13 @@ func applyHelmRelease(a *Agent, hr *unstructured.Unstructured) {
 	// the chart's egress note, and is the chart default when the values set
 	// none.
 	agentBlock, _ := values["agent"].(map[string]any)
+	// The values hold the tags agent-manager wrote, which the Agent's
+	// annotation shows only once Flux has rendered them: values without
+	// agent.tags have none, values without an agent block (a GitOps release
+	// that sets none) leave the annotation's.
+	if agentBlock != nil {
+		a.Tags = rule.ParseList(stringSlice(agentBlock["tags"]))
+	}
 	if prompt, ok := agentBlock["systemMessage"].(string); ok {
 		a.SystemMessage = withoutEgressNote(prompt)
 	} else {
@@ -2060,7 +2093,6 @@ func applyHelmRelease(a *Agent, hr *unstructured.Unstructured) {
 			a.Name = name
 		}
 		a.DisplayName, _ = agentBlock["displayName"].(string)
-		a.Tags = tags.ParseList(stringSlice(agentBlock["tags"]))
 		a.Description, _ = agentBlock["description"].(string)
 		a.IconURL, _ = agentBlock["iconUrl"].(string)
 		a.Harness, _ = agentBlock["harness"].(string)

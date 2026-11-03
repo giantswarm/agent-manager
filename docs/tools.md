@@ -228,7 +228,7 @@ name is the DNS-1123 name the person chose, never derived from displayName. mode
       "type": "string"
     },
     "tags": {
-      "description": "Tags: lowercase letters and digits, '-'-separated, max 63 chars each; lowercased and deduplicated.",
+      "description": "Tags as the agent chart takes them (get_info capabilities.tags); lowercased and deduplicated.",
       "items": {
         "type": "string"
       },
@@ -972,7 +972,7 @@ Lists are skills, plugins, egress and toolset. "" clears a text field back to th
       "type": "string"
     },
     "tags": {
-      "description": "Replaces the whole tag list ([] clears it). Tags: lowercase letters and digits, '-'-separated, max 63 chars each; lowercased and deduplicated.",
+      "description": "Replaces the whole tag list ([] clears it). Tags as the agent chart takes them (get_info capabilities.tags); lowercased and deduplicated.",
       "items": {
         "type": "string"
       },
@@ -1191,7 +1191,7 @@ Checks the name, modelConfig, egressPolicyRefs, harness and toolset (required fo
       "type": "string"
     },
     "tags": {
-      "description": "Tags: lowercase letters and digits, '-'-separated, max 63 chars each; lowercased and deduplicated.",
+      "description": "Tags as the agent chart takes them (get_info capabilities.tags); lowercased and deduplicated.",
       "items": {
         "type": "string"
       },
