@@ -40,8 +40,9 @@ import (
 // the one read credential of every private git skill and plugin;
 // `agent.egress` takes HTTP(S) origins and tls://<host>:<port>;
 // `agent.egressPolicyRefs` names EgressPolicies of the agent's namespace;
-// `agent.platformPrompt.egressNote` appends the egress note to the prompt.
-const EmbeddedSchemaVersion = "2.4.0"
+// `agent.platformPrompt.egressNote` appends the egress note to the prompt;
+// `agent.tags` takes tags checked against $defs/tag.schema.json.
+const EmbeddedSchemaVersion = "2.5.0"
 
 //go:embed embedded/agent.tgz
 var embeddedArchive []byte
