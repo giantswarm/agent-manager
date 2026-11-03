@@ -204,9 +204,7 @@ func BuildValues(spec Spec, cfg ComposeConfig) map[string]any {
 	if strings.TrimSpace(spec.DisplayName) != "" {
 		agent["displayName"] = spec.DisplayName
 	}
-	if list := tags.Normalize(spec.Tags); len(list) > 0 {
-		agent["tags"] = toAnySlice(list)
-	}
+	setOrDeleteList(agent, "tags", tags.Normalize(spec.Tags))
 	if strings.TrimSpace(spec.Description) != "" {
 		agent["description"] = spec.Description
 	}
@@ -219,12 +217,8 @@ func BuildValues(spec Spec, cfg ComposeConfig) map[string]any {
 	// The Harness the caller named, else the platform's: the Agent object's
 	// spec.harnessRef.name.
 	agent["harness"] = orDefault(spec.Harness, orDefault(cfg.HarnessName, DefaultHarnessName))
-	if len(spec.Egress) > 0 {
-		agent["egress"] = toAnySlice(spec.Egress)
-	}
-	if len(spec.EgressPolicyRefs) > 0 {
-		agent["egressPolicyRefs"] = toAnySlice(spec.EgressPolicyRefs)
-	}
+	setOrDeleteList(agent, "egress", spec.Egress)
+	setOrDeleteList(agent, "egressPolicyRefs", spec.EgressPolicyRefs)
 	values := map[string]any{
 		"agent":       agent,
 		"modelConfig": map[string]any{"name": spec.ModelConfig},

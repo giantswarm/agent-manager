@@ -1399,28 +1399,16 @@ func (s *Service) mergedValues(ctx context.Context, st *site, upd Update, hr *un
 	}
 	setOrDelete(agentBlock, "displayName", upd.DisplayName)
 	if upd.Tags != nil {
-		if list := tags.Normalize(*upd.Tags); len(list) > 0 {
-			agentBlock["tags"] = toAnySlice(list)
-		} else {
-			delete(agentBlock, "tags")
-		}
+		setOrDeleteList(agentBlock, "tags", tags.Normalize(*upd.Tags))
 	}
 	setOrDelete(agentBlock, "description", upd.Description)
 	setOrDelete(agentBlock, "systemMessage", upd.SystemMessage)
 	setOrDelete(agentBlock, "iconUrl", upd.IconURL)
 	if upd.Egress != nil {
-		if len(*upd.Egress) > 0 {
-			agentBlock["egress"] = toAnySlice(*upd.Egress)
-		} else {
-			delete(agentBlock, "egress")
-		}
+		setOrDeleteList(agentBlock, "egress", *upd.Egress)
 	}
 	if upd.EgressPolicyRefs != nil {
-		if len(*upd.EgressPolicyRefs) > 0 {
-			agentBlock["egressPolicyRefs"] = toAnySlice(*upd.EgressPolicyRefs)
-		} else {
-			delete(agentBlock, "egressPolicyRefs")
-		}
+		setOrDeleteList(agentBlock, "egressPolicyRefs", *upd.EgressPolicyRefs)
 	}
 	after["agent"] = agentBlock
 
@@ -1521,6 +1509,15 @@ func (s *Service) mergedValues(ctx context.Context, st *site, upd Update, hr *un
 		return after, before, err
 	}
 	return after, before, firstErr
+}
+
+// setOrDeleteList is setOrDelete for a list: an empty one removes the key.
+func setOrDeleteList(m map[string]any, key string, list []string) {
+	if len(list) == 0 {
+		delete(m, key)
+		return
+	}
+	m[key] = toAnySlice(list)
 }
 
 func setOrDelete(m map[string]any, key string, v *string) {
