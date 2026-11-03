@@ -100,22 +100,30 @@ func TestAgentReadsTags(t *testing.T) {
 // agent-manager wrote; the Agent's annotation lags until Flux renders them.
 func TestAgentReadsTagsFromTheValuesFirst(t *testing.T) {
 	rule := tagstest.Rule()
+	valuesFrom := []any{map[string]any{"kind": "ConfigMap", "name": "sre-values"}}
 	tests := []struct {
-		name   string
-		values map[string]any
-		want   []string
+		name       string
+		values     map[string]any
+		valuesFrom []any
+		want       []string
 	}{
 		{name: "values' tags over the stale annotation", values: map[string]any{"agent": map[string]any{"name": "sre", "tags": []any{"ops"}}}, want: []string{"ops"}},
 		{name: "values without tags: cleared", values: map[string]any{"agent": map[string]any{"name": "sre"}}, want: nil},
 		{name: "no agent values: the annotation", values: map[string]any{"modelConfig": map[string]any{"name": "mc"}}, want: []string{"stale"}},
 		{name: "no values: the annotation", values: nil, want: []string{"stale"}},
+		{name: "valuesFrom, values without tags: the annotation", values: map[string]any{"agent": map[string]any{"name": "sre"}}, valuesFrom: valuesFrom, want: []string{"stale"}},
+		{name: "valuesFrom, values' tags over the annotation", values: map[string]any{"agent": map[string]any{"name": "sre", "tags": []any{"ops"}}}, valuesFrom: valuesFrom, want: []string{"ops"}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			obj := agentObject("kagent", "sre", "sre", "kagent", true, true)
 			obj.SetAnnotations(map[string]string{TagsAnnotation: "stale"})
 			a := agentFromObject(obj, nil, rule)
-			applyHelmRelease(&a, helmRelease("kagent", "sre", tc.values, true, nil), rule)
+			hr := helmRelease("kagent", "sre", tc.values, true, nil)
+			if tc.valuesFrom != nil {
+				require.NoError(t, unstructured.SetNestedSlice(hr.Object, tc.valuesFrom, "spec", "valuesFrom"))
+			}
+			applyHelmRelease(&a, hr, rule)
 			assert.Equal(t, tc.want, a.Tags)
 		})
 	}

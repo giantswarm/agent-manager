@@ -2074,9 +2074,11 @@ func applyHelmRelease(a *Agent, hr *unstructured.Unstructured, rule *tags.Rule) 
 	agentBlock, _ := values["agent"].(map[string]any)
 	// The values hold the tags agent-manager wrote, which the Agent's
 	// annotation shows only once Flux has rendered them: values without
-	// agent.tags have none, values without an agent block (a GitOps release
-	// that sets none) leave the annotation's.
-	if agentBlock != nil {
+	// agent.tags have none. Values without an agent block, or a release with
+	// valuesFrom (which can carry agent.tags beneath spec.values), leave the
+	// annotation's unless spec.values sets agent.tags itself.
+	valuesFrom, _, _ := unstructured.NestedSlice(hr.Object, "spec", "valuesFrom")
+	if _, set := agentBlock["tags"]; set || (agentBlock != nil && len(valuesFrom) == 0) {
 		a.Tags = rule.ParseList(stringSlice(agentBlock["tags"]))
 	}
 	if prompt, ok := agentBlock["systemMessage"].(string); ok {
