@@ -237,18 +237,18 @@ func TestAgentReportsThePromptWithoutTheEgressNote(t *testing.T) {
 		"\n\nBesides your model and your tools, your sandbox reaches only these origins: https://github.com, and the registries of the toolchains mounted under /opt/kagent/tools."
 	obj := agentObject("kagent", "coder", "", "", true, true)
 	require.NoError(t, unstructured.SetNestedField(obj.Object, rendered, "spec", "template", "systemPrompt"))
-	assert.Equal(t, rendered, agentFromObject(obj, nil).SystemMessage, "an unmanaged Agent's prompt is reported as is")
+	assert.Equal(t, rendered, agentFromObject(obj, nil, nil).SystemMessage, "an unmanaged Agent's prompt is reported as is")
 
 	values := coderValues()
 	values["agent"].(map[string]any)["platformPrompt"] = map[string]any{"egressNote": true}
-	a := agentFromObject(obj, nil)
-	applyHelmRelease(&a, helmRelease("kagent", "coder", values, true, nil))
+	a := agentFromObject(obj, nil, nil)
+	applyHelmRelease(&a, helmRelease("kagent", "coder", values, true, nil), nil)
 	assert.Equal(t, "You keep the GitOps repositories tidy.", a.SystemMessage, "the values' prompt")
 
 	delete(values["agent"].(map[string]any), "systemMessage")
 	require.NoError(t, unstructured.SetNestedField(obj.Object, "You are a helpful agent.\n\n"+egressNoteHeading+"\n\nBesides your model and your tools, your sandbox reaches only these origins.", "spec", "template", "systemPrompt"))
-	a = agentFromObject(obj, nil)
-	applyHelmRelease(&a, helmRelease("kagent", "coder", values, true, nil))
+	a = agentFromObject(obj, nil, nil)
+	applyHelmRelease(&a, helmRelease("kagent", "coder", values, true, nil), nil)
 	assert.Equal(t, "You are a helpful agent.", a.SystemMessage, "the chart default, without the note")
 }
 

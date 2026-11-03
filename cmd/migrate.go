@@ -184,6 +184,7 @@ func runMigrate(ctx context.Context, out io.Writer, o *migrateOptions) error {
 	}
 	svc := agents.New(kube.NewServiceAccountProvider(clients), resolver, nil, pinner, agents.Config{
 		DefaultNamespace: o.kagentNamespace, ManagedNamespaces: splitList(o.managedNamespaces), Compose: compose, KagentAPIVersion: kagentVersion, Version: build.Version,
+		Tags: chart.EmbeddedSchema().Tags,
 	}, log)
 	// On 2.x the service is the status reader, so the wait phase and
 	// get_agent_status agree on what a Ready Agent is; the service reads no

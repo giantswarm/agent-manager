@@ -16,6 +16,7 @@ import (
 
 	spec "github.com/giantswarm/agent-manager/api"
 	"github.com/giantswarm/agent-manager/internal/agents"
+	"github.com/giantswarm/agent-manager/internal/tags"
 )
 
 // Prefix is the REST base path.
@@ -97,7 +98,7 @@ func location(r *http.Request, ns string) agents.Location {
 
 func (h *REST) listAgents(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	list, err := h.svc.List(r.Context(), location(r, q.Get("namespace")))
+	list, err := h.svc.List(r.Context(), location(r, q.Get("namespace")), tagsQuery(q))
 	if err != nil {
 		h.writeError(w, err)
 		return
@@ -223,13 +224,17 @@ func (h *REST) listEgressPolicies(w http.ResponseWriter, r *http.Request) {
 
 func (h *REST) listSkills(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	res, err := h.svc.ListSkills(r.Context(), q.Get("repository"), q.Get("ref"), strings.EqualFold(q.Get("refresh"), "true"))
+	res, err := h.svc.ListSkills(r.Context(), q.Get("repository"), q.Get("ref"), strings.EqualFold(q.Get("refresh"), "true"), tagsQuery(q))
 	if err != nil {
 		h.writeError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, res)
 }
+
+// tagsQuery reads the tags filter: repeated (tags=a&tags=b), comma-joined
+// (tags=a,b) or both.
+func tagsQuery(q url.Values) tags.Filter { return tags.NewFilter(q["tags"]) }
 
 func (h *REST) listSessions(w http.ResponseWriter, r *http.Request) {
 	res, err := h.svc.ListSessions(r.Context(), r.PathValue("namespace"), r.PathValue("name"), strings.EqualFold(r.URL.Query().Get("allCreators"), "true"))
@@ -360,6 +365,10 @@ func SpecToUpdate(s agents.Spec) agents.Update {
 	upd.Harness = str(s.Harness)
 	upd.IconURL = str(s.IconURL)
 	upd.DefaultWorkspace = str(s.DefaultWorkspace)
+	if s.Tags != nil {
+		tags := s.Tags
+		upd.Tags = &tags
+	}
 	if s.DefaultToolchains != nil {
 		toolchains := s.DefaultToolchains
 		upd.DefaultToolchains = &toolchains

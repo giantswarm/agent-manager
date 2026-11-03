@@ -21,6 +21,7 @@ import (
 
 	"github.com/giantswarm/agent-manager/internal/oci"
 	"github.com/giantswarm/agent-manager/internal/oci/ocitest"
+	"github.com/giantswarm/agent-manager/internal/tags/tagstest"
 )
 
 // The commits the fake's refs resolve to.
@@ -75,7 +76,7 @@ func fakeGitHub(t *testing.T) (*httptest.Server, *int) {
 		case "agent-self-awareness/SKILL.md":
 			_, _ = w.Write([]byte("---\nname: self-awareness\ndescription: Knows what it is.\n---\n# body\n"))
 		case "nested/runbooks/SKILL.md":
-			_, _ = w.Write([]byte("---\nname: runbooks\ndescription: |\n  Operates things.\n---\n"))
+			_, _ = w.Write([]byte("---\nname: runbooks\ndescription: |\n  Operates things.\nmetadata:\n  author: sre\n  tags: \"Triage, kubernetes, bad_tag\"\n---\n"))
 		case "noname/SKILL.md":
 			_, _ = w.Write([]byte("# no frontmatter at all\n"))
 		case "plugins/agent/plugin.json", "plugins/both/plugin.json", "plugins/both/.claude-plugin/plugin.json", "plugins/claude/.claude-plugin/plugin.json":
@@ -117,7 +118,7 @@ func fakeGitHub(t *testing.T) (*httptest.Server, *int) {
 
 func TestDiscoverMirrorsThePortalSemantics(t *testing.T) {
 	ts, hits := fakeGitHub(t)
-	d := New(Config{Repositories: []string{"https://github.com/giantswarm/agent-skills.git"}, APIURL: ts.URL, Tokens: StaticToken("secret"), CacheTTL: time.Minute}, nil)
+	d := New(Config{Repositories: []string{"https://github.com/giantswarm/agent-skills.git"}, APIURL: ts.URL, Tokens: StaticToken("secret"), CacheTTL: time.Minute, Tags: tagstest.Rule()}, nil)
 
 	res, err := d.List(context.Background(), "", "", false)
 	require.NoError(t, err)
@@ -130,7 +131,7 @@ func TestDiscoverMirrorsThePortalSemantics(t *testing.T) {
 	assert.Empty(t, repo.Error)
 	assert.Equal(t, []Skill{
 		{Name: "self-awareness", Description: "Knows what it is.", Path: "agent-self-awareness"},
-		{Name: "runbooks", Description: "Operates things.", Path: "nested/runbooks"},
+		{Name: "runbooks", Description: "Operates things.", Path: "nested/runbooks", Tags: []string{"triage", "kubernetes"}},
 		{Name: "noname", Description: "", Path: "noname"},
 	}, repo.Skills, "sorted by path; the directory names a skill without frontmatter")
 
@@ -263,9 +264,33 @@ func (r *Resolver) resolveInsecure(ctx context.Context, ref string) (string, err
 }
 
 func TestParseFrontmatter(t *testing.T) {
-	assert.Equal(t, map[string]string{"name": "a", "description": "b c"}, parseFrontmatter("---\nname: a\ndescription: b c\nlist: [1]\n---\nrest"))
-	assert.Empty(t, parseFrontmatter("no frontmatter"))
-	assert.Empty(t, parseFrontmatter("---\nname: unterminated\n"))
+	assert.Equal(t, map[string]string{"name": "a", "description": "b c"}, scalars(frontmatter("---\nname: a\ndescription: b c\nlist: [1]\n---\nrest")))
+	assert.Empty(t, scalars(frontmatter("no frontmatter")))
+	assert.Empty(t, scalars(frontmatter("---\nname: unterminated\n")))
+}
+
+func TestMetadataTags(t *testing.T) {
+	long := strings.Repeat("a", 64)
+	tests := []struct {
+		name    string
+		content string
+		want    []string
+	}{
+		{name: "no frontmatter", content: "# body", want: nil},
+		{name: "no metadata", content: "---\nname: a\n---\n", want: nil},
+		{name: "metadata without tags", content: "---\nmetadata:\n  author: me\n---\n", want: nil},
+		{name: "comma-joined, normalized, deduplicated", content: "---\nmetadata:\n  tags: \" Triage, kubernetes,triage,, \"\n---\n", want: []string{"triage", "kubernetes"}},
+		{name: "malformed tags dropped", content: "---\nmetadata:\n  tags: \"ok, bad_tag, -lead, trail-, a--b, " + long + ", two words\"\n---\n", want: []string{"ok"}},
+		{name: "a list is not the spec's string", content: "---\nmetadata:\n  tags: [a, b]\n---\n", want: nil},
+		{name: "metadata not a map", content: "---\nmetadata: x\n---\n", want: nil},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, metadataTags(frontmatter(tc.content), tagstest.Rule()))
+		})
+	}
+	assert.Nil(t, metadataTags(frontmatter("---\nmetadata:\n  tags: ok\n---\n"), nil), "a chart without tags: no skill tags")
+	assert.Equal(t, map[string]string{"name": "a"}, scalars(frontmatter("---\nname: a\nmetadata:\n  tags: x\n---\n")), "metadata stays out of the scalar fields")
 }
 
 func TestRequireReadableGatesPrivateRepositoriesOnThePerson(t *testing.T) {

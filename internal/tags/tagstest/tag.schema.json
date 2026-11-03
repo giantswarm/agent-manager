@@ -1,0 +1,7 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$comment": "One entry of the `agent.tags` value: a lowercase kebab-case keyword. Referenced from values.yaml (`tags: [] # @schema itemRef:tag.schema.json`) and bundled into values.schema.json by the helm-schema pre-commit hook.",
+    "type": "string",
+    "maxLength": 63,
+    "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+}

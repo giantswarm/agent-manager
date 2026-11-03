@@ -46,7 +46,7 @@ MCP-server-writer half.
 | Operation | REST | MCP tool | Writes |
 |---|---|---|---|
 | Version, chart (OCI URL, `2.x` range, latest version, schema in use), managed namespaces, capabilities, API versions, platform Harness, muster URL, identity | `GET /api/v1/info` | `get_info` | no |
-| Agents of a namespace (Agent objects + HelmReleases of the chart not rendered yet), one summary each: display name, description, model config, Harness, toolset, readiness, management mode, and a suspended, deleting or failing release; `details` reports each in full | `GET /api/v1/agents?namespace=[&details=true]` | `list_agents` | no |
+| Agents of a namespace (Agent objects + HelmReleases of the chart not rendered yet), one summary each: display name, description, model config, Harness, toolset, readiness, management mode, and a suspended, deleting or failing release; `details` reports each in full; `tags` keeps those with any of them | `GET /api/v1/agents?namespace=[&details=true&tags=]` | `list_agents` | no |
 | One agent with its HelmRelease values, Harness, pinned skills and plugins, toolset and the Agent's status | `GET /api/v1/agents/{ns}/{name}` | `get_agent` | no |
 | Create: OCIRepository (when missing) + HelmRelease, after skill pinning, schema, ModelConfig and Harness validation | `POST /api/v1/agents` | `create_agent` | HelmRelease, OCIRepository |
 | Update: merge into the HelmRelease values (`refreshSkills` re-pins git skills), validate, update | `PATCH /api/v1/agents/{ns}/{name}[?force=true]` | `update_agent` | HelmRelease |
@@ -55,7 +55,7 @@ MCP-server-writer half.
 | Dry run of create/update: pinned skills, composed manifests + every violation | `POST /api/v1/agents/validate` | `validate_agent` | no |
 | kagent ModelConfigs of a namespace | `GET /api/v1/modelconfigs?namespace=` | `list_model_configs` | no |
 | kagent EgressPolicies of a namespace, read as the caller: each origin and its credential header's name, never the Secret | `GET /api/v1/egresspolicies?namespace=` | `list_egress_policies` | no |
-| Skills (`SKILL.md`) of the configured GitHub repositories, grouped by repository with its head commit | `GET /api/v1/skills[?repository=&ref=&refresh=]` | `list_skills` | no |
+| Skills (`SKILL.md`) of the configured GitHub repositories, grouped by repository with its head commit, tags from `metadata.tags`; `tags` keeps those with any of them | `GET /api/v1/skills[?repository=&ref=&refresh=&tags=]` | `list_skills` | no |
 | Sessions of an agent, as the caller (`SessionService/ListSessions`; `allCreators` when the controller grants it) | `GET /api/v1/agents/{ns}/{name}/sessions[?allCreators=true]` | `list_sessions` | no |
 | Start a session: create it (in a workspace with `workspaceGrant`), send the first message when one is given and answer once the turn is accepted; without `message` only create it | `POST /api/v1/agents/{ns}/{name}/sessions` | `start_session` | a kagent Session |
 | One session and its conversation, one turn per A2A task of its context, oldest first, within `maxBytes`: a summary per turn by default, a transcript or the raw tasks on request | `GET /api/v1/sessions/{id}[?detail=&lastTurns=&maxBytes=]` | `get_session` | no |
@@ -80,7 +80,7 @@ Agent", the cases `force` overrides where documented;
 chose and confirmed — the service never derives one from a display name, per
 the creating-agents PRD), the **modelConfig** (must exist in the namespace;
 the error lists the valid ones), the **toolset** (required, see below), and
-optionally `harness`, `displayName`, `description`, `systemMessage`,
+optionally `harness`, `displayName`, `tags`, `description`, `systemMessage`,
 `iconUrl`, `skills` and `plugins` (see below), `egress` (the origins the
 agent may reach besides what its revision compiles: HTTP(S) origins such as
 `https://github.com:443` or `https://*.githubusercontent.com`, and
@@ -133,7 +133,8 @@ The chart renders the `Agent` (`spec.harnessRef.name: <agent.harness>`,
 `agent.egressPolicyRefs`; under
 `spec.template` the `description`, `systemPrompt`, `modelConfig`,
 `skills[]`, `plugins[]` and the muster binding; the annotations
-`ui.giantswarm.io/display-name` and `ui.giantswarm.io/icon-url`) and the
+`ui.giantswarm.io/display-name`, `ui.giantswarm.io/icon-url` and
+`ui.giantswarm.io/tags`) and the
 agent's own `RemoteMCPServer` (named after the agent, pointing at muster,
 carrying the toolset header). No admission label is involved: the Agent
 selects its Harness by name. ModelConfigs, their Secrets and the Harnesses are

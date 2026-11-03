@@ -301,7 +301,7 @@ func TestGetAndListReportTheEffectiveDefaultToolchains(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []string{"github"}, got.DefaultToolchains)
 	assert.True(t, got.DefaultToolchainsImplicit)
-	list, err := svc.List(ctx, In("kagent"))
+	list, err := svc.List(ctx, In("kagent"), nil)
 	require.NoError(t, err)
 	require.Len(t, list, 1)
 	assert.Equal(t, []string{"github"}, list[0].Summary().DefaultToolchains)
@@ -466,7 +466,7 @@ func TestCreateAndUpdateKeepTheDefaultToolchainsAsAnAnnotation(t *testing.T) {
 func TestTheAgentObjectReportsItsDefaultToolchains(t *testing.T) {
 	obj := agentObject("kagent", "bare", "", "", true, true)
 	obj.SetAnnotations(map[string]string{DefaultToolchainsAnnotation: "go,node@1.0.0"})
-	assert.Equal(t, []string{"go", "node@1.0.0"}, agentFromObject(obj, nil).DefaultToolchains)
+	assert.Equal(t, []string{"go", "node@1.0.0"}, agentFromObject(obj, nil, nil).DefaultToolchains)
 }
 
 func TestDefaultToolchainsOnAWorkloadClusterAreRefused(t *testing.T) {

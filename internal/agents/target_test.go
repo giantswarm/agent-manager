@@ -139,12 +139,12 @@ func TestAnAgentOnATargetClusterIsReadThere(t *testing.T) {
 	assert.Equal(t, VerdictReady, st.Verdict, st.Summary)
 	assert.Equal(t, wc1, st.Target)
 
-	agents, err := f.svc.List(ctx, at)
+	agents, err := f.svc.List(ctx, at, nil)
 	require.NoError(t, err)
 	require.Len(t, agents, 1)
 	assert.Equal(t, "planner", agents[0].Name)
 
-	local, err := f.svc.List(ctx, In("kagent"))
+	local, err := f.svc.List(ctx, In("kagent"), nil)
 	require.NoError(t, err)
 	assert.Empty(t, local, "the installation's own cluster has no agent of that name")
 
