@@ -843,6 +843,27 @@ func TestUpdateMergesIntoValuesAndHonorsOwnership(t *testing.T) {
 	assert.Contains(t, err.Error(), "bare Agent")
 }
 
+// A forced delete removes a bare Agent, never one the platform ships, even
+// when its release cannot be read (renamed or not yet applied).
+func TestForcedDeleteKeepsAPlatformOwnedAgent(t *testing.T) {
+	f := seeded(t)
+	ctx := t.Context()
+	platform := agentObject("kagent", "agent-manager-assistant", "renamed", "agent-platform", true, true)
+	labels := platform.GetLabels()
+	labels[PlatformManagedByLabel] = PlatformManagedByValue
+	platform.SetLabels(labels)
+	mustCreate(t, f, agentGVR, platform)
+
+	_, err := f.svc.Delete(ctx, In(""), "agent-manager-assistant", true, WriteOptions{})
+	require.ErrorIs(t, err, ErrConflict)
+	assert.Contains(t, err.Error(), "ships with the Agent Platform")
+	_, err = f.svc.Update(ctx, Update{Name: "agent-manager-assistant", Description: str("x")})
+	require.ErrorIs(t, err, ErrConflict)
+	assert.Contains(t, err.Error(), "ships with the Agent Platform")
+	_, err = f.dyn.Resource(agentGVR).Namespace("kagent").Get(ctx, "agent-manager-assistant", metav1.GetOptions{})
+	require.NoError(t, err, "the Agent is kept")
+}
+
 func TestDeleteKeepsTheTenantReconcilersSource(t *testing.T) {
 	f := seeded(t)
 	ctx := context.Background()

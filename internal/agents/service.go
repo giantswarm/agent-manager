@@ -1375,13 +1375,16 @@ func (s *Service) writableHelmRelease(ctx context.Context, st *site, name string
 	if err != nil {
 		return nil, nil, err
 	}
+	if hr == nil && PlatformOwned(obj) {
+		return nil, obj, platformRefusal(st, name)
+	}
 	if hr == nil {
 		return nil, obj, conflictf("Agent %s is a bare Agent with no HelmRelease behind it; agent-manager only writes HelmRelease values (recreate it with create_agent, or delete it with force)", st.describe(name))
 	}
 	if PlatformOwned(hr) {
 		// The release is returned with the refusal: a forced delete removes
 		// a bare Agent only, never one a release renders.
-		return hr, obj, conflictf("agent %s ships with the Agent Platform and is read-only here: change it through the platform's configuration", st.describe(name))
+		return hr, obj, platformRefusal(st, name)
 	}
 	if gitOpsOwnedHR(hr) && !allowGitOps {
 		return nil, obj, s.gitOpsRefusal(ctx, st.flux, hr)
@@ -1755,8 +1758,10 @@ func (s *Service) Delete(ctx context.Context, loc Location, name string, force b
 	res := &DeleteResult{Name: name, Namespace: ns, Target: st.loc.Target, RequestedBy: identity.Caller(ctx), WriteOutcome: WriteOutcome{Mode: mode, DryRun: w.DryRun}}
 	hr, obj, err := s.writableHelmRelease(ctx, st, name, force, mode == ModeCommit)
 	if err != nil {
-		if mode == ModeApply && hr == nil && obj != nil && force && errorsIs(err, ErrConflict) {
-			// A bare Agent, forced: delete the object itself.
+		if mode == ModeApply && hr == nil && obj != nil && force && errorsIs(err, ErrConflict) && !PlatformOwned(obj) {
+			// A bare Agent, forced: delete the object itself (also the
+			// leftover of a deleted release). One the platform ships —
+			// labelled on the Agent too — never goes this way.
 			if err := s.deleteRendered(ctx, st.agent, ns, name, res, false, w.DryRun); err != nil {
 				return nil, err
 			}
@@ -1933,6 +1938,11 @@ func (s *Service) otherReferences(ctx context.Context, dyn dynamic.Interface, ns
 func ownerOf(obj *unstructured.Unstructured) (name, namespace string) {
 	labels := obj.GetLabels()
 	return labels[HelmReleaseNameLabel], labels[HelmReleaseNamespaceLabel]
+}
+
+// platformRefusal answers a write to an agent the platform ships.
+func platformRefusal(st *site, name string) error {
+	return conflictf("agent %s ships with the Agent Platform and is read-only here: change it through the platform's configuration", st.describe(name))
 }
 
 // PlatformOwned reports an object the Agent Platform ships (a HelmRelease,
