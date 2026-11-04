@@ -225,8 +225,12 @@ type InfoResponse struct {
 		// clusters; empty: target clusters are refused.
 		TargetURL string `json:"targetUrl,omitempty"`
 	} `json:"muster"`
-	// SkillsRepositories are the configured skill repositories.
+	// SkillsRepositories are the configured skill repositories' URLs.
 	SkillsRepositories []string `json:"skillsRepositories"`
+	// SkillsSources are the configured skill repositories in full: each
+	// with the ref discovery reads and its skills pin (empty: the default
+	// branch), the path it is scanned below and whether it is read-only.
+	SkillsSources []skills.Source `json:"skillsSources"`
 	// SkillsGitAuthSecretName is the installation's skills credential Secret
 	// (key token) an agent with a git skill fetches with unless it names its
 	// own; empty: anonymous fetches.
@@ -295,8 +299,10 @@ func (s *Service) Info(ctx context.Context) InfoResponse {
 	out.Muster.TargetURL = s.cfg.Compose.TargetMusterURL
 	if s.skills != nil {
 		out.SkillsRepositories = s.skills.Repositories()
+		out.SkillsSources = s.skills.Sources()
 	} else {
 		out.SkillsRepositories = []string{}
+		out.SkillsSources = []skills.Source{}
 	}
 	out.SkillsGitAuthSecretName = s.cfg.Compose.SkillsGitAuthSecretName
 	if s.cfg.SkillsBootSecret != nil {
@@ -993,7 +999,7 @@ func (s *Service) ValidateCreate(ctx context.Context, spec Spec) (*ValidateResul
 	if err := requireReadableSkills(ctx, s.pinner, spec.Skills); err != nil {
 		res.addError(err)
 	}
-	if pinned, err := pinSkills(ctx, s.pinner, spec.Skills, false); err != nil {
+	if pinned, err := pinSkills(ctx, s.pinner, s.sourceRefs(spec.Skills, false), false); err != nil {
 		res.addError(err)
 	} else {
 		spec.Skills = pinned
@@ -1221,7 +1227,7 @@ func (s *Service) Create(ctx context.Context, spec Spec) (*CreateResult, error) 
 	if err := requireReadableSkills(ctx, s.pinner, spec.Skills); err != nil {
 		return nil, err
 	}
-	if spec.Skills, err = pinSkills(ctx, s.pinner, spec.Skills, false); err != nil {
+	if spec.Skills, err = pinSkills(ctx, s.pinner, s.sourceRefs(spec.Skills, false), false); err != nil {
 		return nil, err
 	}
 	if err := requireReadablePlugins(ctx, s.pinner, spec.Plugins); err != nil {
@@ -1360,7 +1366,7 @@ func (s *Service) createCommit(ctx context.Context, st *site, spec Spec, values 
 // applies the ownership rules: a bare Agent object has nothing to write to; a
 // suspended release is refused unless force; a GitOps-owned one is refused
 // with gitops_owned, naming mode commit, unless allowGitOps (commit mode,
-// which changes it in git).
+// which changes it in git). A platform-owned one is refused in every mode.
 func (s *Service) writableHelmRelease(ctx context.Context, st *site, name string, force, allowGitOps bool) (*unstructured.Unstructured, *unstructured.Unstructured, error) {
 	obj, hr, err := s.agentObjects(ctx, st, name)
 	if errorsIs(err, ErrNotFound) {
@@ -1371,6 +1377,11 @@ func (s *Service) writableHelmRelease(ctx context.Context, st *site, name string
 	}
 	if hr == nil {
 		return nil, obj, conflictf("Agent %s is a bare Agent with no HelmRelease behind it; agent-manager only writes HelmRelease values (recreate it with create_agent, or delete it with force)", st.describe(name))
+	}
+	if platformOwnedHR(hr) {
+		// The release is returned with the refusal: a forced delete removes
+		// a bare Agent only, never one a release renders.
+		return hr, obj, conflictf("agent %s ships with the Agent Platform and is read-only here: change it through the platform's configuration", st.describe(name))
 	}
 	if gitOpsOwnedHR(hr) && !allowGitOps {
 		return nil, obj, s.gitOpsRefusal(ctx, st.flux, hr)
@@ -1465,7 +1476,7 @@ func (s *Service) mergedValues(ctx context.Context, st *site, upd Update, hr *un
 				return after, before, err
 			}
 		}
-		pinned, err := pinSkills(ctx, s.pinner, list, upd.RefreshSkills)
+		pinned, err := pinSkills(ctx, s.pinner, s.sourceRefs(list, upd.RefreshSkills), upd.RefreshSkills)
 		if err != nil {
 			return after, before, err
 		}
@@ -1924,6 +1935,11 @@ func ownerOf(obj *unstructured.Unstructured) (name, namespace string) {
 	return labels[HelmReleaseNameLabel], labels[HelmReleaseNamespaceLabel]
 }
 
+// platformOwnedHR reports a HelmRelease the Agent Platform ships.
+func platformOwnedHR(hr *unstructured.Unstructured) bool {
+	return hr.GetLabels()[PlatformManagedByLabel] == PlatformManagedByValue
+}
+
 func gitOpsOwnedHR(hr *unstructured.Unstructured) bool {
 	_, ok := hr.GetLabels()[KustomizationNameLabel]
 	return ok
@@ -2049,9 +2065,12 @@ func applyHelmRelease(a *Agent, hr *unstructured.Unstructured, rule *tags.Rule) 
 	if a.CreatedBy == "" {
 		a.CreatedBy = hr.GetAnnotations()[CreatedByAnnotation]
 	}
-	if ref.GitOpsOwned {
+	switch {
+	case platformOwnedHR(hr):
+		a.Managed = ManagedPlatform
+	case ref.GitOpsOwned:
 		a.Managed = ManagedGitOps
-	} else {
+	default:
 		a.Managed = ManagedHelmRelease
 	}
 	values, _, _ := unstructured.NestedMap(hr.Object, "spec", "values")

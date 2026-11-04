@@ -271,7 +271,8 @@ paths:
         request; a release defined elsewhere in the repository is `409
         conflict`). `409 gitops_owned` for a GitOps-owned release in apply
         mode; `409 conflict` for suspended releases and bare Agents
-        unless `force`; a write
+        unless `force`, and in every mode for an agent that ships with the
+        Agent Platform (`managed: platform`); a write
         that races helm-controller's status update of the release is retried
         on a fresh read, not reported. `400` for a body still carrying the
         removed `toolNames` or `runtime`.
@@ -307,7 +308,8 @@ paths:
         Agents and suspended releases need `force` (a forced delete of
         a suspended release removes the rendered objects too); a GitOps-owned
         release is `409 gitops_owned` in apply mode, and `mode: commit`
-        removes its files with a pull request.
+        removes its files with a pull request. An agent that ships with the
+        Agent Platform (`managed: platform`) is `409 conflict` in every mode.
       operationId: deleteAgent
       x-mcp-tool: delete_agent
       parameters:
@@ -784,7 +786,11 @@ components:
           type: object
           properties:
             url: { type: string, description: The muster MCP URL composed into every agent as muster.url; empty means the chart default applies }
-        skillsRepositories: { type: array, items: { type: string } }
+        skillsRepositories: { type: array, items: { type: string }, description: "The configured skill repositories' URLs" }
+        skillsSources:
+          type: array
+          description: The configured skill repositories in full
+          items: { $ref: "#/components/schemas/SkillSource" }
         skillsGitAuthSecretName: { type: string, description: "The installation's skills credential Secret (key token) every agent with a git skill is fetched with unless it names its own; absent: anonymous" }
         skillsGitAuthMint:
           type: object
@@ -994,7 +1000,7 @@ components:
         toolset: { $ref: "#/components/schemas/Toolset" }
         implicitFullAccess: { type: boolean }
         ready: { type: [boolean, "null"] }
-        managed: { type: string, enum: [helmrelease, gitops, none] }
+        managed: { type: string, enum: [helmrelease, gitops, platform, none] }
         suspended: { type: boolean, description: The HelmRelease is suspended (absent when not) }
         deleting: { type: boolean, description: helm-controller is uninstalling the release (absent when not) }
         releaseReason: { type: string, description: The HelmRelease's Ready reason, when it is not Ready }
@@ -1024,7 +1030,7 @@ components:
         tools: { type: array, items: { $ref: "#/components/schemas/ToolBinding" } }
         ready: { type: [boolean, "null"], description: The Agent's verdict (Ready and the desired revision is the latest successful one); null while unreported }
         status: { $ref: "#/components/schemas/ObjectStatus" }
-        managed: { type: string, enum: [helmrelease, gitops, none] }
+        managed: { type: string, enum: [helmrelease, gitops, platform, none] }
         helmRelease: { $ref: "#/components/schemas/HelmReleaseRef" }
         values: { type: object, description: The HelmRelease's inline values (the chart contract) }
     Manifests:
@@ -1183,6 +1189,13 @@ components:
           type: array
           items: { type: string }
           description: Frontmatter metadata.tags (comma-joined), normalized; malformed tags dropped
+    SkillSource:
+      type: object
+      properties:
+        url: { type: string }
+        ref: { type: string, description: "Branch, tag or commit discovery reads and its skills pin; absent for the default branch" }
+        path: { type: string, description: The directory scanned; absent for the whole repository }
+        readOnly: { type: boolean }
     SkillsResult:
       type: object
       properties:
@@ -1192,7 +1205,9 @@ components:
             type: object
             properties:
               repoUrl: { type: string }
-              ref: { type: string, description: The ref read (the default branch unless ref was given) }
+              ref: { type: string, description: "The ref read (the configured ref, else the default branch, unless ref was given)" }
+              path: { type: string, description: The directory scanned; absent for the whole repository. Skill paths stay repository-relative }
+              readOnly: { type: boolean, description: The source is read-only }
               commit: { type: string, description: What ref resolved to when the repository was read — the pin for a skills entry }
               skills: { type: array, items: { $ref: "#/components/schemas/DiscoveredSkill" } }
               private: { type: boolean, description: Only its collaborators can read it; listed only to a caller who can }

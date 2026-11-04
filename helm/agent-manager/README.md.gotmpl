@@ -30,7 +30,8 @@ the RemoteMCPServer and the HelmRelease. Readiness is the Agent's own
 - `muster.url` is the platform's muster MCP URL composed into every agent as
   the chart value `muster.url`; empty leaves the Generic chart's default.
 - `skills.repositories` are the GitHub repositories `list_skills` discovers
-  `SKILL.md` files in, reporting the head commit an agent pins;
+  `SKILL.md` files in, reporting the head commit an agent pins; an entry is a
+  URL or `{url, ref, path, readOnly}` (read at `ref`, scanned below `path`);
   `skills.github.tokenSecret` names a Secret with the token that resolves
   branches and tags in private repositories (there is no per-agent skill
   credential).

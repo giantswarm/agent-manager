@@ -206,6 +206,22 @@ func TestApplyRefusesAGitOpsOwnedReleaseNamingTheTarget(t *testing.T) {
 	assert.ErrorIs(t, err, ErrGitOpsOwned)
 }
 
+func TestCommitRefusesAPlatformOwnedRelease(t *testing.T) {
+	f, fake, ctx := gitOpsFixture(t, true)
+	values := map[string]any{"agent": map[string]any{"name": "agent-manager-assistant"}, "modelConfig": map[string]any{"name": "default-model-config"}, ToolsetValuesKey: []any{"preset:agent-platform"}}
+	mustCreate(t, f, hrGVR, helmRelease("kagent", "agent-manager-assistant", values, true, map[string]any{PlatformManagedByLabel: PlatformManagedByValue, KustomizationNameLabel: "agents", KustomizationNamespaceLabel: "flux-system"}))
+	commit := WriteOptions{Mode: ModeCommit}
+
+	_, err := f.svc.Update(ctx, Update{Name: "agent-manager-assistant", Description: str("x"), WriteOptions: commit})
+	require.ErrorIs(t, err, ErrConflict)
+	assert.Contains(t, err.Error(), "ships with the Agent Platform")
+	_, err = f.svc.ValidateUpdate(ctx, Update{Name: "agent-manager-assistant", Description: str("x"), WriteOptions: commit})
+	require.ErrorIs(t, err, ErrConflict)
+	_, err = f.svc.Delete(ctx, In(""), "agent-manager-assistant", false, commit)
+	require.ErrorIs(t, err, ErrConflict)
+	assert.Empty(t, fake.PullRequests())
+}
+
 func TestValidateUpdateFollowsTheWriteModesOwnershipRule(t *testing.T) {
 	f, fake, ctx := gitOpsFixture(t, true)
 

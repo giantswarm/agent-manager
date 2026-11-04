@@ -68,11 +68,30 @@ func fakeGitHub(t *testing.T) (*httptest.Server, *int) {
 		count()
 		_ = json.NewEncoder(w).Encode(map[string]any{"truncated": false, "tree": []map[string]any{{"path": "README.md", "type": "blob"}}})
 	})
+	mux.HandleFunc("/repos/giantswarm/agent-skills/git/trees/"+tagCommit, func(w http.ResponseWriter, _ *http.Request) {
+		count()
+		_ = json.NewEncoder(w).Encode(map[string]any{"truncated": false, "tree": []map[string]any{
+			{"path": "SKILL.md", "type": "blob"},
+			{"path": "skills/overview/SKILL.md", "type": "blob"},
+			{"path": "skills/nested/tools/SKILL.md", "type": "blob"},
+			{"path": "skillset/SKILL.md", "type": "blob"},
+			{"path": "demo/SKILL.md", "type": "blob"},
+		}})
+	})
 	mux.HandleFunc("/repos/giantswarm/agent-skills/contents/", func(w http.ResponseWriter, r *http.Request) {
 		count()
 		assert.Equal(t, "application/vnd.github.raw+json", r.Header.Get("Accept"))
-		assert.Equal(t, headCommit, r.URL.Query().Get("ref"), "files are read at the resolved commit, not the moving branch")
-		switch strings.TrimPrefix(r.URL.Path, "/repos/giantswarm/agent-skills/contents/") {
+		path := strings.TrimPrefix(r.URL.Path, "/repos/giantswarm/agent-skills/contents/")
+		if strings.HasPrefix(path, "skills/") {
+			assert.Equal(t, tagCommit, r.URL.Query().Get("ref"), "a source's files are read at its ref's commit")
+		} else {
+			assert.Equal(t, headCommit, r.URL.Query().Get("ref"), "files are read at the resolved commit, not the moving branch")
+		}
+		switch path {
+		case "skills/overview/SKILL.md":
+			_, _ = w.Write([]byte("---\nname: overview\ndescription: The platform.\n---\n"))
+		case "skills/nested/tools/SKILL.md":
+			_, _ = w.Write([]byte("---\nname: tools\ndescription: Its tools.\n---\n"))
 		case "agent-self-awareness/SKILL.md":
 			_, _ = w.Write([]byte("---\nname: self-awareness\ndescription: Knows what it is.\n---\n# body\n"))
 		case "nested/runbooks/SKILL.md":
@@ -118,7 +137,7 @@ func fakeGitHub(t *testing.T) (*httptest.Server, *int) {
 
 func TestDiscoverMirrorsThePortalSemantics(t *testing.T) {
 	ts, hits := fakeGitHub(t)
-	d := New(Config{Repositories: []string{"https://github.com/giantswarm/agent-skills.git"}, APIURL: ts.URL, Tokens: StaticToken("secret"), CacheTTL: time.Minute, Tags: tagstest.Rule()}, nil)
+	d := New(Config{Repositories: []Source{{URL: "https://github.com/giantswarm/agent-skills.git"}}, APIURL: ts.URL, Tokens: StaticToken("secret"), CacheTTL: time.Minute, Tags: tagstest.Rule()}, nil)
 
 	res, err := d.List(context.Background(), "", "", false)
 	require.NoError(t, err)
@@ -156,6 +175,35 @@ func TestDiscoverMirrorsThePortalSemantics(t *testing.T) {
 	assert.Equal(t, featureCommit, res.Repositories[0].Commit)
 	assert.Equal(t, "feature", res.Repositories[0].Ref)
 	assert.Empty(t, res.Repositories[0].Skills, "the feature branch carries no skill")
+}
+
+func TestDiscoverReadsASourceAtItsRefBelowItsPath(t *testing.T) {
+	ts, _ := fakeGitHub(t)
+	d := New(Config{Repositories: []Source{{URL: "https://github.com/giantswarm/agent-skills", Ref: "v1.2.0", Path: "skills", ReadOnly: true}}, APIURL: ts.URL, Tokens: StaticToken("secret")}, nil)
+
+	res, err := d.List(t.Context(), "", "", false)
+	require.NoError(t, err)
+	require.Len(t, res.Repositories, 1)
+	repo := res.Repositories[0]
+	assert.Empty(t, repo.Error)
+	assert.Equal(t, "v1.2.0", repo.Ref)
+	assert.Equal(t, tagCommit, repo.Commit, "the commit is the source ref's, not the default branch's")
+	assert.Equal(t, "skills", repo.Path)
+	assert.True(t, repo.ReadOnly)
+	assert.Equal(t, []Skill{
+		{Name: "tools", Description: "Its tools.", Path: "skills/nested/tools"},
+		{Name: "overview", Description: "The platform.", Path: "skills/overview"},
+	}, repo.Skills, "only below the path, paths repository-relative")
+
+	// Asking for the repository by URL keeps its configured ref and path.
+	res, err = d.List(t.Context(), "https://github.com/giantswarm/agent-skills", "", false)
+	require.NoError(t, err)
+	require.Len(t, res.Repositories, 1)
+	assert.Equal(t, tagCommit, res.Repositories[0].Commit)
+	assert.Len(t, res.Repositories[0].Skills, 2)
+	assert.True(t, res.Repositories[0].ReadOnly)
+
+	assert.Equal(t, []Source{{URL: "https://github.com/giantswarm/agent-skills", Ref: "v1.2.0", Path: "skills", ReadOnly: true}}, d.Sources())
 }
 
 func TestListRejectsNonGitHubRepositoriesAndReportsUnreadableOnes(t *testing.T) {
@@ -358,7 +406,7 @@ func TestAppMintsAndRenewsInstallationTokens(t *testing.T) {
 
 func TestExpiredEntryOnTheSameCommitIsRenewedWithoutRereading(t *testing.T) {
 	ts, hits := fakeGitHub(t)
-	d := New(Config{Repositories: []string{"https://github.com/giantswarm/agent-skills"}, APIURL: ts.URL, Tokens: StaticToken("secret"), CacheTTL: time.Nanosecond}, nil)
+	d := New(Config{Repositories: []Source{{URL: "https://github.com/giantswarm/agent-skills"}}, APIURL: ts.URL, Tokens: StaticToken("secret"), CacheTTL: time.Nanosecond}, nil)
 
 	first, err := d.List(context.Background(), "", "", false)
 	require.NoError(t, err)
@@ -372,7 +420,7 @@ func TestExpiredEntryOnTheSameCommitIsRenewedWithoutRereading(t *testing.T) {
 
 func TestAReadOutlivesACallerThatGivesUp(t *testing.T) {
 	ts, _ := fakeGitHub(t)
-	d := New(Config{Repositories: []string{"https://github.com/giantswarm/agent-skills"}, APIURL: ts.URL, Tokens: StaticToken("secret"), CacheTTL: time.Minute}, nil)
+	d := New(Config{Repositories: []Source{{URL: "https://github.com/giantswarm/agent-skills"}}, APIURL: ts.URL, Tokens: StaticToken("secret"), CacheTTL: time.Minute}, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

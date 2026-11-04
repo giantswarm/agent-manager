@@ -151,7 +151,7 @@ environment variable named next to it; flags win over the environment.`,
 	f.StringVar(&o.helmReleaseInterval, "helmrelease-interval", envOr("HELMRELEASE_INTERVAL", agents.DefaultHelmReleaseInterval), "HelmRelease.spec.interval of composed agents (HELMRELEASE_INTERVAL)")
 	f.StringVar(&o.ociRepositoryInterval, "ocirepository-interval", envOr("OCIREPOSITORY_INTERVAL", agents.DefaultOCIRepositoryInterval), "OCIRepository.spec.interval of the shared chart source (OCIREPOSITORY_INTERVAL)")
 	f.StringVar(&o.helmReleaseSA, "helmrelease-service-account", envOr("HELMRELEASE_SERVICE_ACCOUNT", ""), "HelmRelease.spec.serviceAccountName, required by a Flux multi-tenancy admission policy in tenant namespaces; empty omits it (HELMRELEASE_SERVICE_ACCOUNT)")
-	f.StringVar(&o.skillsRepositories, "skills-repositories", envOr("AGENT_MANAGER_SKILLS_REPOSITORIES", ""), "Comma-separated GitHub repository URLs whose SKILL.md files are offered by list_skills (AGENT_MANAGER_SKILLS_REPOSITORIES)")
+	f.StringVar(&o.skillsRepositories, "skills-repositories", envOr("AGENT_MANAGER_SKILLS_REPOSITORIES", ""), "GitHub repositories whose SKILL.md files are offered by list_skills: comma-separated URLs, or a JSON array of URLs and {url, ref, path, readOnly} objects (AGENT_MANAGER_SKILLS_REPOSITORIES)")
 	f.StringVar(&o.skillsGitHubAPI, "skills-github-api", envOr("AGENT_MANAGER_SKILLS_GITHUB_API", "https://api.github.com"), "GitHub API base URL for skill discovery and for resolving a skill's branch or tag to its head commit (AGENT_MANAGER_SKILLS_GITHUB_API)")
 	f.StringVar(&o.skillsToken, "skills-github-token", envOr("GITHUB_TOKEN", ""), "GitHub token for private skill repositories and a higher rate limit; prefer the environment (GITHUB_TOKEN)")
 	f.StringVar(&o.skillsAppID, "skills-github-app-id", envOr("AGENT_MANAGER_SKILLS_GITHUB_APP_ID", ""), "ID of the read-only GitHub App skills are read with: installation tokens instead of a personal token, at the App's rate limit. Mutually exclusive with --skills-github-token (AGENT_MANAGER_SKILLS_GITHUB_APP_ID)")
@@ -292,7 +292,11 @@ func runServe(ctx context.Context, o *serveOptions) error {
 	tagRule := chart.EmbeddedSchema().Tags
 
 	var discoverer *skills.Discoverer
-	if repos := splitList(o.skillsRepositories); len(repos) > 0 {
+	repos, err := skills.ParseSources(o.skillsRepositories)
+	if err != nil {
+		return fmt.Errorf("--skills-repositories: %w", err)
+	}
+	if len(repos) > 0 {
 		discoverer = skills.New(skills.Config{Repositories: repos, APIURL: o.skillsGitHubAPI, Tokens: skillsTokens, CacheTTL: o.skillsCacheTTL, Tags: tagRule}, log)
 	}
 	// Skills are pinned before they are written: a branch or tag to its head

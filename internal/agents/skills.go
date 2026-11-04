@@ -19,7 +19,8 @@ import (
 // "this tag" or "this image tag" — agent-manager resolves the reference at
 // write time and writes the pin. refreshSkills is the way to move every git
 // skill and git plugin of an agent to the head of its repository's default
-// branch again.
+// branch again — a skill of a configured skill source with a ref to that
+// ref's commit.
 
 // SkillPinner resolves mutable skill references to pins (skills.Resolver).
 type SkillPinner interface {
@@ -233,6 +234,29 @@ func pinSource(ctx context.Context, p SkillPinner, at string, git *GitSkill, oci
 		g.Commit = commit
 	}
 	return &g, "", nil
+}
+
+// sourceRefs gives every git skill that names no ref, and would be resolved
+// (no commit, or refresh), the ref of the configured skill source it comes
+// from: a skill of a source pinned to a tag pins that tag's commit, not the
+// default branch's head. The list is copied when a ref is given.
+func (s *Service) sourceRefs(list Skills, refresh bool) Skills {
+	if s.skills == nil || len(list) == 0 {
+		return list
+	}
+	out := make(Skills, len(list))
+	for i, sk := range list {
+		out[i] = sk
+		if sk.Git == nil || sk.Git.Ref != "" || (sk.Git.Commit != "" && !refresh) {
+			continue
+		}
+		if ref := s.skills.SourceRef(sk.Git.URL, sk.Path); ref != "" {
+			g := *sk.Git
+			g.Ref = ref
+			out[i].Git = &g
+		}
+	}
+	return out
 }
 
 func describeRef(ref string) string {

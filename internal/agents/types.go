@@ -95,6 +95,10 @@ const (
 	// git (applied by a Flux Kustomization): a live write would be undone on
 	// the next reconciliation.
 	KustomizationNameLabel = "kustomize.toolkit.fluxcd.io/name"
+	// PlatformManagedByLabel / PlatformManagedByValue mark a HelmRelease the
+	// Agent Platform ships: no write of agent-manager reaches it.
+	PlatformManagedByLabel = "agent-platform.giantswarm.io/managed-by"
+	PlatformManagedByValue = "agent-platform"
 	// ManagedByLabel / ManagedByValue mark the HelmReleases and
 	// OCIRepositories agent-manager created.
 	ManagedByLabel = "app.kubernetes.io/managed-by"
@@ -116,6 +120,10 @@ const (
 	ManagedGitOps = "gitops"
 	// ManagedNone: a bare Agent object with no HelmRelease behind it.
 	ManagedNone = "none"
+	// ManagedPlatform: the agent ships with the Agent Platform (its
+	// HelmRelease carries PlatformManagedByLabel); it is read-only here and
+	// changes go through the platform's configuration.
+	ManagedPlatform = "platform"
 )
 
 // GitSkill is a skill in a git repository. A write takes the repository and,

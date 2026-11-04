@@ -42,6 +42,11 @@ type Skill struct {
 type Repository struct {
 	RepoURL string `json:"repoUrl"`
 	Ref     string `json:"ref,omitempty"`
+	// Path is the directory the skills were discovered below; "" for the
+	// whole repository. Skill paths stay repository-relative.
+	Path string `json:"path,omitempty"`
+	// ReadOnly is the source's readOnly: no write of agent-manager targets it.
+	ReadOnly bool `json:"readOnly,omitempty"`
 	// Commit is what Ref resolved to when the repository was read.
 	Commit string  `json:"commit,omitempty"`
 	Skills []Skill `json:"skills"`
@@ -63,8 +68,9 @@ type Result struct {
 
 // Config tunes the discoverer and the resolver.
 type Config struct {
-	// Repositories are the configured skill repositories (github.com URLs).
-	Repositories []string
+	// Repositories are the configured skill repositories (github.com URLs,
+	// each with an optional ref, path and readOnly).
+	Repositories []Source
 	// APIURL is the GitHub API base (https://api.github.com; tests override).
 	APIURL string
 	// Tokens authenticates GitHub requests (private repositories, higher
@@ -101,35 +107,83 @@ func New(cfg Config, log *slog.Logger) *Discoverer {
 	return &Discoverer{cfg: cfg, gh: newGitHub(cfg.APIURL, cfg.Tokens, cfg.HTTPClient), log: log, cache: map[string]Repository{}}
 }
 
-// Repositories returns the configured repositories.
-func (d *Discoverer) Repositories() []string { return append([]string(nil), d.cfg.Repositories...) }
+// Repositories returns the configured repositories' URLs.
+func (d *Discoverer) Repositories() []string {
+	out := make([]string, 0, len(d.cfg.Repositories))
+	for _, s := range d.cfg.Repositories {
+		out = append(out, s.URL)
+	}
+	return out
+}
+
+// Sources returns the configured repositories.
+func (d *Discoverer) Sources() []Source { return append([]Source(nil), d.cfg.Repositories...) }
+
+// configured returns the configured sources of repoURL, compared by their
+// canonical URL.
+func (d *Discoverer) configured(repoURL string) []Source {
+	owner, name, err := parseRepoURL(repoURL)
+	if err != nil {
+		return nil
+	}
+	want := strings.ToLower(canonicalRepoURL(owner, name))
+	var out []Source
+	for _, s := range d.cfg.Repositories {
+		if o, n, err := parseRepoURL(s.URL); err == nil && strings.ToLower(canonicalRepoURL(o, n)) == want {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// SourceRef is the ref of the configured source a skill at path of repoURL
+// comes from (the deepest source path holding it); "" when no configured
+// source holds it or that source follows the default branch.
+func (d *Discoverer) SourceRef(repoURL, path string) string {
+	path = strings.Trim(path, "/")
+	best, ref := -1, ""
+	for _, s := range d.configured(repoURL) {
+		if (path == s.Path || within(path, s.Path)) && len(s.Path) > best {
+			best, ref = len(s.Path), s.Ref
+		}
+	}
+	return ref
+}
 
 // List discovers skills. repository narrows to one repository (configured or
-// not — any github.com URL is accepted); ref overrides the default branch;
+// not — any github.com URL is accepted; a configured one keeps its ref and
+// path); ref overrides the source's ref (default: the default branch);
 // refresh bypasses the cache.
 func (d *Discoverer) List(ctx context.Context, repository, ref string, refresh bool) (*Result, error) {
-	repos := d.cfg.Repositories
+	sources := d.cfg.Repositories
 	if repository != "" {
 		if _, _, err := parseRepoURL(repository); err != nil {
 			return nil, err
 		}
-		repos = []string{repository}
+		sources = d.configured(repository)
+		if len(sources) == 0 {
+			sources = []Source{{URL: repository}}
+		}
 	}
-	found := make([]Repository, len(repos))
+	found := make([]Repository, len(sources))
 	var wg sync.WaitGroup
-	for i, r := range repos {
+	for i, src := range sources {
+		if ref != "" {
+			src.Ref = ref
+		}
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			found[i] = d.discover(ctx, r, ref, refresh)
+			found[i] = d.discover(ctx, src, refresh)
 		}()
 	}
 	wg.Wait()
 	return &Result{Repositories: found}, nil
 }
 
-func (d *Discoverer) discover(ctx context.Context, repoURL, ref string, refresh bool) Repository {
-	key := repoURL + "@" + ref
+func (d *Discoverer) discover(ctx context.Context, src Source, refresh bool) Repository {
+	repoURL, ref := src.URL, src.Ref
+	key := repoURL + "@" + ref + "#" + src.Path
 	d.mu.Lock()
 	cached, ok := d.cache[key]
 	d.mu.Unlock()
@@ -155,12 +209,14 @@ func (d *Discoverer) discover(ctx context.Context, repoURL, ref string, refresh 
 		}
 	}
 
-	repo, err := d.read(readCtx, repoURL, ref)
+	repo, err := d.read(readCtx, src)
 	now := time.Now()
 	repo.FetchedAt = &now
 	if err != nil {
 		repo.RepoURL = repoURL
 		repo.Ref = ref
+		repo.Path = src.Path
+		repo.ReadOnly = src.ReadOnly
 		repo.Skills = []Skill{}
 		repo.Error = err.Error()
 		d.log.Warn("skill discovery failed", "repository", repoURL, "error", err)
@@ -201,6 +257,11 @@ func isSkillFile(path string) bool {
 	return path == skillFile || strings.HasSuffix(path, "/"+skillFile)
 }
 
+// within reports whether path lies below dir ("" is the whole repository).
+func within(path, dir string) bool {
+	return dir == "" || strings.HasPrefix(path, dir+"/")
+}
+
 func skillDir(path string) string {
 	if path == skillFile {
 		return ""
@@ -208,8 +269,8 @@ func skillDir(path string) string {
 	return strings.TrimSuffix(path, "/"+skillFile)
 }
 
-func (d *Discoverer) read(ctx context.Context, repoURL, ref string) (Repository, error) {
-	owner, name, err := parseRepoURL(repoURL)
+func (d *Discoverer) read(ctx context.Context, src Source) (Repository, error) {
+	owner, name, err := parseRepoURL(src.URL)
 	if err != nil {
 		return Repository{}, err
 	}
@@ -218,7 +279,7 @@ func (d *Discoverer) read(ctx context.Context, repoURL, ref string) (Repository,
 	if err != nil {
 		return Repository{}, err
 	}
-	branch := ref
+	branch := src.Ref
 	if branch == "" {
 		branch = meta.DefaultBranch
 	}
@@ -239,10 +300,10 @@ func (d *Discoverer) read(ctx context.Context, repoURL, ref string) (Repository,
 	if err := d.gh.getJSON(ctx, d.gh.apiURL+"/repos/"+owner+"/"+name+"/git/trees/"+head+"?recursive=1", &tree); err != nil {
 		return Repository{}, err
 	}
-	repo := Repository{RepoURL: canonical, Ref: branch, Commit: head, Private: meta.Private, Skills: []Skill{}, Truncated: tree.Truncated}
+	repo := Repository{RepoURL: canonical, Ref: branch, Path: src.Path, ReadOnly: src.ReadOnly, Commit: head, Private: meta.Private, Skills: []Skill{}, Truncated: tree.Truncated}
 	var paths []string
 	for _, entry := range tree.Tree {
-		if entry.Type == "blob" && isSkillFile(entry.Path) {
+		if entry.Type == "blob" && isSkillFile(entry.Path) && within(entry.Path, src.Path) {
 			paths = append(paths, entry.Path)
 		}
 	}

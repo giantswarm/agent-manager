@@ -29,7 +29,8 @@ the RemoteMCPServer and the HelmRelease. Readiness is the Agent's own
 - `muster.url` is the platform's muster MCP URL composed into every agent as
   the chart value `muster.url`; empty leaves the Generic chart's default.
 - `skills.repositories` are the GitHub repositories `list_skills` discovers
-  `SKILL.md` files in, reporting the head commit an agent pins;
+  `SKILL.md` files in, reporting the head commit an agent pins; an entry is a
+  URL or `{url, ref, path, readOnly}` (read at `ref`, scanned below `path`);
   `skills.github.tokenSecret` names a Secret with the token that resolves
   branches and tags in private repositories (there is no per-agent skill
   credential).
@@ -98,7 +99,7 @@ meta chart (`components.agent-manager.enabled`), which sets `kagent.namespace`,
 | flux.helmReleaseServiceAccount | string | `""` | HelmRelease.spec.serviceAccountName, required by a Flux multi-tenancy admission policy in tenant namespaces; empty omits it. |
 | flux.helmReleaseApiVersion | string | `"auto"` | helm.toolkit.fluxcd.io API version composed into HelmReleases; `auto` discovers it. |
 | flux.ociRepositoryApiVersion | string | `"auto"` | source.toolkit.fluxcd.io API version composed into OCIRepositories; `auto` discovers it. |
-| skills.repositories | list | `["https://github.com/giantswarm/agent-skills"]` | GitHub repositories whose SKILL.md files list_skills offers (the same list the portal's create flow reads), each with the head commit an agent pins. Empty turns the skills capability off; skills given by URL are still resolved through the GitHub API. |
+| skills.repositories | list | `["https://github.com/giantswarm/agent-skills"]` | GitHub repositories whose SKILL.md files list_skills offers (the same list the portal's create flow reads), each with the head commit an agent pins. Empty turns the skills capability off; skills given by URL are still resolved through the GitHub API. An item is a URL or `{url, ref, path, readOnly}`: `ref` (branch, tag or commit; default: the default branch) is what discovery reads and its skills pin, `path` the directory scanned, `readOnly` is reported per repository. |
 | skills.github.apiUrl | string | `"https://api.github.com"` | GitHub API base URL. |
 | skills.github.app.secretName | string | `""` | Existing Secret in the release namespace of the read-only skills GitHub App, with the keys `app-id`, `installation-id` and `private-key` (PEM): skills are discovered and pinned with the App's short-lived installation tokens, at the App's rate limit, and a private repository is offered to and usable by only the people who can read it themselves (their GitHub login, verified through the `github` pin below; without the pin private repositories are refused). Mutually exclusive with `tokenSecret`. |
 | skills.github.tokenSecret.name | string | `""` | Existing Secret in the release namespace with a static GitHub token for skill discovery and pinning. Prefer `app`. Empty (and no `app`): anonymous, public repositories only. |
