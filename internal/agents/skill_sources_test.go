@@ -1,6 +1,7 @@
 package agents
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -74,4 +75,21 @@ func TestPluginsFromASourceWithARefPinItsCommit(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, got.Plugins, 1)
 	assert.Equal(t, tagHead, got.Plugins[0].Git.Commit, "refreshSkills follows the source's ref")
+}
+
+// One write resolves each repository ref once, however many skills and
+// plugins share it.
+func TestAWriteResolvesEachRefOnce(t *testing.T) {
+	f := seeded(t)
+	_, err := f.svc.Create(t.Context(), Spec{Name: "many", ModelConfig: "default-model-config", Toolset: []string{"preset:read-only"},
+		Skills:  Skills{{Git: &GitSkill{URL: skillsRepo}, Path: "a"}, {Git: &GitSkill{URL: skillsRepo}, Path: "b"}, {Git: &GitSkill{URL: skillsRepo, Ref: "feature"}, Path: "c"}},
+		Plugins: Plugins{{Git: &GitSkill{URL: skillsRepo}, Path: "plugins/agent"}}})
+	require.NoError(t, err)
+	var git []string
+	for _, c := range f.pinner.calls {
+		if strings.HasPrefix(c, "git ") {
+			git = append(git, c)
+		}
+	}
+	assert.ElementsMatch(t, []string{"git " + skillsRepo + "@", "git " + skillsRepo + "@feature"}, git)
 }

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"sync"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
@@ -31,6 +32,43 @@ type SkillPinner interface {
 	// RequireReadable refuses a repository login (the caller's GitHub login,
 	// empty when unknown) cannot read: skills.ErrNotReadable.
 	RequireReadable(ctx context.Context, repoURL, login string) error
+}
+
+// memoPinner resolves each git ref once: one write's skills and plugins
+// often share a repository and its ref.
+type memoPinner struct {
+	SkillPinner
+	mu    sync.Mutex
+	heads map[string]string
+}
+
+// memoized wraps p for one write; nil stays nil.
+func memoized(p SkillPinner) SkillPinner {
+	if p == nil {
+		return nil
+	}
+	return &memoPinner{SkillPinner: p, heads: map[string]string{}}
+}
+
+func (m *memoPinner) GitHead(ctx context.Context, repoURL, ref string) (string, error) {
+	if skills.CommitPattern.MatchString(ref) {
+		return ref, nil
+	}
+	key := repoURL + "@" + ref
+	m.mu.Lock()
+	head, ok := m.heads[key]
+	m.mu.Unlock()
+	if ok {
+		return head, nil
+	}
+	head, err := m.SkillPinner.GitHead(ctx, repoURL, ref)
+	if err != nil {
+		return "", err
+	}
+	m.mu.Lock()
+	m.heads[key] = head
+	m.mu.Unlock()
+	return head, nil
 }
 
 // gitHubLogin is the caller's verified GitHub login (the App-pinned
