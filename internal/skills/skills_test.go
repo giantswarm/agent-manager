@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -68,15 +69,31 @@ func fakeGitHub(t *testing.T) (*httptest.Server, *int) {
 		count()
 		_ = json.NewEncoder(w).Encode(map[string]any{"truncated": false, "tree": []map[string]any{{"path": "README.md", "type": "blob"}}})
 	})
-	mux.HandleFunc("/repos/giantswarm/agent-skills/git/trees/"+tagCommit, func(w http.ResponseWriter, _ *http.Request) {
+	// At the tag the tree is walked: the root and each directory down to a
+	// source's path without recursion, then only that directory recursively.
+	mux.HandleFunc("/repos/giantswarm/agent-skills/git/trees/"+tagCommit, func(w http.ResponseWriter, r *http.Request) {
 		count()
+		assert.Empty(t, r.URL.Query().Get("recursive"), "a source with a path never reads the whole tree")
 		_ = json.NewEncoder(w).Encode(map[string]any{"truncated": false, "tree": []map[string]any{
-			{"path": "SKILL.md", "type": "blob"},
-			{"path": "skills/overview/SKILL.md", "type": "blob"},
-			{"path": "skills/nested/tools/SKILL.md", "type": "blob"},
-			{"path": "skillset/SKILL.md", "type": "blob"},
-			{"path": "demo/SKILL.md", "type": "blob"},
+			{"path": "SKILL.md", "type": "blob", "sha": "b1"},
+			{"path": "skills", "type": "tree", "sha": "skillstree"},
+			{"path": "skillset", "type": "tree", "sha": "skillsettree"},
+			{"path": "big", "type": "tree", "sha": "bigtree"},
+			{"path": "demo", "type": "tree", "sha": "demotree"},
 		}})
+	})
+	mux.HandleFunc("/repos/giantswarm/agent-skills/git/trees/skillstree", func(w http.ResponseWriter, r *http.Request) {
+		count()
+		assert.Equal(t, "1", r.URL.Query().Get("recursive"))
+		_ = json.NewEncoder(w).Encode(map[string]any{"truncated": false, "tree": []map[string]any{
+			{"path": "overview", "type": "tree"},
+			{"path": "overview/SKILL.md", "type": "blob"},
+			{"path": "nested/tools/SKILL.md", "type": "blob"},
+		}})
+	})
+	mux.HandleFunc("/repos/giantswarm/agent-skills/git/trees/bigtree", func(w http.ResponseWriter, _ *http.Request) {
+		count()
+		_ = json.NewEncoder(w).Encode(map[string]any{"truncated": true, "tree": []map[string]any{}})
 	})
 	mux.HandleFunc("/repos/giantswarm/agent-skills/contents/", func(w http.ResponseWriter, r *http.Request) {
 		count()
@@ -204,6 +221,41 @@ func TestDiscoverReadsASourceAtItsRefBelowItsPath(t *testing.T) {
 	assert.True(t, res.Repositories[0].ReadOnly)
 
 	assert.Equal(t, []Source{{URL: "https://github.com/giantswarm/agent-skills", Ref: "v1.2.0", Path: "skills", ReadOnly: true}}, d.Sources())
+}
+
+// A truncated tree is reported and logged, never passed over silently.
+func TestDiscoverReportsATruncatedTree(t *testing.T) {
+	ts, _ := fakeGitHub(t)
+	var logs strings.Builder
+	d := New(Config{Repositories: []Source{{URL: "https://github.com/giantswarm/agent-skills", Ref: "v1.2.0", Path: "big"}}, APIURL: ts.URL, Tokens: StaticToken("secret")},
+		slog.New(slog.NewTextHandler(&logs, nil)))
+
+	res, err := d.List(t.Context(), "", "", false)
+	require.NoError(t, err)
+	assert.True(t, res.Repositories[0].Truncated)
+	assert.Contains(t, logs.String(), "truncated")
+}
+
+// A missing path is the repository's error, not an empty listing.
+func TestDiscoverReportsAMissingPath(t *testing.T) {
+	ts, _ := fakeGitHub(t)
+	d := New(Config{Repositories: []Source{{URL: "https://github.com/giantswarm/agent-skills", Ref: "v1.2.0", Path: "nowhere"}}, APIURL: ts.URL, Tokens: StaticToken("secret")}, nil)
+
+	res, err := d.List(t.Context(), "", "", false)
+	require.NoError(t, err)
+	assert.Contains(t, res.Repositories[0].Error, "nowhere")
+}
+
+// A source pinned to a commit is read at it without resolving it.
+func TestDiscoverReadsACommitRefWithoutResolvingIt(t *testing.T) {
+	ts, _ := fakeGitHub(t)
+	d := New(Config{Repositories: []Source{{URL: "https://github.com/giantswarm/agent-skills", Ref: tagCommit, Path: "skills"}}, APIURL: ts.URL, Tokens: StaticToken("secret")}, nil)
+
+	res, err := d.List(t.Context(), "", "", false)
+	require.NoError(t, err)
+	assert.Empty(t, res.Repositories[0].Error)
+	assert.Equal(t, tagCommit, res.Repositories[0].Commit)
+	assert.Len(t, res.Repositories[0].Skills, 2)
 }
 
 func TestListRejectsNonGitHubRepositoriesAndReportsUnreadableOnes(t *testing.T) {

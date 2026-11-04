@@ -12,6 +12,7 @@ package skills
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"sort"
@@ -244,6 +245,9 @@ const (
 
 // headOf resolves ref (the default branch when empty) to its head commit.
 func (d *Discoverer) headOf(ctx context.Context, repoURL, ref string) (string, error) {
+	if CommitPattern.MatchString(ref) {
+		return ref, nil
+	}
 	owner, name, err := parseRepoURL(repoURL)
 	if err != nil {
 		return "", err
@@ -292,24 +296,24 @@ func (d *Discoverer) read(ctx context.Context, src Source) (Repository, error) {
 	// The commit the ref points at right now: what an agent pins. The tree
 	// and the files are read at that commit, not the branch, so the listing
 	// stays consistent even when the branch moves between the calls.
-	head, err := d.gh.headCommit(ctx, owner, name, branch)
+	// A commit is its own head.
+	head := branch
+	if !CommitPattern.MatchString(head) {
+		if head, err = d.gh.headCommit(ctx, owner, name, branch); err != nil {
+			return Repository{}, err
+		}
+	}
+	tree, err := d.tree(ctx, owner, name, head, src.Path)
 	if err != nil {
 		return Repository{}, err
 	}
-	var tree struct {
-		Tree []struct {
-			Path string `json:"path"`
-			Type string `json:"type"`
-		} `json:"tree"`
-		Truncated bool `json:"truncated"`
-	}
-	if err := d.gh.getJSON(ctx, d.gh.apiURL+"/repos/"+owner+"/"+name+"/git/trees/"+head+"?recursive=1", &tree); err != nil {
-		return Repository{}, err
-	}
 	repo := Repository{RepoURL: canonical, Ref: branch, Path: src.Path, ReadOnly: src.ReadOnly, Commit: head, Private: meta.Private, Skills: []Skill{}, Truncated: tree.Truncated}
+	if tree.Truncated {
+		d.log.Warn("skill repository tree truncated by GitHub: some skills are missing from the listing; give the source a path to narrow it", "repository", canonical, "path", src.Path, "commit", head)
+	}
 	var paths []string
 	for _, entry := range tree.Tree {
-		if entry.Type == "blob" && isSkillFile(entry.Path) && within(entry.Path, src.Path) {
+		if entry.Type == "blob" && isSkillFile(entry.Path) {
 			paths = append(paths, entry.Path)
 		}
 	}
@@ -360,6 +364,53 @@ func (d *Discoverer) read(ctx context.Context, src Source) (Repository, error) {
 		return repo.Skills[i].Name < repo.Skills[j].Name
 	})
 	return repo, nil
+}
+
+// gitTree is a git/trees answer.
+type gitTree struct {
+	Tree []struct {
+		Path string `json:"path"`
+		Type string `json:"type"`
+		SHA  string `json:"sha"`
+	} `json:"tree"`
+	Truncated bool `json:"truncated"`
+}
+
+// tree lists the files below dir at commit, recursively, with
+// repository-relative paths. Without a dir it is the whole tree; with one,
+// the directories down to it are read one level each and only dir
+// recursively, so a large repository's other directories are not listed.
+func (d *Discoverer) tree(ctx context.Context, owner, name, commit, dir string) (gitTree, error) {
+	base := d.gh.apiURL + "/repos/" + owner + "/" + name + "/git/trees/"
+	sha := commit
+	if dir != "" {
+		for _, seg := range strings.Split(dir, "/") {
+			var level gitTree
+			if err := d.gh.getJSON(ctx, base+sha, &level); err != nil {
+				return gitTree{}, err
+			}
+			next := ""
+			for _, entry := range level.Tree {
+				if entry.Type == "tree" && entry.Path == seg {
+					next = entry.SHA
+				}
+			}
+			if next == "" {
+				return gitTree{}, fmt.Errorf("path %q does not exist at commit %s", dir, commit)
+			}
+			sha = next
+		}
+	}
+	var out gitTree
+	if err := d.gh.getJSON(ctx, base+sha+"?recursive=1", &out); err != nil {
+		return gitTree{}, err
+	}
+	if dir != "" {
+		for i := range out.Tree {
+			out.Tree[i].Path = dir + "/" + out.Tree[i].Path
+		}
+	}
+	return out, nil
 }
 
 // frontmatter parses the YAML block between the leading `---` lines; nil
