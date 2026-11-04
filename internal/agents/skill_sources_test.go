@@ -69,7 +69,7 @@ func TestPluginsFromASourceWithARefPinItsCommit(t *testing.T) {
 	upd, err := f.svc.Update(ctx, Update{Name: "plugged", Plugins: &Plugins{{Git: &GitSkill{URL: skillsRepo, Ref: "feature"}, Path: "plugins/agent"}}})
 	require.NoError(t, err)
 	require.NotNil(t, upd.Agent)
-	upd, err = f.svc.Update(ctx, Update{Name: "plugged", RefreshSkills: true})
+	_, err = f.svc.Update(ctx, Update{Name: "plugged", RefreshSkills: true})
 	require.NoError(t, err)
 	got, err := f.svc.Get(ctx, In(""), "plugged")
 	require.NoError(t, err)
