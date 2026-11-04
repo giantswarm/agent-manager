@@ -1007,7 +1007,7 @@ func (s *Service) ValidateCreate(ctx context.Context, spec Spec) (*ValidateResul
 	if err := requireReadablePlugins(ctx, s.pinner, spec.Plugins); err != nil {
 		res.addError(err)
 	}
-	if pinned, err := pinPlugins(ctx, s.pinner, spec.Plugins, false); err != nil {
+	if pinned, err := pinPlugins(ctx, s.pinner, s.pluginSourceRefs(spec.Plugins, false), false); err != nil {
 		res.addError(err)
 	} else {
 		spec.Plugins = pinned
@@ -1233,7 +1233,7 @@ func (s *Service) Create(ctx context.Context, spec Spec) (*CreateResult, error) 
 	if err := requireReadablePlugins(ctx, s.pinner, spec.Plugins); err != nil {
 		return nil, err
 	}
-	if spec.Plugins, err = pinPlugins(ctx, s.pinner, spec.Plugins, false); err != nil {
+	if spec.Plugins, err = pinPlugins(ctx, s.pinner, s.pluginSourceRefs(spec.Plugins, false), false); err != nil {
 		return nil, err
 	}
 	values := BuildValues(spec, st.compose)
@@ -1500,7 +1500,7 @@ func (s *Service) mergedValues(ctx context.Context, st *site, upd Update, hr *un
 				return after, before, err
 			}
 		}
-		pinned, err := pinPlugins(ctx, s.pinner, list, upd.RefreshSkills)
+		pinned, err := pinPlugins(ctx, s.pinner, s.pluginSourceRefs(list, upd.RefreshSkills), upd.RefreshSkills)
 		if err != nil {
 			return after, before, err
 		}

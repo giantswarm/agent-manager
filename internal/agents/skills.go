@@ -247,16 +247,37 @@ func (s *Service) sourceRefs(list Skills, refresh bool) Skills {
 	out := make(Skills, len(list))
 	for i, sk := range list {
 		out[i] = sk
-		if sk.Git == nil || sk.Git.Ref != "" || (sk.Git.Commit != "" && !refresh) {
-			continue
-		}
-		if ref := s.skills.SourceRef(sk.Git.URL, sk.Path); ref != "" {
-			g := *sk.Git
-			g.Ref = ref
-			out[i].Git = &g
-		}
+		out[i].Git = s.sourceRef(sk.Git, sk.Path, refresh)
 	}
 	return out
+}
+
+// pluginSourceRefs is sourceRefs for git plugins.
+func (s *Service) pluginSourceRefs(list Plugins, refresh bool) Plugins {
+	if s.skills == nil || len(list) == 0 {
+		return list
+	}
+	out := make(Plugins, len(list))
+	for i, pl := range list {
+		out[i] = pl
+		out[i].Git = s.sourceRef(pl.Git, pl.Path, refresh)
+	}
+	return out
+}
+
+// sourceRef is git with the ref of the configured source holding path, when
+// git names no ref and would be resolved; otherwise git itself.
+func (s *Service) sourceRef(git *GitSkill, path string, refresh bool) *GitSkill {
+	if git == nil || git.Ref != "" || (git.Commit != "" && !refresh) {
+		return git
+	}
+	ref := s.skills.SourceRef(git.URL, path)
+	if ref == "" {
+		return git
+	}
+	g := *git
+	g.Ref = ref
+	return &g
 }
 
 func describeRef(ref string) string {

@@ -51,3 +51,27 @@ func TestSkillsFromASourceWithARefPinItsCommit(t *testing.T) {
 		map[string]any{"name": "tools", "path": "skills/tools", "git": map[string]any{"url": skillsRepo, "commit": tagHead}},
 	}, upd.After["skills"], "every skill below the source's path moves to its ref's commit")
 }
+
+// A git plugin of a configured source follows the source's ref as a skill
+// does.
+func TestPluginsFromASourceWithARefPinItsCommit(t *testing.T) {
+	f := seeded(t)
+	ctx := t.Context()
+	f.svc.skills = skills.New(skills.Config{Repositories: []skills.Source{{URL: skillsRepo, Ref: "v1.2.0", Path: "plugins"}}}, nil)
+
+	res, err := f.svc.Create(ctx, Spec{Name: "plugged", ModelConfig: "default-model-config", Toolset: []string{"preset:read-only"},
+		Plugins: Plugins{{Git: &GitSkill{URL: skillsRepo}, Path: "plugins/agent"}}})
+	require.NoError(t, err)
+	require.Len(t, res.Agent.Plugins, 1)
+	assert.Equal(t, tagHead, res.Agent.Plugins[0].Git.Commit)
+
+	upd, err := f.svc.Update(ctx, Update{Name: "plugged", Plugins: &Plugins{{Git: &GitSkill{URL: skillsRepo, Ref: "feature"}, Path: "plugins/agent"}}})
+	require.NoError(t, err)
+	require.NotNil(t, upd.Agent)
+	upd, err = f.svc.Update(ctx, Update{Name: "plugged", RefreshSkills: true})
+	require.NoError(t, err)
+	got, err := f.svc.Get(ctx, In(""), "plugged")
+	require.NoError(t, err)
+	require.Len(t, got.Plugins, 1)
+	assert.Equal(t, tagHead, got.Plugins[0].Git.Commit, "refreshSkills follows the source's ref")
+}
