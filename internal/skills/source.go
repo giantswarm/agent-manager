@@ -3,6 +3,7 @@ package skills
 import (
 	"encoding/json"
 	"fmt"
+	"path"
 	"strings"
 )
 
@@ -54,16 +55,26 @@ func ParseSources(value string) ([]Source, error) {
 	for i, s := range out {
 		s.URL = strings.TrimSpace(s.URL)
 		s.Ref = strings.TrimSpace(s.Ref)
-		s.Path = strings.Trim(strings.TrimSpace(s.Path), "/")
+		raw := strings.TrimSpace(s.Path)
 		switch {
-		case s.URL == "" && s.Ref == "" && s.Path == "":
+		case s.URL == "" && s.Ref == "" && raw == "":
 			continue // an empty item of a comma-separated list
 		case s.URL == "":
 			return nil, fmt.Errorf("skill repository %d has no url", i)
 		case strings.ContainsAny(s.Ref, " \t\n"):
 			return nil, fmt.Errorf("skill repository %s: ref %q contains whitespace", s.URL, s.Ref)
-		case climbs(s.Path):
-			return nil, fmt.Errorf("skill repository %s: path %q must not climb out of the repository", s.URL, s.Path)
+		case strings.HasPrefix(raw, "/"):
+			return nil, fmt.Errorf("skill repository %s: path %q must be relative to the repository root", s.URL, raw)
+		case climbs(raw):
+			return nil, fmt.Errorf("skill repository %s: path %q must not climb out of the repository", s.URL, raw)
+		}
+		if s.Path = path.Clean(raw); s.Path == "." {
+			s.Path = ""
+		}
+		for _, prev := range kept {
+			if sameRepository(prev.URL, s.URL) && (within(s.Path, prev.Path) || within(prev.Path, s.Path) || s.Path == prev.Path) {
+				return nil, fmt.Errorf("skill repository %s is configured twice with overlapping paths (%q and %q): give it once, or paths that do not contain each other", s.URL, prev.Path, s.Path)
+			}
 		}
 		kept = append(kept, s)
 	}
@@ -71,6 +82,18 @@ func ParseSources(value string) ([]Source, error) {
 		return nil, nil
 	}
 	return kept, nil
+}
+
+// sameRepository compares two repository URLs by their canonical form.
+func sameRepository(a, b string) bool {
+	return canonicalOrRaw(a) == canonicalOrRaw(b)
+}
+
+func canonicalOrRaw(url string) string {
+	if owner, name, err := parseRepoURL(url); err == nil {
+		return strings.ToLower(canonicalRepoURL(owner, name))
+	}
+	return strings.ToLower(strings.TrimRight(url, "/"))
 }
 
 func climbs(path string) bool {

@@ -16,11 +16,16 @@ func TestParseSourcesAcceptsURLsAndObjects(t *testing.T) {
 		"comma-separated": {in: "https://github.com/a/b, https://github.com/c/d", want: []Source{{URL: "https://github.com/a/b"}, {URL: "https://github.com/c/d"}}},
 		"JSON strings":    {in: `["https://github.com/a/b"]`, want: []Source{{URL: "https://github.com/a/b"}}},
 		"JSON mixed": {
-			in: ` [{"url":"https://github.com/giantswarm/agent-platform","ref":"v1.4.0","path":"/skills/","readOnly":true},"https://github.com/c/d"]`,
+			in: ` [{"url":"https://github.com/giantswarm/agent-platform","ref":"v1.4.0","path":"./skills/","readOnly":true},"https://github.com/c/d"]`,
 			want: []Source{
 				{URL: "https://github.com/giantswarm/agent-platform", Ref: "v1.4.0", Path: "skills", ReadOnly: true},
 				{URL: "https://github.com/c/d"},
 			},
+		},
+		"root path": {in: `[{"url":"https://github.com/a/b","path":"."}]`, want: []Source{{URL: "https://github.com/a/b"}}},
+		"same URL, separate paths": {
+			in:   `[{"url":"https://github.com/a/b","path":"skills"},{"url":"https://github.com/a/b.git","path":"demo"}]`,
+			want: []Source{{URL: "https://github.com/a/b", Path: "skills"}, {URL: "https://github.com/a/b.git", Path: "demo"}},
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -33,10 +38,15 @@ func TestParseSourcesAcceptsURLsAndObjects(t *testing.T) {
 
 func TestParseSourcesRefusesMalformedEntries(t *testing.T) {
 	for name, in := range map[string]string{
-		"not JSON":       `[{"url":`,
-		"no url":         `[{"ref":"main"}]`,
-		"climbing path":  `[{"url":"https://github.com/a/b","path":"../x"}]`,
-		"ref whitespace": `[{"url":"https://github.com/a/b","ref":"a b"}]`,
+		"not JSON":        `[{"url":`,
+		"no url":          `[{"ref":"main"}]`,
+		"climbing path":   `[{"url":"https://github.com/a/b","path":"../x"}]`,
+		"ref whitespace":  `[{"url":"https://github.com/a/b","ref":"a b"}]`,
+		"absolute path":   `[{"url":"https://github.com/a/b","path":"/skills"}]`,
+		"inner climb":     `[{"url":"https://github.com/a/b","path":"skills/../.."}]`,
+		"duplicate URL":   "https://github.com/a/b,https://github.com/a/b/",
+		"nested paths":    `[{"url":"https://github.com/a/b","path":"skills"},{"url":"https://github.com/a/b","path":"skills/x"}]`,
+		"root and a path": `[{"url":"https://github.com/a/b"},{"url":"https://github.com/a/b","path":"skills"}]`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := ParseSources(in)
