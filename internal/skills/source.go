@@ -9,8 +9,9 @@ import (
 
 // Source is one configured skill repository: its URL and, optionally, the
 // ref discovery reads and agents pin (empty: the default branch's head), the
-// directory discovery scans (empty: the whole repository) and whether it is
-// read-only (no write of agent-manager targets it).
+// directory discovery scans (empty: the whole repository) and readOnly.
+// agent-manager only reports readOnly — it has no write path into skill
+// repositories; consumers that write skills (the portal) honour it.
 type Source struct {
 	URL      string `json:"url"`
 	Ref      string `json:"ref,omitempty"`

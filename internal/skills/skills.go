@@ -45,7 +45,8 @@ type Repository struct {
 	// Path is the directory the skills were discovered below; "" for the
 	// whole repository. Skill paths stay repository-relative.
 	Path string `json:"path,omitempty"`
-	// ReadOnly is the source's readOnly: no write of agent-manager targets it.
+	// ReadOnly is the source's readOnly, reported for consumers that write
+	// skills; agent-manager has no write path into skill repositories.
 	ReadOnly bool `json:"readOnly,omitempty"`
 	// Commit is what Ref resolved to when the repository was read.
 	Commit string  `json:"commit,omitempty"`
