@@ -107,11 +107,16 @@ func New(cfg Config, log *slog.Logger) *Discoverer {
 	return &Discoverer{cfg: cfg, gh: newGitHub(cfg.APIURL, cfg.Tokens, cfg.HTTPClient), log: log, cache: map[string]Repository{}}
 }
 
-// Repositories returns the configured repositories' URLs.
+// Repositories returns the configured repositories' URLs, each once; a
+// consumer that needs the ref, path or readOnly reads Sources.
 func (d *Discoverer) Repositories() []string {
 	out := make([]string, 0, len(d.cfg.Repositories))
+	seen := map[string]bool{}
 	for _, s := range d.cfg.Repositories {
-		out = append(out, s.URL)
+		if !seen[s.URL] {
+			seen[s.URL] = true
+			out = append(out, s.URL)
+		}
 	}
 	return out
 }

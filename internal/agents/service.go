@@ -225,11 +225,14 @@ type InfoResponse struct {
 		// clusters; empty: target clusters are refused.
 		TargetURL string `json:"targetUrl,omitempty"`
 	} `json:"muster"`
-	// SkillsRepositories are the configured skill repositories' URLs.
+	// SkillsRepositories are the configured skill repositories' URLs, each
+	// once. A consumer that needs a source's ref, path or readOnly reads
+	// SkillsSources.
 	SkillsRepositories []string `json:"skillsRepositories"`
 	// SkillsSources are the configured skill repositories in full: each
 	// with the ref discovery reads and its skills pin (empty: the default
-	// branch), the path it is scanned below and whether it is read-only.
+	// branch), the path it is scanned below and whether it is reported
+	// read-only.
 	SkillsSources []skills.Source `json:"skillsSources"`
 	// SkillsGitAuthSecretName is the installation's skills credential Secret
 	// (key token) an agent with a git skill fetches with unless it names its

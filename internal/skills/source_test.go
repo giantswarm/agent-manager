@@ -44,3 +44,13 @@ func TestParseSourcesRefusesMalformedEntries(t *testing.T) {
 		})
 	}
 }
+
+func TestRepositoriesListsEachURLOnce(t *testing.T) {
+	d := New(Config{Repositories: []Source{
+		{URL: "https://github.com/giantswarm/agent-platform", Ref: "v1.4.0", Path: "skills"},
+		{URL: "https://github.com/giantswarm/agent-platform", Path: "demo"},
+		{URL: "https://github.com/giantswarm/agent-skills"},
+	}}, nil)
+	assert.Equal(t, []string{"https://github.com/giantswarm/agent-platform", "https://github.com/giantswarm/agent-skills"}, d.Repositories())
+	assert.Len(t, d.Sources(), 3)
+}

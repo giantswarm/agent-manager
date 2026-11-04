@@ -786,7 +786,7 @@ components:
           type: object
           properties:
             url: { type: string, description: The muster MCP URL composed into every agent as muster.url; empty means the chart default applies }
-        skillsRepositories: { type: array, items: { type: string }, description: "The configured skill repositories' URLs" }
+        skillsRepositories: { type: array, items: { type: string }, description: "The configured skill repositories' URLs, each once; read skillsSources for ref, path and readOnly" }
         skillsSources:
           type: array
           description: The configured skill repositories in full
