@@ -1017,3 +1017,25 @@ func TestExpandRetriesAWriteThatRacesTheControllers(t *testing.T) {
 	assert.Equal(t, "go", botAgent["runtime"], "nothing of the rewrite was written")
 	assert.Equal(t, SourceNotMoved, bySource(tenant)["tenant/agent"].Action)
 }
+
+// A release the Agent Platform ships is reported, never written, even in a
+// managed namespace without a Kustomization; the source it shares is not
+// moved under it.
+func TestExpandNeverWritesAPlatformOwnedRelease(t *testing.T) {
+	platform := helmRelease("kagent", "agent-manager-assistant", portalValues(), "0.6.1")
+	platform.SetLabels(map[string]string{agents.PlatformManagedByLabel: agents.PlatformManagedByValue})
+	c := newCluster(ociRepository("kagent", legacyRange), platform, harness("kagent"))
+
+	res, err := c.runner(t, Options{Namespaces: []string{"kagent"}}, "1.0.0", "secret").Run(context.Background())
+	require.NoError(t, err)
+	rep := res.Reports[0]
+	rel := byRelease(rep)["kagent/agent-manager-assistant"]
+	assert.Equal(t, ActionDiff, rel.Action)
+	assert.Equal(t, OwnershipPlatform, rel.Ownership)
+	assert.Contains(t, rel.Reason, "Agent Platform")
+	assert.Equal(t, portalValues(), c.values(t, "kagent", "agent-manager-assistant"))
+	src := bySource(rep)["kagent/agent"]
+	assert.Equal(t, OwnershipPlatform, src.Ownership)
+	assert.Equal(t, ActionDiff, src.Action)
+	assert.Equal(t, legacyRange, c.semver(t, "kagent", "agent"))
+}

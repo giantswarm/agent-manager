@@ -1378,7 +1378,7 @@ func (s *Service) writableHelmRelease(ctx context.Context, st *site, name string
 	if hr == nil {
 		return nil, obj, conflictf("Agent %s is a bare Agent with no HelmRelease behind it; agent-manager only writes HelmRelease values (recreate it with create_agent, or delete it with force)", st.describe(name))
 	}
-	if platformOwnedHR(hr) {
+	if PlatformOwned(hr) {
 		// The release is returned with the refusal: a forced delete removes
 		// a bare Agent only, never one a release renders.
 		return hr, obj, conflictf("agent %s ships with the Agent Platform and is read-only here: change it through the platform's configuration", st.describe(name))
@@ -1935,9 +1935,11 @@ func ownerOf(obj *unstructured.Unstructured) (name, namespace string) {
 	return labels[HelmReleaseNameLabel], labels[HelmReleaseNamespaceLabel]
 }
 
-// platformOwnedHR reports a HelmRelease the Agent Platform ships.
-func platformOwnedHR(hr *unstructured.Unstructured) bool {
-	return hr.GetLabels()[PlatformManagedByLabel] == PlatformManagedByValue
+// PlatformOwned reports an object the Agent Platform ships (a HelmRelease,
+// its Agent or its chart source): agent-manager reports it and never
+// writes it; it changes through the platform's configuration.
+func PlatformOwned(obj *unstructured.Unstructured) bool {
+	return obj != nil && obj.GetLabels()[PlatformManagedByLabel] == PlatformManagedByValue
 }
 
 func gitOpsOwnedHR(hr *unstructured.Unstructured) bool {
@@ -2066,7 +2068,7 @@ func applyHelmRelease(a *Agent, hr *unstructured.Unstructured, rule *tags.Rule) 
 		a.CreatedBy = hr.GetAnnotations()[CreatedByAnnotation]
 	}
 	switch {
-	case platformOwnedHR(hr):
+	case PlatformOwned(hr):
 		a.Managed = ManagedPlatform
 	case ref.GitOpsOwned:
 		a.Managed = ManagedGitOps

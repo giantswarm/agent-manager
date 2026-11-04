@@ -63,6 +63,9 @@ func convergeAction(obj *unstructured.Unstructured, url string, rep SourceReport
 	if gitOpsOwned(obj) {
 		return SourceNotMoved, "its desired state lives in a GitOps repository: move the range there"
 	}
+	if agents.PlatformOwned(obj) {
+		return SourceNotMoved, "it ships with the Agent Platform and moves with the platform release"
+	}
 	if obj.GetLabels()[agents.ManagedByLabel] != agents.ManagedByValue {
 		return SourceNotMoved, "not created by agent-manager"
 	}
