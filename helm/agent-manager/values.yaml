@@ -154,7 +154,7 @@ flux:
   ociRepositoryApiVersion: auto
 
 skills:
-  # @schema item: [string, object]; itemProperties: {url: {type: string, minLength: 1}, ref: {type: string}, path: {type: string}, readOnly: {type: boolean}}
+  # @schema item: [string, object]; itemRequired: [url]; itemProperties: {url: {type: string, minLength: 1}, ref: {type: string}, path: {type: string}, readOnly: {type: boolean}}
   # -- GitHub repositories whose SKILL.md files list_skills offers (the same
   # list the portal's create flow reads), each with the head commit an agent
   # pins. Empty turns the skills capability off; skills given by URL are still

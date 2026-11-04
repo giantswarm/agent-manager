@@ -885,6 +885,10 @@
                             "string",
                             "object"
                         ],
+                        "required": [
+                            "url"
+                        ],
+                        "additionalProperties": false,
                         "properties": {
                             "path": {
                                 "type": "string"
@@ -899,11 +903,7 @@
                                 "type": "string",
                                 "minLength": 1
                             }
-                        },
-                        "additionalProperties": false,
-                        "required": [
-                            "url"
-                        ]
+                        }
                     }
                 }
             }
