@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `skills.repositories` (`--skills-repositories`) items take `{url, ref, path, readOnly}` besides a plain URL (the flag a JSON array, or comma-separated URLs as before). `list_skills` reads a source at its `ref` (empty: the default branch) and only below its `path`, reporting `path` and `readOnly` per repository; skill paths stay repository-relative. A skill or git plugin of a source with a `ref` pins that ref's commit on `create_agent`, `update_agent` and `refreshSkills`. A path is read without listing the rest of the repository; a repository configured twice with overlapping paths is refused at start. `get_info` reports the sources as `skillsSources` (`skillsRepositories` lists each URL once) (giantswarm/giantswarm#38970).
 - Agents the Agent Platform ships (HelmRelease label `agent-platform.giantswarm.io/managed-by: agent-platform`) are `managed: platform` in `list_agents` and `get_agent`; `update_agent` (with `refreshSkills` too), `validate_agent` with `update` and `delete_agent` refuse them in every mode with `409 conflict`: they change through the platform's configuration. The label on the Agent alone suffices, and the `migrate` command and the start-up source convergence report such a release, and the source it uses, without writing them (giantswarm/giantswarm#38970).
 
+## [2.18.0] - 2026-11-03
+
+### Added
+
 - `tags` on `create_agent`, `update_agent`, `get_agent` and `list_agents` (REST and MCP), stored as the chart value `agent.tags` (rendered as the `ui.giantswarm.io/tags` annotation) and read from it, so a read reflects an update at once; and the `get_info` capability `tags`, true when the embedded agent chart has a tag rule and the chart in use takes `agent.tags` (2.5.0 or later). The tag rule is the embedded chart's `tag.schema.json` and `agent.tags` `maxItems`, loaded at startup, for agents and skills alike. `list_agents` and `list_skills` take a `tags` filter (any of them); `list_skills` reports a skill's tags from its `SKILL.md` frontmatter `metadata.tags` (comma-joined; a tag the rule refuses is dropped) (giantswarm/giantswarm#38901).
 
 ## [2.17.7] - 2026-10-26
@@ -540,7 +544,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Chart: the MCPServer CR carries `agent-platform.giantswarm.io/tool-group: agent-platform` next to `muster.giantswarm.io/type` — the Agent Platform tier of MCP servers (the portal's MCP servers page, the `agent-platform` toolset preset). `muster.mcpServer.labels` still adds or overrides labels. (#23)
 
-[Unreleased]: https://github.com/giantswarm/agent-manager/compare/v2.17.7...HEAD
+[Unreleased]: https://github.com/giantswarm/agent-manager/compare/v2.18.0...HEAD
+[2.18.0]: https://github.com/giantswarm/agent-manager/compare/v2.17.7...v2.18.0
 [2.17.7]: https://github.com/giantswarm/agent-manager/compare/v2.17.2...v2.17.7
 [2.17.2]: https://github.com/giantswarm/agent-manager/compare/v2.17.1...v2.17.2
 [2.17.1]: https://github.com/giantswarm/agent-manager/compare/v2.17.0...v2.17.1
