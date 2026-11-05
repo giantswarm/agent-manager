@@ -19,6 +19,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `--multi-tenant` (chart `tenants.enabled`) manages the organization namespaces labelled `agent-platform.giantswarm.io/organization`, which agent-platform-operator keeps, and serves the organization tools; agent-manager keeps nothing in them. Its ServiceAccount only reads namespaces to find them; everything else runs as the caller. `--multi-tenant` now needs `--downstream-oauth`.
 
+### Fixed
+
+- A `start_session` that runs out of its time budget answers with kagent's last answer and starts no further attempt, also when gRPC's deadline ends the attempt just before the request's own.
+
 ### Removed
 
 - **Breaking:** the tenant reconciler. Its flags `--tenant-model-config`, `--tenant-model-secret`, `--tenant-worker-pool-replicas`, `--tenant-flux-cluster-role`, `--tenant-network-policy-flavor`, `--tenant-network-policies`, `--tenant-interval` and `--tenant-leader-election-namespace` are gone, and the chart refuses the values `tenants.modelConfig`, `tenants.workerPoolReplicas`, `tenants.networkPolicy` and `tenants.interval`: remove them before you move to this version (the agent-platform chart stops passing them in giantswarm/agent-platform#1268). The chart keeps rendering the ClusterRole `agent-platform-tenant-flux` that the agents' Helm ServiceAccount is bound to. The chart no longer renders the ClusterRole and ClusterRoleBinding `<fullname>-tenants` (cluster-wide writes, RoleBinding writes and `bind` on `agent-platform-tenant-flux`), the ValidatingAdmissionPolicy and its binding `<fullname>-tenants`, or the Role and RoleBinding `<fullname>-tenants-leader` (the Lease `agent-manager-tenants`). `get_info` no longer reports `tenantReconciler`. An agent created in a tenant names a ModelConfig that exists there: the platform default is no longer accepted before a copy exists.
