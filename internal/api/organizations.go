@@ -319,7 +319,7 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service) {
 
 	s.AddTool(mcp.NewTool(ToolListOrganizationConnector,
 		tooldesc.Describe("List an organization's connectors (RemoteMCPServers): URL, description and the credential headers by Secret name.",
-			"Read as you. curated marks a read-only copy of what the platform curates."),
+			"Read as you. A credential in a URL written elsewhere is shown as REDACTED. curated marks a read-only copy of what the platform curates."),
 		orgNSProp,
 		mcp.WithReadOnlyHintAnnotation(true),
 		mcp.WithDestructiveHintAnnotation(false),
@@ -332,10 +332,10 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service) {
 
 	s.AddTool(mcp.NewTool(ToolSetOrganizationConnector,
 		tooldesc.Describe("Create or change an organization's connector (a RemoteMCPServer) as you; its credential is a Secret named by reference.",
-			"Any credential field sets one Secret-backed header (default Authorization from tenant-credential-<name>, key token, the whole header value); noCredential removes it. Never pass a value: a missing Secret is answered with the Dev Portal's credential form link in credentials[].next. Needs agent-platform:admin."),
+			"A credential field sets the Secret-backed header it names (default: the only one, else Authorization; Secret tenant-credential-<name>, key token, the whole value); other headers stay; noCredential removes them. A URL with userinfo or a credential-like query parameter is refused. Never pass a value: a missing Secret is answered with the Dev Portal's form link in credentials[].next. Needs agent-platform:admin."),
 		orgNSProp,
 		mcp.WithString(argName, mcp.Required(), mcp.Description("RemoteMCPServer name")),
-		mcp.WithString(argURL, mcp.Description("MCP endpoint URL; required to create")),
+		mcp.WithString(argURL, mcp.Description("MCP endpoint URL, without a credential in it; required to create")),
 		mcp.WithString(argDescription, mcp.Description("What the server offers")),
 		mcp.WithString(argCredentialHeader, mcp.Description("Header the credential goes in; default Authorization")),
 		mcp.WithString(argCredentialSecret, mcp.Description(credSecretDesc)),

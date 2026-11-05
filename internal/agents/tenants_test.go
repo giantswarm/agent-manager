@@ -2,13 +2,19 @@ package agents
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
+	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/giantswarm/agent-manager/internal/identity"
 )
@@ -40,6 +46,7 @@ func TestTenantNamespaceIsManaged(t *testing.T) {
 	assert.Equal(t, "org-a", ns)
 	_, err = f.svc.Namespace(ctx, "org-b")
 	assert.ErrorIs(t, err, ErrInvalid)
+	assert.NotContains(t, err.Error(), "org-a", "an organization namespace is never named to a caller who did not ask for it")
 
 	// No platform default is accepted before it exists there any more.
 	_, err = f.svc.Create(ctx, Spec{Location: In("org-a"), Name: "sre", ModelConfig: "default-model-config", Toolset: []string{"preset:read-only"}})
@@ -169,5 +176,27 @@ func TestTenantUpdateDropsTheInstallationSkillsCredential(t *testing.T) {
 		}
 		assert.NotContains(t, res.After, SkillsGitAuthValuesKey, ref)
 		assert.NotContains(t, mustValues(hr), SkillsGitAuthValuesKey, ref)
+	}
+}
+
+// toolchain_users never names an organization namespace whose agents the
+// caller may not list: its members' namespace names stay theirs.
+func TestToolchainUsersNamesNoOrganizationTheCallerIsNotIn(t *testing.T) {
+	svc, _, _ := newToolchainFixture(t, "github")
+	svc.cfg.Tenants = &fakeTenants{namespaces: []string{"agents-other-x7k2q"}}
+	ctx := asPerson(t.Context(), "admin@lab.local")
+	c, err := svc.kube.Client(ctx)
+	require.NoError(t, err)
+	c.Dynamic().(*dynamicfake.FakeDynamicClient).PrependReactor("list", "agents", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		if a.GetNamespace() == "agents-other-x7k2q" {
+			return true, nil, apierrors.NewForbidden(schema.GroupResource{Group: KagentAPIGroup, Resource: "agents"}, "", errors.New("RBAC: access denied"))
+		}
+		return false, nil, nil
+	})
+	users, err := svc.ToolchainUsers(ctx, "github", "")
+	require.NoError(t, err)
+	assert.Equal(t, []ToolchainAgent{{Namespace: "kagent", Name: "sre", Toolchain: "github"}}, users.Agents)
+	for _, line := range users.Unreadable {
+		assert.NotContains(t, line, "agents-other-x7k2q")
 	}
 }

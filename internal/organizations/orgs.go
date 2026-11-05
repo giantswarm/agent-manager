@@ -366,6 +366,9 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (*CreateResult,
 		if err != nil {
 			return nil, err
 		}
+		if org.DeletionTimestamp != nil {
+			return nil, fmt.Errorf("%w: %s is being erased (%s); create it again once get_organization answers not_found", agents.ErrConflict, what, orDefault(org.Status.ErasureStep, "starting"))
+		}
 		if done, err := s.hasFirstAdmins(ctx, c, org); err != nil || done {
 			if err != nil {
 				return nil, err
@@ -387,6 +390,18 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (*CreateResult,
 	res.Organization = summary(org)
 	if !ready(org) {
 		res.Pending = fmt.Sprintf("the organization is not Ready after %s (%s), so its first admins are not bound yet; call create_organization again with the same arguments to bind them once it is", s.cfg.ReadyTimeout, describeReady(res.Organization.Ready))
+		return res, nil
+	}
+	// The parent's check holds for an organizations-admin, whose bindings the
+	// operator mirrors into the new namespace. Rights there from another
+	// source (a Giant Swarm Organization admin's cluster-admin in its
+	// org-<name>) are not mirrored: ask again where the binding goes, so the
+	// answer names who can finish it instead of a Forbidden write.
+	if err := requireAccess(ctx, c, wayFirstAdmins(org),
+		access{namespace: org.Status.Namespace, verb: "create", group: rbacGVR.Group, resource: rbacGVR.Resource},
+		access{namespace: org.Status.Namespace, verb: "bind", group: rbacGVR.Group, resource: "clusterroles", name: RoleAdmin},
+	); err != nil {
+		res.Pending = fmt.Sprintf("the organization %s exists and is Ready, but its first admins are not bound: %v", what, err)
 		return res, nil
 	}
 	binding, err := s.bindFirstAdmins(ctx, c, org, subjects)
@@ -662,7 +677,13 @@ func (s *Service) Delete(ctx context.Context, req DeleteRequest) (*DeleteResult,
 		return nil, err
 	}
 	if err := orgs.Delete(ctx, req.Name, metav1.DeleteOptions{}); err != nil {
-		return nil, kubeErr(err, "delete "+what, way)
+		err = kubeErr(err, "delete "+what, way)
+		if marked {
+			if unmarkErr := s.unmarkPrune(ctx, c, req.Parent, req.Name); unmarkErr != nil {
+				return nil, fmt.Errorf("%w; the object keeps %s: %s, remove it: %v", err, PruneAnnotation, PruneEnabled, unmarkErr)
+			}
+		}
+		return nil, err
 	}
 	res.Deleted = true
 	res.Next = "the operator erases the organization now; get_organization reports its erasure step until it is gone"
@@ -675,6 +696,9 @@ func (s *Service) Delete(ctx context.Context, req DeleteRequest) (*DeleteResult,
 func (s *Service) unmarkPrune(ctx context.Context, c kube.Client, parent, name string) error {
 	orgs := c.Dynamic().Resource(GVR).Namespace(parent)
 	u, err := orgs.Get(ctx, name, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return nil
+	}
 	if err != nil {
 		return err
 	}

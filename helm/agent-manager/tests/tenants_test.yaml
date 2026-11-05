@@ -1,7 +1,6 @@
 # tenants.enabled: the organization namespaces managed beside the configured
 # ones, found by label with a read-only ServiceAccount, and the ClusterRole
-# the agents' HelmReleases run as there. The retired tenant reconciler's
-# RBAC, admission policy and leader Lease are gone.
+# the agents' HelmReleases run as there; the ServiceAccount writes nothing.
 #
 # Run with: make helm-test (helm unittest helm/agent-manager)
 suite: tenants
@@ -115,7 +114,7 @@ tests:
           path: spec.template.spec.containers[0].args[*]
           pattern: ^--tenant-
 
-  - it: refuses the retired reconciler's keys
+  - it: refuses keys tenants does not take
     template: templates/deployment.yaml
     set:
       tenants:

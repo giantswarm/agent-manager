@@ -560,8 +560,8 @@ copies, the WorkerPool, the object quota). A Giant Swarm Organization's
 `org-<name>`, labelled `giantswarm.io/organization`, is not an organization
 namespace and is not managed. `--kagent-namespace` is never one.
 
-agent-manager no longer runs a tenant reconciler. Its ServiceAccount only
-finds the organization namespaces: RBAC cannot narrow a list by label, so it
+agent-manager keeps nothing in an organization namespace. Its ServiceAccount
+only finds the organization namespaces: RBAC cannot narrow a list by label, so it
 may get and list namespaces, read-only, and keeps the labelled ones.
 Everything else runs as the caller, which needs `--downstream-oauth`.
 

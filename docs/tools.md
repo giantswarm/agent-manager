@@ -852,7 +852,7 @@ An organization namespace is listed when you may list its Agents, which every or
 ```text
 List an organization's connectors (RemoteMCPServers): URL, description and the credential headers by Secret name.
 
-Read as you. curated marks a read-only copy of what the platform curates.
+Read as you. A credential in a URL written elsewhere is shown as REDACTED. curated marks a read-only copy of what the platform curates.
 ```
 
 ```json
@@ -1030,7 +1030,7 @@ From every binding of the role that holds them, dry run first; an emptied bindin
 ```text
 Create or change an organization's connector (a RemoteMCPServer) as you; its credential is a Secret named by reference.
 
-Any credential field sets one Secret-backed header (default Authorization from tenant-credential-<name>, key token, the whole header value); noCredential removes it. Never pass a value: a missing Secret is answered with the Dev Portal's credential form link in credentials[].next. Needs agent-platform:admin.
+A credential field sets the Secret-backed header it names (default: the only one, else Authorization; Secret tenant-credential-<name>, key token, the whole value); other headers stay; noCredential removes them. A URL with userinfo or a credential-like query parameter is refused. Never pass a value: a missing Secret is answered with the Dev Portal's form link in credentials[].next. Needs agent-platform:admin.
 ```
 
 ```json
@@ -1073,7 +1073,7 @@ Any credential field sets one Secret-backed header (default Authorization from t
       "type": "boolean"
     },
     "url": {
-      "description": "MCP endpoint URL; required to create",
+      "description": "MCP endpoint URL, without a credential in it; required to create",
       "type": "string"
     }
   },

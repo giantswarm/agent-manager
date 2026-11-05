@@ -400,7 +400,13 @@ func (s *Service) Namespace(ctx context.Context, ns string) (string, error) {
 	if tenant {
 		return ns, nil
 	}
-	return "", invalidf("namespace %q is not managed by agent-manager (managed: %s)", ns, strings.Join(s.Managed(ctx), ", "))
+	// The organization namespaces are not named: the ServiceAccount found
+	// them, and a caller learns only those it belongs to.
+	what := "an organization namespace you belong to (list_my_organizations)"
+	if s.cfg.Tenants == nil {
+		what = "none other"
+	}
+	return "", invalidf("namespace %q is not managed by agent-manager (managed: %s, and %s)", ns, strings.Join(s.cfg.ManagedNamespaces, ", "), what)
 }
 
 func (s *Service) dyn(ctx context.Context) (dynamic.Interface, kube.Client, error) {

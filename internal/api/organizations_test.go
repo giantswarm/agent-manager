@@ -550,3 +550,118 @@ func TestOrganizationMembers(t *testing.T) {
 	assert.Contains(t, text, "namespace org-acme is not an organization namespace")
 	assert.NotContains(t, text, "tenant", "an org-* namespace is no tenant of any kind")
 }
+
+// A creator whose rights in the parent do not reach the new namespace (a
+// Giant Swarm Organization admin's cluster-admin there, which the operator
+// does not mirror) gets the organization without a Forbidden write, and an
+// answer naming who can bind the first admins; their call finishes it.
+func TestCreateOrganizationNamesWhoBindsTheFirstAdminsWhenTheCreatorCannot(t *testing.T) {
+	f := newOrgFixture(t)
+	f.deny = func(ns, verb, resource, _ string) bool {
+		return ns == orgNS && (resource == "rolebindings" || verb == "bind")
+	}
+	args := map[string]any{"namespace": "org-acme", "name": "payments", "adminGroups": []any{"payments-leads"}}
+	text, isErr := f.call(t, ToolCreateOrganization, args)
+	require.False(t, isErr, text)
+	pending := decode(t, text)["pending"].(string)
+	assert.Contains(t, pending, "first admins are not bound")
+	assert.Contains(t, pending, organizations.RoleOrganizationsAdmin)
+	assert.NotNil(t, f.get(t, orgGVR, "org-acme", "payments"))
+	assert.Nil(t, f.get(t, rbGVR, orgNS, organizations.FirstAdminsBinding))
+	for _, d := range f.dryRuns.Received() {
+		assert.NotEqual(t, "RoleBinding", d.Object.GetKind(), "no write is tried that RBAC refuses")
+	}
+
+	f.deny = func(string, string, string, string) bool { return false }
+	text, isErr = f.call(t, ToolCreateOrganization, args)
+	require.False(t, isErr, text)
+	assert.NotNil(t, f.get(t, rbGVR, orgNS, organizations.FirstAdminsBinding))
+}
+
+// An organization being erased is not "not Ready yet".
+func TestCreateOrganizationRefusesOneBeingErased(t *testing.T) {
+	org := organization("org-acme", "payments", nil)
+	now := metav1.Now()
+	org.SetDeletionTimestamp(&now)
+	org.SetFinalizers([]string{apov1alpha1.Finalizer})
+	f := newOrgFixture(t, org)
+	start := time.Now()
+	text, isErr := f.call(t, ToolCreateOrganization, map[string]any{"namespace": "org-acme", "name": "payments", "adminGroups": []any{"g"}})
+	require.True(t, isErr)
+	assert.True(t, strings.HasPrefix(text, "conflict:"), text)
+	assert.Contains(t, text, "being erased")
+	assert.Less(t, time.Since(start), time.Second, "no wait for a Ready that never comes")
+}
+
+// A delete the API server refuses after its dry run passed takes the delete
+// intent off again: the admission guard keeps protecting the object.
+func TestAFailedDeleteTakesTheDeleteIntentOffAgain(t *testing.T) {
+	f := newOrgFixture(t, organization("org-acme", "payments", nil))
+	f.dyn.PrependReactor("delete", "agentplatformorganizations", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		if len(a.(k8stesting.DeleteActionImpl).DeleteOptions.DryRun) == 0 {
+			return true, nil, apierrors.NewServiceUnavailable("webhook unavailable")
+		}
+		return false, nil, nil
+	})
+	text, isErr := f.call(t, ToolDeleteOrganization, map[string]any{"namespace": "org-acme", "name": "payments", "confirm": "org-acme/payments"})
+	require.True(t, isErr, text)
+	org := f.get(t, orgGVR, "org-acme", "payments")
+	require.NotNil(t, org)
+	assert.NotContains(t, org.GetAnnotations(), organizations.PruneAnnotation)
+}
+
+// Moving the default mark never leaves an organization without one: when a
+// write after the first fails, a model still carries the mark.
+func TestMovingTheDefaultMarkNeverLeavesNone(t *testing.T) {
+	f := newOrgFixture(t, model("claude", true), model("gpt", false))
+	writes := 0
+	f.dyn.PrependReactor("update", "modelconfigs", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		if len(a.(k8stesting.UpdateActionImpl).UpdateOptions.DryRun) > 0 {
+			return false, nil, nil
+		}
+		if writes++; writes == 2 {
+			return true, nil, apierrors.NewServiceUnavailable("etcd timeout")
+		}
+		return false, nil, nil
+	})
+	_, isErr := f.call(t, ToolSetOrganizationModel, map[string]any{"namespace": orgNS, "name": "gpt", "default": true})
+	require.True(t, isErr)
+	assert.True(t, marked(f.get(t, mcGVR, orgNS, "claude")) || marked(f.get(t, mcGVR, orgNS, "gpt")), "a model keeps the mark")
+}
+
+// A connector's URL never carries a credential into or out of a tool call,
+// and setting one credential header keeps the others.
+func TestConnectorURLsAndHeaders(t *testing.T) {
+	conn := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "api.kagent.dev/v1alpha3", "kind": "RemoteMCPServer",
+		"metadata": map[string]any{"name": "jira", "namespace": orgNS},
+		// #nosec G101 -- a fake credential in a URL, the case under test
+		"spec": map[string]any{"description": "jira", "url": "https://bot:hunter2@jira.example/mcp?api_key=k-live&site=acme",
+			"headersFrom": []any{
+				map[string]any{"name": "Authorization", "valueFrom": map[string]any{"type": "Secret", "name": "tenant-credential-jira", "key": "token"}},
+				map[string]any{"name": "X-Atlassian-Token", "valueFrom": map[string]any{"type": "Secret", "name": "tenant-credential-jira", "key": "xsrf"}},
+			}},
+	}}
+	f := newOrgFixture(t, conn)
+
+	for _, url := range []string{"https://bot:hunter2@mcp.example/mcp", "https://mcp.example/mcp?access_token=t-live"} {
+		text, isErr := f.call(t, ToolSetOrganizationConnector, map[string]any{"namespace": orgNS, "name": "x", "url": url})
+		require.True(t, isErr, url)
+		assert.True(t, strings.HasPrefix(text, "invalid_request:"), text)
+		assert.Nil(t, f.get(t, connGVR, orgNS, "x"))
+	}
+
+	text, isErr := f.call(t, ToolListOrganizationConnector, map[string]any{"namespace": orgNS})
+	require.False(t, isErr, text)
+	assert.NotContains(t, text, "hunter2")
+	assert.NotContains(t, text, "k-live")
+	assert.Contains(t, text, "site=acme")
+
+	text, isErr = f.call(t, ToolSetOrganizationConnector, map[string]any{"namespace": orgNS, "name": "jira", "credentialHeader": "Authorization", "credentialSecret": "tenant-credential-jira-v2"}) // #nosec G101 -- a Secret's name, not a credential
+	require.False(t, isErr, text)
+	headers, _, _ := unstructured.NestedSlice(f.get(t, connGVR, orgNS, "jira").Object, "spec", "headersFrom")
+	assert.ElementsMatch(t, []any{
+		map[string]any{"name": "Authorization", "valueFrom": map[string]any{"type": "Secret", "name": "tenant-credential-jira-v2", "key": "token"}},
+		map[string]any{"name": "X-Atlassian-Token", "valueFrom": map[string]any{"type": "Secret", "name": "tenant-credential-jira", "key": "xsrf"}},
+	}, headers)
+}

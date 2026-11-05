@@ -3,6 +3,8 @@ package organizations
 import (
 	"context"
 	"fmt"
+	"net/url"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -182,15 +184,18 @@ func (s *Service) SetModel(ctx context.Context, req ModelRequest) (*ResourceResu
 		}
 	}
 	way := wayOrganizationAdmin(ns)
-	var writes []write
+	var writes, unmarks []write
 	switch {
 	case req.Default:
+		// The mark is written here first and taken off the others after: a
+		// failure in between leaves two marks, which the operator reports
+		// and default true fixes, never an organization without a default.
 		for _, name := range marks {
 			other := find(items, name)
 			annotations := other.GetAnnotations()
 			delete(annotations, apov1alpha1.DefaultModelConfigAnnotation)
 			other.SetAnnotations(annotations)
-			writes = append(writes, write{gvr: gvr, op: opUpdate, obj: other.Object, ns: ns, name: name, what: "ModelConfig " + ns + "/" + name + " (default mark removed)", reason: way})
+			unmarks = append(unmarks, write{gvr: gvr, op: opUpdate, obj: other.Object, ns: ns, name: name, what: "ModelConfig " + ns + "/" + name + " (default mark removed)", reason: way})
 		}
 		res.Unmarked = marks
 		setMark(obj)
@@ -204,6 +209,7 @@ func (s *Service) SetModel(ctx context.Context, req ModelRequest) (*ResourceResu
 		op = opCreate
 	}
 	writes = append(writes, write{gvr: gvr, op: op, obj: obj.Object, ns: ns, name: req.Name, what: "ModelConfig " + ns + "/" + req.Name, reason: way})
+	writes = append(writes, unmarks...)
 	if err := apply(ctx, c.Dynamic(), writes, req.DryRun); err != nil {
 		return nil, err
 	}
@@ -316,7 +322,8 @@ func (s *Service) ListConnectors(ctx context.Context, ns string) ([]Connector, e
 	for i := range items {
 		u := &items[i]
 		conn := Connector{Name: u.GetName(), Credentials: connectorCredentials(u), ManagedBy: u.GetLabels()[agents.ManagedByLabel]}
-		conn.URL, _, _ = unstructured.NestedString(u.Object, "spec", "url")
+		raw, _, _ := unstructured.NestedString(u.Object, "spec", "url")
+		conn.URL = redactURL(raw)
 		conn.Description, _, _ = unstructured.NestedString(u.Object, "spec", "description")
 		_, conn.Curated = u.GetLabels()[agents.OperatorObjectLabel]
 		out = append(out, conn)
@@ -362,6 +369,9 @@ func (s *Service) SetConnector(ctx context.Context, req ConnectorRequest) (*Reso
 		res.Created = true
 	}
 	if req.URL != "" {
+		if err := refuseCredentialInURL(req.URL); err != nil {
+			return nil, err
+		}
 		_ = unstructured.SetNestedField(obj.Object, req.URL, "spec", "url")
 	}
 	if desc, _, _ := unstructured.NestedString(obj.Object, "spec", "description"); req.Description != "" || desc == "" {
@@ -369,12 +379,23 @@ func (s *Service) SetConnector(ctx context.Context, req ConnectorRequest) (*Reso
 	}
 	if withCredential || req.NoCredential {
 		raw, _, _ := unstructured.NestedSlice(obj.Object, "spec", "headersFrom")
-		kept := make([]any, 0, len(raw)+1)
+		secretBacked := connectorCredentials(obj)
+		// The header a credential field sets: the one named, else the only
+		// Secret-backed one there is, else Authorization. Every other header
+		// stays; noCredential removes the Secret-backed ones.
+		header := req.CredentialHeader
+		if header == "" && len(secretBacked) == 1 {
+			header = secretBacked[0].Header
+		}
+		header = firstOf(header, "Authorization")
 		var prev ConnectorCredential
+		kept := make([]any, 0, len(raw)+1)
 		for _, v := range raw {
 			h, _ := v.(map[string]any)
-			if from, _ := h["valueFrom"].(map[string]any); from != nil && from["type"] == "Secret" {
-				prev.Header, _ = h["name"].(string)
+			from, _ := h["valueFrom"].(map[string]any)
+			isSecret := from != nil && from["type"] == "Secret"
+			name, _ := h["name"].(string)
+			if isSecret && (req.NoCredential || strings.EqualFold(name, header)) {
 				prev.Secret, _ = from["name"].(string)
 				prev.Key, _ = from["key"].(string)
 				continue
@@ -383,7 +404,7 @@ func (s *Service) SetConnector(ctx context.Context, req ConnectorRequest) (*Reso
 		}
 		if withCredential {
 			cred := ConnectorCredential{
-				Header: firstOf(req.CredentialHeader, prev.Header, "Authorization"),
+				Header: header,
 				Secret: firstOf(req.CredentialSecret, prev.Secret, CredentialPrefix+req.Name),
 				Key:    firstOf(req.CredentialKey, prev.Key, defaultTokenKey),
 			}
@@ -581,4 +602,50 @@ func (s *Service) DeleteResource(ctx context.Context, ns, kind, name string, dry
 		s.log.Info("organization object deleted", identity.LogAttr(ctx), "namespace", ns, "kind", kind, "name", name)
 	}
 	return res, nil
+}
+
+// credentialQuery matches a query parameter name that carries a credential.
+var credentialQuery = regexp.MustCompile(`(?i)(key|token|secret|password|passwd|auth|sig|credential)`)
+
+// refuseCredentialInURL refuses a connector URL that carries a credential:
+// userinfo, or a query parameter named like one. A credential goes in a
+// header from a Secret, so it never crosses MCP.
+func refuseCredentialInURL(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return invalidf("url %q: %v", raw, err)
+	}
+	if u.User != nil {
+		return invalidf("url: carries user information; a connector's credential goes in a header from a Secret (credentialHeader, credentialSecret), never in the URL")
+	}
+	for name := range u.Query() {
+		if credentialQuery.MatchString(name) {
+			return invalidf("url: query parameter %q looks like a credential; a connector's credential goes in a header from a Secret (credentialHeader, credentialSecret), never in the URL", name)
+		}
+	}
+	return nil
+}
+
+// redactURL hides what refuseCredentialInURL refuses, in a URL written
+// elsewhere (git, kubectl), so a read never returns it.
+func redactURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return ""
+	}
+	if u.User != nil {
+		u.User = url.User("REDACTED")
+	}
+	q := u.Query()
+	changed := false
+	for name := range q {
+		if credentialQuery.MatchString(name) {
+			q.Set(name, "REDACTED")
+			changed = true
+		}
+	}
+	if changed {
+		u.RawQuery = q.Encode()
+	}
+	return u.String()
 }

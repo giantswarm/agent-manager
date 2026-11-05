@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/giantswarm/agent-manager/internal/kagent"
@@ -88,6 +89,10 @@ func (s *Service) ToolchainUsers(ctx context.Context, name, version string) (*To
 			continue
 		}
 		objects, err := st.agent.Resource(s.agentGVR()).Namespace(ns).List(ctx, metav1.ListOptions{})
+		if apierrors.IsForbidden(err) && !slices.Contains(s.cfg.ManagedNamespaces, ns) {
+			// An organization the caller does not belong to: not named.
+			continue
+		}
 		if err != nil {
 			out.Unreadable = append(out.Unreadable, fmt.Sprintf("namespace %s: %v", ns, wrapKube(err, "list agents in "+ns)))
 			continue

@@ -139,6 +139,13 @@ func wayOrganizationsAdmin(parent string) string {
 	return fmt.Sprintf("this needs the ClusterRole %s, bound to you in namespace %s or cluster-wide; a cluster-admin, or an admin of the Giant Swarm Organization that owns %s, binds it", RoleOrganizationsAdmin, parent, parent)
 }
 
+// wayFirstAdmins names who can bind the first admins of org when the
+// creator may not: rights in the parent that the operator does not mirror
+// into the organization namespace.
+func wayFirstAdmins(org *apov1alpha1.AgentPlatformOrganization) string {
+	return fmt.Sprintf("your right to create it in %s does not reach its namespace %s (agent-platform-operator mirrors only %s bindings of the parent); someone with %s bound in %s or cluster-wide, or a cluster-admin, calls create_organization with the same arguments to bind them", org.Namespace, org.Status.Namespace, RoleOrganizationsAdmin, RoleOrganizationsAdmin, org.Namespace)
+}
+
 // wayOrganizationAdmin names who can make the caller an admin of the
 // organization in ns.
 func wayOrganizationAdmin(ns string) string {
