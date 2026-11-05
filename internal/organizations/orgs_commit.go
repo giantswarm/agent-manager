@@ -74,6 +74,16 @@ func (s *Service) createCommit(ctx context.Context, c kube.Client, req CreateReq
 	}
 	binding := unstructuredOf(roleBinding("", FirstAdminsBinding, RoleAdmin, subjects))
 	setAnnotation(binding, PruneAnnotation, PruneDisabled)
+	isSecret, err := cm.secretFiles(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err := refusePlainAsSecret(isSecret, objFile, orgKind, req.Name); err != nil {
+		return nil, err
+	}
+	if err := refusePlainAsSecret(isSecret, contentFile(content, kindRoleBinding, FirstAdminsBinding), kindRoleBinding, FirstAdminsBinding); err != nil {
+		return nil, err
+	}
 
 	changes := []fileChange{
 		{dir: cm.objectDir(req.Parent), write: map[string][]byte{objFile: manifest(obj, true)}},
@@ -134,10 +144,16 @@ func (s *Service) updateCommit(ctx context.Context, c kube.Client, u *unstructur
 		return nil, err
 	}
 	setAnnotation(file, PruneAnnotation, PruneDisabled)
-	next := u.DeepCopy()
-	if _, err := changeOrganization(next, req); err != nil {
+	isSecret, err := cm.secretFiles(ctx)
+	if err != nil {
 		return nil, err
 	}
+	if err := refusePlainAsSecret(isSecret, p, orgKind, req.Name); err != nil {
+		return nil, err
+	}
+	// The dry run is of what the file will say, on the live object.
+	next := file.DeepCopy()
+	withLive(next, u)
 	after, err := organizationOf(next)
 	if err != nil {
 		return nil, err

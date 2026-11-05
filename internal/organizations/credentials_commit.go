@@ -7,6 +7,7 @@ import (
 	"github.com/giantswarm/gitops-commit/sopsenc"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/giantswarm/agent-manager/internal/agents"
@@ -27,7 +28,8 @@ type CredentialCommit struct {
 	Key    string
 	Value  []byte
 	// Replace re-encrypts the Secret's file where git carries it already;
-	// without it an existing file is refused.
+	// without it an existing file is refused. The file holds Key alone: a
+	// live Secret with other keys is refused.
 	Replace bool
 	DryRun  bool
 }
@@ -81,6 +83,14 @@ func (s *Service) CommitCredential(ctx context.Context, req CredentialCommit) (*
 		live, err := c.Dynamic().Resource(secretGVR).Namespace(req.Namespace).Get(ctx, req.Secret, metav1.GetOptions{})
 		if err != nil {
 			return nil, kubeErr(err, "get "+what, way)
+		}
+		// The file holds this one key: other keys of the live Secret
+		// would be gone after the merge.
+		data, _, _ := unstructured.NestedMap(live.Object, "data")
+		for k := range data {
+			if k != req.Key {
+				return nil, fmt.Errorf("%w: Secret %s holds other keys than %s (%s among them), which a commit of this key alone would remove: give each credential a Secret of its own", agents.ErrConflict, what, req.Key, k)
+			}
 		}
 		obj.SetResourceVersion(live.GetResourceVersion())
 		wr.op = opUpdate

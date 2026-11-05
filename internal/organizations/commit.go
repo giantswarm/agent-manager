@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 
+	apov1alpha1 "github.com/giantswarm/agent-platform-operator/api/v1alpha1"
 	"github.com/giantswarm/gitops-commit/commit"
 	"github.com/giantswarm/gitops-commit/layout"
 	"github.com/giantswarm/gitops-commit/provenance"
@@ -45,7 +46,7 @@ const (
 	// when commit mode opens the pull request that removes the object's
 	// file: agent-platform-operator reports the organization Orphaned with
 	// reason DeleteMerged instead of MissingFromGit once it merged.
-	DeletePullRequestAnnotation = "agent-platform.giantswarm.io/delete-pull-request"
+	DeletePullRequestAnnotation = apov1alpha1.DeletePullRequestAnnotation
 	// PruneDisabled is the value of PruneAnnotation on the object's file
 	// and on the organization-admins file: Flux never prunes either.
 	PruneDisabled = "disabled"
@@ -60,16 +61,11 @@ const (
 )
 
 // GitHubRemote is what commit mode needs of GitHub, acting as the person:
-// the pull request seams, the reads of the base and the listing of a
-// content path.
-type GitHubRemote interface {
-	commit.Remote
-	commit.Reader
-	commit.Lister
-}
+// the agent tools' remote, whose listing removes a content path.
+type GitHubRemote = agents.GitHubRemote
 
 // RemoteFor builds the GitHub remote from the person's App user token.
-type RemoteFor func(token string) (GitHubRemote, error)
+type RemoteFor = agents.RemoteFor
 
 // CommitConfig is where commit mode writes an installation's organizations.
 type CommitConfig struct {
@@ -131,6 +127,9 @@ type CommitResult struct {
 	Review string `json:"review,omitempty"`
 	// LiveSteps are what the merge alone does not do.
 	LiveSteps []string `json:"liveSteps,omitempty"`
+	// Unchanged: git carries the change already, so no pull request was
+	// opened.
+	Unchanged bool `json:"unchanged,omitempty"`
 }
 
 // reviewNote is what every organization pull request says about its review.
@@ -304,8 +303,20 @@ func (c *orgCommit) open(ctx context.Context, changes []fileChange, branch, titl
 			landed = append(landed, change)
 		}
 	}
-	if dryRun || len(landed) == 0 {
+	if dryRun {
 		return out, nil
+	}
+	if len(landed) == 0 {
+		out.Unchanged = true
+		return out, nil
+	}
+	// The files are decided against the base: a second change on the
+	// branch of an open pull request would undo the first in it.
+	if open, has, err := c.remote.FindPullRequest(ctx, c.cfg.Objects.Repository, branch); err != nil || has {
+		if err != nil {
+			return nil, commitError(err)
+		}
+		return nil, fmt.Errorf("%w: the pull request %s for this object is open: merge or close it first, then call again", agents.ErrConflict, open.URL)
 	}
 	prs, err := commit.Open(ctx, c.remote, commit.Request{Branch: branch, Title: title, Body: body + "\n\nThe platform team reviews this pull request (CODEOWNERS of the organization paths).\n\nOpened by agent-manager as @" + c.gh.Login + "."}, landed)
 	if err != nil {
@@ -454,19 +465,52 @@ func (w *contentWriter) source(ctx context.Context, obj *unstructured.Unstructur
 	if file == nil {
 		return nil, fmt.Errorf("%w: %s %s/%s is applied from git, but not from %s in %s: change it in the file that defines it", agents.ErrConflict, kind, obj.GetNamespace(), obj.GetName(), p, w.commit.cfg.Objects.Repository)
 	}
-	file.SetNamespace(obj.GetNamespace())
-	file.SetResourceVersion(obj.GetResourceVersion())
+	withLive(file, obj)
+	return file, nil
+}
+
+// withLive gives a file's object the live object's namespace,
+// resourceVersion and Flux labels, so a dry run updates the live object to
+// what the file says; manifest drops them again.
+func withLive(file, live *unstructured.Unstructured) {
+	file.SetNamespace(live.GetNamespace())
+	file.SetResourceVersion(live.GetResourceVersion())
 	labels := file.GetLabels()
 	if labels == nil {
 		labels = map[string]string{}
 	}
-	for k, v := range obj.GetLabels() {
+	for k, v := range live.GetLabels() {
 		if strings.HasPrefix(k, fluxLabelPrefix) {
 			labels[k] = v
 		}
 	}
 	file.SetLabels(labels)
-	return file, nil
+}
+
+// secretFiles is how the repository's .sops.yaml decides which files
+// gitops-commit encrypts: by name, and by any creation rule's path_regex.
+func (c *orgCommit) secretFiles(ctx context.Context) (func(string) bool, error) {
+	raw, err := c.remote.ReadFile(ctx, c.cfg.Objects.Repository, c.cfg.Objects.Branch, layout.SOPSConfigFile)
+	if errors.Is(err, commit.ErrFileNotFound) {
+		return sopsenc.IsSecretFile, nil
+	}
+	if err != nil {
+		return nil, commitError(err)
+	}
+	enc, err := sopsenc.New(raw)
+	if err != nil {
+		return sopsenc.IsSecretFile, nil
+	}
+	return enc.IsSecretFile, nil
+}
+
+// refusePlainAsSecret refuses a file of an object that is no Secret where
+// gitops-commit would encrypt it: it would never be updated again.
+func refusePlainAsSecret(isSecret func(string) bool, p, kind, name string) error {
+	if isSecret(p) {
+		return invalidf("%s %s: its file %s is a secret file in git (by its name, or a .sops.yaml path_regex), which gitops-commit encrypts once and never updates: pick another name, or narrow the creation rule to the -secret.enc.yaml files", kind, name, p)
+	}
+	return nil
 }
 
 // land dry-runs every write as the caller, then applies them in apply mode,
@@ -491,15 +535,20 @@ func (w *contentWriter) land(ctx context.Context, s *Service, writes []write, dr
 	if err := apply(ctx, c.Dynamic(), writes, true); err != nil {
 		return nil, err
 	}
+	isSecret, err := w.commit.secretFiles(ctx)
+	if err != nil {
+		return nil, err
+	}
 	ch := fileChange{dir: w.dir, write: map[string][]byte{}}
 	for _, wr := range writes {
 		if err := segment(wr.kind+" name", wr.name); err != nil {
 			return nil, err
 		}
 		p := contentFile(w.dir, wr.kind, wr.name)
-		if wr.kind != kindSecret && sopsenc.IsSecretFile(p) {
-			// gitops-commit would encrypt it and never rewrite it again.
-			return nil, invalidf("%s %s: its file %s would be a secret file in git (a name containing \"secret\" or \"credential\"), which is encrypted and never updated: pick another name", wr.kind, wr.name, p)
+		if wr.op != opDelete {
+			if err := refusePlainAsSecret(isSecret, p, wr.kind, wr.name); err != nil {
+				return nil, err
+			}
 		}
 		switch wr.op {
 		case opDelete:

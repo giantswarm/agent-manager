@@ -332,7 +332,7 @@ func runServe(ctx context.Context, o *serveOptions) error {
 		}
 		var orgsCommit *organizations.CommitConfig
 		if o.orgsRepository != "" {
-			if orgsCommit, err = organizations.NewCommitConfig(orgsRemote(o.githubAuthorizationServer, o.githubAPIURL), o.orgsRepository, o.orgsBranch, o.orgsObjectsPath, o.orgsContentPrefix); err != nil {
+			if orgsCommit, err = organizations.NewCommitConfig(gitHubRemote(o.githubAuthorizationServer, o.githubAPIURL), o.orgsRepository, o.orgsBranch, o.orgsObjectsPath, o.orgsContentPrefix); err != nil {
 				return fmt.Errorf("--organizations-repository: %w", err)
 			}
 		}
@@ -581,20 +581,6 @@ func gitHubRemote(authorizationServer, apiURL string) agents.RemoteFor {
 		return nil
 	}
 	return func(token string) (agents.GitHubRemote, error) {
-		if apiURL == server.DefaultGitHubAPIURL {
-			return commit.NewGitHub(token)
-		}
-		return commit.NewGitHub(token, commit.WithBaseURL(apiURL))
-	}
-}
-
-// orgsRemote is gitHubRemote for the organization tools, which also list a
-// content path to remove it. Nil without the App pin.
-func orgsRemote(authorizationServer, apiURL string) organizations.RemoteFor {
-	if authorizationServer == "" {
-		return nil
-	}
-	return func(token string) (organizations.GitHubRemote, error) {
 		if apiURL == server.DefaultGitHubAPIURL {
 			return commit.NewGitHub(token)
 		}

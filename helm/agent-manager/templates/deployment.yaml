@@ -80,7 +80,7 @@ spec:
             {{- with .Values.tenants.commit.repository }}
             - {{ printf "--organizations-repository=%s" . | quote }}
             - {{ printf "--organizations-branch=%s" $.Values.tenants.commit.branch | quote }}
-            - {{ printf "--organizations-objects-path=%s" $.Values.tenants.commit.objectsPath | quote }}
+            - {{ printf "--organizations-objects-path=%s" (required "tenants.commit.objectsPath is required with tenants.commit.repository: the directory the installation's Kustomization applies the organization objects from" $.Values.tenants.commit.objectsPath) | quote }}
             - {{ printf "--organizations-content-prefix=%s" $.Values.tenants.commit.contentPrefix | quote }}
             {{- end }}
             {{- end }}

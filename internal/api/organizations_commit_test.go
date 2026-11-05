@@ -370,3 +370,81 @@ func TestContentToolsCommitIntoTheContentPath(t *testing.T) {
 	assert.Equal(t, organizations.PruneDisabled, obj.GetAnnotations()[organizations.PruneAnnotation])
 	assert.NotContains(t, obj.Object, "status")
 }
+
+// Every content tool lands its file in the content path in commit mode; a
+// dry run opens nothing; a second change while the object's pull request
+// is open is refused rather than undoing the first in it.
+func TestEveryContentToolCommits(t *testing.T) {
+	cases := []struct {
+		tool   string
+		args   map[string]any
+		file   string
+		action string
+	}{
+		{ToolSetOrganizationConnector, map[string]any{"name": "gh", "url": "https://mcp.example.com/mcp", "credentialHeader": "Authorization"}, "remotemcpserver-gh.yaml", "add"},
+		{ToolSetOrganizationEgress, map[string]any{"name": "github", "destinations": []any{map[string]any{"origin": "https://api.github.com"}}}, "egresspolicy-github.yaml", "add"},
+		{ToolDeleteOrganizationObject, map[string]any{"kind": "model", "name": "claude"}, "modelconfig-claude.yaml", "remove"},
+		{ToolRemoveOrganizationMember, map[string]any{"group": "payments-leads"}, "rolebinding-organization-admins.yaml", "remove"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.tool, func(t *testing.T) {
+			f, fake := gitOrganization(t)
+			args := map[string]any{"namespace": orgNS, "mode": "commit", "dryRun": true}
+			for k, v := range tc.args {
+				args[k] = v
+			}
+			text, isErr := f.call(t, tc.tool, args)
+			require.False(t, isErr, text)
+			assert.Empty(t, fake.PullRequests(), "a dry run opens nothing")
+
+			delete(args, "dryRun")
+			text, isErr = f.call(t, tc.tool, args)
+			require.False(t, isErr, text)
+			require.Len(t, fake.PullRequests(), 1)
+			files := map[string]string{}
+			for _, file := range decode(t, text)["commit"].(map[string]any)["files"].([]any) {
+				m := file.(map[string]any)
+				files[m["path"].(string)] = m["action"].(string)
+			}
+			assert.Equal(t, tc.action, files[paymentsPath+"/"+tc.file])
+
+			text, isErr = f.call(t, tc.tool, args)
+			require.True(t, isErr)
+			assert.True(t, strings.HasPrefix(text, "conflict:"), text)
+			assert.Contains(t, text, fake.PullRequests()[0].URL)
+			assert.Len(t, fake.PullRequests(), 1)
+		})
+	}
+}
+
+// A .sops.yaml rule that makes a plain object's file secret is refused:
+// gitops-commit would encrypt the file once and never update it.
+func TestAPlainFileTheRepositoryWouldEncryptIsRefused(t *testing.T) {
+	f, fake := commitFixture(t, map[string][]byte{".sops.yaml": sopsCovering(t, `^agent-platform/organizations/.*`)})
+	text, isErr := f.call(t, ToolCreateOrganization, map[string]any{"namespace": "org-acme", "name": "payments", "adminGroups": []any{"g"}, "mode": "commit"})
+	require.True(t, isErr)
+	assert.True(t, strings.HasPrefix(text, "invalid"), text)
+	assert.Contains(t, text, "rolebinding-organization-admins.yaml")
+	assert.Empty(t, fake.PullRequests())
+}
+
+// A credential Secret whose live object holds other keys is not replaced by
+// a file of one key, which would drop them.
+func TestACredentialOfASharedSecretIsRefused(t *testing.T) {
+	live := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "v1", "kind": "Secret",
+		"metadata": map[string]any{"name": "tenant-credential-shared", "namespace": orgNS, "resourceVersion": "7"},
+		"data":     map[string]any{"token": "eA==", "other": "eQ=="},
+	}}
+	f, fake := commitFixture(t, nil, live)
+	f.dryRuns.Refuse = func(u *unstructured.Unstructured) error {
+		if u.GetKind() == "Secret" && u.GetResourceVersion() == "" {
+			return apierrors.NewAlreadyExists(schema.GroupResource{Resource: "secrets"}, u.GetName())
+		}
+		return nil
+	}
+	_, err := f.orgs.CommitCredential(f.ctx, organizations.CredentialCommit{Namespace: orgNS, Secret: "tenant-credential-shared", Key: "token", Value: []byte("v"), Replace: true}) // #nosec G101 -- a test value
+	require.ErrorIs(t, err, agents.ErrConflict)
+	assert.Contains(t, err.Error(), "other")
+	assert.Empty(t, fake.PullRequests())
+}
