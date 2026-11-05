@@ -25,7 +25,6 @@ import (
 	"github.com/giantswarm/agent-manager/internal/kube"
 	"github.com/giantswarm/agent-manager/internal/skills"
 	"github.com/giantswarm/agent-manager/internal/tags"
-	"github.com/giantswarm/agent-manager/internal/tenants"
 )
 
 // ChartSource is what the service needs to know about the agent chart.
@@ -88,8 +87,8 @@ type Config struct {
 	// start_session holds a Session's toolchains to, asked as the caller.
 	// Nil: any version the registry carries starts.
 	ToolchainCatalog ToolchainCatalog
-	// Tenants finds the organization namespaces (and the legacy tenants),
-	// managed beside ManagedNamespaces. Nil: none.
+	// Tenants finds the organization namespaces, managed beside
+	// ManagedNamespaces. Nil: none.
 	Tenants TenantSet
 	// Tags is the agent chart's tag rule, loaded from the embedded chart
 	// (chart.EmbeddedSchema().Tags). Nil: the chart takes no tags; agents
@@ -97,8 +96,8 @@ type Config struct {
 	Tags *tags.Rule
 }
 
-// TenantSet finds the organization namespaces, the ones agent-platform-operator
-// keeps and the legacy tenants, by their labels.
+// TenantSet finds the organization namespaces agent-platform-operator keeps,
+// by their label.
 type TenantSet interface {
 	// Names are the organization namespaces, sorted.
 	Names(ctx context.Context) ([]string, error)
@@ -1807,8 +1806,8 @@ func (s *Service) Delete(ctx context.Context, loc Location, name string, force b
 
 // sourceToRemove is the shared chart source a delete of hr takes with it —
 // the OCIRepository it renders from when no other release of its namespace
-// references it and neither agent-platform-operator nor the retired tenant
-// reconciler keeps it — or, empty, why it stays.
+// references it and agent-platform-operator does not keep it — or, empty,
+// why it stays.
 func (s *Service) sourceToRemove(ctx context.Context, dyn dynamic.Interface, hr *unstructured.Unstructured) (name, kept string) {
 	ref := chartRefOf(hr)
 	if ref == nil || ref.Kind != kindOCIRepository {
@@ -1822,9 +1821,6 @@ func (s *Service) sourceToRemove(ctx context.Context, dyn dynamic.Interface, hr 
 	if source != nil {
 		if _, ok := source.GetLabels()[OperatorObjectLabel]; ok {
 			return "", "agent-platform-operator keeps it while the namespace is an organization's"
-		}
-		if _, ok := source.GetLabels()[tenants.ObjectLabel]; ok {
-			return "", "the retired tenant reconciler made it for the legacy tenant; it stays until the tenant's agents move into an organization namespace"
 		}
 	}
 	others, err := s.otherReferences(ctx, dyn, sourceNs, ref.Name, hr.GetName())

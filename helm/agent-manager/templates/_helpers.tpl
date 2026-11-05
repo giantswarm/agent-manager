@@ -91,8 +91,7 @@ every Kubernetes call carries the caller's token.
 
 {{/*
 The ClusterRole agent-platform-operator binds to the agents' Flux
-ServiceAccount in every organization namespace (the retired tenant
-reconciler bound it in the legacy tenants).
+ServiceAccount in every organization namespace.
 */}}
 {{- define "agent-manager.tenantFluxClusterRole" -}}
 agent-platform-tenant-flux

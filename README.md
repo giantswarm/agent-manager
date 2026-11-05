@@ -556,10 +556,9 @@ in a parent namespace; the operator creates its organization namespace,
 labelled `agent-platform.giantswarm.io/organization`, and keeps in it what an
 agent needs there (the agent chart's OCIRepository, the Helm ServiceAccount
 bound to `agent-platform-tenant-flux`, the network policies, the curated
-copies, the WorkerPool, the object quota). A legacy tenant, a Giant Swarm
-Organization's `org-<name>` labelled `giantswarm.io/organization`, is managed
-too until the migration moves its agents (giantswarm/giantswarm#38990);
-agent-manager keeps nothing in it any more. `--kagent-namespace` is never one.
+copies, the WorkerPool, the object quota). A Giant Swarm Organization's
+`org-<name>`, labelled `giantswarm.io/organization`, is not an organization
+namespace and is not managed. `--kagent-namespace` is never one.
 
 agent-manager no longer runs a tenant reconciler. Its ServiceAccount only
 finds the organization namespaces: RBAC cannot narrow a list by label, so it
@@ -615,8 +614,7 @@ An agent in an organization namespace gets no installation skills credential
 (`--skills-git-auth-secret-name`): that Secret exists in the configured
 namespaces only and admission refuses it there, so it names its own.
 `update_agent` drops a reference to the installation's credential, under its
-current or a previous name, from such an agent, and `agent-manager migrate
---multi-tenant` drops it from every agent release in a legacy tenant.
+current or a previous name, from such an agent.
 
 The agents' Flux identity can read and write every Secret of the organization
 namespace. helm-controller keeps an agent's Helm release Secrets
@@ -827,15 +825,6 @@ the fleet's GitOps-owned `sre-agent` releases live in `flux-giantswarm` with
 `--gitops-namespaces` with a `targetNamespace` in the managed set. Releases
 outside the managed namespaces, and releases applied by a Flux Kustomization
 (`kustomize.toolkit.fluxcd.io/name`), are read and never written.
-
-With `--multi-tenant` (`AGENT_MANAGER_MULTI_TENANT`, as `serve` takes it) the
-run also finds the legacy tenant namespaces (labelled `giantswarm.io/organization`) and drops
-`skillsGitAuthSecretRef` from every agent release there that names the
-installation's skills credential under its current or a previous name: the
-tenant credential admission policy refuses that reference, so Flux could not
-apply the agent's next change. That is all it does in a tenant, reading and
-writing only HelmReleases; the default namespace's report lists those releases
-under `tenants`, a GitOps-owned one as pending, never written.
 
 ### 1.x → 2.x values
 

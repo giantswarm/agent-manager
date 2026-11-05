@@ -40,8 +40,7 @@ type Members struct {
 }
 
 // organization resolves an organization namespace argument: it must be one
-// agent-platform-operator keeps. A legacy tenant's members are declared
-// outside agent-manager until its agents move.
+// agent-platform-operator keeps.
 func (s *Service) organization(ctx context.Context, ns string) (Namespace, error) {
 	if ns == "" {
 		return Namespace{}, invalidf("namespace (the organization namespace) is required; list_my_organizations lists yours, get_organization names an organization's")
@@ -52,9 +51,6 @@ func (s *Service) organization(ctx context.Context, ns string) (Namespace, error
 	}
 	if !ok {
 		return Namespace{}, invalidf("namespace %s is not an organization namespace; list_my_organizations lists yours", ns)
-	}
-	if org.Legacy {
-		return Namespace{}, invalidf("namespace %s is a legacy tenant (labelled giantswarm.io/organization), not an organization namespace: its members, models and credentials are declared outside agent-manager until its agents move into an organization", ns)
 	}
 	return org, nil
 }

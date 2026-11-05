@@ -475,11 +475,14 @@ func TestCredentialsAreReferencesOnly(t *testing.T) {
 }
 
 // The picker lists the organizations whose Agents the caller may list,
-// asked as the caller, never a legacy tenant or a plain namespace.
+// asked as the caller: never an org-<name> labelled giantswarm.io/organization
+// alone, nor a plain namespace, even where the caller may list Agents.
 func TestThePickerListsOnlyTheCallersOrganizations(t *testing.T) {
 	f := newOrgFixture(t)
 	f.deny = func(ns, verb, resource, _ string) bool {
-		return verb == "list" && resource == "agents" && ns != orgNS
+		// The caller may list Agents in org-legacy and plain too: only the
+		// organization label keeps them out.
+		return verb == "list" && resource == "agents" && ns == "agents-billing-a1b2c"
 	}
 	text, isErr := f.call(t, ToolListMyOrganizations, nil)
 	require.False(t, isErr, text)
@@ -542,5 +545,5 @@ func TestOrganizationMembers(t *testing.T) {
 
 	text, isErr = f.call(t, ToolAddOrganizationMember, map[string]any{"namespace": "org-legacy", "role": "user", "group": "g"})
 	require.True(t, isErr)
-	assert.Contains(t, text, "legacy tenant")
+	assert.Contains(t, text, "not an organization namespace")
 }

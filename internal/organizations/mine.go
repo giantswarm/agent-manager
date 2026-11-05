@@ -27,15 +27,9 @@ type Mine struct {
 // API server decides on the caller's identity. A namespace whose review fails
 // is left out.
 func (s *Service) ListMine(ctx context.Context) (*Mine, error) {
-	all, err := s.cfg.Namespaces.List(ctx)
+	candidates, err := s.cfg.Namespaces.List(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", agents.ErrUnsupported, err)
-	}
-	var candidates []Namespace
-	for _, ns := range all {
-		if !ns.Legacy {
-			candidates = append(candidates, ns)
-		}
 	}
 	c, err := s.caller(ctx)
 	if err != nil {

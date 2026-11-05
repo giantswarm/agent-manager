@@ -5,16 +5,14 @@ agent-manager manages the organization namespaces beside the configured ones
 and serves the organization tools, all as the caller. Its ServiceAccount only
 finds the organization namespaces: RBAC cannot narrow a list by label, so it
 may get and list every namespace, read-only, and keeps those labelled
-agent-platform.giantswarm.io/organization (and the legacy tenants labelled
-giantswarm.io/organization). It writes nothing, binds nothing and reads no
+agent-platform.giantswarm.io/organization. It writes nothing, binds nothing and reads no
 Secret: the tenant reconciler that did is gone; agent-platform-operator keeps
 the organization namespaces.
 
 agent-platform-tenant-flux is what the agents' HelmReleases run as in an
 organization namespace (helm-controller impersonates the release's
-ServiceAccount, which agent-platform-operator, and in a legacy tenant the
-retired reconciler, binds to it). It is rendered here until the Agent Platform
-chart renders it.
+ServiceAccount, which agent-platform-operator binds to it). It is rendered
+here until the Agent Platform chart renders it.
 */}}
 {{- if .Values.tenants.enabled }}
 {{- if not (and .Values.oauth.enabled .Values.oauth.downstream.enabled) }}

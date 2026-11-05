@@ -475,10 +475,10 @@ tenants:
   # `set_organization_model`, `list_my_organizations` and the rest). An
   # organization namespace is labelled
   # `agent-platform.giantswarm.io/organization` (agent-platform-operator
-  # keeps it and what it holds); a legacy tenant, a Giant Swarm
-  # Organization's `org-<name>` labelled `giantswarm.io/organization`, is
-  # managed too until its agents move. Everything a request does there runs
-  # as the caller. The ServiceAccount only finds the namespaces by label:
+  # keeps it and what it holds); a Giant Swarm Organization's `org-<name>`,
+  # labelled `giantswarm.io/organization`, is not one. Everything a request
+  # does there runs as the caller. The ServiceAccount only finds the
+  # namespaces by label:
   # the chart grants it `get` and `list` on namespaces, read-only,
   # and renders the ClusterRole `agent-platform-tenant-flux` the agents'
   # HelmReleases run as there. Needs `oauth.downstream.enabled` and

@@ -31,7 +31,6 @@ import (
 	"github.com/giantswarm/agent-manager/internal/organizations"
 	"github.com/giantswarm/agent-manager/internal/server"
 	"github.com/giantswarm/agent-manager/internal/skills"
-	"github.com/giantswarm/agent-manager/internal/tenants"
 	"github.com/giantswarm/agent-manager/internal/toolchainmanager"
 	"github.com/giantswarm/agent-manager/internal/workspaces"
 )
@@ -155,7 +154,7 @@ environment variable named next to it; flags win over the environment.`,
 	f.BoolVar(&o.skillsGitAuthMint, "skills-git-auth-mint", envBool("AGENT_MANAGER_SKILLS_GIT_AUTH_MINT", false), "Keep the Secret --skills-git-auth-secret-name names filled with the skills GitHub App's installation token in every managed namespace, refreshed before it expires; the Secret must exist (the chart renders it) and the ServiceAccount may update it. Needs the skills GitHub App (AGENT_MANAGER_SKILLS_GIT_AUTH_MINT)")
 	f.DurationVar(&o.skillsCacheTTL, "skills-cache-ttl", envDuration("AGENT_MANAGER_SKILLS_CACHE_TTL", 5*time.Minute), "How long a repository's discovered skills are reused (AGENT_MANAGER_SKILLS_CACHE_TTL)")
 	f.StringVar(&o.kagentTarget, "kagent-target", envOr("AGENT_MANAGER_KAGENT_TARGET", ""), "The kagent controller's gRPC target through agentgateway, which list_sessions, get_session, get_session_turn, start_session and delete_session call as the caller: grpc://host:port (h2c, the in-cluster agentgateway Service) or grpcs://host[:port] (TLS). Empty: the session tools answer unsupported. Needs --enable-oauth for a caller token (AGENT_MANAGER_KAGENT_TARGET)")
-	f.BoolVar(&o.multiTenant, "multi-tenant", envBool("AGENT_MANAGER_MULTI_TENANT", false), "Manage the organization namespaces beside the configured ones: those labelled "+apov1alpha1.OrganizationLabel+", which agent-platform-operator keeps, and the legacy tenants labelled "+tenants.OrganizationLabel+" (never --kagent-namespace), found by label with the ServiceAccount's read of namespaces; and serve the organization tools, which act as the caller. Needs --downstream-oauth (AGENT_MANAGER_MULTI_TENANT)")
+	f.BoolVar(&o.multiTenant, "multi-tenant", envBool("AGENT_MANAGER_MULTI_TENANT", false), "Manage the organization namespaces beside the configured ones: those labelled "+apov1alpha1.OrganizationLabel+", which agent-platform-operator keeps (never --kagent-namespace), found by label with the ServiceAccount's read of namespaces; and serve the organization tools, which act as the caller. Needs --downstream-oauth (AGENT_MANAGER_MULTI_TENANT)")
 	f.StringVar(&o.devPortalURL, "dev-portal-url", envOr("AGENT_MANAGER_DEV_PORTAL_URL", ""), "The Dev Portal's base URL (https://portal.example.com): the organization tools answer a missing or replaced credential with its credential form's link; empty names the Secret without a link (AGENT_MANAGER_DEV_PORTAL_URL)")
 	f.BoolVar(&o.mcpEnabled, "mcp-enabled", envBool("AGENT_MANAGER_MCP_ENABLED", true), "Serve the MCP streamable-HTTP endpoint (AGENT_MANAGER_MCP_ENABLED)")
 	f.StringVar(&o.mcpPath, "mcp-path", envOr("AGENT_MANAGER_MCP_PATH", "/mcp"), "MCP endpoint path (AGENT_MANAGER_MCP_PATH)")
