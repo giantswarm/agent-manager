@@ -9,7 +9,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- `skills.repositories` (`--skills-repositories`) items take `{url, ref, path, readOnly}` besides a plain URL (the flag a JSON array, or comma-separated URLs as before). `list_skills` reads a source at its `ref` (empty: the default branch) and only below its `path`, reporting `path` and `readOnly` per repository; skill paths stay repository-relative. A skill or git plugin of a source with a `ref` pins that ref's commit on `create_agent`, `update_agent` and `refreshSkills`. A path is read without listing the rest of the repository; a repository configured twice with overlapping paths is refused at start. `get_info` reports the sources as `skillsSources` (`skillsRepositories` lists each URL once) (giantswarm/giantswarm#38970).
 - Agents the Agent Platform ships (HelmRelease label `agent-platform.giantswarm.io/managed-by: agent-platform`) are `managed: platform` in `list_agents` and `get_agent`; `update_agent` (with `refreshSkills` too), `validate_agent` with `update` and `delete_agent` refuse them in every mode with `409 conflict`: they change through the platform's configuration. The label on the Agent alone suffices, and the `migrate` command and the start-up source convergence report such a release, and the source it uses, without writing them (giantswarm/giantswarm#38970).
 
 ## [2.18.0] - 2026-11-03

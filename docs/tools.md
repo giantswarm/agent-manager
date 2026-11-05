@@ -642,14 +642,14 @@ Read through agentgateway as you. allCreators includes every person's sessions, 
 ```text
 List the skills agents can mount, from the configured skill repositories, with each repository's head commit.
 
-Per repository: the ref read, the commit it resolved to (what a skills entry pins), the path scanned, readOnly, and each SKILL.md's name, description, repository-relative path and tags (metadata.tags). Cached briefly; refresh re-reads GitHub.
+Per repository: the ref read, the commit it resolved to (what a skills entry pins) and each SKILL.md's name, description, path and tags (metadata.tags). Cached briefly; refresh re-reads GitHub.
 ```
 
 ```json
 {
   "properties": {
     "ref": {
-      "description": "Git ref to read; default: the repository's configured ref, else the default branch (the ref refreshSkills follows)",
+      "description": "Git ref to read; default: the default branch (the ref refreshSkills follows)",
       "type": "string"
     },
     "refresh": {
@@ -919,7 +919,7 @@ Lists are skills, plugins, egress and toolset. "" clears a text field back to th
       "type": "array"
     },
     "refreshSkills": {
-      "description": "Re-pin every git skill and git plugin to its default-branch head, or its configured skill repository's ref; nothing else changes (default false).",
+      "description": "Re-pin every git skill and git plugin to its default-branch head and change nothing else on the release (default false).",
       "type": "boolean"
     },
     "repository": {
@@ -1142,7 +1142,7 @@ Checks the name, modelConfig, egressPolicyRefs, harness and toolset (required fo
       "type": "array"
     },
     "refreshSkills": {
-      "description": "Re-pin every git skill and git plugin to its default-branch head, or its configured skill repository's ref; nothing else changes (default false).",
+      "description": "Re-pin every git skill and git plugin to its default-branch head and change nothing else on the release (default false).",
       "type": "boolean"
     },
     "skills": {

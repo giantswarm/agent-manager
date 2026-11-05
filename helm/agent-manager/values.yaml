@@ -154,14 +154,10 @@ flux:
   ociRepositoryApiVersion: auto
 
 skills:
-  # @schema item: [string, object]; itemRequired: [url]; itemProperties: {url: {type: string, minLength: 1}, ref: {type: string}, path: {type: string}, readOnly: {type: boolean}}
   # -- GitHub repositories whose SKILL.md files list_skills offers (the same
   # list the portal's create flow reads), each with the head commit an agent
   # pins. Empty turns the skills capability off; skills given by URL are still
-  # resolved through the GitHub API. An item is a URL or
-  # `{url, ref, path, readOnly}`: `ref` (branch, tag or commit; default: the
-  # default branch) is what discovery reads and its skills pin, `path` the
-  # directory scanned, `readOnly` is reported per repository.
+  # resolved through the GitHub API.
   repositories:
     - https://github.com/giantswarm/agent-skills
   github:

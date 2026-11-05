@@ -176,7 +176,7 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 	gitAuthReplaceProp := mcp.WithString(argGitAuthSecret, mcp.Description(gitAuthDesc+"; \"\" goes back to it"))
 	skillsProp := mcp.WithArray(argSkills, mcp.Description(skillDesc), mcp.Items(skillEntry))
 	skillsReplaceProp := mcp.WithArray(argSkills, mcp.Description("Replaces the whole skill list: "+skillShape+"."), mcp.Items(skillEntry))
-	refreshSkillsProp := mcp.WithBoolean(argRefreshSkills, mcp.Description("Re-pin every git skill and git plugin to its default-branch head, or its configured skill repository's ref; nothing else changes (default false)."))
+	refreshSkillsProp := mcp.WithBoolean(argRefreshSkills, mcp.Description("Re-pin every git skill and git plugin to its default-branch head and change nothing else on the release (default false)."))
 	selectorShape := "preset:<name>, server:<name>, workflow:<name> or tool:<name> selectors, at most 32"
 	toolsetDesc := "Gateway tools the agent may use: " + selectorShape + "; preset:none means no tools."
 	presetsSentence := "Presets: " + strings.Join(agents.PresetSelectors(), ", ") + "."
@@ -428,9 +428,9 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 
 	s.AddTool(mcp.NewTool(ToolListSkills,
 		tooldesc.Describe("List the skills agents can mount, from the configured skill repositories, with each repository's head commit.",
-			"Per repository: the ref read, the commit it resolved to (what a skills entry pins), the path scanned, readOnly, and each SKILL.md's name, description, repository-relative path and tags (metadata.tags). Cached briefly; refresh re-reads GitHub."),
+			"Per repository: the ref read, the commit it resolved to (what a skills entry pins) and each SKILL.md's name, description, path and tags (metadata.tags). Cached briefly; refresh re-reads GitHub."),
 		mcp.WithString(argRepository, mcp.Description("Only this repository (https://github.com/<owner>/<repo>); default: every configured one")),
-		mcp.WithString(argRef, mcp.Description("Git ref to read; default: the repository's configured ref, else the default branch (the ref refreshSkills follows)")),
+		mcp.WithString(argRef, mcp.Description("Git ref to read; default: the default branch (the ref refreshSkills follows)")),
 		mcp.WithBoolean(argRefresh, mcp.Description("Bypass the cache (default false)")),
 		tagsFilterProp,
 		mcp.WithReadOnlyHintAnnotation(true),

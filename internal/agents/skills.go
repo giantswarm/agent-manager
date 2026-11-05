@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
-	"sync"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
@@ -20,8 +19,7 @@ import (
 // "this tag" or "this image tag" — agent-manager resolves the reference at
 // write time and writes the pin. refreshSkills is the way to move every git
 // skill and git plugin of an agent to the head of its repository's default
-// branch again — a skill of a configured skill source with a ref to that
-// ref's commit.
+// branch again.
 
 // SkillPinner resolves mutable skill references to pins (skills.Resolver).
 type SkillPinner interface {
@@ -32,43 +30,6 @@ type SkillPinner interface {
 	// RequireReadable refuses a repository login (the caller's GitHub login,
 	// empty when unknown) cannot read: skills.ErrNotReadable.
 	RequireReadable(ctx context.Context, repoURL, login string) error
-}
-
-// memoPinner resolves each git ref once: one write's skills and plugins
-// often share a repository and its ref.
-type memoPinner struct {
-	SkillPinner
-	mu    sync.Mutex
-	heads map[string]string
-}
-
-// memoized wraps p for one write; nil stays nil.
-func memoized(p SkillPinner) SkillPinner {
-	if p == nil {
-		return nil
-	}
-	return &memoPinner{SkillPinner: p, heads: map[string]string{}}
-}
-
-func (m *memoPinner) GitHead(ctx context.Context, repoURL, ref string) (string, error) {
-	if skills.CommitPattern.MatchString(ref) {
-		return ref, nil
-	}
-	key := repoURL + "@" + ref
-	m.mu.Lock()
-	head, ok := m.heads[key]
-	m.mu.Unlock()
-	if ok {
-		return head, nil
-	}
-	head, err := m.SkillPinner.GitHead(ctx, repoURL, ref)
-	if err != nil {
-		return "", err
-	}
-	m.mu.Lock()
-	m.heads[key] = head
-	m.mu.Unlock()
-	return head, nil
 }
 
 // gitHubLogin is the caller's verified GitHub login (the App-pinned
@@ -272,50 +233,6 @@ func pinSource(ctx context.Context, p SkillPinner, at string, git *GitSkill, oci
 		g.Commit = commit
 	}
 	return &g, "", nil
-}
-
-// sourceRefs gives every git skill that names no ref, and would be resolved
-// (no commit, or refresh), the ref of the configured skill source it comes
-// from: a skill of a source pinned to a tag pins that tag's commit, not the
-// default branch's head. The list is copied when a ref is given.
-func (s *Service) sourceRefs(list Skills, refresh bool) Skills {
-	if s.skills == nil || len(list) == 0 {
-		return list
-	}
-	out := make(Skills, len(list))
-	for i, sk := range list {
-		out[i] = sk
-		out[i].Git = s.sourceRef(sk.Git, sk.Path, refresh)
-	}
-	return out
-}
-
-// pluginSourceRefs is sourceRefs for git plugins.
-func (s *Service) pluginSourceRefs(list Plugins, refresh bool) Plugins {
-	if s.skills == nil || len(list) == 0 {
-		return list
-	}
-	out := make(Plugins, len(list))
-	for i, pl := range list {
-		out[i] = pl
-		out[i].Git = s.sourceRef(pl.Git, pl.Path, refresh)
-	}
-	return out
-}
-
-// sourceRef is git with the ref of the configured source holding path, when
-// git names no ref and would be resolved; otherwise git itself.
-func (s *Service) sourceRef(git *GitSkill, path string, refresh bool) *GitSkill {
-	if git == nil || git.Ref != "" || (git.Commit != "" && !refresh) {
-		return git
-	}
-	ref := s.skills.SourceRef(git.URL, path)
-	if ref == "" {
-		return git
-	}
-	g := *git
-	g.Ref = ref
-	return &g
 }
 
 func describeRef(ref string) string {

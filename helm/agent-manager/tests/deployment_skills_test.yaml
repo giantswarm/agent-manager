@@ -131,17 +131,3 @@ tests:
     asserts:
       - failedTemplate:
           errorPattern: mutually exclusive
-
-  - it: passes skill repositories as JSON, URLs and {url, ref, path, readOnly} alike
-    set:
-      skills:
-        repositories:
-          - url: https://github.com/giantswarm/agent-platform
-            ref: v1.4.0
-            path: skills
-            readOnly: true
-          - https://github.com/giantswarm/agent-skills
-    asserts:
-      - contains:
-          path: spec.template.spec.containers[0].args
-          content: '--skills-repositories=[{"path":"skills","readOnly":true,"ref":"v1.4.0","url":"https://github.com/giantswarm/agent-platform"},"https://github.com/giantswarm/agent-skills"]'

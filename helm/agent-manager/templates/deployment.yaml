@@ -88,7 +88,7 @@ spec:
             - --tenant-interval={{ .Values.tenants.interval }}
             {{- end }}
             {{- with .Values.skills.repositories }}
-            - {{ printf "--skills-repositories=%s" (toJson .) | quote }}
+            - --skills-repositories={{ join "," . }}
             {{- end }}
             - --skills-github-api={{ .Values.skills.github.apiUrl }}
             - --skills-cache-ttl={{ .Values.skills.cacheTTL }}

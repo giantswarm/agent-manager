@@ -879,31 +879,9 @@
                 },
                 "repositories": {
                     "type": "array",
-                    "description": "GitHub repositories whose SKILL.md files list_skills offers (the same list the portal's create flow reads), each with the head commit an agent pins. Empty turns the skills capability off; skills given by URL are still resolved through the GitHub API. An item is a URL or `{url, ref, path, readOnly}`: `ref` (branch, tag or commit; default: the default branch) is what discovery reads and its skills pin, `path` the directory scanned, `readOnly` is reported per repository.",
+                    "description": "GitHub repositories whose SKILL.md files list_skills offers (the same list the portal's create flow reads), each with the head commit an agent pins. Empty turns the skills capability off; skills given by URL are still resolved through the GitHub API.",
                     "items": {
-                        "type": [
-                            "string",
-                            "object"
-                        ],
-                        "required": [
-                            "url"
-                        ],
-                        "additionalProperties": false,
-                        "properties": {
-                            "path": {
-                                "type": "string"
-                            },
-                            "readOnly": {
-                                "type": "boolean"
-                            },
-                            "ref": {
-                                "type": "string"
-                            },
-                            "url": {
-                                "type": "string",
-                                "minLength": 1
-                            }
-                        }
+                        "type": "string"
                     }
                 }
             }

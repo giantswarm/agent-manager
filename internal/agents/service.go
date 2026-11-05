@@ -225,15 +225,8 @@ type InfoResponse struct {
 		// clusters; empty: target clusters are refused.
 		TargetURL string `json:"targetUrl,omitempty"`
 	} `json:"muster"`
-	// SkillsRepositories are the configured skill repositories' URLs, each
-	// once. A consumer that needs a source's ref, path or readOnly reads
-	// SkillsSources.
+	// SkillsRepositories are the configured skill repositories.
 	SkillsRepositories []string `json:"skillsRepositories"`
-	// SkillsSources are the configured skill repositories in full: each
-	// with the ref discovery reads and its skills pin (empty: the default
-	// branch), the path it is scanned below and whether it is reported
-	// read-only.
-	SkillsSources []skills.Source `json:"skillsSources"`
 	// SkillsGitAuthSecretName is the installation's skills credential Secret
 	// (key token) an agent with a git skill fetches with unless it names its
 	// own; empty: anonymous fetches.
@@ -302,10 +295,8 @@ func (s *Service) Info(ctx context.Context) InfoResponse {
 	out.Muster.TargetURL = s.cfg.Compose.TargetMusterURL
 	if s.skills != nil {
 		out.SkillsRepositories = s.skills.Repositories()
-		out.SkillsSources = s.skills.Sources()
 	} else {
 		out.SkillsRepositories = []string{}
-		out.SkillsSources = []skills.Source{}
 	}
 	out.SkillsGitAuthSecretName = s.cfg.Compose.SkillsGitAuthSecretName
 	if s.cfg.SkillsBootSecret != nil {
@@ -999,11 +990,10 @@ func (s *Service) ValidateCreate(ctx context.Context, spec Spec) (*ValidateResul
 			res.Notes = append(res.Notes, fmt.Sprintf("the name %q could not be checked for a clash: %v", spec.Name, err))
 		}
 	}
-	pinner := memoized(s.pinner) // each ref resolved once per write
 	if err := requireReadableSkills(ctx, s.pinner, spec.Skills); err != nil {
 		res.addError(err)
 	}
-	if pinned, err := pinSkills(ctx, pinner, s.sourceRefs(spec.Skills, false), false); err != nil {
+	if pinned, err := pinSkills(ctx, s.pinner, spec.Skills, false); err != nil {
 		res.addError(err)
 	} else {
 		spec.Skills = pinned
@@ -1011,7 +1001,7 @@ func (s *Service) ValidateCreate(ctx context.Context, spec Spec) (*ValidateResul
 	if err := requireReadablePlugins(ctx, s.pinner, spec.Plugins); err != nil {
 		res.addError(err)
 	}
-	if pinned, err := pinPlugins(ctx, pinner, s.pluginSourceRefs(spec.Plugins, false), false); err != nil {
+	if pinned, err := pinPlugins(ctx, s.pinner, spec.Plugins, false); err != nil {
 		res.addError(err)
 	} else {
 		spec.Plugins = pinned
@@ -1228,17 +1218,16 @@ func (s *Service) Create(ctx context.Context, spec Spec) (*CreateResult, error) 
 	if err != nil {
 		return nil, err
 	}
-	pinner := memoized(s.pinner) // each ref resolved once per write
 	if err := requireReadableSkills(ctx, s.pinner, spec.Skills); err != nil {
 		return nil, err
 	}
-	if spec.Skills, err = pinSkills(ctx, pinner, s.sourceRefs(spec.Skills, false), false); err != nil {
+	if spec.Skills, err = pinSkills(ctx, s.pinner, spec.Skills, false); err != nil {
 		return nil, err
 	}
 	if err := requireReadablePlugins(ctx, s.pinner, spec.Plugins); err != nil {
 		return nil, err
 	}
-	if spec.Plugins, err = pinPlugins(ctx, pinner, s.pluginSourceRefs(spec.Plugins, false), false); err != nil {
+	if spec.Plugins, err = pinPlugins(ctx, s.pinner, spec.Plugins, false); err != nil {
 		return nil, err
 	}
 	values := BuildValues(spec, st.compose)
@@ -1473,7 +1462,6 @@ func (s *Service) mergedValues(ctx context.Context, st *site, upd Update, hr *un
 		}
 		after["modelConfig"] = map[string]any{"name": *upd.ModelConfig}
 	}
-	pinner := memoized(s.pinner) // each ref resolved once per write
 	if upd.Skills != nil || upd.RefreshSkills {
 		list := skillsFromValues(after)
 		if upd.Skills != nil {
@@ -1485,7 +1473,7 @@ func (s *Service) mergedValues(ctx context.Context, st *site, upd Update, hr *un
 				return after, before, err
 			}
 		}
-		pinned, err := pinSkills(ctx, pinner, s.sourceRefs(list, upd.RefreshSkills), upd.RefreshSkills)
+		pinned, err := pinSkills(ctx, s.pinner, list, upd.RefreshSkills)
 		if err != nil {
 			return after, before, err
 		}
@@ -1506,7 +1494,7 @@ func (s *Service) mergedValues(ctx context.Context, st *site, upd Update, hr *un
 				return after, before, err
 			}
 		}
-		pinned, err := pinPlugins(ctx, pinner, s.pluginSourceRefs(list, upd.RefreshSkills), upd.RefreshSkills)
+		pinned, err := pinPlugins(ctx, s.pinner, list, upd.RefreshSkills)
 		if err != nil {
 			return after, before, err
 		}
