@@ -320,3 +320,18 @@ func TestNewRefusesABadURL(t *testing.T) {
 		require.Error(t, err, u)
 	}
 }
+
+// A GitHub bearer goes to skill-manager only with the ID token beside it;
+// without one the call is refused here, before skill-manager answers 401.
+func TestAGitHubBearerWithoutAnIDTokenIsUnauthenticated(t *testing.T) {
+	f := &fakeSkillManager{}
+	c := newClient(t, f, "service")
+	ctx := identity.ContextWithGitHub(t.Context(), &identity.GitHub{Login: "alice", Token: "gh-token"})
+
+	_, _, err := c.Resolve(ctx, []Item{{Git: &Git{URL: repo}}}, nil)
+	require.ErrorIs(t, err, ErrUnauthenticated)
+	assert.Contains(t, err.Error(), "ID token")
+	_, err = c.Skills(ctx, "", false)
+	require.ErrorIs(t, err, ErrUnauthenticated)
+	assert.Zero(t, f.calls(), "nothing was sent")
+}
