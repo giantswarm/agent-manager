@@ -7,12 +7,8 @@ finds the organization namespaces: RBAC cannot narrow a list by label, so it
 may get and list every namespace, read-only, and keeps those labelled
 agent-platform.giantswarm.io/organization. It writes nothing, binds nothing
 and reads no Secret: agent-platform-operator keeps the organization
-namespaces.
-
-agent-platform-tenant-flux is what the agents' HelmReleases run as in an
-organization namespace (helm-controller impersonates the release's
-ServiceAccount, which agent-platform-operator binds to it). It is rendered
-here until the Agent Platform chart renders it.
+namespaces. The ClusterRole agent-platform-tenant-flux the agents' HelmReleases
+run as there is the Agent Platform chart's.
 */}}
 {{- if .Values.tenants.enabled }}
 {{- if not (and .Values.oauth.enabled .Values.oauth.downstream.enabled) }}
@@ -20,37 +16,6 @@ here until the Agent Platform chart renders it.
 {{- end }}
 {{- $_ := required "flux.helmReleaseServiceAccount is required with tenants.enabled: the agents' HelmReleases in an organization namespace run as it (admission refuses one without)" .Values.flux.helmReleaseServiceAccount }}
 {{- $sa := include "agent-manager.serviceAccountName" . }}
----
-# What the agents' HelmReleases run as in an organization namespace
-# (helm-controller impersonates the release's ServiceAccount): Secrets (Helm's
-# release storage, see the rule) and the two kinds the Generic agent chart 2.x
-# renders, an Agent and its RemoteMCPServer.
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: {{ include "agent-manager.tenantFluxClusterRole" . }}
-  labels:
-    {{- include "agent-manager.labels" . | nindent 4 }}
-rules:
-  # Helm's Secret storage driver (helm-controller keeps the release Secrets
-  # sh.helm.release.v1.<release>.v<N> in the HelmRelease's namespace) calls
-  # get, list, create, update and delete, nothing else. RBAC cannot narrow a
-  # list (a label selector is no resourceNames), so this identity can read
-  # every Secret of an organization namespace, and a chart rendered through
-  # it can copy one with Helm `lookup` into an object it renders. With
-  # create, update and delete such a chart can also overwrite or delete any
-  # Secret there, and get the token of any ServiceAccount there (a
-  # service-account-token Secret it renders, read back with `lookup`).
-  # Whoever may create or change a HelmRelease there can trigger that: the
-  # members bound to agent-platform:editor or agent-platform:admin. The
-  # HelmRelease field lock of agent-platform's connectivity chart holds the
-  # chart source to the operator's OCIRepository.
-  - apiGroups: [""]
-    resources: ["secrets"]
-    verbs: ["get", "list", "create", "update", "delete"]
-  - apiGroups: ["api.kagent.dev"]
-    resources: ["agents", "remotemcpservers"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 ---
 # The organization namespaces, found by label: read-only.
 apiVersion: rbac.authorization.k8s.io/v1

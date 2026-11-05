@@ -90,14 +90,6 @@ every Kubernetes call carries the caller's token.
 {{- end }}
 
 {{/*
-The ClusterRole agent-platform-operator binds to the agents' Flux
-ServiceAccount in every organization namespace.
-*/}}
-{{- define "agent-manager.tenantFluxClusterRole" -}}
-agent-platform-tenant-flux
-{{- end }}
-
-{{/*
 Existing Secret with the provider credentials: oauth.existingSecret, else the
 platform's global.identity.existingSecret, else the chart-rendered one.
 */}}

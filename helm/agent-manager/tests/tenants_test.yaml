@@ -34,11 +34,11 @@ tests:
           content: --multi-tenant=true
         template: templates/deployment.yaml
 
-  - it: renders the Flux ClusterRole and the namespace read, nothing else
+  - it: renders the namespace read and nothing else, no Flux ClusterRole
     template: templates/tenants-rbac.yaml
     asserts:
       - hasDocuments:
-          count: 3
+          count: 2
 
   - it: needs oauth.downstream, since a request in an organization namespace runs as the caller
     template: templates/tenants-rbac.yaml
@@ -59,28 +59,9 @@ tests:
       - failedTemplate:
           errorPattern: flux.helmReleaseServiceAccount is required with tenants.enabled
 
-  - it: renders the Flux ClusterRole with only the Helm storage verbs on Secrets and without agenttemplates
-    template: templates/tenants-rbac.yaml
-    documentIndex: 0
-    asserts:
-      - isKind:
-          of: ClusterRole
-      - equal:
-          path: metadata.name
-          value: agent-platform-tenant-flux
-      - equal:
-          path: rules
-          value:
-            - apiGroups: [""]
-              resources: ["secrets"]
-              verbs: ["get", "list", "create", "update", "delete"]
-            - apiGroups: ["api.kagent.dev"]
-              resources: ["agents", "remotemcpservers"]
-              verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-
   - it: gives the ServiceAccount a read of namespaces and nothing more
     template: templates/tenants-rbac.yaml
-    documentIndex: 1
+    documentIndex: 0
     asserts:
       - isKind:
           of: ClusterRole
@@ -93,7 +74,7 @@ tests:
 
   - it: binds the namespace read to the ServiceAccount
     template: templates/tenants-rbac.yaml
-    documentIndex: 2
+    documentIndex: 1
     asserts:
       - isKind:
           of: ClusterRoleBinding

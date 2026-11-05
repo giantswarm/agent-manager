@@ -645,8 +645,8 @@ The agents' Flux identity can read and write every Secret of the organization
 namespace. helm-controller keeps an agent's Helm release Secrets
 (`sh.helm.release.v1.<release>.v<N>`) in the HelmRelease's namespace, and
 Helm's Secret storage driver calls `get`, `list`, `create`, `update` and
-`delete` on them (`agent-platform-tenant-flux`, rendered by this chart, grants
-these and no more). RBAC cannot narrow a `list`, so that identity can read
+`delete` on them (`agent-platform-tenant-flux`, which the Agent Platform chart
+renders, grants these and no more). RBAC cannot narrow a `list`, so that identity can read
 every Secret of the namespace, and a chart rendered through it can copy such
 a Secret with Helm `lookup` into an object it renders, overwrite or delete any
 Secret there, and get the token of any ServiceAccount there. Whoever may
