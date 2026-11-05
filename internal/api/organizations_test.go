@@ -70,11 +70,19 @@ type orgFixture struct {
 	// namespace as soon as it is created.
 	ready bool
 	ctx   context.Context
+	orgs  *organizations.Service
 }
 
 const orgNS = "agents-payments-x7k2q"
 
 func newOrgFixture(t *testing.T, objs ...runtime.Object) *orgFixture {
+	t.Helper()
+	return newOrgFixtureWith(t, nil, objs...)
+}
+
+// newOrgFixtureWith is newOrgFixture with the tools' configuration changed
+// by configure.
+func newOrgFixtureWith(t *testing.T, configure func(*organizations.Config), objs ...runtime.Object) *orgFixture {
 	t.Helper()
 	f := &orgFixture{ready: true, deny: func(string, string, string, string) bool { return false }}
 	f.dyn = dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{
@@ -127,11 +135,16 @@ func newOrgFixture(t *testing.T, objs ...runtime.Object) *orgFixture {
 		namespace("org-acme", map[string]string{"giantswarm.io/organization": "acme"}),
 		namespace("plain", nil),
 	)
-	orgs := organizations.New(callerOnly{c: kube.FromInterfaces(f.dyn, f.typed, f.typed.Discovery())}, organizations.Config{
+	cfg := organizations.Config{
 		Namespaces:   organizations.NewNamespaces(sa, "kagent"),
 		DevPortalURL: "https://portal.example.com/",
 		ReadyTimeout: time.Second, ReadyPoll: 10 * time.Millisecond,
-	}, nil)
+	}
+	if configure != nil {
+		configure(&cfg)
+	}
+	orgs := organizations.New(callerOnly{c: kube.FromInterfaces(f.dyn, f.typed, f.typed.Discovery())}, cfg, nil)
+	f.orgs = orgs
 	svc, _ := newService(t)
 	f.srv = NewMCPServer(svc, "test", WithOrganizations(orgs))
 	f.ctx = identity.ContextWith(context.Background(), &identity.Identity{Subject: "a", Email: "alice@example.com"})

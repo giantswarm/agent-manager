@@ -124,6 +124,7 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service) {
 	orgNameProp := mcp.WithString(argName, mcp.Required(), mcp.Description("The organization's name (at most 50 characters, no dot)"))
 	orgNSProp := mcp.WithString(argNamespace, mcp.Required(), mcp.Description("The organization namespace, e.g. agents-payments-x7k2q (list_my_organizations, get_organization)"))
 	dryRun := mcp.WithBoolean(argDryRun, mcp.Description("Check every write with the API server as you and write nothing (default false)"))
+	modeProp := mcp.WithString(argMode, mcp.Enum(agents.ModeApply, agents.ModeCommit), mcp.Description("apply (default): write live as you; refused with gitops_owned for what git applies. commit: dry-run as you, then open a pull request as you"))
 	replaceCred := mcp.WithBoolean(argReplaceCredential, mcp.Description("Answer with the Dev Portal's credential form to enter a new value (default false)"))
 	stringList := map[string]any{"type": "string"}
 	credSecretDesc := "Secret in the organization namespace that holds the credential, by name (tenant-credential-...); never a value"
@@ -155,14 +156,14 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service) {
 
 	s.AddTool(mcp.NewTool(ToolCreateOrganization,
 		tooldesc.Describe("Create an organization as you, then bind its first admins in its namespace.",
-			"Asks first whether you may bind them and dry-runs the object, so a refusal comes before anything exists. Waits for the operator's Ready (it creates the namespace), then writes the RoleBinding organization-admins to agent-platform:admin as you. If it is not Ready in time the answer says so: call again with the same arguments to bind the admins. Offer an identity provider group as admin before a person. Needs agent-platform:organizations-admin in the parent namespace."),
+			"Asks first whether you may bind them and dry-runs the object, so a refusal comes before anything exists. Waits for the operator's Ready (it creates the namespace), then writes the RoleBinding organization-admins to agent-platform:admin as you. Not Ready in time: call again with the same arguments. mode commit opens one pull request with the object and organization-admins instead. Offer an identity provider group as admin before a person. Needs agent-platform:organizations-admin in the parent namespace."),
 		parentProp, orgNameProp,
 		mcp.WithString(argDisplayName, mcp.Description("Name people see")),
 		mcp.WithArray(argAdminGroups, mcp.Description("First admins: identity provider groups, as the API server sees them (preferred)"), mcp.Items(stringList)),
 		mcp.WithArray(argAdminUsers, mcp.Description("First admins: users, as the API server sees them"), mcp.Items(stringList)),
 		mcp.WithArray(argHarnesses, mcp.Description("Curated Harnesses the organization gets"), mcp.Items(stringList)),
 		mcp.WithNumber(argWorkerReplicas, mcp.Description("Warm workers of its WorkerPool")),
-		dryRun,
+		dryRun, modeProp,
 		mcp.WithReadOnlyHintAnnotation(false),
 		mcp.WithDestructiveHintAnnotation(false),
 		mcp.WithIdempotentHintAnnotation(false),
@@ -177,22 +178,23 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service) {
 			Harnesses      []string `json:"harnesses"`
 			WorkerReplicas *int32   `json:"workerReplicas"`
 			DryRun         bool     `json:"dryRun"`
+			Mode           string   `json:"mode"`
 		}
 		if err := bindArgs(req, &in); err != nil {
 			return nil, err
 		}
 		return t.svc.Create(ctx, organizations.CreateRequest{Parent: in.Namespace, Name: in.Name, DisplayName: in.DisplayName,
-			Harnesses: in.Harnesses, WorkerReplicas: in.WorkerReplicas, AdminGroups: in.AdminGroups, AdminUsers: in.AdminUsers, DryRun: in.DryRun})
+			Harnesses: in.Harnesses, WorkerReplicas: in.WorkerReplicas, AdminGroups: in.AdminGroups, AdminUsers: in.AdminUsers, DryRun: in.DryRun, Mode: in.Mode})
 	}))
 
 	s.AddTool(mcp.NewTool(ToolUpdateOrganization,
 		tooldesc.Describe("Change an organization's display name, harnesses or worker replicas as you.",
-			"An omitted field stays; harnesses replaces the whole list; displayName \"\" removes it. Dry-runs as you first. Refused for an organization Flux applies from git. Needs agent-platform:organizations-admin."),
+			"An omitted field stays; harnesses replaces the whole list; displayName \"\" removes it. Dry-runs as you first. An organization Flux applies from git is changed with mode commit. Needs agent-platform:organizations-admin."),
 		parentProp, orgNameProp,
 		mcp.WithString(argDisplayName, mcp.Description("Name people see")),
 		mcp.WithArray(argHarnesses, mcp.Description("Curated Harnesses the organization gets"), mcp.Items(stringList)),
 		mcp.WithNumber(argWorkerReplicas, mcp.Description("Warm workers of its WorkerPool")),
-		dryRun,
+		dryRun, modeProp,
 		mcp.WithReadOnlyHintAnnotation(false),
 		mcp.WithDestructiveHintAnnotation(true),
 		mcp.WithIdempotentHintAnnotation(true),
@@ -205,27 +207,28 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service) {
 			Harnesses      *[]string `json:"harnesses"`
 			WorkerReplicas *int32    `json:"workerReplicas"`
 			DryRun         bool      `json:"dryRun"`
+			Mode           string    `json:"mode"`
 		}
 		if err := bindArgs(req, &in); err != nil {
 			return nil, err
 		}
 		return t.svc.Update(ctx, organizations.UpdateRequest{Parent: in.Namespace, Name: in.Name, DisplayName: in.DisplayName,
-			Harnesses: in.Harnesses, WorkerReplicas: in.WorkerReplicas, DryRun: in.DryRun})
+			Harnesses: in.Harnesses, WorkerReplicas: in.WorkerReplicas, DryRun: in.DryRun, Mode: in.Mode})
 	}))
 
 	s.AddTool(mcp.NewTool(ToolDeleteOrganization,
 		tooldesc.Describe("Delete an organization as you, which erases it: its namespace, agents, sessions, snapshots and credentials.",
-			"Without confirm it only answers what would be erased: show that to the person and ask them to type <parent>/<name>, then call again with confirm set to it. Marks the object kustomize.toolkit.fluxcd.io/prune: enabled, the delete intent, then deletes it; the operator erases it. Session tombstones stay. Needs agent-platform:organizations-admin."),
+			"Without confirm it only answers what would be erased: show that to the person and ask them to type <parent>/<name>, then call again with confirm set to it. Marks the object kustomize.toolkit.fluxcd.io/prune: enabled, the delete intent, then deletes it; the operator erases it. mode commit: without confirm it opens the pull request removing it from git and marks the object; once merged (Pending erase), confirm erases it. Session tombstones stay. Needs agent-platform:organizations-admin."),
 		parentProp, orgNameProp,
 		mcp.WithString(argConfirm, mcp.Description("<parent>/<name>, as the person typed it")),
-		dryRun,
+		dryRun, modeProp,
 		mcp.WithReadOnlyHintAnnotation(false),
 		mcp.WithDestructiveHintAnnotation(true),
 		mcp.WithIdempotentHintAnnotation(false),
 		mcp.WithOpenWorldHintAnnotation(false),
 	), t.run(func(ctx context.Context, req mcp.CallToolRequest) (any, error) {
 		return t.svc.Delete(ctx, organizations.DeleteRequest{Parent: req.GetString(argNamespace, ""), Name: req.GetString(argName, ""),
-			Confirm: req.GetString(argConfirm, ""), DryRun: req.GetBool(argDryRun, false)})
+			Confirm: req.GetString(argConfirm, ""), DryRun: req.GetBool(argDryRun, false), Mode: req.GetString(argMode, "")})
 	}))
 
 	s.AddTool(mcp.NewTool(ToolListMyOrganizations,
@@ -256,7 +259,7 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service) {
 			orgNSProp,
 			mcp.WithString(argGroup, mcp.Description("Identity provider group, as the API server sees it; offer a group first: membership then changes in the identity provider")),
 			mcp.WithString(argUser, mcp.Description("A person, as the API server sees them; when no group fits")),
-			dryRun,
+			dryRun, modeProp,
 		}
 	}
 	addOpts := append(memberProps(),
@@ -295,7 +298,7 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service) {
 		mcp.WithString(argCredentialSecret, mcp.Description(credSecretDesc+"; default tenant-credential-<name>")),
 		mcp.WithString(argCredentialKey, mcp.Description("Key of that Secret; default apiKey")),
 		mcp.WithBoolean(argDefault, mcp.Description("Make this the organization's default model, moving the mark (default false)")),
-		replaceCred, dryRun,
+		replaceCred, dryRun, modeProp,
 		mcp.WithReadOnlyHintAnnotation(false),
 		mcp.WithDestructiveHintAnnotation(true),
 		mcp.WithIdempotentHintAnnotation(true),
@@ -311,6 +314,7 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service) {
 			Default           bool   `json:"default"`
 			ReplaceCredential bool   `json:"replaceCredential"`
 			DryRun            bool   `json:"dryRun"`
+			Mode              string `json:"mode"`
 		}
 		if err := bindArgs(req, &in); err != nil {
 			return nil, err
@@ -342,7 +346,7 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service) {
 		mcp.WithString(argCredentialSecret, mcp.Description(credSecretDesc)),
 		mcp.WithString(argCredentialKey, mcp.Description("Key of that Secret; default token")),
 		mcp.WithBoolean(argNoCredential, mcp.Description("Remove the credential header (default false)")),
-		replaceCred, dryRun,
+		replaceCred, dryRun, modeProp,
 		mcp.WithReadOnlyHintAnnotation(false),
 		mcp.WithDestructiveHintAnnotation(true),
 		mcp.WithIdempotentHintAnnotation(true),
@@ -359,6 +363,7 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service) {
 			NoCredential      bool   `json:"noCredential"`
 			ReplaceCredential bool   `json:"replaceCredential"`
 			DryRun            bool   `json:"dryRun"`
+			Mode              string `json:"mode"`
 		}
 		if err := bindArgs(req, &in); err != nil {
 			return nil, err
@@ -382,7 +387,7 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service) {
 			},
 			"required": []string{"origin"},
 		})),
-		replaceCred, dryRun,
+		replaceCred, dryRun, modeProp,
 		mcp.WithReadOnlyHintAnnotation(false),
 		mcp.WithDestructiveHintAnnotation(true),
 		mcp.WithIdempotentHintAnnotation(true),
@@ -394,6 +399,7 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service) {
 			Destinations      []organizations.EgressDestination `json:"destinations"`
 			ReplaceCredential bool                              `json:"replaceCredential"`
 			DryRun            bool                              `json:"dryRun"`
+			Mode              string                            `json:"mode"`
 		}
 		if err := bindArgs(req, &in); err != nil {
 			return nil, err
@@ -407,17 +413,17 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service) {
 		orgNSProp,
 		mcp.WithString(argKind, mcp.Required(), mcp.Enum(organizations.KindModel, organizations.KindConnector, organizations.KindEgressPolicy)),
 		mcp.WithString(argName, mcp.Required(), mcp.Description("Object name")),
-		dryRun,
+		dryRun, modeProp,
 		mcp.WithReadOnlyHintAnnotation(false),
 		mcp.WithDestructiveHintAnnotation(true),
 		mcp.WithIdempotentHintAnnotation(false),
 		mcp.WithOpenWorldHintAnnotation(false),
 	), t.run(func(ctx context.Context, req mcp.CallToolRequest) (any, error) {
-		return t.svc.DeleteResource(ctx, req.GetString(argNamespace, ""), req.GetString(argKind, ""), req.GetString(argName, ""), req.GetBool(argDryRun, false))
+		return t.svc.DeleteResource(ctx, req.GetString(argNamespace, ""), req.GetString(argKind, ""), req.GetString(argName, ""), req.GetBool(argDryRun, false), req.GetString(argMode, ""))
 	}))
 }
 
 func memberRequest(req mcp.CallToolRequest) organizations.MemberRequest {
 	return organizations.MemberRequest{Namespace: req.GetString(argNamespace, ""), Role: req.GetString(argRole, ""),
-		Group: req.GetString(argGroup, ""), User: req.GetString(argUser, ""), DryRun: req.GetBool(argDryRun, false)}
+		Group: req.GetString(argGroup, ""), User: req.GetString(argUser, ""), DryRun: req.GetBool(argDryRun, false), Mode: req.GetString(argMode, "")}
 }

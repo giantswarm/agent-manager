@@ -114,6 +114,31 @@ tests:
           path: spec.template.spec.containers[0].args[*]
           pattern: ^--tenant-
 
+  - it: passes the organizations repository only when one is set
+    template: templates/deployment.yaml
+    set:
+      tenants:
+        commit:
+          repository: giantswarm/gazelle-config
+          objectsPath: management-clusters/gazelle/agent-platform-organizations
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --organizations-repository=giantswarm/gazelle-config
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --organizations-objects-path=management-clusters/gazelle/agent-platform-organizations
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --organizations-content-prefix=agent-platform/organizations
+
+  - it: passes no organizations repository by default
+    template: templates/deployment.yaml
+    asserts:
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].args[*]
+          pattern: ^--organizations-
+
   - it: refuses keys tenants does not take
     template: templates/deployment.yaml
     set:

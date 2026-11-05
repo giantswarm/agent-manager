@@ -148,6 +148,8 @@ type MemberRequest struct {
 	Group  string
 	User   string
 	DryRun bool
+	// Mode is apply (default) or commit.
+	Mode string
 }
 
 func (r MemberRequest) subject() (Subject, error) {
@@ -181,6 +183,8 @@ type MemberResult struct {
 	Bindings    []string `json:"bindings,omitempty"`
 	DryRun      bool     `json:"dryRun,omitempty"`
 	RequestedBy string   `json:"requestedBy,omitempty"`
+	// Commit is the pull request of a change in mode commit.
+	Commit *CommitResult `json:"commit,omitempty"`
 }
 
 // AddMember binds a group or a user to an organization role as the caller,
@@ -194,7 +198,12 @@ func (s *Service) AddMember(ctx context.Context, req MemberRequest) (*MemberResu
 	if err != nil {
 		return nil, err
 	}
-	if _, err := s.organization(ctx, req.Namespace); err != nil {
+	org, err := s.organization(ctx, req.Namespace)
+	if err != nil {
+		return nil, err
+	}
+	cw, err := s.contentWriter(ctx, org, req.Mode)
+	if err != nil {
 		return nil, err
 	}
 	c, err := s.caller(ctx)
@@ -220,29 +229,30 @@ func (s *Service) AddMember(ctx context.Context, req MemberRequest) (*MemberResu
 	var w write
 	switch {
 	case apierrors.IsNotFound(err):
-		w = write{gvr: rbacGVR, op: opCreate, obj: roleBinding(ns, name, role, []Subject{sub}), ns: ns, name: name, what: what, reason: way}
+		w = write{gvr: rbacGVR, kind: kindRoleBinding, op: opCreate, obj: roleBinding(ns, name, role, []Subject{sub}), ns: ns, name: name, what: what, reason: way}
 	case err != nil:
 		return nil, kubeErr(err, "get "+what, way)
 	default:
-		if err := refuseUnowned(existing, "RoleBinding"); err != nil {
+		obj, err := cw.source(ctx, existing, kindRoleBinding)
+		if err != nil {
 			return nil, err
 		}
-		if ref, _, _ := unstructured.NestedString(existing.Object, "roleRef", "name"); ref != role {
+		if ref, _, _ := unstructured.NestedString(obj.Object, "roleRef", "name"); ref != role {
 			return nil, fmt.Errorf("%w: %s binds %s, not %s: agent-manager writes the %s members into it; rename or remove that binding first", agents.ErrConflict, what, ref, role, req.Role)
 		}
-		obj := existing.DeepCopy()
+		obj = obj.DeepCopy()
 		subs, _, _ := unstructured.NestedSlice(obj.Object, "subjects")
 		subs = append(subs, subjectObject(sub))
 		if err := unstructured.SetNestedSlice(obj.Object, subs, "subjects"); err != nil {
 			return nil, err
 		}
-		w = write{gvr: rbacGVR, op: opUpdate, obj: obj.Object, ns: ns, name: name, what: what, reason: way}
+		w = write{gvr: rbacGVR, kind: kindRoleBinding, op: opUpdate, obj: obj.Object, ns: ns, name: name, what: what, reason: way}
 	}
-	if err := apply(ctx, c.Dynamic(), []write{w}, req.DryRun); err != nil {
+	if res.Commit, err = cw.land(ctx, s, []write{w}, req.DryRun, "member-add-"+req.Role+"-"+slug(sub.Kind+"-"+sub.Name), "chore(organizations): add "+req.Role+" "+sub.Name); err != nil {
 		return nil, err
 	}
 	res.Changed, res.Bindings = true, []string{name}
-	if !req.DryRun {
+	if !req.DryRun && res.Commit == nil {
 		s.log.Info("organization member added", identity.LogAttr(ctx), "namespace", ns, "role", req.Role, "kind", sub.Kind)
 	}
 	return res, nil
@@ -267,7 +277,12 @@ func (s *Service) RemoveMember(ctx context.Context, req MemberRequest) (*MemberR
 			return nil, err
 		}
 	}
-	if _, err := s.organization(ctx, req.Namespace); err != nil {
+	org, err := s.organization(ctx, req.Namespace)
+	if err != nil {
+		return nil, err
+	}
+	cw, err := s.contentWriter(ctx, org, req.Mode)
+	if err != nil {
 		return nil, err
 	}
 	c, err := s.caller(ctx)
@@ -286,7 +301,14 @@ func (s *Service) RemoveMember(ctx context.Context, req MemberRequest) (*MemberR
 		if req.Role != "" && b.role != req.Role {
 			continue
 		}
-		subs, _, _ := unstructured.NestedSlice(b.obj.Object, "subjects")
+		if !slices.ContainsFunc(bindingSubjects(&b.obj), sub.matches) {
+			continue
+		}
+		src, err := cw.source(ctx, &b.obj, kindRoleBinding)
+		if err != nil {
+			return nil, err
+		}
+		subs, _, _ := unstructured.NestedSlice(src.Object, "subjects")
 		kept := make([]any, 0, len(subs))
 		for _, v := range subs {
 			m, _ := v.(map[string]any)
@@ -298,9 +320,6 @@ func (s *Service) RemoveMember(ctx context.Context, req MemberRequest) (*MemberR
 		if len(kept) == len(subs) {
 			continue
 		}
-		if err := refuseUnowned(&b.obj, "RoleBinding"); err != nil {
-			return nil, err
-		}
 		name := b.obj.GetName()
 		what := fmt.Sprintf("RoleBinding %s/%s", ns, name)
 		reason := way
@@ -310,13 +329,13 @@ func (s *Service) RemoveMember(ctx context.Context, req MemberRequest) (*MemberR
 			reason = "if " + FirstAdminsBinding + " would lose its last admin: add another admin first (add_organization_member role admin); a lockout is a cluster-admin's to fix; otherwise " + way
 		}
 		if len(kept) == 0 {
-			writes = append(writes, write{gvr: rbacGVR, op: opDelete, ns: ns, name: name, what: what, reason: reason})
+			writes = append(writes, write{gvr: rbacGVR, kind: kindRoleBinding, op: opDelete, ns: ns, name: name, what: what, reason: reason})
 		} else {
-			obj := b.obj.DeepCopy()
+			obj := src.DeepCopy()
 			if err := unstructured.SetNestedSlice(obj.Object, kept, "subjects"); err != nil {
 				return nil, err
 			}
-			writes = append(writes, write{gvr: rbacGVR, op: opUpdate, obj: obj.Object, ns: ns, name: name, what: what, reason: reason})
+			writes = append(writes, write{gvr: rbacGVR, kind: kindRoleBinding, op: opUpdate, obj: obj.Object, ns: ns, name: name, what: what, reason: reason})
 		}
 		res.Bindings = append(res.Bindings, name)
 		if res.Member.Role == "" {
@@ -326,11 +345,11 @@ func (s *Service) RemoveMember(ctx context.Context, req MemberRequest) (*MemberR
 	if len(writes) == 0 {
 		return res, nil
 	}
-	if err := apply(ctx, c.Dynamic(), writes, req.DryRun); err != nil {
+	if res.Commit, err = cw.land(ctx, s, writes, req.DryRun, "member-remove-"+slug(sub.Kind+"-"+sub.Name), "chore(organizations): remove member "+sub.Name); err != nil {
 		return nil, err
 	}
 	res.Changed = true
-	if !req.DryRun {
+	if !req.DryRun && res.Commit == nil {
 		s.log.Info("organization member removed", identity.LogAttr(ctx), "namespace", ns, "role", req.Role, "kind", sub.Kind)
 	}
 	return res, nil
@@ -342,4 +361,23 @@ func subjectFrom(m map[string]any) Subject {
 	s.Name, _ = m["name"].(string)
 	s.Namespace, _ = m["namespace"].(string)
 	return s
+}
+
+// slug makes s fit a branch name: lower case letters, digits, dots and
+// dashes, at most 40 characters.
+func slug(s string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(s) {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '.', r == '-':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('-')
+		}
+	}
+	out := strings.Trim(b.String(), "-.")
+	if len(out) > 40 {
+		out = strings.Trim(out[:40], "-.")
+	}
+	return out
 }

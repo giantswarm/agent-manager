@@ -62,6 +62,8 @@ type ResourceResult struct {
 	Note        string       `json:"note,omitempty"`
 	DryRun      bool         `json:"dryRun,omitempty"`
 	RequestedBy string       `json:"requestedBy,omitempty"`
+	// Commit is the pull request of a write in mode commit.
+	Commit *CommitResult `json:"commit,omitempty"`
 }
 
 // existing reads the objects of kind in ns as the caller.
@@ -78,22 +80,6 @@ func find(items []unstructured.Unstructured, name string) *unstructured.Unstruct
 		if items[i].GetName() == name {
 			return items[i].DeepCopy()
 		}
-	}
-	return nil
-}
-
-// refuseUnowned refuses a live write to an object agent-manager may not
-// change live: a copy agent-platform-operator keeps, or an object a Flux
-// Kustomization applies from git, which Flux would revert.
-func refuseUnowned(obj *unstructured.Unstructured, kind string) error {
-	if obj == nil {
-		return nil
-	}
-	if scope, ok := obj.GetLabels()[agents.OperatorObjectLabel]; ok {
-		return fmt.Errorf("%w: %s %s/%s is agent-platform-operator's (%s: %s), a copy of what the platform curates: it is changed where the platform curates it, not here", agents.ErrConflict, kind, obj.GetNamespace(), obj.GetName(), agents.OperatorObjectLabel, scope)
-	}
-	if ks := obj.GetLabels()[agents.KustomizationNameLabel]; ks != "" {
-		return fmt.Errorf("%w: %s %s/%s is applied from git by the Flux Kustomization %s, which would revert a live change: change it in git (commit mode for organizations is giantswarm/agent-manager#292)", agents.ErrGitOpsOwned, kind, obj.GetNamespace(), obj.GetName(), ks)
 	}
 	return nil
 }
@@ -126,6 +112,8 @@ type ModelRequest struct {
 	// ReplaceCredential answers with the credential form for a new value.
 	ReplaceCredential bool
 	DryRun            bool
+	// Mode is apply (default) or commit.
+	Mode string
 }
 
 // SetModel creates or changes a ModelConfig as the caller, dry run first. The
@@ -150,8 +138,12 @@ func (s *Service) SetModel(ctx context.Context, req ModelRequest) (*ResourceResu
 	if err != nil {
 		return nil, err
 	}
-	obj := find(items, req.Name)
-	if err := refuseUnowned(obj, "ModelConfig"); err != nil {
+	w, err := s.contentWriter(ctx, org, req.Mode)
+	if err != nil {
+		return nil, err
+	}
+	obj, err := w.source(ctx, find(items, req.Name), "ModelConfig")
+	if err != nil {
 		return nil, err
 	}
 	res := &ResourceResult{Namespace: ns, Kind: KindModel, Name: req.Name, DryRun: req.DryRun, RequestedBy: identity.Caller(ctx)}
@@ -192,14 +184,14 @@ func (s *Service) SetModel(ctx context.Context, req ModelRequest) (*ResourceResu
 		// failure in between leaves two marks, which the operator reports
 		// and default true fixes, never an organization without a default.
 		for _, name := range marks {
-			other := find(items, name)
-			if err := refuseUnowned(other, "ModelConfig"); err != nil {
+			other, err := w.source(ctx, find(items, name), "ModelConfig")
+			if err != nil {
 				return nil, fmt.Errorf("moving the default mark takes it off %s: %w", name, err)
 			}
 			annotations := other.GetAnnotations()
 			delete(annotations, apov1alpha1.DefaultModelConfigAnnotation)
 			other.SetAnnotations(annotations)
-			unmarks = append(unmarks, write{gvr: gvr, op: opUpdate, obj: other.Object, ns: ns, name: name, what: "ModelConfig " + ns + "/" + name + " (default mark removed)", reason: way})
+			unmarks = append(unmarks, write{gvr: gvr, kind: "ModelConfig", op: opUpdate, obj: other.Object, ns: ns, name: name, what: "ModelConfig " + ns + "/" + name + " (default mark removed)", reason: way})
 		}
 		res.Unmarked = marks
 		setMark(obj)
@@ -212,9 +204,9 @@ func (s *Service) SetModel(ctx context.Context, req ModelRequest) (*ResourceResu
 	if res.Created {
 		op = opCreate
 	}
-	writes = append(writes, write{gvr: gvr, op: op, obj: obj.Object, ns: ns, name: req.Name, what: "ModelConfig " + ns + "/" + req.Name, reason: way})
+	writes = append(writes, write{gvr: gvr, kind: "ModelConfig", op: op, obj: obj.Object, ns: ns, name: req.Name, what: "ModelConfig " + ns + "/" + req.Name, reason: way})
 	writes = append(writes, unmarks...)
-	if err := apply(ctx, c.Dynamic(), writes, req.DryRun); err != nil {
+	if res.Commit, err = w.land(ctx, s, writes, req.DryRun, "model-"+req.Name, "chore(organizations): set model "+req.Name); err != nil {
 		return nil, err
 	}
 	switch {
@@ -226,7 +218,7 @@ func (s *Service) SetModel(ctx context.Context, req ModelRequest) (*ResourceResu
 		res.Note = fmt.Sprintf("the namespace has %d models marked as its default (%s), so it has none: set_organization_model with default true on one of them", len(marks), strings.Join(marks, ", "))
 	}
 	res.Credentials = []Credential{s.credential(ctx, c, org, "ModelConfig", req.Name, secret, key, req.ReplaceCredential)}
-	if !req.DryRun {
+	if !req.DryRun && res.Commit == nil {
 		s.log.Info("organization model written", identity.LogAttr(ctx), "namespace", ns, "name", req.Name, "created", res.Created, "default", agents.IsMarkedDefault(obj))
 	}
 	return res, nil
@@ -270,6 +262,8 @@ type ConnectorRequest struct {
 	NoCredential      bool
 	ReplaceCredential bool
 	DryRun            bool
+	// Mode is apply (default) or commit.
+	Mode string
 }
 
 // ConnectorCredential is a Secret-backed header of a connector.
@@ -360,8 +354,12 @@ func (s *Service) SetConnector(ctx context.Context, req ConnectorRequest) (*Reso
 	if err != nil {
 		return nil, err
 	}
-	obj := find(items, req.Name)
-	if err := refuseUnowned(obj, "RemoteMCPServer"); err != nil {
+	w, err := s.contentWriter(ctx, org, req.Mode)
+	if err != nil {
+		return nil, err
+	}
+	obj, err := w.source(ctx, find(items, req.Name), "RemoteMCPServer")
+	if err != nil {
 		return nil, err
 	}
 	res := &ResourceResult{Namespace: ns, Kind: KindConnector, Name: req.Name, DryRun: req.DryRun, RequestedBy: identity.Caller(ctx)}
@@ -427,14 +425,14 @@ func (s *Service) SetConnector(ctx context.Context, req ConnectorRequest) (*Reso
 	if res.Created {
 		op = opCreate
 	}
-	w := write{gvr: gvr, op: op, obj: obj.Object, ns: ns, name: req.Name, what: "RemoteMCPServer " + ns + "/" + req.Name, reason: wayOrganizationAdmin(ns)}
-	if err := apply(ctx, c.Dynamic(), []write{w}, req.DryRun); err != nil {
+	wr := write{gvr: gvr, kind: "RemoteMCPServer", op: op, obj: obj.Object, ns: ns, name: req.Name, what: "RemoteMCPServer " + ns + "/" + req.Name, reason: wayOrganizationAdmin(ns)}
+	if res.Commit, err = w.land(ctx, s, []write{wr}, req.DryRun, "connector-"+req.Name, "chore(organizations): set connector "+req.Name); err != nil {
 		return nil, err
 	}
 	for _, cc := range connectorCredentials(obj) {
 		res.Credentials = append(res.Credentials, s.credential(ctx, c, org, "RemoteMCPServer", req.Name, cc.Secret, cc.Key, req.ReplaceCredential))
 	}
-	if !req.DryRun {
+	if !req.DryRun && res.Commit == nil {
 		s.log.Info("organization connector written", identity.LogAttr(ctx), "namespace", ns, "name", req.Name, "created", res.Created)
 	}
 	return res, nil
@@ -485,6 +483,8 @@ type EgressRequest struct {
 	Destinations      []EgressDestination
 	ReplaceCredential bool
 	DryRun            bool
+	// Mode is apply (default) or commit.
+	Mode string
 }
 
 // SetEgressPolicy creates or replaces an EgressPolicy as the caller, dry run
@@ -510,8 +510,12 @@ func (s *Service) SetEgressPolicy(ctx context.Context, req EgressRequest) (*Reso
 	if err != nil {
 		return nil, err
 	}
-	obj := find(items, req.Name)
-	if err := refuseUnowned(obj, "EgressPolicy"); err != nil {
+	w, err := s.contentWriter(ctx, org, req.Mode)
+	if err != nil {
+		return nil, err
+	}
+	obj, err := w.source(ctx, find(items, req.Name), "EgressPolicy")
+	if err != nil {
 		return nil, err
 	}
 	res := &ResourceResult{Namespace: ns, Kind: KindEgressPolicy, Name: req.Name, DryRun: req.DryRun, RequestedBy: identity.Caller(ctx)}
@@ -546,8 +550,8 @@ func (s *Service) SetEgressPolicy(ctx context.Context, req EgressRequest) (*Reso
 	if res.Created {
 		op = opCreate
 	}
-	w := write{gvr: gvr, op: op, obj: obj.Object, ns: ns, name: req.Name, what: "EgressPolicy " + ns + "/" + req.Name, reason: wayOrganizationAdmin(ns)}
-	if err := apply(ctx, c.Dynamic(), []write{w}, req.DryRun); err != nil {
+	wr := write{gvr: gvr, kind: "EgressPolicy", op: op, obj: obj.Object, ns: ns, name: req.Name, what: "EgressPolicy " + ns + "/" + req.Name, reason: wayOrganizationAdmin(ns)}
+	if res.Commit, err = w.land(ctx, s, []write{wr}, req.DryRun, "egress-"+req.Name, "chore(organizations): set egress policy "+req.Name); err != nil {
 		return nil, err
 	}
 	seen := map[string]bool{}
@@ -558,7 +562,7 @@ func (s *Service) SetEgressPolicy(ctx context.Context, req EgressRequest) (*Reso
 		seen[d.CredentialSecret+"/"+d.CredentialKey] = true
 		res.Credentials = append(res.Credentials, s.credential(ctx, c, org, "EgressPolicy", req.Name, d.CredentialSecret, d.CredentialKey, req.ReplaceCredential))
 	}
-	if !req.DryRun {
+	if !req.DryRun && res.Commit == nil {
 		s.log.Info("organization egress policy written", identity.LogAttr(ctx), "namespace", ns, "name", req.Name, "created", res.Created)
 	}
 	return res, nil
@@ -569,7 +573,7 @@ func (s *Service) SetEgressPolicy(ctx context.Context, req EgressRequest) (*Reso
 // DeleteResource deletes a model, connector or egress policy of an
 // organization namespace as the caller, dry run first. Its credential
 // Secret stays: another object may name it.
-func (s *Service) DeleteResource(ctx context.Context, ns, kind, name string, dryRun bool) (*ResourceResult, error) {
+func (s *Service) DeleteResource(ctx context.Context, ns, kind, name string, dryRun bool, mode string) (*ResourceResult, error) {
 	info, ok := kinds[kind]
 	if !ok {
 		return nil, invalidf("kind %q: %s, %s or %s", kind, KindModel, KindConnector, KindEgressPolicy)
@@ -577,7 +581,12 @@ func (s *Service) DeleteResource(ctx context.Context, ns, kind, name string, dry
 	if name == "" {
 		return nil, invalidf("name is required")
 	}
-	if _, err := s.organization(ctx, ns); err != nil {
+	org, err := s.organization(ctx, ns)
+	if err != nil {
+		return nil, err
+	}
+	w, err := s.contentWriter(ctx, org, mode)
+	if err != nil {
 		return nil, err
 	}
 	c, err := s.caller(ctx)
@@ -590,19 +599,20 @@ func (s *Service) DeleteResource(ctx context.Context, ns, kind, name string, dry
 	if err != nil {
 		return nil, kubeErr(err, "get "+what, wayOrganizationAdmin(ns))
 	}
-	if err := refuseUnowned(obj, info.kubeKind); err != nil {
+	if _, err := w.source(ctx, obj, info.kubeKind); err != nil {
 		return nil, err
 	}
-	w := write{gvr: gvr, op: opDelete, ns: ns, name: name, what: what, reason: wayOrganizationAdmin(ns)}
-	if err := apply(ctx, c.Dynamic(), []write{w}, dryRun); err != nil {
+	wr := write{gvr: gvr, kind: info.kubeKind, op: opDelete, ns: ns, name: name, what: what, reason: wayOrganizationAdmin(ns)}
+	committed, err := w.land(ctx, s, []write{wr}, dryRun, "delete-"+strings.ToLower(info.kubeKind)+"-"+name, "chore(organizations): remove "+kind+" "+name)
+	if err != nil {
 		return nil, err
 	}
-	res := &ResourceResult{Namespace: ns, Kind: kind, Name: name, Deleted: !dryRun, DryRun: dryRun, RequestedBy: identity.Caller(ctx),
-		Note: "its credential Secret, if any, stays: another object may name it"}
+	res := &ResourceResult{Namespace: ns, Kind: kind, Name: name, Deleted: !dryRun && committed == nil, DryRun: dryRun, RequestedBy: identity.Caller(ctx),
+		Note: "its credential Secret, if any, stays: another object may name it", Commit: committed}
 	if kind == KindModel && agents.IsMarkedDefault(obj) {
 		res.Note = "it was the organization's default model, so the organization has none now: set_organization_model with default true on another; " + res.Note
 	}
-	if !dryRun {
+	if !dryRun && committed == nil {
 		s.log.Info("organization object deleted", identity.LogAttr(ctx), "namespace", ns, "kind", kind, "name", name)
 	}
 	return res, nil

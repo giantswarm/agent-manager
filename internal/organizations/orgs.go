@@ -269,6 +269,8 @@ type CreateRequest struct {
 	AdminGroups []string
 	AdminUsers  []string
 	DryRun      bool
+	// Mode is apply (default) or commit.
+	Mode string
 }
 
 // CreateResult is create_organization's answer.
@@ -286,6 +288,8 @@ type CreateResult struct {
 	// Note says what this call did not do.
 	Note        string `json:"note,omitempty"`
 	RequestedBy string `json:"requestedBy,omitempty"`
+	// Commit is the pull request of a create in mode commit.
+	Commit *CommitResult `json:"commit,omitempty"`
 }
 
 // Binding is a RoleBinding as the tools report it.
@@ -321,6 +325,10 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (*CreateResult,
 	if len(subjects) == 0 {
 		return nil, invalidf("the first admins are required: adminGroups (an identity provider group, preferred) or adminUsers; they are bound to %s in the organization namespace as %s", RoleAdmin, FirstAdminsBinding)
 	}
+	mode, err := s.mode(req.Mode)
+	if err != nil {
+		return nil, err
+	}
 	c, err := s.caller(ctx)
 	if err != nil {
 		return nil, err
@@ -334,6 +342,9 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (*CreateResult,
 		return nil, err
 	}
 	res := &CreateResult{DryRun: req.DryRun, RequestedBy: identity.Caller(ctx)}
+	if mode == agents.ModeCommit {
+		return s.createCommit(ctx, c, req, subjects, res)
+	}
 	orgs := c.Dynamic().Resource(GVR).Namespace(req.Parent)
 	what := fmt.Sprintf("AgentPlatformOrganization %s/%s", req.Parent, req.Name)
 
@@ -342,7 +353,7 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (*CreateResult,
 	switch {
 	case apierrors.IsNotFound(err):
 		obj := s.organizationObject(req)
-		w := write{gvr: GVR, op: opCreate, obj: obj, ns: req.Parent, name: req.Name, what: what, reason: way}
+		w := write{gvr: GVR, kind: orgKind, op: opCreate, obj: obj, ns: req.Parent, name: req.Name, what: what, reason: way}
 		if err := apply(ctx, c.Dynamic(), []write{w}, req.DryRun); err != nil {
 			return nil, err
 		}
@@ -498,7 +509,7 @@ func (s *Service) hasFirstAdmins(ctx context.Context, c kube.Client, org *apov1a
 func (s *Service) bindFirstAdmins(ctx context.Context, c kube.Client, org *apov1alpha1.AgentPlatformOrganization, subjects []Subject) (*Binding, error) {
 	ns := org.Status.Namespace
 	obj := roleBinding(ns, FirstAdminsBinding, RoleAdmin, subjects)
-	w := write{gvr: rbacGVR, op: opCreate, obj: obj, ns: ns, name: FirstAdminsBinding,
+	w := write{gvr: rbacGVR, kind: kindRoleBinding, op: opCreate, obj: obj, ns: ns, name: FirstAdminsBinding,
 		what: fmt.Sprintf("RoleBinding %s/%s", ns, FirstAdminsBinding), reason: wayOrganizationsAdmin(org.Namespace)}
 	if err := apply(ctx, c.Dynamic(), []write{w}, false); err != nil {
 		return nil, err
@@ -517,6 +528,8 @@ type UpdateRequest struct {
 	Harnesses      *[]string
 	WorkerReplicas *int32
 	DryRun         bool
+	// Mode is apply (default) or commit.
+	Mode string
 }
 
 // UpdateResult is update_organization's answer.
@@ -526,43 +539,31 @@ type UpdateResult struct {
 	Changed     []string     `json:"changed"`
 	DryRun      bool         `json:"dryRun,omitempty"`
 	RequestedBy string       `json:"requestedBy,omitempty"`
+	// Commit is the pull request of a change in mode commit.
+	Commit *CommitResult `json:"commit,omitempty"`
 }
 
-// Update changes an organization as the caller, dry run first.
+// Update changes an organization as the caller, dry run first: live in
+// apply mode, in its file in commit mode.
 func (s *Service) Update(ctx context.Context, req UpdateRequest) (*UpdateResult, error) {
+	mode, err := s.mode(req.Mode)
+	if err != nil {
+		return nil, err
+	}
 	c, u, org, err := s.get(ctx, req.Parent, req.Name)
 	if err != nil {
 		return nil, err
 	}
+	if mode == agents.ModeCommit {
+		return s.updateCommit(ctx, c, u, org, req)
+	}
 	if err := refuseLive(org); err != nil {
 		return nil, err
 	}
-	res := &UpdateResult{Before: summary(org), DryRun: req.DryRun, RequestedBy: identity.Caller(ctx), Changed: []string{}}
+	res := &UpdateResult{Before: summary(org), DryRun: req.DryRun, RequestedBy: identity.Caller(ctx)}
 	next := u.DeepCopy()
-	if req.DisplayName != nil && *req.DisplayName != org.Annotations[apov1alpha1.DisplayNameAnnotation] {
-		annotations := next.GetAnnotations()
-		if annotations == nil {
-			annotations = map[string]string{}
-		}
-		if *req.DisplayName == "" {
-			delete(annotations, apov1alpha1.DisplayNameAnnotation)
-		} else {
-			annotations[apov1alpha1.DisplayNameAnnotation] = *req.DisplayName
-		}
-		next.SetAnnotations(annotations)
-		res.Changed = append(res.Changed, "displayName")
-	}
-	if req.Harnesses != nil && !slices.Equal(*req.Harnesses, org.Spec.Harnesses) {
-		if err := unstructured.SetNestedStringSlice(next.Object, *req.Harnesses, "spec", "harnesses"); err != nil {
-			return nil, err
-		}
-		res.Changed = append(res.Changed, "harnesses")
-	}
-	if req.WorkerReplicas != nil && *req.WorkerReplicas != org.Spec.Workers.Replicas {
-		if err := unstructured.SetNestedField(next.Object, int64(*req.WorkerReplicas), "spec", "workers", "replicas"); err != nil {
-			return nil, err
-		}
-		res.Changed = append(res.Changed, "workerReplicas")
+	if res.Changed, err = changeOrganization(next, req); err != nil {
+		return nil, err
 	}
 	after, err := organizationOf(next)
 	if err != nil {
@@ -572,7 +573,7 @@ func (s *Service) Update(ctx context.Context, req UpdateRequest) (*UpdateResult,
 	if len(res.Changed) == 0 {
 		return res, nil
 	}
-	w := write{gvr: GVR, op: opUpdate, obj: next.Object, ns: req.Parent, name: req.Name,
+	w := write{gvr: GVR, kind: orgKind, op: opUpdate, obj: next.Object, ns: req.Parent, name: req.Name,
 		what: fmt.Sprintf("AgentPlatformOrganization %s/%s", req.Parent, req.Name), reason: wayOrganizationsAdmin(req.Parent)}
 	if err := apply(ctx, c.Dynamic(), []write{w}, req.DryRun); err != nil {
 		return nil, err
@@ -583,11 +584,48 @@ func (s *Service) Update(ctx context.Context, req UpdateRequest) (*UpdateResult,
 	return res, nil
 }
 
+// changeOrganization applies an update's fields to next, which holds an
+// organization (the live object, or its file in commit mode), and names the
+// fields that changed against what next held.
+func changeOrganization(next *unstructured.Unstructured, req UpdateRequest) ([]string, error) {
+	cur, err := organizationOf(next)
+	if err != nil {
+		return nil, err
+	}
+	changed := []string{}
+	if req.DisplayName != nil && *req.DisplayName != cur.Annotations[apov1alpha1.DisplayNameAnnotation] {
+		annotations := next.GetAnnotations()
+		if annotations == nil {
+			annotations = map[string]string{}
+		}
+		if *req.DisplayName == "" {
+			delete(annotations, apov1alpha1.DisplayNameAnnotation)
+		} else {
+			annotations[apov1alpha1.DisplayNameAnnotation] = *req.DisplayName
+		}
+		next.SetAnnotations(annotations)
+		changed = append(changed, "displayName")
+	}
+	if req.Harnesses != nil && !slices.Equal(*req.Harnesses, cur.Spec.Harnesses) {
+		if err := unstructured.SetNestedStringSlice(next.Object, *req.Harnesses, "spec", "harnesses"); err != nil {
+			return nil, err
+		}
+		changed = append(changed, "harnesses")
+	}
+	if req.WorkerReplicas != nil && *req.WorkerReplicas != cur.Spec.Workers.Replicas {
+		if err := unstructured.SetNestedField(next.Object, int64(*req.WorkerReplicas), "spec", "workers", "replicas"); err != nil {
+			return nil, err
+		}
+		changed = append(changed, "workerReplicas")
+	}
+	return changed, nil
+}
+
 // refuseLive refuses a live write to an organization Flux applies from git:
 // Flux would undo it.
 func refuseLive(org *apov1alpha1.AgentPlatformOrganization) error {
 	if ks := org.Labels[agents.KustomizationNameLabel]; ks != "" {
-		return fmt.Errorf("%w: AgentPlatformOrganization %s/%s is applied from git by the Flux Kustomization %s: change it in git (commit mode for organizations is giantswarm/agent-manager#292)", agents.ErrGitOpsOwned, org.Namespace, org.Name, ks)
+		return fmt.Errorf("%w: AgentPlatformOrganization %s/%s is applied from git by the Flux Kustomization %s, which would revert a live change: use mode commit to change it with a pull request", agents.ErrGitOpsOwned, org.Namespace, org.Name, ks)
 	}
 	return nil
 }
@@ -602,6 +640,8 @@ type DeleteRequest struct {
 	// the answer is what the delete would erase.
 	Confirm string
 	DryRun  bool
+	// Mode is apply (default) or commit.
+	Mode string
 }
 
 // DeleteResult is delete_organization's answer.
@@ -612,6 +652,9 @@ type DeleteResult struct {
 	DryRun       bool         `json:"dryRun,omitempty"`
 	Next         string       `json:"next,omitempty"`
 	RequestedBy  string       `json:"requestedBy,omitempty"`
+	// Commit is the pull request that removes the organization from git,
+	// the first step of a delete in mode commit.
+	Commit *CommitResult `json:"commit,omitempty"`
 }
 
 // Delete deletes an organization as the caller, which erases it: the
@@ -621,12 +664,18 @@ type DeleteResult struct {
 // admission policy accepts, after an access review for the delete and a dry
 // run of the mark.
 func (s *Service) Delete(ctx context.Context, req DeleteRequest) (*DeleteResult, error) {
+	mode, err := s.mode(req.Mode)
+	if err != nil {
+		return nil, err
+	}
 	c, u, org, err := s.get(ctx, req.Parent, req.Name)
 	if err != nil {
 		return nil, err
 	}
-	if err := refuseLive(org); err != nil {
-		return nil, err
+	if mode == agents.ModeApply {
+		if err := refuseLive(org); err != nil {
+			return nil, err
+		}
 	}
 	confirm := req.Parent + "/" + req.Name
 	res := &DeleteResult{Organization: summary(org), DryRun: req.DryRun, RequestedBy: identity.Caller(ctx)}
@@ -640,6 +689,16 @@ func (s *Service) Delete(ctx context.Context, req DeleteRequest) (*DeleteResult,
 	way := wayOrganizationsAdmin(req.Parent)
 	if err := requireAccess(ctx, c, way, access{namespace: req.Parent, verb: "delete", group: GVR.Group, resource: GVR.Resource, name: req.Name}); err != nil {
 		return nil, err
+	}
+	if mode == agents.ModeCommit {
+		// The first step opens the pull request; the erase follows only
+		// once agent-manager has seen it merged and the file gone.
+		if answered, err := s.deleteCommit(ctx, c, u, org, req, res); err != nil || answered {
+			if err != nil {
+				return nil, err
+			}
+			return res, nil
+		}
 	}
 	if req.Confirm != confirm {
 		res.Next = fmt.Sprintf("nothing was deleted: show the person what is erased and, once they typed it, call delete_organization again with confirm %q", confirm)
@@ -660,7 +719,7 @@ func (s *Service) Delete(ctx context.Context, req DeleteRequest) (*DeleteResult,
 		}
 		annotations[PruneAnnotation] = PruneEnabled
 		next.SetAnnotations(annotations)
-		w := write{gvr: GVR, op: opUpdate, obj: next.Object, ns: req.Parent, name: req.Name, what: what + " (" + PruneAnnotation + ": " + PruneEnabled + ")", reason: way}
+		w := write{gvr: GVR, kind: orgKind, op: opUpdate, obj: next.Object, ns: req.Parent, name: req.Name, what: what + " (" + PruneAnnotation + ": " + PruneEnabled + ")", reason: way}
 		if err := apply(ctx, c.Dynamic(), []write{w}, req.DryRun); err != nil {
 			return nil, err
 		}
