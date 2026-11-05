@@ -18,6 +18,8 @@
 #     release, so an entry under Unreleased that a tag's CHANGELOG.md already
 #     holds is released; the job fails until `make changelog-cut` moves it into
 #     that tag's version section. Tags are fetched: the checkout may lack them.
+#     A branch that does not change CHANGELOG.md passes: the cut is the debt
+#     of the branch that writes the next entry, and main is fetched to tell.
 #     Branches only: on main the merge is itself the release being tagged.
 version: 2.1
 
@@ -59,8 +61,8 @@ jobs:
     steps:
       - checkout
       - run:
-          name: Fetch the tags
-          command: git fetch --force --tags origin
+          name: Fetch the tags and main
+          command: git fetch --force --tags origin main:refs/remotes/origin/main
       - run:
           name: Unreleased holds only changes no tag carries
           command: make changelog-check

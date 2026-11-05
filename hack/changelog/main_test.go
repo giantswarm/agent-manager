@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"testing"
 
 	"github.com/Masterminds/semver/v3"
@@ -106,5 +107,78 @@ func TestCutKeepsAnExistingVersionSection(t *testing.T) {
 	}
 	if g := cl.sections[1].groups; g[0].name != "Added" || g[1].name != "Changed" {
 		t.Errorf("groups out of Keep a Changelog order: %s, %s", g[0].name, g[1].name)
+	}
+}
+
+// gitRepo makes a repository in a temporary directory, isolated from the
+// user's and the checkout's git configuration, and runs the test inside it.
+func gitRepo(t *testing.T) func(args ...string) {
+	t.Helper()
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	t.Setenv("GIT_AUTHOR_NAME", "test")
+	t.Setenv("GIT_AUTHOR_EMAIL", "test@example.com")
+	t.Setenv("GIT_COMMITTER_NAME", "test")
+	t.Setenv("GIT_COMMITTER_EMAIL", "test@example.com")
+	t.Chdir(t.TempDir())
+	run := func(args ...string) {
+		t.Helper()
+		if _, err := git(args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	run("init", "--quiet", "--initial-branch=main")
+	return run
+}
+
+func commit(t *testing.T, run func(...string), file, content string) {
+	t.Helper()
+	if err := os.WriteFile(file, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	run("add", file)
+	run("commit", "--quiet", "-m", file)
+}
+
+func TestChangelogTouched(t *testing.T) {
+	tests := []struct {
+		name   string
+		branch func(t *testing.T, run func(...string))
+		want   bool
+	}{
+		{
+			name:   "a dependency bump",
+			branch: func(t *testing.T, run func(...string)) { commit(t, run, "go.mod", "module x\n\ngo 1.27\n") },
+			want:   false,
+		},
+		{
+			name: "a change with an entry",
+			branch: func(t *testing.T, run func(...string)) {
+				commit(t, run, changelogPath, header+"\n## [Unreleased]\n\n- two\n")
+			},
+			want: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			run := gitRepo(t)
+			commit(t, run, changelogPath, header)
+			run("update-ref", "refs/remotes/origin/main", "HEAD")
+			run("checkout", "--quiet", "-b", "branch")
+			tt.branch(t, run)
+
+			if got := changelogTouched(); got != tt.want {
+				t.Errorf("changelogTouched() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestChangelogTouchedWithoutMainChecksInFull(t *testing.T) {
+	run := gitRepo(t)
+	commit(t, run, changelogPath, header)
+
+	if !changelogTouched() {
+		t.Error("changelogTouched() = false without origin/main, want true")
 	}
 }
