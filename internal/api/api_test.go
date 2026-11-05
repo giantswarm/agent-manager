@@ -415,6 +415,7 @@ func TestMCPToolsMirrorREST(t *testing.T) {
 		switch tool.Name {
 		case ToolCreateAgent:
 			assert.Contains(t, tool.InputSchema.Required, "toolset")
+			assert.NotContains(t, tool.InputSchema.Required, "modelConfig", "omitted, the namespace default")
 			assert.Contains(t, tool.InputSchema.Properties["toolset"].(map[string]any)["description"], "preset:none")
 			skills := tool.InputSchema.Properties["skills"].(map[string]any)
 			assert.Equal(t, "array", skills["type"], "skills is a list")

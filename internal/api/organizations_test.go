@@ -366,13 +366,13 @@ func model(name string, isDefault bool) *unstructured.Unstructured {
 		"spec":     map[string]any{"provider": "Anthropic", "model": "m", "apiKeySecret": "tenant-credential-" + name, "apiKeySecretKey": "apiKey"},
 	}}
 	if isDefault {
-		u.SetAnnotations(map[string]string{apov1alpha1.DefaultModelConfigAnnotation: "true"})
+		u.SetAnnotations(map[string]string{agents.DefaultModelConfigAnnotation: "true"})
 	}
 	return u
 }
 
 func marked(u *unstructured.Unstructured) bool {
-	return u != nil && u.GetAnnotations()[apov1alpha1.DefaultModelConfigAnnotation] == "true"
+	return u != nil && u.GetAnnotations()[agents.DefaultModelConfigAnnotation] == "true"
 }
 
 // The first model of an organization is its default; a later one is not;

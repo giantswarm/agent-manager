@@ -288,9 +288,9 @@ func NewMCPServer(svc *agents.Service, version string, opts ...Option) *mcpserve
 
 	s.AddTool(mcp.NewTool(ToolCreateAgent,
 		tooldesc.Describe("Create an agent: a HelmRelease of the Generic agent chart. It needs a toolset; confirm its name with the person.",
-			"name is the DNS-1123 name the person chose, never derived from displayName. modelConfig must exist in the namespace (list_model_configs; a refusal names the valid ones). Skills and plugins are pinned at write time (list_skills) the values pass the chart schema and the API server's dry-run of the rendered objects; a failure writes nothing. "+presetsSentence+" Poll get_agent_status until ready."),
+			"name is the DNS-1123 name the person chose, never derived from displayName. modelConfig must exist (list_model_configs); omitted, the namespace default is written and reported. Skills and plugins are pinned at write time (list_skills) the values pass the chart schema and the API server's dry-run of the rendered objects; a failure writes nothing. "+presetsSentence+" Poll get_agent_status until ready."),
 		mcp.WithString(argName, mcp.Required(), mcp.Description("DNS-1123 technical name (max 63 chars): the HelmRelease and Agent name")),
-		mcp.WithString(argModelConfig, mcp.Required(), mcp.Description("Name of an existing kagent ModelConfig in the namespace (list_model_configs)")),
+		mcp.WithString(argModelConfig, mcp.Description("Name of an existing kagent ModelConfig in the namespace (list_model_configs); omit for the namespace default")),
 		mcp.WithString(argHarness, mcp.Description(harnessDesc)),
 		mcp.WithString(argDisplayName, mcp.Description("Friendly Unicode name (max 63 chars), shown by the portal")),
 		tagsProp,
@@ -380,9 +380,9 @@ func NewMCPServer(svc *agents.Service, version string, opts ...Option) *mcpserve
 
 	s.AddTool(mcp.NewTool(ToolValidateAgent,
 		tooldesc.Describe("Dry run of create_agent, or of update_agent with update: true: the manifests and every violation. Writes nothing.",
-			"Checks the name, modelConfig, egressPolicyRefs, harness and toolset (required for a create), pins the skills and plugins, validates the values against the chart schema and has the API server dry-run the rendered Agent and RemoteMCPServer (its field errors are the errors; an object the caller may not write is a note). mode answers as the write would. With update: true, lists, labels and annotations replace the whole value, as in update_agent."),
+			"Checks the name, modelConfig (omitted: the default), egressPolicyRefs, harness and toolset (required for a create), pins the skills and plugins, validates the values against the chart schema and has the API server dry-run the rendered Agent and RemoteMCPServer (its field errors are the errors; an object the caller may not write is a note). mode answers as the write would. With update: true, lists, labels and annotations replace the whole value, as in update_agent."),
 		mcp.WithString(argName, mcp.Required(), mcp.Description("Agent name")),
-		mcp.WithString(argModelConfig, mcp.Description("ModelConfig name (required for a create)")),
+		mcp.WithString(argModelConfig, mcp.Description("ModelConfig name; omitted on a create, the namespace default. The result names the one a create writes, with a note when it is not ResolvedRefs=True")),
 		mcp.WithString(argHarness, mcp.Description(harnessDesc)),
 		mcp.WithString(argDisplayName, mcp.Description("Friendly name")),
 		tagsProp,
@@ -414,7 +414,7 @@ func NewMCPServer(svc *agents.Service, version string, opts ...Option) *mcpserve
 
 	s.AddTool(mcp.NewTool(ToolListModelConfigs,
 		tooldesc.Describe("List the ModelConfigs of a namespace: the values create_agent accepts for modelConfig.",
-			"Each with provider, model, its Accepted condition, who manages it and, in an organization namespace, default: the organization's default model. Organization admins write them with set_organization_model."),
+			"Each with provider, model, its Accepted and ResolvedRefs conditions, who manages it, and default: the one create_agent writes when modelConfig is omitted (the single ModelConfig annotated "+agents.DefaultModelConfigAnnotation+"=true; none or several is no default). Organization admins write them with set_organization_model."),
 		nsProp,
 		orgProp,
 		clusterProp,

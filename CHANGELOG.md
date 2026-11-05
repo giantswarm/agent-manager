@@ -13,10 +13,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `--dev-portal-url` (chart `devPortal.url`): the origin of the credential form links.
 - A namespace the agent tools refuse, `toolchain_users` and `list_my_organizations` name no organization namespace the caller has not shown access to, also when the API server refuses the caller's token.
 - The organization tools refuse a live change to a model, connector, egress policy or member binding that a Flux Kustomization applies from git (`gitops_owned`), as they do for the organization itself, also when `create_organization` would bind the first admins of a git-applied organization.
-- `list_model_configs` reports `default` on the model that carries the organization's default mark; `get_info` reports the capability `organizations`.
+- `get_info` reports the capability `organizations`.
+- `default` and `resolvedRefs` on every ModelConfig of `list_model_configs` and `GET /api/v1/modelconfigs`, in every namespace. The default is the one ModelConfig of the namespace annotated `agent-platform.giantswarm.io/is-default-model-config: "true"`; none or several annotated is no default. While no ModelConfig of a namespace carries the annotation, one named `default-model-config` counts as marked ([#295](https://github.com/giantswarm/agent-manager/issues/295)).
+- `modelConfig` and `modelConfigFromDefault` in the result of `create_agent` and `POST /api/v1/agents` (the ModelConfig written into the agent) and of `validate_agent` (the one a create would write). `validate_agent` adds a note when that ModelConfig is not `ResolvedRefs=True`.
 
 ### Changed
 
+- `modelConfig` is optional on `create_agent` and `POST /api/v1/agents`: omitted, the namespace default's name is written into the agent. A namespace without a default refuses the create, naming its ModelConfigs. `update_agent` never resolves the default.
+- The default model mark `set_organization_model` writes and moves is the annotation `agent-platform.giantswarm.io/is-default-model-config`.
 - `--multi-tenant` (chart `tenants.enabled`) manages the organization namespaces labelled `agent-platform.giantswarm.io/organization`, which agent-platform-operator keeps, and serves the organization tools; agent-manager keeps nothing in them. Its ServiceAccount only reads namespaces to find them; everything else runs as the caller. `--multi-tenant` now needs `--downstream-oauth`.
 
 ### Fixed

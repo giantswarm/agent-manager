@@ -86,7 +86,7 @@ Writes the RoleBinding organization-<role>s (admins: organization-admins), dry r
 ```text
 Create an agent: a HelmRelease of the Generic agent chart. It needs a toolset; confirm its name with the person.
 
-name is the DNS-1123 name the person chose, never derived from displayName. modelConfig must exist in the namespace (list_model_configs; a refusal names the valid ones). Skills and plugins are pinned at write time (list_skills) the values pass the chart schema and the API server's dry-run of the rendered objects; a failure writes nothing. Presets: preset:read-only, preset:none, preset:infrastructure, preset:agent-platform, preset:full. Poll get_agent_status until ready.
+name is the DNS-1123 name the person chose, never derived from displayName. modelConfig must exist (list_model_configs); omitted, the namespace default is written and reported. Skills and plugins are pinned at write time (list_skills) the values pass the chart schema and the API server's dry-run of the rendered objects; a failure writes nothing. Presets: preset:read-only, preset:none, preset:infrastructure, preset:agent-platform, preset:full. Poll get_agent_status until ready.
 ```
 
 ```json
@@ -174,7 +174,7 @@ name is the DNS-1123 name the person chose, never derived from displayName. mode
       "type": "string"
     },
     "modelConfig": {
-      "description": "Name of an existing kagent ModelConfig in the namespace (list_model_configs)",
+      "description": "Name of an existing kagent ModelConfig in the namespace (list_model_configs); omit for the namespace default",
       "type": "string"
     },
     "name": {
@@ -303,7 +303,6 @@ name is the DNS-1123 name the person chose, never derived from displayName. mode
   },
   "required": [
     "name",
-    "modelConfig",
     "toolset"
   ],
   "type": "object"
@@ -807,7 +806,7 @@ Each with its origins and, where the egress gateway adds a credential, the heade
 ```text
 List the ModelConfigs of a namespace: the values create_agent accepts for modelConfig.
 
-Each with provider, model, its Accepted condition, who manages it and, in an organization namespace, default: the organization's default model. Organization admins write them with set_organization_model.
+Each with provider, model, its Accepted and ResolvedRefs conditions, who manages it, and default: the one create_agent writes when modelConfig is omitted (the single ModelConfig annotated agent-platform.giantswarm.io/is-default-model-config=true; none or several is no default). Organization admins write them with set_organization_model.
 ```
 
 ```json
@@ -1159,7 +1158,7 @@ destinations replaces the whole list. A credentialHeader makes the egress gatewa
 ```text
 Create or change an organization's model (a ModelConfig) as you; its API key is a Secret named by reference.
 
-The first model of an organization without a default becomes its default (annotation agent-platform.giantswarm.io/default-model-config); default true moves the mark here. Never pass a key: when its Secret is missing, credentials[].next carries the Dev Portal's credential form link for the person. list_model_configs lists the models. Needs agent-platform:admin.
+The first model of an organization without a default becomes its default (annotation agent-platform.giantswarm.io/is-default-model-config); default true moves the mark here. Never pass a key: when its Secret is missing, credentials[].next carries the Dev Portal's credential form link for the person. list_model_configs lists the models. Needs agent-platform:admin.
 ```
 
 ```json
@@ -1582,7 +1581,7 @@ An omitted field stays; harnesses replaces the whole list; displayName "" remove
 ```text
 Dry run of create_agent, or of update_agent with update: true: the manifests and every violation. Writes nothing.
 
-Checks the name, modelConfig, egressPolicyRefs, harness and toolset (required for a create), pins the skills and plugins, validates the values against the chart schema and has the API server dry-run the rendered Agent and RemoteMCPServer (its field errors are the errors; an object the caller may not write is a note). mode answers as the write would. With update: true, lists, labels and annotations replace the whole value, as in update_agent.
+Checks the name, modelConfig (omitted: the default), egressPolicyRefs, harness and toolset (required for a create), pins the skills and plugins, validates the values against the chart schema and has the API server dry-run the rendered Agent and RemoteMCPServer (its field errors are the errors; an object the caller may not write is a note). mode answers as the write would. With update: true, lists, labels and annotations replace the whole value, as in update_agent.
 ```
 
 ```json
@@ -1666,7 +1665,7 @@ Checks the name, modelConfig, egressPolicyRefs, harness and toolset (required fo
       "type": "string"
     },
     "modelConfig": {
-      "description": "ModelConfig name (required for a create)",
+      "description": "ModelConfig name; omitted on a create, the namespace default. The result names the one a create writes, with a note when it is not ResolvedRefs=True",
       "type": "string"
     },
     "name": {

@@ -8,7 +8,6 @@ import (
 	"slices"
 	"strings"
 
-	apov1alpha1 "github.com/giantswarm/agent-platform-operator/api/v1alpha1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -128,10 +127,6 @@ type ModelRequest struct {
 	DryRun            bool
 }
 
-func marked(u *unstructured.Unstructured) bool {
-	return u.GetAnnotations()[apov1alpha1.DefaultModelConfigAnnotation] == "true"
-}
-
 // SetModel creates or changes a ModelConfig as the caller, dry run first. The
 // first model of a namespace without a default carries the default mark;
 // Default moves it here. A namespace that holds two marked models has no
@@ -184,7 +179,7 @@ func (s *Service) SetModel(ctx context.Context, req ModelRequest) (*ResourceResu
 
 	var marks []string
 	for i := range items {
-		if marked(&items[i]) && items[i].GetName() != req.Name {
+		if agents.IsMarkedDefault(&items[i]) && items[i].GetName() != req.Name {
 			marks = append(marks, items[i].GetName())
 		}
 	}
@@ -201,7 +196,7 @@ func (s *Service) SetModel(ctx context.Context, req ModelRequest) (*ResourceResu
 				return nil, fmt.Errorf("moving the default mark takes it off %s: %w", name, err)
 			}
 			annotations := other.GetAnnotations()
-			delete(annotations, apov1alpha1.DefaultModelConfigAnnotation)
+			delete(annotations, agents.DefaultModelConfigAnnotation)
 			other.SetAnnotations(annotations)
 			unmarks = append(unmarks, write{gvr: gvr, op: opUpdate, obj: other.Object, ns: ns, name: name, what: "ModelConfig " + ns + "/" + name + " (default mark removed)", reason: way})
 		}
@@ -222,7 +217,7 @@ func (s *Service) SetModel(ctx context.Context, req ModelRequest) (*ResourceResu
 		return nil, err
 	}
 	switch {
-	case marked(obj):
+	case agents.IsMarkedDefault(obj):
 		res.DefaultModel = req.Name
 	case len(marks) == 1:
 		res.DefaultModel = marks[0]
@@ -231,7 +226,7 @@ func (s *Service) SetModel(ctx context.Context, req ModelRequest) (*ResourceResu
 	}
 	res.Credentials = []Credential{s.credential(ctx, c, org, "ModelConfig", req.Name, secret, key, req.ReplaceCredential)}
 	if !req.DryRun {
-		s.log.Info("organization model written", identity.LogAttr(ctx), "namespace", ns, "name", req.Name, "created", res.Created, "default", marked(obj))
+		s.log.Info("organization model written", identity.LogAttr(ctx), "namespace", ns, "name", req.Name, "created", res.Created, "default", agents.IsMarkedDefault(obj))
 	}
 	return res, nil
 }
@@ -241,7 +236,7 @@ func setMark(obj *unstructured.Unstructured) {
 	if annotations == nil {
 		annotations = map[string]string{}
 	}
-	annotations[apov1alpha1.DefaultModelConfigAnnotation] = "true"
+	annotations[agents.DefaultModelConfigAnnotation] = "true"
 	obj.SetAnnotations(annotations)
 }
 
@@ -603,7 +598,7 @@ func (s *Service) DeleteResource(ctx context.Context, ns, kind, name string, dry
 	}
 	res := &ResourceResult{Namespace: ns, Kind: kind, Name: name, Deleted: !dryRun, DryRun: dryRun, RequestedBy: identity.Caller(ctx),
 		Note: "its credential Secret, if any, stays: another object may name it"}
-	if kind == KindModel && marked(obj) {
+	if kind == KindModel && agents.IsMarkedDefault(obj) {
 		res.Note = "it was the organization's default model, so the organization has none now: set_organization_model with default true on another; " + res.Note
 	}
 	if !dryRun {

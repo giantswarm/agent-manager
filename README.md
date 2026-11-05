@@ -53,7 +53,7 @@ MCP-server-writer half.
 | Delete: the HelmRelease; the OCIRepository only when nothing else references it | `DELETE /api/v1/agents/{ns}/{name}[?force=true&mode=&dryRun=]` | `delete_agent` | HelmRelease, OCIRepository, (bare Agent with force) |
 | Status verdict: the Agent's conditions, HelmRelease conditions/history, Warning events | `GET /api/v1/agents/{ns}/{name}/status` | `get_agent_status` | no |
 | Dry run of create/update: pinned skills, composed manifests + every violation | `POST /api/v1/agents/validate` | `validate_agent` | no |
-| kagent ModelConfigs of a namespace | `GET /api/v1/modelconfigs?namespace=` | `list_model_configs` | no |
+| kagent ModelConfigs of a namespace, with the namespace default (`default`) and their `accepted` and `resolvedRefs` conditions | `GET /api/v1/modelconfigs?namespace=` | `list_model_configs` | no |
 | kagent EgressPolicies of a namespace, read as the caller: each origin and its credential header's name, never the Secret | `GET /api/v1/egresspolicies?namespace=` | `list_egress_policies` | no |
 | Skills (`SKILL.md`) of the configured GitHub repositories, grouped by repository with its head commit, tags from `metadata.tags`; `tags` keeps those with any of them | `GET /api/v1/skills[?repository=&ref=&refresh=&tags=]` | `list_skills` | no |
 | Sessions of an agent, as the caller (`SessionService/ListSessions`; `allCreators` when the controller grants it) | `GET /api/v1/agents/{ns}/{name}/sessions[?allCreators=true]` | `list_sessions` | no |
@@ -78,9 +78,9 @@ Agent", the cases `force` overrides where documented;
 
 `create_agent` takes the technical **name** (a DNS-1123 label the caller
 chose and confirmed — the service never derives one from a display name, per
-the creating-agents PRD), the **modelConfig** (must exist in the namespace;
-the error lists the valid ones), the **toolset** (required, see below), and
-optionally `harness`, `displayName`, `tags`, `description`, `systemMessage`,
+the creating-agents PRD), the **toolset** (required, see below), and
+optionally `modelConfig` (see [The default model](#the-default-model)),
+`harness`, `displayName`, `tags`, `description`, `systemMessage`,
 `iconUrl`, `skills` and `plugins` (see below), `egress` (the origins the
 agent may reach besides what its revision compiles: HTTP(S) origins such as
 `https://github.com:443` or `https://*.githubusercontent.com`, and
@@ -138,7 +138,32 @@ The chart renders the `Agent` (`spec.harnessRef.name: <agent.harness>`,
 agent's own `RemoteMCPServer` (named after the agent, pointing at muster,
 carrying the toolset header). No admission label is involved: the Agent
 selects its Harness by name. ModelConfigs, their Secrets and the Harnesses are
-platform-admin owned: agent-manager only reads them.
+platform-admin owned (an organization's admins own its ModelConfigs):
+agent-manager only reads them, apart from `set_organization_model`.
+
+## The default model
+
+A namespace's default model is the one ModelConfig there annotated
+`agent-platform.giantswarm.io/is-default-model-config: "true"`, as with the
+default IngressClass: none annotated, or more than one, is no default. Until
+every installation marks its default, a ModelConfig named
+`default-model-config` counts as marked while no other carries the
+annotation. `list_model_configs` and `GET /api/v1/modelconfigs` report it as
+`default: true`, next to each ModelConfig's `accepted` and `resolvedRefs`
+conditions.
+
+- `create_agent` and `POST /api/v1/agents` take `modelConfig` optionally. A
+  named one must exist in the namespace (the refusal lists the valid ones).
+  Omitted, the default's name is written into the agent, so the agent stays
+  on that model when the default moves, and the result reports it as
+  `modelConfig` with `modelConfigFromDefault: true`. Without a default the
+  create is refused, naming the namespace's ModelConfigs (and the marked
+  ones when there are several); a namespace without any says who adds one.
+- `update_agent` never resolves the default: it keeps the agent's model
+  unless `modelConfig` names another.
+- `validate_agent` reports in `modelConfig` the model a create would write,
+  and adds a `notes` entry when that ModelConfig is not `ResolvedRefs=True`
+  (its key Secret missing, say). The create is not refused for it.
 
 ## The Harness and plugins
 
@@ -588,7 +613,7 @@ The organization tools (every name holds `organization`):
   of a role go into the RoleBinding `organization-<role>s`, and
   `organization-admins` is never emptied); `set_organization_model`
   (a ModelConfig; the first model of an organization without a default
-  carries `agent-platform.giantswarm.io/default-model-config: "true"`,
+  carries `agent-platform.giantswarm.io/is-default-model-config: "true"`,
   `default: true` moves the mark, and a namespace with two marks takes no
   new model until one is chosen); `list_organization_connectors` and
   `set_organization_connector` (RemoteMCPServers);
