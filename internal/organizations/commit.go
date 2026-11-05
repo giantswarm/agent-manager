@@ -475,6 +475,14 @@ func (w *contentWriter) source(ctx context.Context, obj *unstructured.Unstructur
 func withLive(file, live *unstructured.Unstructured) {
 	file.SetNamespace(live.GetNamespace())
 	file.SetResourceVersion(live.GetResourceVersion())
+	// What no file carries stays as it is live: an apply from git does
+	// not touch it either.
+	file.SetFinalizers(live.GetFinalizers())
+	for _, k := range []string{DeletePullRequestAnnotation, lastAppliedAnnotation} {
+		if v, ok := live.GetAnnotations()[k]; ok {
+			setAnnotation(file, k, v)
+		}
+	}
 	labels := file.GetLabels()
 	if labels == nil {
 		labels = map[string]string{}

@@ -16,6 +16,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	k8stesting "k8s.io/client-go/testing"
 	"sigs.k8s.io/yaml"
 
 	"github.com/giantswarm/agent-manager/internal/agents"
@@ -447,4 +448,31 @@ func TestACredentialOfASharedSecretIsRefused(t *testing.T) {
 	require.ErrorIs(t, err, agents.ErrConflict)
 	assert.Contains(t, err.Error(), "other")
 	assert.Empty(t, fake.PullRequests())
+}
+
+// A mark that fails after the delete pull request opened is written by the
+// next call, from the open pull request; no second one is opened.
+func TestAFailedDeleteMarkIsWrittenByTheNextCall(t *testing.T) {
+	f, fake := gitOrganization(t)
+	failed := false
+	f.dyn.PrependReactor("update", "agentplatformorganizations", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		u := a.(k8stesting.UpdateActionImpl)
+		obj := u.GetObject().(*unstructured.Unstructured)
+		if len(u.UpdateOptions.DryRun) == 0 && obj.GetAnnotations()[organizations.DeletePullRequestAnnotation] != "" && !failed {
+			failed = true
+			return true, nil, apierrors.NewConflict(schema.GroupResource{Resource: "agentplatformorganizations"}, obj.GetName(), errors.New("the object has been modified"))
+		}
+		return false, nil, nil
+	})
+	args := map[string]any{"namespace": "org-acme", "name": "payments", "mode": "commit"}
+	text, isErr := f.call(t, ToolDeleteOrganization, args)
+	require.True(t, isErr)
+	assert.Contains(t, text, "call delete_organization again")
+	require.Len(t, fake.PullRequests(), 1)
+	assert.NotContains(t, f.get(t, orgGVR, "org-acme", "payments").GetAnnotations(), organizations.DeletePullRequestAnnotation)
+
+	text, isErr = f.call(t, ToolDeleteOrganization, args)
+	require.False(t, isErr, text)
+	assert.Len(t, fake.PullRequests(), 1)
+	assert.Equal(t, fake.PullRequests()[0].URL, f.get(t, orgGVR, "org-acme", "payments").GetAnnotations()[organizations.DeletePullRequestAnnotation])
 }

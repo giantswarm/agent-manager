@@ -151,10 +151,15 @@ func (s *Service) updateCommit(ctx context.Context, c kube.Client, u *unstructur
 	if err := refusePlainAsSecret(isSecret, p, orgKind, req.Name); err != nil {
 		return nil, err
 	}
-	// The dry run is of what the file will say, on the live object.
+	// The dry run is of what the file will say, on the live object; the
+	// answer is the live object with the change.
 	next := file.DeepCopy()
 	withLive(next, u)
-	after, err := organizationOf(next)
+	live := u.DeepCopy()
+	if _, err := changeOrganization(live, req); err != nil {
+		return nil, err
+	}
+	after, err := organizationOf(live)
 	if err != nil {
 		return nil, err
 	}
@@ -195,23 +200,19 @@ func (s *Service) deleteCommit(ctx context.Context, c kube.Client, u *unstructur
 	what := fmt.Sprintf("AgentPlatformOrganization %s/%s", req.Parent, req.Name)
 	head := branch("delete", req.Parent, req.Name)
 	prURL := org.Annotations[DeletePullRequestAnnotation]
+	// merged tells only that the pull request the object names merged, not
+	// that it removed the file: gitops-commit's Remote exposes neither a
+	// merged pull request's files nor its head, so the file's absence from
+	// the base is checked instead. Checking the pull request's own change
+	// waits on a gitops-commit read of a merged pull request's files.
 	var merged bool
-	var open bool
 	if prURL != "" {
-		pr, ok := cm.pullRequest(prURL)
-		if ok {
+		if pr, ok := cm.pullRequest(prURL); ok {
 			st, err := cm.remote.Status(ctx, pr)
 			if err != nil {
 				return false, commitError(err)
 			}
 			merged = st.Merged
-			if !merged {
-				found, has, err := cm.remote.FindPullRequest(ctx, cm.cfg.Objects.Repository, head)
-				if err != nil {
-					return false, commitError(err)
-				}
-				open = has && found.Number == pr.Number
-			}
 		}
 	}
 
@@ -223,11 +224,23 @@ func (s *Service) deleteCommit(ctx context.Context, c kube.Client, u *unstructur
 			}
 			return false, fmt.Errorf("%w: %s. Call delete_organization with mode commit and no confirm to open the pull request that removes it", agents.ErrConflict, msg)
 		}
-		if open {
-			res.Next = fmt.Sprintf("the pull request that removes the organization from git is open: %s; %s. Once it is merged, call delete_organization again with mode commit and confirm %q to erase it", prURL, reviewNote, req.Parent+"/"+req.Name)
+		// The delete pull request agent-manager opened is open: the object
+		// carries it, or a mark that failed after the pull request opened is
+		// written now.
+		open, has, err := cm.remote.FindPullRequest(ctx, cm.cfg.Objects.Repository, head)
+		if err != nil {
+			return false, commitError(err)
+		}
+		if has {
+			if prURL != open.URL && !req.DryRun {
+				if err := s.markDelete(ctx, c, req.Parent, req.Name, open.URL, false); err != nil {
+					return false, err
+				}
+			}
+			res.Next = fmt.Sprintf("the pull request that removes the organization from git is open: %s; %s. Once it is merged, call delete_organization again with mode commit and confirm %q to erase it", open.URL, reviewNote, req.Parent+"/"+req.Name)
 			return true, nil
 		}
-		return true, s.openDelete(ctx, c, cm, u, req, res, p, prURL, merged)
+		return true, s.openDelete(ctx, c, cm, req, res, p, prURL, merged)
 	}
 
 	// The file is gone from git: only this organization's merged delete
@@ -248,15 +261,8 @@ func (s *Service) deleteCommit(ctx context.Context, c kube.Client, u *unstructur
 // openDelete opens the pull request that removes the organization's file
 // and its whole content path, then marks the live object with it, as the
 // caller: the mark is dry-run before the pull request exists.
-func (s *Service) openDelete(ctx context.Context, c kube.Client, cm *orgCommit, u *unstructured.Unstructured, req DeleteRequest, res *DeleteResult, p, earlier string, earlierMerged bool) error {
-	what := fmt.Sprintf("AgentPlatformOrganization %s/%s", req.Parent, req.Name)
-	way := wayOrganizationsAdmin(req.Parent)
-	mark := func(url string) write {
-		next := u.DeepCopy()
-		setAnnotation(next, DeletePullRequestAnnotation, url)
-		return write{gvr: GVR, kind: orgKind, op: opUpdate, obj: next.Object, ns: req.Parent, name: req.Name, what: what + " (" + DeletePullRequestAnnotation + ")", reason: way}
-	}
-	if err := apply(ctx, c.Dynamic(), []write{mark("https://github.com/" + cm.cfg.Objects.Repository.String() + "/pull/0")}, true); err != nil {
+func (s *Service) openDelete(ctx context.Context, c kube.Client, cm *orgCommit, req DeleteRequest, res *DeleteResult, p, earlier string, earlierMerged bool) error {
+	if err := s.markDelete(ctx, c, req.Parent, req.Name, "https://github.com/"+cm.cfg.Objects.Repository.String()+"/pull/0", true); err != nil {
 		return err
 	}
 	content := cm.contentDir(req.Parent, req.Name)
@@ -292,14 +298,28 @@ func (s *Service) openDelete(ctx context.Context, c kube.Client, cm *orgCommit, 
 		res.Next += "dry run: no pull request was opened and the object was not marked; the files are in commit.files"
 		return nil
 	}
-	if err := apply(ctx, c.Dynamic(), []write{mark(res.Commit.PullRequest)}, false); err != nil {
-		return fmt.Errorf("%w (the pull request %s is open; call delete_organization again with mode commit to mark the object)", err, res.Commit.PullRequest)
+	if err := s.markDelete(ctx, c, req.Parent, req.Name, res.Commit.PullRequest, false); err != nil {
+		return fmt.Errorf("%w (the pull request %s is open; call delete_organization again with mode commit and no confirm to mark the object)", err, res.Commit.PullRequest)
 	}
 	step := fmt.Sprintf("after the merge the organization shows Pending erase (Orphaned, reason DeleteMerged); then call delete_organization with mode commit and confirm %q to erase it (Erase now). Until then nothing is erased", req.Parent+"/"+req.Name)
 	res.Commit.LiveSteps = []string{step}
 	res.Next += "the pull request " + res.Commit.PullRequest + " removes the organization from git; " + reviewNote + "; " + step
 	s.log.Info("organization delete committed", identity.LogAttr(ctx), "parent", req.Parent, "name", req.Name, "pullRequest", res.Commit.PullRequest)
 	return nil
+}
+
+// markDelete marks the live organization with its delete pull request, as
+// the caller, on the object as it is now: dry run first, and only the dry
+// run when dryRun.
+func (s *Service) markDelete(ctx context.Context, c kube.Client, parent, name, url string, dryRun bool) error {
+	what := fmt.Sprintf("AgentPlatformOrganization %s/%s", parent, name)
+	way := wayOrganizationsAdmin(parent)
+	u, err := c.Dynamic().Resource(GVR).Namespace(parent).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return kubeErr(err, "get "+what, way)
+	}
+	setAnnotation(u, DeletePullRequestAnnotation, url)
+	return apply(ctx, c.Dynamic(), []write{{gvr: GVR, kind: orgKind, op: opUpdate, obj: u.Object, ns: parent, name: name, what: what + " (" + DeletePullRequestAnnotation + ")", reason: way}}, dryRun)
 }
 
 // pullRequest reads a pull request URL of the organizations repository:
