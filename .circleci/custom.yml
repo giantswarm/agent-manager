@@ -8,9 +8,9 @@
 #     `make test`: the unittest plugin is not in the architect go image, so the
 #     job runs in a plain container with a pinned helm.
 #   - test-envtest: `make test-envtest`, the Go tests that need a real
-#     kube-apiserver (the tenant ValidatingAdmissionPolicy). The go-build job's
-#     `make test` skips them without KUBEBUILDER_ASSETS; this job downloads one
-#     with setup-envtest. The architect image carries Go and helm.
+#     kube-apiserver (the server-side dry run of the rendered objects). The
+#     go-build job's `make test` skips them without KUBEBUILDER_ASSETS; this
+#     job downloads one with setup-envtest. The architect image carries Go and helm.
 #   - verify-release-version: on a tag build, the binary go-build produced
 #     must report the tag (without its v); a release whose stamp is lost fails
 #     its pipeline.

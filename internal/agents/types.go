@@ -99,6 +99,12 @@ const (
 	// OCIRepositories agent-manager created.
 	ManagedByLabel = "app.kubernetes.io/managed-by"
 	ManagedByValue = "agent-manager"
+	// OperatorObjectLabel marks what agent-platform-operator keeps in an
+	// organization namespace (the agent chart's OCIRepository and the curated
+	// copies among them): agent-manager never deletes or rewrites such an
+	// object. The operator declares it in its internal controller package,
+	// which is not importable.
+	OperatorObjectLabel = "agent-platform.giantswarm.io/organization-object"
 )
 
 // The kinds an agent renders to.
@@ -551,6 +557,9 @@ type ModelConfig struct {
 	Accepted  *bool  `json:"accepted"`
 	Message   string `json:"message,omitempty"`
 	ManagedBy string `json:"managedBy,omitempty"`
+	// Default: it carries the organization's default mark
+	// (agent-platform.giantswarm.io/default-model-config: "true").
+	Default bool `json:"default,omitempty"`
 }
 
 // EgressPolicy is a kagent EgressPolicy as list_egress_policies reports it:

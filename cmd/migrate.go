@@ -89,7 +89,7 @@ is moved to its current name (--skills-git-auth-secret-name), also when its
 values are on the target major already; a GitOps-owned release gets the diff.
 
 With --multi-tenant, the agent releases in the tenant namespaces (labelled
-giantswarm.io/organization, as serve's tenant reconciler finds them) lose a
+giantswarm.io/organization, the legacy tenants) lose a
 skillsGitAuthSecretRef that names the installation's skills credential under
 its current or an earlier name: admission refuses that reference in a tenant,
 where an agent reads its git sources with its own credential or anonymously.

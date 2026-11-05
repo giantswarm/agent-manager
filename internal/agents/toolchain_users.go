@@ -81,7 +81,7 @@ func (s *Service) ToolchainUsers(ctx context.Context, name, version string) (*To
 			return image.GetName() == name && slices.ContainsFunc(digests, func(d string) bool { return strings.HasSuffix(image.GetOci(), "@"+d) })
 		}
 	}
-	for _, ns := range s.Managed() {
+	for _, ns := range s.Managed(ctx) {
 		st, err := s.site(ctx, In(ns))
 		if err != nil {
 			out.Unreadable = append(out.Unreadable, fmt.Sprintf("namespace %s: %v", ns, err))

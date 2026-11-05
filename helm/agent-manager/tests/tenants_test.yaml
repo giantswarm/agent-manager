@@ -1,6 +1,7 @@
-# The tenant reconciler's RBAC and admission policy (tenants.enabled): its
-# own switch, rendered with oauth.downstream too, binding only
-# agent-platform-tenant-flux, and its writes held to labelled namespaces.
+# tenants.enabled: the organization namespaces managed beside the configured
+# ones, found by label with a read-only ServiceAccount, and the ClusterRole
+# the agents' HelmReleases run as there. The retired tenant reconciler's
+# RBAC, admission policy and leader Lease are gone.
 #
 # Run with: make helm-test (helm unittest helm/agent-manager)
 suite: tenants
@@ -34,13 +35,13 @@ tests:
           content: --multi-tenant=true
         template: templates/deployment.yaml
 
-  - it: renders with oauth.downstream, where the ServiceAccount has no other RBAC
+  - it: renders the Flux ClusterRole and the namespace read, nothing else
     template: templates/tenants-rbac.yaml
     asserts:
       - hasDocuments:
-          count: 7
+          count: 3
 
-  - it: needs oauth.downstream, since a request in a tenant runs as the caller
+  - it: needs oauth.downstream, since a request in an organization namespace runs as the caller
     template: templates/tenants-rbac.yaml
     set:
       oauth:
@@ -59,7 +60,7 @@ tests:
       - failedTemplate:
           errorPattern: flux.helmReleaseServiceAccount is required with tenants.enabled
 
-  - it: renders the tenant Flux ClusterRole with only the Helm storage verbs on Secrets and without agenttemplates
+  - it: renders the Flux ClusterRole with only the Helm storage verbs on Secrets and without agenttemplates
     template: templates/tenants-rbac.yaml
     documentIndex: 0
     asserts:
@@ -78,37 +79,20 @@ tests:
               resources: ["agents", "remotemcpservers"]
               verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 
-  - it: binds only agent-platform-tenant-flux, never escalates, and names the one Secret it reads
+  - it: gives the ServiceAccount a read of namespaces and nothing more
     template: templates/tenants-rbac.yaml
     documentIndex: 1
     asserts:
       - isKind:
           of: ClusterRole
-      - contains:
+      - equal:
           path: rules
-          content:
-            apiGroups: ["rbac.authorization.k8s.io"]
-            resources: ["clusterroles"]
-            resourceNames: ["agent-platform-tenant-flux"]
-            verbs: ["bind"]
-      - contains:
-          path: rules
-          content:
-            apiGroups: [""]
-            resources: ["secrets"]
-            resourceNames: ["kagent-anthropic"]
-            verbs: ["get", "list", "watch", "update", "delete"]
-      - notMatchRegex:
-          path: rules[*].verbs[*]
-          pattern: ^(escalate|impersonate|\*)$
-      - notContains:
-          path: rules
-          content:
-            apiGroups: ["cilium.io"]
-            resources: ["ciliumnetworkpolicies"]
-            verbs: ["get", "list", "watch", "create", "update"]
+          value:
+            - apiGroups: [""]
+              resources: ["namespaces"]
+              verbs: ["get", "list", "watch"]
 
-  - it: binds the ClusterRole to the ServiceAccount
+  - it: binds the namespace read to the ServiceAccount
     template: templates/tenants-rbac.yaml
     documentIndex: 2
     asserts:
@@ -119,167 +103,32 @@ tests:
           value: RELEASE-NAME-agent-manager
       - equal:
           path: roleRef.name
-          value: RELEASE-NAME-agent-manager-tenants
+          value: RELEASE-NAME-agent-manager-namespaces
 
-  - it: holds the ServiceAccount's writes to labelled namespaces
-    template: templates/tenants-rbac.yaml
-    documentIndex: 3
-    asserts:
-      - isKind:
-          of: ValidatingAdmissionPolicy
-      - equal:
-          path: spec.failurePolicy
-          value: Fail
-      - equal:
-          path: spec.matchConditions[0].expression
-          value: request.userInfo.username == 'system:serviceaccount:NAMESPACE:RELEASE-NAME-agent-manager'
-      - equal:
-          path: spec.variables[0].expression
-          value: has(namespaceObject.metadata.labels) && 'giantswarm.io/organization' in namespaceObject.metadata.labels && namespaceObject.metadata.name != 'kagent'
-      - matchRegex:
-          path: spec.validations[1].expression
-          pattern: request.name == 'kagent-anthropic'$
-      - matchRegex:
-          path: spec.validations[2].expression
-          pattern: variables.binding.roleRef.name == 'agent-platform-tenant-flux' && has\(variables.binding.subjects\) && variables.binding.subjects.all\(s, s.kind == 'ServiceAccount' && s.name == 'agents-flux' && s.namespace == request.namespace\)
-      - contains:
-          path: spec.matchConstraints.resourceRules
-          content:
-            apiGroups: [""]
-            apiVersions: ["v1"]
-            operations: ["CREATE", "UPDATE", "DELETE"]
-            resources: ["secrets", "serviceaccounts"]
-      - contains:
-          path: spec.matchConstraints.resourceRules
-          content:
-            apiGroups: ["rbac.authorization.k8s.io"]
-            apiVersions: ["v1"]
-            operations: ["CREATE", "UPDATE", "DELETE"]
-            resources: ["rolebindings"]
-
-  - it: admits in the managed namespaces the update of the skills boot Secret under its current and every previous name it keeps filled, and no other Secret
-    template: templates/tenants-rbac.yaml
-    documentIndex: 3
-    set:
-      kagent:
-        additionalNamespaces: [agents]
-      skills:
-        mintGitAuthSecret: true
-        github:
-          app:
-            secretName: skills-app
-        previousGitAuthSecretNames: [old-skills-token]
-    asserts:
-      - equal:
-          path: spec.variables[1].expression
-          value: request.namespace in ['kagent','agents'] && (request.resource.resource == 'ocirepositories' || (request.resource.resource == 'secrets' && request.operation == 'UPDATE' && request.name in ['RELEASE-NAME-agent-manager-skills-token','tenant-credential-RELEASE-NAME-agent-manager-skills-token','old-skills-token']))
-
-  - it: admits only the configured skills Secret without minting, where agent-manager fills no previous name
-    template: templates/tenants-rbac.yaml
-    documentIndex: 3
-    set:
-      skills:
-        gitAuthSecretName: skills-token
-        previousGitAuthSecretNames: [old-skills-token]
-    asserts:
-      - equal:
-          path: spec.variables[1].expression
-          value: request.namespace in ['kagent'] && (request.resource.resource == 'ocirepositories' || (request.resource.resource == 'secrets' && request.operation == 'UPDATE' && request.name in ['skills-token']))
-
-  - it: denies what the policy refuses
-    template: templates/tenants-rbac.yaml
-    documentIndex: 4
-    asserts:
-      - isKind:
-          of: ValidatingAdmissionPolicyBinding
-      - equal:
-          path: spec.validationActions
-          value: ["Deny"]
-
-  - it: lets the ServiceAccount hold the leader Lease agent-manager-tenants in the release namespace, and no other
-    template: templates/tenants-rbac.yaml
-    release:
-      namespace: agent-platform
-    documentIndex: 5
-    asserts:
-      - isKind:
-          of: Role
-      - equal:
-          path: metadata.namespace
-          value: agent-platform
-      - equal:
-          path: rules
-          value:
-            - apiGroups: ["coordination.k8s.io"]
-              resources: ["leases"]
-              verbs: ["create"]
-            - apiGroups: ["coordination.k8s.io"]
-              resources: ["leases"]
-              resourceNames: ["agent-manager-tenants"]
-              verbs: ["get", "update"]
-            - apiGroups: [""]
-              resources: ["events"]
-              verbs: ["create", "patch"]
-
-  - it: names the network policy kind of the flavor in the role and the policy
-    template: templates/tenants-rbac.yaml
-    set:
-      tenants:
-        networkPolicy:
-          flavor: cilium
-          names: [substrate-workers]
-    asserts:
-      - contains:
-          path: rules
-          content:
-            apiGroups: ["cilium.io"]
-            resources: ["ciliumnetworkpolicies"]
-            verbs: ["get", "list", "watch", "create", "update"]
-        documentIndex: 1
-      - contains:
-          path: spec.matchConstraints.resourceRules
-          content:
-            apiGroups: ["cilium.io"]
-            apiVersions: ["*"]
-            operations: ["CREATE", "UPDATE", "DELETE"]
-            resources: ["ciliumnetworkpolicies"]
-        documentIndex: 3
-
-  - it: refuses an unknown flavor
-    template: templates/tenants-rbac.yaml
-    set:
-      tenants:
-        networkPolicy:
-          flavor: calico
-          names: [x]
-    asserts:
-      - failedTemplate:
-          errorPattern: "tenants.networkPolicy.flavor \"calico\": kubernetes, cilium or empty"
-
-  - it: passes the tenant flags
+  - it: passes the tenant flag and no reconciler flag
     template: templates/deployment.yaml
-    set:
-      tenants:
-        workerPoolReplicas: 2
-        networkPolicy:
-          flavor: kubernetes
-          names: [substrate-workers-ingress]
     asserts:
       - contains:
           path: spec.template.spec.containers[0].args
           content: --multi-tenant=true
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].args[*]
+          pattern: ^--tenant-
+
+  - it: refuses the retired reconciler's keys
+    template: templates/deployment.yaml
+    set:
+      tenants:
+        workerPoolReplicas: 2
+    asserts:
+      - failedTemplate: {}
+
+  - it: passes the Dev Portal's URL
+    template: templates/deployment.yaml
+    set:
+      devPortal:
+        url: https://portal.example.com
+    asserts:
       - contains:
           path: spec.template.spec.containers[0].args
-          content: --tenant-worker-pool-replicas=2
-      - contains:
-          path: spec.template.spec.containers[0].args
-          content: --tenant-flux-cluster-role=agent-platform-tenant-flux
-      - contains:
-          path: spec.template.spec.containers[0].args
-          content: --tenant-network-policy-flavor=kubernetes
-      - contains:
-          path: spec.template.spec.containers[0].args
-          content: --tenant-network-policies=substrate-workers-ingress
-      - contains:
-          path: spec.template.spec.containers[0].args
-          content: --tenant-model-secret=kagent-anthropic
+          content: --dev-portal-url=https://portal.example.com

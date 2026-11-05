@@ -42,13 +42,19 @@ const (
 	ToolToolchainUsers     = "toolchain_users"
 )
 
-// ToolNames lists every tool the MCP server registers.
+// ToolNames lists the agent tools.
 func ToolNames() []string {
 	return []string{
 		ToolGetInfo, ToolListAgents, ToolGetAgent, ToolCreateAgent, ToolUpdateAgent,
 		ToolDeleteAgent, ToolGetAgentStatus, ToolValidateAgent, ToolListModelConfigs, ToolListEgressPolicies, ToolListSkills,
 		ToolListSessions, ToolGetSession, ToolGetSessionTurn, ToolStartSession, ToolDeleteSession, ToolToolchainUsers,
 	}
+}
+
+// AllToolNames lists every tool the MCP server registers: the agent tools,
+// then the organization tools.
+func AllToolNames() []string {
+	return append(ToolNames(), OrganizationToolNames()...)
 }
 
 const (
@@ -139,7 +145,11 @@ func reportProgress(next mcpserver.ToolHandlerFunc) mcpserver.ToolHandlerFunc {
 
 // NewMCPServer builds an MCP server exposing the same operations as the REST
 // API as tools. Results are JSON text with the same shapes as the REST bodies.
-func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
+func NewMCPServer(svc *agents.Service, version string, opts ...Option) *mcpserver.MCPServer {
+	var o serverOptions
+	for _, opt := range opts {
+		opt(&o)
+	}
 	s := mcpserver.NewMCPServer("agent-manager", version,
 		mcpserver.WithToolHandlerMiddleware(genAIToolName),
 		mcpserver.WithToolHandlerMiddleware(toolDuration(otel.Meter(tracerName))),
@@ -148,7 +158,7 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 		// MCP spans nest under it instead of extracting it a second time.
 		mcpotel.WithServerTracingPropagator(otel.Tracer(tracerName), propagation.NewCompositeTextMapPropagator()),
 		mcpserver.WithToolCapabilities(false),
-		mcpserver.WithInstructions("Manage the agents of the Agent Platform. An agent is a Flux HelmRelease of the Generic agent chart, which renders a kagent Agent, its Harness reference and the agent's muster RemoteMCPServer carrying its toolset. Call get_info first, and list_model_configs and list_skills before create_agent. Names are DNS-1123 labels the person chooses and confirms. Every agent needs a toolset. create_agent, update_agent and delete_agent take dryRun and mode: apply writes live as you, commit opens a pull request as you in the repository that owns the namespace. organization and cluster (both or neither) place an agent on a workload cluster and address it in every later call of a tool that takes them. Talk to an agent with start_session and get_session."),
+		mcpserver.WithInstructions("Manage the agents of the Agent Platform. An agent is a Flux HelmRelease of the Generic agent chart, which renders a kagent Agent, its Harness reference and the agent's muster RemoteMCPServer carrying its toolset. Call get_info first, and list_model_configs and list_skills before create_agent. Names are DNS-1123 labels the person chooses and confirms. Every agent needs a toolset. create_agent, update_agent and delete_agent take dryRun and mode: apply writes live as you, commit opens a pull request as you in the repository that owns the namespace. organization and cluster (both or neither) place an agent on a workload cluster and address it in every later call of a tool that takes them. Talk to an agent with start_session and get_session. Organizations: list_my_organizations lists the organization namespaces you can create agents in; the *_organization* tools manage organizations, their members, models, connectors and egress policies as you, and never take a secret value."),
 	)
 	t := &tools{svc: svc}
 
@@ -404,7 +414,7 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 
 	s.AddTool(mcp.NewTool(ToolListModelConfigs,
 		tooldesc.Describe("List the ModelConfigs of a namespace: the values create_agent accepts for modelConfig.",
-			"Each with provider, model, its Accepted condition and who manages it; agent-manager never writes them. In a tenant namespace without agents yet, the platform default ModelConfig comes with the first agent."),
+			"Each with provider, model, its Accepted condition, who manages it and, in an organization namespace, default: the organization's default model. Organization admins write them with set_organization_model."),
 		nsProp,
 		orgProp,
 		clusterProp,
@@ -416,7 +426,7 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 
 	s.AddTool(mcp.NewTool(ToolListEgressPolicies,
 		tooldesc.Describe("List the EgressPolicies of a namespace: the names create_agent and update_agent accept for egressPolicyRefs.",
-			"Each with its origins and, where the egress gateway adds a credential, the header's name; never the Secret. Read as you; tenant admins write them, agent-manager never does. A change to a policy reaches every agent that picks it from its next Session on."),
+			"Each with its origins and, where the egress gateway adds a credential, the header's name; never the Secret. Read as you; organization admins write them with set_organization_egress_policy. A change to a policy reaches every agent that picks it from its next Session on."),
 		nsProp,
 		orgProp,
 		clusterProp,
@@ -518,6 +528,7 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 		mcp.WithOpenWorldHintAnnotation(false),
 	), t.toolchainUsers)
 
+	addOrganizationTools(s, o.orgs)
 	return s
 }
 

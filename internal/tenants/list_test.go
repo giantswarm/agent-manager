@@ -10,7 +10,7 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 )
 
-func TestListFindsTheTenantsAsTheReconcilerDoes(t *testing.T) {
+func TestListFindsTheLabelledTenants(t *testing.T) {
 	ns := func(name string, labelled bool, mutate func(*corev1.Namespace)) *corev1.Namespace {
 		n := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: name}}
 		if labelled {
