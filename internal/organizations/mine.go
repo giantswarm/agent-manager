@@ -47,8 +47,10 @@ func (s *Service) ListMine(ctx context.Context) (*Mine, error) {
 			res, err := c.Typed().AuthorizationV1().SelfSubjectAccessReviews().Create(gctx, review, metav1.CreateOptions{})
 			if apierrors.IsUnauthorized(err) {
 				// The caller's token is refused: no review answers, and
-				// "no organization" would be the wrong answer.
-				return kubeErr(err, "access review in "+ns.Name, "")
+				// "no organization" would be the wrong answer. The answer
+				// names no namespace: the ServiceAccount found them, and
+				// the caller has shown access to none.
+				return errTokenRefused
 			}
 			if err != nil {
 				s.log.Debug("access review failed; leaving the organization out", identity.LogAttr(ctx), "namespace", ns.Name, "error", err)

@@ -332,7 +332,7 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service) {
 
 	s.AddTool(mcp.NewTool(ToolSetOrganizationConnector,
 		tooldesc.Describe("Create or change an organization's connector (a RemoteMCPServer) as you; its credential is a Secret named by reference.",
-			"A credential field sets the Secret-backed header it names (default: the only one, else Authorization; Secret tenant-credential-<name>, key token, the whole value); other headers stay; noCredential removes them. A URL with userinfo or a credential-like query parameter is refused. Never pass a value: a missing Secret is answered with the Dev Portal's form link in credentials[].next. Needs agent-platform:admin."),
+			"A credential field sets the Secret-backed header it names (default: the only one, else Authorization; Secret tenant-credential-<name>, key token, the whole value); other headers stay; noCredential removes them. A URL with userinfo, a fragment, a credential-like query parameter or a query that does not parse is refused. Never pass a value: a missing Secret is answered with the Dev Portal's form link in credentials[].next. Needs agent-platform:admin."),
 		orgNSProp,
 		mcp.WithString(argName, mcp.Required(), mcp.Description("RemoteMCPServer name")),
 		mcp.WithString(argURL, mcp.Description("MCP endpoint URL, without a credential in it; required to create")),

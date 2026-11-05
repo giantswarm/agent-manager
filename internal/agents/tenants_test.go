@@ -200,3 +200,37 @@ func TestToolchainUsersNamesNoOrganizationTheCallerIsNotIn(t *testing.T) {
 		assert.NotContains(t, line, "agents-other-x7k2q")
 	}
 }
+
+// A token the API server refuses fails toolchain_users without naming the
+// organization namespace it was refused in; another failure there is
+// counted, not named: the caller has shown access to none of them.
+func TestToolchainUsersNamesNoOrganizationOnAFailure(t *testing.T) {
+	for name, fail := range map[string]error{
+		"refused token": apierrors.NewUnauthorized("token expired"),
+		"server error":  apierrors.NewInternalError(errors.New("etcd timeout")),
+	} {
+		t.Run(name, func(t *testing.T) {
+			svc, _, _ := newToolchainFixture(t, "github")
+			svc.cfg.Tenants = &fakeTenants{namespaces: []string{"agents-other-x7k2q"}}
+			ctx := asPerson(t.Context(), "admin@lab.local")
+			c, err := svc.kube.Client(ctx)
+			require.NoError(t, err)
+			c.Dynamic().(*dynamicfake.FakeDynamicClient).PrependReactor("list", "agents", func(a k8stesting.Action) (bool, runtime.Object, error) {
+				if a.GetNamespace() == "agents-other-x7k2q" {
+					return true, nil, fail
+				}
+				return false, nil, nil
+			})
+			users, err := svc.ToolchainUsers(ctx, "github", "")
+			if apierrors.IsUnauthorized(fail) {
+				require.ErrorIs(t, err, ErrUnauthenticated)
+				assert.NotContains(t, err.Error(), "agents-other-x7k2q")
+				return
+			}
+			require.NoError(t, err)
+			require.Len(t, users.Unreadable, 1)
+			assert.Contains(t, users.Unreadable[0], "1 organization namespace")
+			assert.NotContains(t, users.Unreadable[0], "agents-other-x7k2q")
+		})
+	}
+}

@@ -505,6 +505,7 @@ func TestThePickerListsOnlyTheCallersOrganizations(t *testing.T) {
 	text, isErr = f.call(t, ToolListMyOrganizations, nil)
 	require.True(t, isErr)
 	assert.True(t, strings.HasPrefix(text, "unauthenticated:"), text)
+	assert.NotContains(t, text, "agents-", "a refused token learns no organization namespace")
 }
 
 // Members are added into their role's binding and removed from it; when
@@ -643,19 +644,38 @@ func TestConnectorURLsAndHeaders(t *testing.T) {
 				map[string]any{"name": "X-Atlassian-Token", "valueFrom": map[string]any{"type": "Secret", "name": "tenant-credential-jira", "key": "xsrf"}},
 			}},
 	}}
-	f := newOrgFixture(t, conn)
+	// Written elsewhere, with a query that does not parse (a ; separator)
+	// and a fragment: neither may hide a credential from a read.
+	// #nosec G101 -- a fake credential in a URL, the case under test
+	malformed := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "api.kagent.dev/v1alpha3", "kind": "RemoteMCPServer",
+		"metadata": map[string]any{"name": "malformed", "namespace": orgNS},
+		"spec":     map[string]any{"description": "m", "url": "https://mcp.example/mcp?access_token=q-live;extra#token=f-live"},
+	}}
+	f := newOrgFixture(t, conn, malformed)
 
-	for _, url := range []string{"https://bot:hunter2@mcp.example/mcp", "https://mcp.example/mcp?access_token=t-live"} {
+	for _, url := range []string{
+		"https://bot:hunter2@mcp.example/mcp",
+		"https://mcp.example/mcp?access_token=t-live",
+		// url.URL.Query drops the malformed pair, and the credential with it.
+		"https://mcp.example/mcp?access_token=t-live;extra",
+		"https://mcp.example/mcp#access_token=t-live",
+		// Does not parse: the error must not carry the userinfo back.
+		"https://bot:hunter2@mcp.example/%zz",
+	} {
 		text, isErr := f.call(t, ToolSetOrganizationConnector, map[string]any{"namespace": orgNS, "name": "x", "url": url})
 		require.True(t, isErr, url)
 		assert.True(t, strings.HasPrefix(text, "invalid_request:"), text)
+		assert.NotContains(t, text, "hunter2", url)
+		assert.NotContains(t, text, "t-live", url)
 		assert.Nil(t, f.get(t, connGVR, orgNS, "x"))
 	}
 
 	text, isErr := f.call(t, ToolListOrganizationConnector, map[string]any{"namespace": orgNS})
 	require.False(t, isErr, text)
-	assert.NotContains(t, text, "hunter2")
-	assert.NotContains(t, text, "k-live")
+	for _, secret := range []string{"hunter2", "k-live", "q-live", "f-live"} {
+		assert.NotContains(t, text, secret)
+	}
 	assert.Contains(t, text, "site=acme")
 
 	text, isErr = f.call(t, ToolSetOrganizationConnector, map[string]any{"namespace": orgNS, "name": "jira", "credentialHeader": "Authorization", "credentialSecret": "tenant-credential-jira-v2"}) // #nosec G101 -- a Secret's name, not a credential

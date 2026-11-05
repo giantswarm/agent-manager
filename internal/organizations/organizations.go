@@ -215,6 +215,11 @@ func requireAccess(ctx context.Context, c kube.Client, way string, checks ...acc
 
 var dryRunAll = []string{metav1.DryRunAll}
 
+// errTokenRefused answers a caller whose token the API server refuses (401)
+// before the caller has shown access to any organization namespace: it
+// names none of them, nor carries the API server's message about one.
+var errTokenRefused = fmt.Errorf("%w: the API server refused your token (401): sign in again", agents.ErrUnauthenticated)
+
 // write is one object write a tool makes: dry-run first, all of them, then
 // applied in order.
 type write struct {

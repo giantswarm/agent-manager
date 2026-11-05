@@ -616,44 +616,63 @@ func (s *Service) DeleteResource(ctx context.Context, ns, kind, name string, dry
 var credentialQuery = regexp.MustCompile(`(?i)(key|token|secret|password|passwd|auth|sig|credential)`)
 
 // refuseCredentialInURL refuses a connector URL that carries a credential:
-// userinfo, or a query parameter named like one. A credential goes in a
-// header from a Secret, so it never crosses MCP.
+// userinfo, or a query parameter named like one. A URL or a query that does
+// not parse is refused too: what it hides cannot be checked. A credential
+// goes in a header from a Secret, so it never crosses MCP, and no refusal
+// echoes the URL or its parse error, which would carry it back.
 func refuseCredentialInURL(raw string) error {
+	const way = "a connector's credential goes in a header from a Secret (credentialHeader, credentialSecret), never in the URL"
 	u, err := url.Parse(raw)
 	if err != nil {
-		return invalidf("url %q: %v", raw, err)
+		return invalidf("url: not a valid URL (the URL is not repeated here: it may carry a credential)")
 	}
 	if u.User != nil {
-		return invalidf("url: carries user information; a connector's credential goes in a header from a Secret (credentialHeader, credentialSecret), never in the URL")
+		return invalidf("url: carries user information; %s", way)
 	}
-	for name := range u.Query() {
+	if u.Fragment != "" || u.RawFragment != "" {
+		return invalidf("url: carries a fragment (#...), which an MCP endpoint does not use and which can hold a credential; %s", way)
+	}
+	query, err := url.ParseQuery(u.RawQuery)
+	if err != nil {
+		return invalidf("url: its query does not parse as name=value pairs joined by &, so it cannot be checked for a credential; %s", way)
+	}
+	for name := range query {
 		if credentialQuery.MatchString(name) {
-			return invalidf("url: query parameter %q looks like a credential; a connector's credential goes in a header from a Secret (credentialHeader, credentialSecret), never in the URL", name)
+			return invalidf("url: query parameter %q looks like a credential; %s", name, way)
 		}
 	}
 	return nil
 }
 
 // redactURL hides what refuseCredentialInURL refuses, in a URL written
-// elsewhere (git, kubectl), so a read never returns it.
+// elsewhere (git, kubectl), so a read never returns it: userinfo, a query
+// parameter named like a credential, a whole query that does not parse, and
+// the fragment.
+// A URL that does not parse is not returned at all.
 func redactURL(raw string) string {
+	const redacted = "REDACTED"
 	u, err := url.Parse(raw)
 	if err != nil {
 		return ""
 	}
 	if u.User != nil {
-		u.User = url.User("REDACTED")
+		u.User = url.User(redacted)
 	}
-	q := u.Query()
+	u.Fragment, u.RawFragment = "", ""
+	query, err := url.ParseQuery(u.RawQuery)
+	if err != nil {
+		u.RawQuery = redacted
+		return u.String()
+	}
 	changed := false
-	for name := range q {
+	for name := range query {
 		if credentialQuery.MatchString(name) {
-			q.Set(name, "REDACTED")
+			query.Set(name, redacted)
 			changed = true
 		}
 	}
 	if changed {
-		u.RawQuery = q.Encode()
+		u.RawQuery = query.Encode()
 	}
 	return u.String()
 }
