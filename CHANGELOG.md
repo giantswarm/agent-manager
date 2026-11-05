@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.18.0] - 2026-11-03
+
 ### Added
 
 - `tags` on `create_agent`, `update_agent`, `get_agent` and `list_agents` (REST and MCP), stored as the chart value `agent.tags` (rendered as the `ui.giantswarm.io/tags` annotation) and read from it, so a read reflects an update at once; and the `get_info` capability `tags`, true when the embedded agent chart has a tag rule and the chart in use takes `agent.tags` (2.5.0 or later). The tag rule is the embedded chart's `tag.schema.json` and `agent.tags` `maxItems`, loaded at startup, for agents and skills alike. `list_agents` and `list_skills` take a `tags` filter (any of them); `list_skills` reports a skill's tags from its `SKILL.md` frontmatter `metadata.tags` (comma-joined; a tag the rule refuses is dropped) (giantswarm/giantswarm#38901).
@@ -537,7 +539,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Chart: the MCPServer CR carries `agent-platform.giantswarm.io/tool-group: agent-platform` next to `muster.giantswarm.io/type` — the Agent Platform tier of MCP servers (the portal's MCP servers page, the `agent-platform` toolset preset). `muster.mcpServer.labels` still adds or overrides labels. (#23)
 
-[Unreleased]: https://github.com/giantswarm/agent-manager/compare/v2.17.7...HEAD
+[Unreleased]: https://github.com/giantswarm/agent-manager/compare/v2.18.0...HEAD
+[2.18.0]: https://github.com/giantswarm/agent-manager/compare/v2.17.7...v2.18.0
 [2.17.7]: https://github.com/giantswarm/agent-manager/compare/v2.17.2...v2.17.7
 [2.17.2]: https://github.com/giantswarm/agent-manager/compare/v2.17.1...v2.17.2
 [2.17.1]: https://github.com/giantswarm/agent-manager/compare/v2.17.0...v2.17.1
