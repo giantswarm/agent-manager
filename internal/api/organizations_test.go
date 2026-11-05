@@ -121,7 +121,9 @@ func newOrgFixture(t *testing.T, objs ...runtime.Object) *orgFixture {
 	sa := kubefake.NewClientset(
 		namespace(orgNS, map[string]string{apov1alpha1.OrganizationLabel: "payments", apov1alpha1.ParentLabel: "org-acme"}),
 		namespace("agents-billing-a1b2c", map[string]string{apov1alpha1.OrganizationLabel: "billing", apov1alpha1.ParentLabel: "org-acme"}),
-		namespace("org-legacy", map[string]string{"giantswarm.io/organization": "legacy"}),
+		// The parent of the organizations: a Giant Swarm Organization's
+		// namespace, with the old label alone.
+		namespace("org-acme", map[string]string{"giantswarm.io/organization": "acme"}),
 		namespace("plain", nil),
 	)
 	orgs := organizations.New(callerOnly{c: kube.FromInterfaces(f.dyn, f.typed, f.typed.Discovery())}, organizations.Config{
@@ -480,7 +482,7 @@ func TestCredentialsAreReferencesOnly(t *testing.T) {
 func TestThePickerListsOnlyTheCallersOrganizations(t *testing.T) {
 	f := newOrgFixture(t)
 	f.deny = func(ns, verb, resource, _ string) bool {
-		// The caller may list Agents in org-legacy and plain too: only the
+		// The caller may list Agents in org-acme and plain too: only the
 		// organization label keeps them out.
 		return verb == "list" && resource == "agents" && ns == "agents-billing-a1b2c"
 	}
@@ -543,7 +545,8 @@ func TestOrganizationMembers(t *testing.T) {
 	require.False(t, isErr, text)
 	assert.Nil(t, f.get(t, rbGVR, orgNS, "organization-editors"), "an emptied binding goes")
 
-	text, isErr = f.call(t, ToolAddOrganizationMember, map[string]any{"namespace": "org-legacy", "role": "user", "group": "g"})
+	text, isErr = f.call(t, ToolAddOrganizationMember, map[string]any{"namespace": "org-acme", "role": "user", "group": "g"})
 	require.True(t, isErr)
-	assert.Contains(t, text, "not an organization namespace")
+	assert.Contains(t, text, "namespace org-acme is not an organization namespace")
+	assert.NotContains(t, text, "tenant", "an org-* namespace is no tenant of any kind")
 }
