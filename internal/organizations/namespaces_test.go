@@ -46,4 +46,11 @@ func TestNamesAreTheOrganizationNamespacesOnly(t *testing.T) {
 		require.NoError(t, err)
 		assert.False(t, ok, name)
 	}
+	// Holds is how the agent tools ask the same question.
+	holds, err := finder.Holds(t.Context(), "agents-payments-x7k2q")
+	require.NoError(t, err)
+	assert.True(t, holds)
+	holds, err = finder.Holds(t.Context(), "org-acme")
+	require.NoError(t, err)
+	assert.False(t, holds)
 }

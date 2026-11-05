@@ -224,6 +224,9 @@ func (s *Service) AddMember(ctx context.Context, req MemberRequest) (*MemberResu
 	case err != nil:
 		return nil, kubeErr(err, "get "+what, way)
 	default:
+		if err := refuseUnowned(existing, "RoleBinding"); err != nil {
+			return nil, err
+		}
 		if ref, _, _ := unstructured.NestedString(existing.Object, "roleRef", "name"); ref != role {
 			return nil, fmt.Errorf("%w: %s binds %s, not %s: agent-manager writes the %s members into it; rename or remove that binding first", agents.ErrConflict, what, ref, role, req.Role)
 		}
@@ -294,6 +297,9 @@ func (s *Service) RemoveMember(ctx context.Context, req MemberRequest) (*MemberR
 		}
 		if len(kept) == len(subs) {
 			continue
+		}
+		if err := refuseUnowned(&b.obj, "RoleBinding"); err != nil {
+			return nil, err
 		}
 		name := b.obj.GetName()
 		what := fmt.Sprintf("RoleBinding %s/%s", ns, name)

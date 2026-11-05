@@ -26,7 +26,7 @@ const (
 
 // Credential is a credential Secret an object names, by reference only: the
 // value is typed in the Dev Portal's credential form, never in a tool call,
-// and never read back.
+// and no tool answer, log or trace carries it.
 type Credential struct {
 	// Secret and Key name where the value lives in the organization
 	// namespace.
@@ -56,7 +56,11 @@ func credentialRef(secret, key string) error {
 }
 
 // credential reports the state of a Secret an object of kind and name in org
-// names, read as the caller: only whether the key exists, never its value.
+// names. It GETs the Secret as the caller, which returns its data (the API
+// has no read of a Secret's keys without their values), to tell whether the
+// key holds a value; the value stays in this function, which reports only
+// the state, and it is never returned, logged or traced. A caller who may not
+// read the Secret gets the state unknown.
 func (s *Service) credential(ctx context.Context, c kube.Client, org Namespace, kind, name, secret, key string, replace bool) Credential {
 	cred := Credential{Secret: secret, Key: key, FormURL: s.formURL(org, secret, key, kind, name)}
 	obj, err := c.Typed().CoreV1().Secrets(org.Name).Get(ctx, secret, metav1.GetOptions{})

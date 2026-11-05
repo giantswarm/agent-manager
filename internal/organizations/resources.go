@@ -82,13 +82,18 @@ func find(items []unstructured.Unstructured, name string) *unstructured.Unstruct
 	return nil
 }
 
-// refuseCurated refuses a write to an object agent-platform-operator keeps.
-func refuseCurated(obj *unstructured.Unstructured, kind string) error {
+// refuseUnowned refuses a live write to an object agent-manager may not
+// change live: a copy agent-platform-operator keeps, or an object a Flux
+// Kustomization applies from git, which Flux would revert.
+func refuseUnowned(obj *unstructured.Unstructured, kind string) error {
 	if obj == nil {
 		return nil
 	}
 	if scope, ok := obj.GetLabels()[agents.OperatorObjectLabel]; ok {
 		return fmt.Errorf("%w: %s %s/%s is agent-platform-operator's (%s: %s), a copy of what the platform curates: it is changed where the platform curates it, not here", agents.ErrConflict, kind, obj.GetNamespace(), obj.GetName(), agents.OperatorObjectLabel, scope)
+	}
+	if ks := obj.GetLabels()[agents.KustomizationNameLabel]; ks != "" {
+		return fmt.Errorf("%w: %s %s/%s is applied from git by the Flux Kustomization %s, which would revert a live change: change it in git (commit mode for organizations is giantswarm/agent-manager#292)", agents.ErrGitOpsOwned, kind, obj.GetNamespace(), obj.GetName(), ks)
 	}
 	return nil
 }
@@ -150,7 +155,7 @@ func (s *Service) SetModel(ctx context.Context, req ModelRequest) (*ResourceResu
 		return nil, err
 	}
 	obj := find(items, req.Name)
-	if err := refuseCurated(obj, "ModelConfig"); err != nil {
+	if err := refuseUnowned(obj, "ModelConfig"); err != nil {
 		return nil, err
 	}
 	res := &ResourceResult{Namespace: ns, Kind: KindModel, Name: req.Name, DryRun: req.DryRun, RequestedBy: identity.Caller(ctx)}
@@ -192,6 +197,9 @@ func (s *Service) SetModel(ctx context.Context, req ModelRequest) (*ResourceResu
 		// and default true fixes, never an organization without a default.
 		for _, name := range marks {
 			other := find(items, name)
+			if err := refuseUnowned(other, "ModelConfig"); err != nil {
+				return nil, fmt.Errorf("moving the default mark takes it off %s: %w", name, err)
+			}
 			annotations := other.GetAnnotations()
 			delete(annotations, apov1alpha1.DefaultModelConfigAnnotation)
 			other.SetAnnotations(annotations)
@@ -357,7 +365,7 @@ func (s *Service) SetConnector(ctx context.Context, req ConnectorRequest) (*Reso
 		return nil, err
 	}
 	obj := find(items, req.Name)
-	if err := refuseCurated(obj, "RemoteMCPServer"); err != nil {
+	if err := refuseUnowned(obj, "RemoteMCPServer"); err != nil {
 		return nil, err
 	}
 	res := &ResourceResult{Namespace: ns, Kind: KindConnector, Name: req.Name, DryRun: req.DryRun, RequestedBy: identity.Caller(ctx)}
@@ -507,7 +515,7 @@ func (s *Service) SetEgressPolicy(ctx context.Context, req EgressRequest) (*Reso
 		return nil, err
 	}
 	obj := find(items, req.Name)
-	if err := refuseCurated(obj, "EgressPolicy"); err != nil {
+	if err := refuseUnowned(obj, "EgressPolicy"); err != nil {
 		return nil, err
 	}
 	res := &ResourceResult{Namespace: ns, Kind: KindEgressPolicy, Name: req.Name, DryRun: req.DryRun, RequestedBy: identity.Caller(ctx)}
@@ -586,7 +594,7 @@ func (s *Service) DeleteResource(ctx context.Context, ns, kind, name string, dry
 	if err != nil {
 		return nil, kubeErr(err, "get "+what, wayOrganizationAdmin(ns))
 	}
-	if err := refuseCurated(obj, info.kubeKind); err != nil {
+	if err := refuseUnowned(obj, info.kubeKind); err != nil {
 		return nil, err
 	}
 	w := write{gvr: gvr, op: opDelete, ns: ns, name: name, what: what, reason: wayOrganizationAdmin(ns)}

@@ -25,6 +25,7 @@ import (
 	kubefake "k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
 
+	"github.com/giantswarm/agent-manager/internal/agents"
 	"github.com/giantswarm/agent-manager/internal/identity"
 	"github.com/giantswarm/agent-manager/internal/kube"
 	"github.com/giantswarm/agent-manager/internal/kube/kubetest"
@@ -664,4 +665,114 @@ func TestConnectorURLsAndHeaders(t *testing.T) {
 		map[string]any{"name": "Authorization", "valueFrom": map[string]any{"type": "Secret", "name": "tenant-credential-jira-v2", "key": "token"}},
 		map[string]any{"name": "X-Atlassian-Token", "valueFrom": map[string]any{"type": "Secret", "name": "tenant-credential-jira", "key": "xsrf"}},
 	}, headers)
+}
+
+// list_organizations lists a parent's organizations, or every parent's, as
+// the caller; a refusal names the role.
+func TestListOrganizations(t *testing.T) {
+	other := organization("org-other", "billing", nil)
+	f := newOrgFixture(t, organization("org-acme", "payments", nil), other)
+	names := func(text string) []string {
+		var out []string
+		for _, o := range decode(t, text)["organizations"].([]any) {
+			out = append(out, o.(map[string]any)["parent"].(string)+"/"+o.(map[string]any)["name"].(string))
+		}
+		return out
+	}
+	text, isErr := f.call(t, ToolListOrganizations, map[string]any{"namespace": "org-acme"})
+	require.False(t, isErr, text)
+	assert.Equal(t, []string{"org-acme/payments"}, names(text))
+	text, isErr = f.call(t, ToolListOrganizations, nil)
+	require.False(t, isErr, text)
+	assert.Equal(t, []string{"org-acme/payments", "org-other/billing"}, names(text))
+
+	f.dyn.PrependReactor("list", "agentplatformorganizations", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewForbidden(orgGVR.GroupResource(), "", errors.New("RBAC: access denied"))
+	})
+	text, isErr = f.call(t, ToolListOrganizations, map[string]any{"namespace": "org-acme"})
+	require.True(t, isErr)
+	assert.True(t, strings.HasPrefix(text, "forbidden:"), text)
+	assert.Contains(t, text, organizations.RoleOrganizationsAdmin)
+}
+
+// get_organization answers what a delete erases as far as the caller can
+// read it, and names what it cannot read instead of failing.
+func TestGetOrganizationNamesWhatItCannotRead(t *testing.T) {
+	f := newOrgFixture(t, organization("org-acme", "payments", nil), model("claude", true))
+	f.dyn.PrependReactor("list", "*", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		if a.GetNamespace() == orgNS && (a.GetResource().Resource == "agents" || a.GetResource().Resource == "rolebindings") {
+			return true, nil, apierrors.NewForbidden(a.GetResource().GroupResource(), "", errors.New("RBAC: access denied"))
+		}
+		return false, nil, nil
+	})
+	text, isErr := f.call(t, ToolGetOrganization, map[string]any{"namespace": "org-acme", "name": "payments"})
+	require.False(t, isErr, text)
+	erases := decode(t, text)["erases"].(map[string]any)
+	assert.Equal(t, []any{"claude"}, erases["models"])
+	assert.Equal(t, []any{"tenant-credential-claude"}, erases["credentials"])
+	unreadable := erases["unreadable"].([]any)
+	require.Len(t, unreadable, 2)
+	assert.Contains(t, unreadable[0], "agents:")
+	assert.Contains(t, unreadable[1], "members:")
+	assert.Contains(t, erases["kept"], "session tombstones")
+}
+
+// What a Flux Kustomization applies from git is not changed live: Flux
+// would revert it.
+func TestGitOwnedObjectsAreNotWrittenLive(t *testing.T) {
+	fromGit := map[string]string{"kustomize.toolkit.fluxcd.io/name": "org-payments"}
+	gitModel := model("claude", true)
+	gitModel.SetLabels(fromGit)
+	gitEditors := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "rbac.authorization.k8s.io/v1", "kind": "RoleBinding",
+		"metadata": map[string]any{"name": "organization-editors", "namespace": orgNS, "labels": map[string]any{"kustomize.toolkit.fluxcd.io/name": "org-payments"}},
+		"roleRef":  map[string]any{"apiGroup": "rbac.authorization.k8s.io", "kind": "ClusterRole", "name": organizations.RoleEditor},
+		"subjects": []any{map[string]any{"kind": "Group", "name": "payments-team", "apiGroup": "rbac.authorization.k8s.io"}},
+	}}
+	gitOrg := organization("org-acme", "payments", fromGit)
+	for name, call := range map[string]struct {
+		tool string
+		args map[string]any
+	}{
+		"change a model":        {ToolSetOrganizationModel, map[string]any{"namespace": orgNS, "name": "claude", "model": "other"}},
+		"move the mark off one": {ToolSetOrganizationModel, map[string]any{"namespace": orgNS, "name": "haiku", "provider": "Anthropic", "model": "m", "default": true}},
+		"delete a model":        {ToolDeleteOrganizationObject, map[string]any{"namespace": orgNS, "kind": "model", "name": "claude"}},
+		"add to a git binding":  {ToolAddOrganizationMember, map[string]any{"namespace": orgNS, "role": "editor", "user": "jane@example.com"}},
+		"remove from one":       {ToolRemoveOrganizationMember, map[string]any{"namespace": orgNS, "group": "payments-team"}},
+		"bind the first admins": {ToolCreateOrganization, map[string]any{"namespace": "org-acme", "name": "payments", "adminGroups": []any{"g"}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newOrgFixture(t, gitModel.DeepCopy(), gitEditors.DeepCopy(), gitOrg.DeepCopy())
+			text, isErr := f.call(t, call.tool, call.args)
+			require.True(t, isErr, text)
+			assert.True(t, strings.HasPrefix(text, "gitops_owned:"), text)
+			assert.Contains(t, text, "org-payments")
+			for _, a := range f.dyn.Actions() {
+				switch a.GetVerb() {
+				case "create", "update", "delete":
+					t.Errorf("a %s %s was sent", a.GetVerb(), a.GetResource().Resource)
+				}
+			}
+		})
+	}
+}
+
+// delete_organization_object deletes as the caller and says when the
+// organization is left without a default model; a curated copy stays.
+func TestDeleteOrganizationObject(t *testing.T) {
+	curated := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "api.kagent.dev/v1alpha3", "kind": "RemoteMCPServer",
+		"metadata": map[string]any{"name": "muster", "namespace": orgNS, "labels": map[string]any{agents.OperatorObjectLabel: "curated"}},
+		"spec":     map[string]any{"description": "muster", "url": "https://muster.example/mcp"},
+	}}
+	f := newOrgFixture(t, model("claude", true), curated)
+	text, isErr := f.call(t, ToolDeleteOrganizationObject, map[string]any{"namespace": orgNS, "kind": "model", "name": "claude"})
+	require.False(t, isErr, text)
+	assert.Contains(t, decode(t, text)["note"], "has none now")
+	assert.Nil(t, f.get(t, mcGVR, orgNS, "claude"))
+
+	text, isErr = f.call(t, ToolDeleteOrganizationObject, map[string]any{"namespace": orgNS, "kind": "connector", "name": "muster"})
+	require.True(t, isErr)
+	assert.True(t, strings.HasPrefix(text, "conflict:"), text)
+	assert.NotNil(t, f.get(t, connGVR, orgNS, "muster"))
 }

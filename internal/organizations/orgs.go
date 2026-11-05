@@ -366,6 +366,9 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (*CreateResult,
 		if err != nil {
 			return nil, err
 		}
+		if err := refuseLive(org); err != nil {
+			return nil, err
+		}
 		if org.DeletionTimestamp != nil {
 			return nil, fmt.Errorf("%w: %s is being erased (%s); create it again once get_organization answers not_found", agents.ErrConflict, what, orDefault(org.Status.ErasureStep, "starting"))
 		}
