@@ -85,6 +85,8 @@ type Config struct {
 	// it looks.
 	ReadyTimeout time.Duration
 	ReadyPoll    time.Duration
+	// Commit is where mode commit writes; nil: only mode apply.
+	Commit *CommitConfig
 }
 
 // Service is the organization tools.
@@ -224,6 +226,7 @@ var errTokenRefused = fmt.Errorf("%w: the API server refused your token (401): s
 // applied in order.
 type write struct {
 	gvr    schema.GroupVersionResource
+	kind   string // the object's kind, which names its file in commit mode
 	op     string // create, update or delete
 	obj    map[string]any
 	ns     string

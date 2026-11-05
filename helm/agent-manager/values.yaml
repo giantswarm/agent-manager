@@ -494,6 +494,23 @@ tenants:
   # that: the members bound to `agent-platform:editor` or
   # `agent-platform:admin`.
   enabled: false
+  commit:
+    # -- The installation's repository (`owner/name`) the organization
+    # tools' `mode: commit` opens its pull requests in, as the person.
+    # Empty: `mode: commit` is not offered for organizations. Needs
+    # `github.authorizationServer.issuer`. The repository's CODEOWNERS must
+    # name the platform team for `objectsPath` and `contentPrefix`, and its
+    # `.sops.yaml` must cover `contentPrefix` (docs/organizations-commit-mode.md).
+    repository: ""
+    # -- The branch the pull requests go to.
+    branch: main
+    # -- The directory the installation's Kustomization applies the
+    # organization objects from: `<objectsPath>/<parent>/<name>.yaml`.
+    objectsPath: ""
+    # -- The directory of the organizations' content paths,
+    # `<contentPrefix>/<parent>/<name>`: agent-platform-operator's
+    # `commitMode.path` without `{parent}/{name}`.
+    contentPrefix: agent-platform/organizations
 
 devPortal:
   # -- The Dev Portal's base URL (`https://portal.example.com`). The

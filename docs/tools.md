@@ -55,6 +55,14 @@ Writes the RoleBinding organization-<role>s (admins: organization-admins), dry r
       "description": "Identity provider group, as the API server sees it; offer a group first: membership then changes in the identity provider",
       "type": "string"
     },
+    "mode": {
+      "description": "apply (default): write live as you; refused with gitops_owned for what git applies. commit: dry-run as you, then open a pull request as you",
+      "enum": [
+        "apply",
+        "commit"
+      ],
+      "type": "string"
+    },
     "namespace": {
       "description": "The organization namespace, e.g. agents-payments-x7k2q (list_my_organizations, get_organization)",
       "type": "string"
@@ -314,7 +322,7 @@ name is the DNS-1123 name the person chose, never derived from displayName. mode
 ```text
 Create an organization as you, then bind its first admins in its namespace.
 
-Asks first whether you may bind them and dry-runs the object, so a refusal comes before anything exists. Waits for the operator's Ready (it creates the namespace), then writes the RoleBinding organization-admins to agent-platform:admin as you. If it is not Ready in time the answer says so: call again with the same arguments to bind the admins. Offer an identity provider group as admin before a person. Needs agent-platform:organizations-admin in the parent namespace.
+Asks first whether you may bind them and dry-runs the object, so a refusal comes before anything exists. Waits for the operator's Ready (it creates the namespace), then writes the RoleBinding organization-admins to agent-platform:admin as you. Not Ready in time: call again with the same arguments. mode commit opens one pull request with the object and organization-admins instead. Offer an identity provider group as admin before a person. Needs agent-platform:organizations-admin in the parent namespace.
 ```
 
 ```json
@@ -348,6 +356,14 @@ Asks first whether you may bind them and dry-runs the object, so a refusal comes
         "type": "string"
       },
       "type": "array"
+    },
+    "mode": {
+      "description": "apply (default): write live as you; refused with gitops_owned for what git applies. commit: dry-run as you, then open a pull request as you",
+      "enum": [
+        "apply",
+        "commit"
+      ],
+      "type": "string"
     },
     "name": {
       "description": "The organization's name (at most 50 characters, no dot)",
@@ -438,7 +454,7 @@ The chart's shared OCIRepository goes too when nothing else in the namespace use
 ```text
 Delete an organization as you, which erases it: its namespace, agents, sessions, snapshots and credentials.
 
-Without confirm it only answers what would be erased: show that to the person and ask them to type <parent>/<name>, then call again with confirm set to it. Marks the object kustomize.toolkit.fluxcd.io/prune: enabled, the delete intent, then deletes it; the operator erases it. Session tombstones stay. Needs agent-platform:organizations-admin.
+Without confirm it only answers what would be erased: show that to the person and ask them to type <parent>/<name>, then call again with confirm set to it. Marks the object kustomize.toolkit.fluxcd.io/prune: enabled, the delete intent, then deletes it; the operator erases it. mode commit: without confirm it opens the pull request removing it from git and marks the object; once merged (Pending erase), confirm erases it. Session tombstones stay. Needs agent-platform:organizations-admin.
 ```
 
 ```json
@@ -451,6 +467,14 @@ Without confirm it only answers what would be erased: show that to the person an
     "dryRun": {
       "description": "Check every write with the API server as you and write nothing (default false)",
       "type": "boolean"
+    },
+    "mode": {
+      "description": "apply (default): write live as you; refused with gitops_owned for what git applies. commit: dry-run as you, then open a pull request as you",
+      "enum": [
+        "apply",
+        "commit"
+      ],
+      "type": "string"
     },
     "name": {
       "description": "The organization's name (at most 50 characters, no dot)",
@@ -489,6 +513,14 @@ Dry run first. Its credential Secret stays. Deleting the default model leaves th
         "model",
         "connector",
         "egressPolicy"
+      ],
+      "type": "string"
+    },
+    "mode": {
+      "description": "apply (default): write live as you; refused with gitops_owned for what git applies. commit: dry-run as you, then open a pull request as you",
+      "enum": [
+        "apply",
+        "commit"
       ],
       "type": "string"
     },
@@ -999,6 +1031,14 @@ From every binding of the role that holds them, dry run first; an emptied bindin
       "description": "Identity provider group, as the API server sees it; offer a group first: membership then changes in the identity provider",
       "type": "string"
     },
+    "mode": {
+      "description": "apply (default): write live as you; refused with gitops_owned for what git applies. commit: dry-run as you, then open a pull request as you",
+      "enum": [
+        "apply",
+        "commit"
+      ],
+      "type": "string"
+    },
     "namespace": {
       "description": "The organization namespace, e.g. agents-payments-x7k2q (list_my_organizations, get_organization)",
       "type": "string"
@@ -1054,6 +1094,14 @@ A credential field sets the Secret-backed header it names (default: the only one
     "dryRun": {
       "description": "Check every write with the API server as you and write nothing (default false)",
       "type": "boolean"
+    },
+    "mode": {
+      "description": "apply (default): write live as you; refused with gitops_owned for what git applies. commit: dry-run as you, then open a pull request as you",
+      "enum": [
+        "apply",
+        "commit"
+      ],
+      "type": "string"
     },
     "name": {
       "description": "RemoteMCPServer name",
@@ -1131,6 +1179,14 @@ destinations replaces the whole list. A credentialHeader makes the egress gatewa
       "description": "Check every write with the API server as you and write nothing (default false)",
       "type": "boolean"
     },
+    "mode": {
+      "description": "apply (default): write live as you; refused with gitops_owned for what git applies. commit: dry-run as you, then open a pull request as you",
+      "enum": [
+        "apply",
+        "commit"
+      ],
+      "type": "string"
+    },
     "name": {
       "description": "EgressPolicy name",
       "type": "string"
@@ -1179,6 +1235,14 @@ The first model of an organization without a default becomes its default (annota
     "dryRun": {
       "description": "Check every write with the API server as you and write nothing (default false)",
       "type": "boolean"
+    },
+    "mode": {
+      "description": "apply (default): write live as you; refused with gitops_owned for what git applies. commit: dry-run as you, then open a pull request as you",
+      "enum": [
+        "apply",
+        "commit"
+      ],
+      "type": "string"
     },
     "model": {
       "description": "Model id, e.g. claude-sonnet-4-6; required to create",
@@ -1534,7 +1598,7 @@ Lists are skills, plugins, egress and toolset. "" clears a text field back to th
 ```text
 Change an organization's display name, harnesses or worker replicas as you.
 
-An omitted field stays; harnesses replaces the whole list; displayName "" removes it. Dry-runs as you first. Refused for an organization Flux applies from git. Needs agent-platform:organizations-admin.
+An omitted field stays; harnesses replaces the whole list; displayName "" removes it. Dry-runs as you first. An organization Flux applies from git is changed with mode commit. Needs agent-platform:organizations-admin.
 ```
 
 ```json
@@ -1554,6 +1618,14 @@ An omitted field stays; harnesses replaces the whole list; displayName "" remove
         "type": "string"
       },
       "type": "array"
+    },
+    "mode": {
+      "description": "apply (default): write live as you; refused with gitops_owned for what git applies. commit: dry-run as you, then open a pull request as you",
+      "enum": [
+        "apply",
+        "commit"
+      ],
+      "type": "string"
     },
     "name": {
       "description": "The organization's name (at most 50 characters, no dot)",

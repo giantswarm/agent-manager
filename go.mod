@@ -4,10 +4,11 @@ go 1.26.0
 
 require (
 	buf.build/gen/go/bufbuild/protovalidate/protocolbuffers/go v1.36.12-20260825204119-511051f7f437.2
+	filippo.io/age v1.3.2
 	github.com/Masterminds/semver/v3 v3.5.0
 	github.com/a2aproject/a2a-go/v2 v2.7.0
 	github.com/giantswarm/agent-platform-operator v0.1.0-rc.10
-	github.com/giantswarm/gitops-commit v0.11.10
+	github.com/giantswarm/gitops-commit v0.12.0-rc.2
 	github.com/giantswarm/mcp-oauth v1.9.6
 	github.com/giantswarm/mcp-toolkit v0.4.9
 	github.com/go-jose/go-jose/v4 v4.1.8
@@ -51,7 +52,6 @@ require (
 	cloud.google.com/go/monitoring v1.30.0 // indirect
 	cloud.google.com/go/storage v1.63.1 // indirect
 	dario.cat/mergo v1.0.2 // indirect
-	filippo.io/age v1.3.2 // indirect
 	filippo.io/edwards25519 v1.2.0 // indirect
 	filippo.io/hpke v0.4.0 // indirect
 	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.22.0 // indirect

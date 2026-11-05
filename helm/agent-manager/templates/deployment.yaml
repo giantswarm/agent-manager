@@ -77,6 +77,12 @@ spec:
             {{- end }}
             {{- if .Values.tenants.enabled }}
             - --multi-tenant=true
+            {{- with .Values.tenants.commit.repository }}
+            - {{ printf "--organizations-repository=%s" . | quote }}
+            - {{ printf "--organizations-branch=%s" $.Values.tenants.commit.branch | quote }}
+            - {{ printf "--organizations-objects-path=%s" $.Values.tenants.commit.objectsPath | quote }}
+            - {{ printf "--organizations-content-prefix=%s" $.Values.tenants.commit.contentPrefix | quote }}
+            {{- end }}
             {{- end }}
             {{- with .Values.devPortal.url }}
             - {{ printf "--dev-portal-url=%s" . | quote }}
