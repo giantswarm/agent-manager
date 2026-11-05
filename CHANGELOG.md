@@ -9,13 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- `default` and `resolvedRefs` on every ModelConfig of `list_model_configs` and `GET /api/v1/modelconfigs`, in every namespace. The default is the one ModelConfig of the namespace annotated `agent-platform.giantswarm.io/is-default-model-config: "true"`; none or several annotated is no default. While no ModelConfig of a namespace outside the organization namespaces carries the annotation, one named `default-model-config` counts as marked ([#295](https://github.com/giantswarm/agent-manager/issues/295)).
-- `modelConfig` and `modelConfigFromDefault` in the result of `create_agent` and `POST /api/v1/agents` (the ModelConfig written into the agent) and of `validate_agent` (the one a create would write). `validate_agent` adds a note when that ModelConfig is not `ResolvedRefs=True`.
 - `mode: commit` on every organization write tool (`--organizations-repository`, chart `tenants.commit`): the change is dry-run as the caller, then opened as a pull request as the caller in the installation's repository. `create_organization` puts the organization's file (with `kustomize.toolkit.fluxcd.io/prune: disabled`) under its parent and its first admins in its content path in one pull request. The member, model, connector and egress tools write their files into the content path. `delete_organization` takes two steps: without `confirm` it opens the pull request that removes the file and the whole content path and marks the organization with `agent-platform.giantswarm.io/delete-pull-request`; once that pull request is merged and the file is gone from git, `confirm` erases it. A live delete is refused while the file is in git. The layout and the CODEOWNERS rule the repository needs are in `docs/organizations-commit-mode.md` ([#292](https://github.com/giantswarm/agent-manager/issues/292)).
 
 ### Changed
 
 - The organization tools answer a live change to an object Flux applies from git with `gitops_owned` naming `mode commit`.
+
+## [2.19.0-rc.2] - 2026-11-05
+
+### Added
+
+- `default` and `resolvedRefs` on every ModelConfig of `list_model_configs` and `GET /api/v1/modelconfigs`, in every namespace. The default is the one ModelConfig of the namespace annotated `agent-platform.giantswarm.io/is-default-model-config: "true"`; none or several annotated is no default. While no ModelConfig of a namespace outside the organization namespaces carries the annotation, one named `default-model-config` counts as marked ([#295](https://github.com/giantswarm/agent-manager/issues/295)).
+- `modelConfig` and `modelConfigFromDefault` in the result of `create_agent` and `POST /api/v1/agents` (the ModelConfig written into the agent) and of `validate_agent` (the one a create would write). `validate_agent` adds a note when that ModelConfig is not `ResolvedRefs=True`.
+
+### Changed
+
 - `modelConfig` is optional on `create_agent` and `POST /api/v1/agents`: omitted, the namespace default's name is written into the agent. A namespace without a default refuses the create, naming its ModelConfigs. `update_agent` never resolves the default.
 - The default model mark `set_organization_model` writes and moves is the annotation `agent-platform.giantswarm.io/is-default-model-config`, which agent-platform-operator reads from v0.1.0-rc.10.
 
@@ -574,7 +582,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Chart: the MCPServer CR carries `agent-platform.giantswarm.io/tool-group: agent-platform` next to `muster.giantswarm.io/type` — the Agent Platform tier of MCP servers (the portal's MCP servers page, the `agent-platform` toolset preset). `muster.mcpServer.labels` still adds or overrides labels. (#23)
 
-[Unreleased]: https://github.com/giantswarm/agent-manager/compare/v2.19.0-rc.1...HEAD
+[Unreleased]: https://github.com/giantswarm/agent-manager/compare/v2.19.0-rc.2...HEAD
+[2.19.0-rc.2]: https://github.com/giantswarm/agent-manager/compare/v2.19.0-rc.1...v2.19.0-rc.2
 [2.19.0-rc.1]: https://github.com/giantswarm/agent-manager/compare/v2.18.0...v2.19.0-rc.1
 [2.18.0]: https://github.com/giantswarm/agent-manager/compare/v2.17.7...v2.18.0
 [2.17.7]: https://github.com/giantswarm/agent-manager/compare/v2.17.2...v2.17.7
