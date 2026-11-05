@@ -204,7 +204,8 @@ func (s *Service) deleteCommit(ctx context.Context, c kube.Client, u *unstructur
 	// that it removed the file: gitops-commit's Remote exposes neither a
 	// merged pull request's files nor its head, so the file's absence from
 	// the base is checked instead. Checking the pull request's own change
-	// waits on a gitops-commit read of a merged pull request's files.
+	// waits on a gitops-commit read of a merged pull request's files
+	// (giantswarm/gitops-commit#61).
 	var merged bool
 	if prURL != "" {
 		if pr, ok := cm.pullRequest(prURL); ok {
