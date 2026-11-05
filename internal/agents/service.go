@@ -683,7 +683,11 @@ func (s *Service) readModelConfigs(ctx context.Context, st *site) (namespaceMode
 	if err != nil {
 		return namespaceModels{}, wrapKube(err, "list modelconfigs in "+ns)
 	}
-	models := namespaceModels{namespace: ns, configs: make([]ModelConfig, 0, len(list.Items)), marked: markedModelConfigs(list.Items)}
+	marked, err := s.markedModelConfigs(ctx, st, list.Items)
+	if err != nil {
+		return namespaceModels{}, err
+	}
+	models := namespaceModels{namespace: ns, configs: make([]ModelConfig, 0, len(list.Items)), marked: marked}
 	for _, item := range list.Items {
 		mc := ModelConfig{Name: item.GetName(), Namespace: item.GetNamespace()}
 		mc.Provider, _, _ = unstructured.NestedString(item.Object, "spec", "provider")

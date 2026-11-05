@@ -19,7 +19,9 @@ import (
 const DefaultModelConfigAnnotation = "agent-platform.giantswarm.io/is-default-model-config"
 
 // transitionDefaultModelConfig counts as marked while no ModelConfig of the
-// namespace carries DefaultModelConfigAnnotation.
+// namespace carries DefaultModelConfigAnnotation, outside organization
+// namespaces: there the mark alone decides, as it does for
+// agent-platform-operator and set_organization_model.
 const transitionDefaultModelConfig = "default-model-config"
 
 // IsMarkedDefault reports whether a ModelConfig carries the default mark.
@@ -29,27 +31,29 @@ func IsMarkedDefault(mc *unstructured.Unstructured) bool {
 
 // markedModelConfigs are the sorted names of the ModelConfigs marked as the
 // namespace default.
-func markedModelConfigs(items []unstructured.Unstructured) []string {
+func (s *Service) markedModelConfigs(ctx context.Context, st *site, items []unstructured.Unstructured) ([]string, error) {
 	var marked []string
+	hasTransition := false
 	for i := range items {
 		if IsMarkedDefault(&items[i]) {
 			marked = append(marked, items[i].GetName())
 		}
+		hasTransition = hasTransition || items[i].GetName() == transitionDefaultModelConfig
 	}
-	if len(marked) == 0 {
-		marked = transitionMarked(items)
+	if len(marked) > 0 || !hasTransition {
+		slices.Sort(marked)
+		return marked, nil
 	}
-	slices.Sort(marked)
-	return marked
-}
-
-func transitionMarked(items []unstructured.Unstructured) []string {
-	for i := range items {
-		if items[i].GetName() == transitionDefaultModelConfig {
-			return []string{transitionDefaultModelConfig}
+	if !st.loc.IsSet() {
+		tenant, err := s.isTenant(ctx, st.ns())
+		if err != nil {
+			return nil, err
+		}
+		if tenant {
+			return nil, nil
 		}
 	}
-	return nil
+	return []string{transitionDefaultModelConfig}, nil
 }
 
 // namespaceModels are the ModelConfigs of a namespace and the ones marked as
