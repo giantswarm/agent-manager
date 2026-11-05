@@ -99,7 +99,7 @@ func pinPlugins(ctx context.Context, p SkillPinner, list Plugins, refresh bool) 
 	for i, pl := range list {
 		pinned := Plugin{Path: pl.Path, Skills: pl.Skills}
 		var err error
-		if pinned.Git, pinned.OCI, err = pinSource(ctx, p, fmt.Sprintf("plugins[%d]", i), pl.Git, pl.OCI, refresh); err != nil {
+		if pinned.Git, pinned.OCI, err = pinSource(ctx, p, fmt.Sprintf("plugins[%d]", i), pl.Git, pl.OCI, pl.Path, refresh); err != nil {
 			return nil, err
 		}
 		out = append(out, pinned)

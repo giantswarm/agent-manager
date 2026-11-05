@@ -11,6 +11,7 @@ import (
 
 	"github.com/giantswarm/agent-manager/internal/identity"
 	"github.com/giantswarm/agent-manager/internal/oci"
+	"github.com/giantswarm/agent-manager/internal/skillmanager"
 	"github.com/giantswarm/agent-manager/internal/skills"
 )
 
@@ -30,6 +31,43 @@ type SkillPinner interface {
 	// RequireReadable refuses a repository login (the caller's GitHub login,
 	// empty when unknown) cannot read: skills.ErrNotReadable.
 	RequireReadable(ctx context.Context, repoURL, login string) error
+}
+
+// PathPinner is a SkillPinner that resolves a git source with the path it
+// is read at (skill-manager): one with no ref below a configured skill
+// source's path takes that source's ref.
+type PathPinner interface {
+	// GitHeadAt is GitHead for the source at path.
+	GitHeadAt(ctx context.Context, repoURL, ref, path string) (string, error)
+}
+
+// sourceError marks a failed lookup of a skill or plugin source, named at:
+// a repository the caller cannot read is forbidden, skill-manager refusing
+// the bearer unauthenticated, skill-manager or GitHub behind it failing a
+// backend error; anything else is an invalid reference.
+func sourceError(at string, err error) error {
+	switch {
+	case errors.Is(err, skills.ErrNotReadable):
+		return fmt.Errorf("%w: %s: %w", ErrForbidden, at, err)
+	case errors.Is(err, skillmanager.ErrUnauthenticated):
+		return fmt.Errorf("%w: %s: %w", ErrUnauthenticated, at, err)
+	case errors.Is(err, skillmanager.ErrUnavailable):
+		return fmt.Errorf("%s: %w", at, err)
+	}
+	return fmt.Errorf("%w: %s: %w", ErrInvalid, at, err)
+}
+
+// skillManagerError maps a failed catalogue read of skill-manager.
+func skillManagerError(err error) error {
+	switch {
+	case errors.Is(err, skillmanager.ErrInvalid):
+		return fmt.Errorf("%w: %w", ErrInvalid, err)
+	case errors.Is(err, skills.ErrNotReadable):
+		return fmt.Errorf("%w: %w", ErrForbidden, err)
+	case errors.Is(err, skillmanager.ErrUnauthenticated):
+		return fmt.Errorf("%w: %w", ErrUnauthenticated, err)
+	}
+	return err
 }
 
 // gitHubLogin is the caller's verified GitHub login (the App-pinned
@@ -78,10 +116,7 @@ func requireReadableRepo(ctx context.Context, pinner SkillPinner, seen map[strin
 	}
 	seen[repoURL] = true
 	if err := pinner.RequireReadable(ctx, repoURL, gitHubLogin(ctx)); err != nil {
-		if errors.Is(err, skills.ErrNotReadable) {
-			return fmt.Errorf("%w: %s: %v", ErrForbidden, what, err)
-		}
-		return invalidf("%s: %v", what, err)
+		return sourceError(what, err)
 	}
 	return nil
 }
@@ -195,7 +230,7 @@ func pinSkills(ctx context.Context, p SkillPinner, list Skills, refresh bool) (S
 		pinned := Skill{Name: s.mountName(), Path: s.Path}
 		var err error
 		at := fmt.Sprintf("skills[%d] (%s)", i, pinned.Name)
-		if pinned.Git, pinned.OCI, err = pinSource(ctx, p, at, s.Git, s.OCI, refresh); err != nil {
+		if pinned.Git, pinned.OCI, err = pinSource(ctx, p, at, s.Git, s.OCI, s.Path, refresh); err != nil {
 			return nil, err
 		}
 		out = append(out, pinned)
@@ -206,15 +241,16 @@ func pinSkills(ctx context.Context, p SkillPinner, list Skills, refresh bool) (S
 // pinSource pins one source, a skill's or a plugin's, named at in errors: a
 // git source to a full commit (its Commit when given, else the head of Ref,
 // else of the default branch — with refresh, always the head of Ref or the
-// default branch), an OCI source to its digest.
-func pinSource(ctx context.Context, p SkillPinner, at string, git *GitSkill, ociRef string, refresh bool) (*GitSkill, string, error) {
+// default branch), an OCI source to its digest. path is where the source is
+// read, for a PathPinner.
+func pinSource(ctx context.Context, p SkillPinner, at string, git *GitSkill, ociRef, path string, refresh bool) (*GitSkill, string, error) {
 	if git == nil {
 		if skills.DigestRefPattern.MatchString(ociRef) || p == nil {
 			return nil, ociRef, nil
 		}
 		digest, err := p.OCIDigest(ctx, ociRef)
 		if err != nil {
-			return nil, "", fmt.Errorf("%w: %s: %w", ErrInvalid, at, err)
+			return nil, "", sourceError(at, err)
 		}
 		return nil, digest, nil
 	}
@@ -226,9 +262,15 @@ func pinSource(ctx context.Context, p SkillPinner, at string, git *GitSkill, oci
 		if p == nil {
 			return nil, "", invalidf("%s: no resolver to look up %s — give git.commit", at, describeRef(git.Ref))
 		}
-		commit, err := p.GitHead(ctx, g.URL, git.Ref)
+		var commit string
+		var err error
+		if pp, ok := p.(PathPinner); ok {
+			commit, err = pp.GitHeadAt(ctx, g.URL, git.Ref, path)
+		} else {
+			commit, err = p.GitHead(ctx, g.URL, git.Ref)
+		}
 		if err != nil {
-			return nil, "", fmt.Errorf("%w: %s: %w", ErrInvalid, at, err)
+			return nil, "", sourceError(at, err)
 		}
 		g.Commit = commit
 	}

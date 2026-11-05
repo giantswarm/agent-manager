@@ -94,6 +94,19 @@ type Config struct {
 	// (chart.EmbeddedSchema().Tags). Nil: the chart takes no tags; agents
 	// are read without them and capabilities.tags is false.
 	Tags *tags.Rule
+	// SkillManager is skill-manager, whose catalogue list_skills proxies as
+	// the caller; the service's pinner is then skill-manager's too. Nil:
+	// skills are discovered in process (deprecated).
+	SkillManager SkillCatalog
+}
+
+// SkillCatalog is skill-manager's catalogue (GET /v1/skills).
+type SkillCatalog interface {
+	// URL is skill-manager's base URL, which get_info reports.
+	URL() string
+	// Skills lists the skills of every configured source, or of source
+	// alone, as the caller; refresh bypasses skill-manager's cache.
+	Skills(ctx context.Context, source string, refresh bool) (map[string]any, error)
 }
 
 // TenantSet is the tenant reconciler as the service sees it.
@@ -225,8 +238,12 @@ type InfoResponse struct {
 		// clusters; empty: target clusters are refused.
 		TargetURL string `json:"targetUrl,omitempty"`
 	} `json:"muster"`
-	// SkillsRepositories are the configured skill repositories.
+	// SkillsRepositories are the configured skill repositories; empty when
+	// skill-manager serves the skills.
 	SkillsRepositories []string `json:"skillsRepositories"`
+	// SkillManager is skill-manager's URL when it serves the skills: its
+	// tools list the sources and skills, and every pin goes through it.
+	SkillManager string `json:"skillManager,omitempty"`
 	// SkillsGitAuthSecretName is the installation's skills credential Secret
 	// (key token) an agent with a git skill fetches with unless it names its
 	// own; empty: anonymous fetches.
@@ -251,7 +268,7 @@ func (s *Service) Info(ctx context.Context) InfoResponse {
 	out.Capabilities = map[string]bool{
 		"list": true, "get": true, "create": true, "update": true, "delete": true,
 		"status": true, "validate": true, "modelConfigs": true,
-		"skills":         s.skills != nil,
+		"skills":         s.skills != nil || s.cfg.SkillManager != nil,
 		"writesAsCaller": s.kube.Identity() == kube.IdentityCaller,
 		// mode commit: the manifests land as a pull request, opened as the
 		// person, in the repository that owns the namespace.
@@ -293,9 +310,13 @@ func (s *Service) Info(ctx context.Context) InfoResponse {
 	out.Harness.Name = s.cfg.Compose.HarnessName
 	out.Muster.URL = s.cfg.Compose.MusterURL
 	out.Muster.TargetURL = s.cfg.Compose.TargetMusterURL
-	if s.skills != nil {
+	switch {
+	case s.cfg.SkillManager != nil:
+		out.SkillsRepositories = []string{}
+		out.SkillManager = s.cfg.SkillManager.URL()
+	case s.skills != nil:
 		out.SkillsRepositories = s.skills.Repositories()
-	} else {
+	default:
 		out.SkillsRepositories = []string{}
 	}
 	out.SkillsGitAuthSecretName = s.cfg.Compose.SkillsGitAuthSecretName
@@ -739,10 +760,14 @@ func (s *Service) harnessFor(ctx context.Context, dyn dynamic.Interface, ns, nam
 
 // ---- skills -------------------------------------------------------------------
 
-// ListSkills discovers skills in the configured (or the given) repository.
-// With a filter, every repository stays with only the skills that carry any
-// of its tags.
-func (s *Service) ListSkills(ctx context.Context, repository, ref string, refresh bool, filter tags.Filter) (*skills.Result, error) {
+// ListSkills discovers skills in the configured (or the given) repository,
+// or lists skill-manager's catalogue as the caller when it serves the skills
+// (deprecated: skill-manager's own tools list them). With a filter, every
+// repository stays with only the skills that carry any of its tags.
+func (s *Service) ListSkills(ctx context.Context, repository, ref string, refresh bool, filter tags.Filter) (any, error) {
+	if s.cfg.SkillManager != nil {
+		return s.listSkillManagerSkills(ctx, repository, ref, refresh, filter)
+	}
 	if s.skills == nil {
 		return nil, fmt.Errorf("%w: no skill repositories are configured", ErrUnsupported)
 	}
@@ -762,6 +787,45 @@ func (s *Service) ListSkills(ctx context.Context, repository, ref string, refres
 		out.Repositories = append(out.Repositories, repo)
 	}
 	return out, nil
+}
+
+// listSkillManagerSkills is skill-manager's GET /v1/skills, filtered.
+func (s *Service) listSkillManagerSkills(ctx context.Context, repository, ref string, refresh bool, filter tags.Filter) (map[string]any, error) {
+	if ref != "" {
+		return nil, invalidf("ref is not taken here: skill-manager (%s) reads each source at its configured ref", s.cfg.SkillManager.URL())
+	}
+	res, err := s.cfg.SkillManager.Skills(ctx, repository, refresh)
+	if err != nil {
+		return nil, skillManagerError(err)
+	}
+	if len(filter) == 0 {
+		return res, nil
+	}
+	repos, _ := res["repositories"].([]any)
+	for _, raw := range repos {
+		repo, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		list, _ := repo["skills"].([]any)
+		kept := []any{}
+		for _, item := range list {
+			sk, _ := item.(map[string]any)
+			var have []string
+			if raw, ok := sk["tags"].([]any); ok {
+				for _, t := range raw {
+					if t, ok := t.(string); ok {
+						have = append(have, t)
+					}
+				}
+			}
+			if filter.Matches(have) {
+				kept = append(kept, item)
+			}
+		}
+		repo["skills"] = kept
+	}
+	return res, nil
 }
 
 // skillsTagged keeps the skills that carry any tag of filter, in a new
