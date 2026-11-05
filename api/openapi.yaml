@@ -744,11 +744,11 @@ components:
           type: object
           properties:
             default: { type: string }
-            managed: { type: array, items: { type: string }, description: "The managed namespaces (the configured ones and, with tenants, every namespace labelled giantswarm.io/organization) in which the caller may create agents (create on helmreleases, asked as the caller)" }
+            managed: { type: array, items: { type: string }, description: "The managed namespaces (the configured ones and, with tenants, every organization namespace, labelled agent-platform.giantswarm.io/organization) in which the caller may create agents (create on helmreleases, asked as the caller)" }
         capabilities:
           type: object
           additionalProperties: { type: boolean }
-          description: "list, get, create, update, delete, status, validate, modelConfigs, egressPolicies (egressPolicyRefs and list_egress_policies), tags (agents carry tags; false when the agent chart in use does not take agent.tags), skills, writesAsCaller (true when identity is caller), commit (false: the write tools apply live, there is no pull-request mode), targetCluster, sessions (false: the session operations answer 501)"
+          description: "list, get, create, update, delete, status, validate, modelConfigs, egressPolicies (egressPolicyRefs and list_egress_policies), tags (agents carry tags; false when the agent chart in use does not take agent.tags), skills, writesAsCaller (true when identity is caller), commit (false: the write tools apply live, there is no pull-request mode), targetCluster, sessions (false: the session operations answer 501), organizations (the organization namespaces are managed and the organization tools answer)"
         identity:
           type: string
           enum: [caller, serviceAccount]
@@ -796,13 +796,6 @@ components:
             refreshedAt: { type: string, format: date-time, description: When the last refresh succeeded }
             expiresAt: { type: string, format: date-time, description: When the written token expires }
             error: { type: string, description: "The last refresh's failure; absent after a success" }
-        tenantReconciler:
-          type: object
-          description: "Present when agent-manager keeps the tenants (--multi-tenant): the tenant reconciler on the replica that answered. The API keeps serving through a failure, and a new reconciler starts after it."
-          properties:
-            running: { type: boolean, description: "A reconciler runs and follows the tenant namespaces (it reconciles while it holds the Lease). False after a failure until a new one has started; meanwhile the tenant namespaces are the ones known at the failure" }
-            error: { type: string, description: "What stopped the reconciler last; absent: nothing since the replica started" }
-            failedAt: { type: string, format: date-time, description: When it stopped }
     GitSkill:
       type: object
       required: [url]
@@ -1159,6 +1152,7 @@ components:
         accepted: { type: [boolean, "null"] }
         message: { type: string }
         managedBy: { type: string }
+        default: { type: boolean, description: "It carries the organization's default mark (agent-platform.giantswarm.io/default-model-config: \"true\")" }
     EgressPolicy:
       type: object
       properties:
