@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/giantswarm/agent-manager/internal/kagent"
@@ -81,13 +82,33 @@ func (s *Service) ToolchainUsers(ctx context.Context, name, version string) (*To
 			return image.GetName() == name && slices.ContainsFunc(digests, func(d string) bool { return strings.HasSuffix(image.GetOci(), "@"+d) })
 		}
 	}
-	for _, ns := range s.Managed() {
+	// An organization namespace is named only once the caller listed its
+	// Agents: the ServiceAccount found it, and a failure before that says
+	// nothing about the caller's access, so it is not named. A refused token
+	// fails the whole answer without a name; any other failure is counted.
+	unnamed := 0
+	for _, ns := range s.Managed(ctx) {
+		organization := !slices.Contains(s.cfg.ManagedNamespaces, ns)
 		st, err := s.site(ctx, In(ns))
 		if err != nil {
+			if organization {
+				unnamed++
+				continue
+			}
 			out.Unreadable = append(out.Unreadable, fmt.Sprintf("namespace %s: %v", ns, err))
 			continue
 		}
 		objects, err := st.agent.Resource(s.agentGVR()).Namespace(ns).List(ctx, metav1.ListOptions{})
+		switch {
+		case err != nil && apierrors.IsUnauthorized(err) && organization:
+			return nil, fmt.Errorf("%w: the API server refused your token (401): sign in again", ErrUnauthenticated)
+		case err != nil && apierrors.IsForbidden(err) && organization:
+			// An organization the caller does not belong to.
+			continue
+		case err != nil && organization:
+			unnamed++
+			continue
+		}
 		if err != nil {
 			out.Unreadable = append(out.Unreadable, fmt.Sprintf("namespace %s: %v", ns, wrapKube(err, "list agents in "+ns)))
 			continue
@@ -121,6 +142,9 @@ func (s *Service) ToolchainUsers(ctx context.Context, name, version string) (*To
 				}
 			}
 		}
+	}
+	if unnamed > 0 {
+		out.Unreadable = append(out.Unreadable, fmt.Sprintf("%d organization namespace(s) could not be read; they are not named before you have shown access to them", unnamed))
 	}
 	return out, nil
 }

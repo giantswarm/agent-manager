@@ -12,8 +12,8 @@ import (
 	k8stesting "k8s.io/client-go/testing"
 )
 
-// DryRuns plays the API server's side of the dry-run creates and updates
-// (dryRun=All) a fake dynamic client receives, which the fake would otherwise
+// DryRuns plays the API server's side of the dry-run creates, updates and
+// deletes (dryRun=All) a fake dynamic client receives, which the fake would otherwise
 // perform: it records every object and answers with Refuse's error, accepting
 // when Refuse is nil or returns nil. A dry-run never reaches the fake's
 // tracker; every other write does.
@@ -41,6 +41,17 @@ func AnswerDryRuns(dyn *dynamicfake.FakeDynamicClient) *DryRuns {
 	dyn.PrependReactor("update", "*", func(a k8stesting.Action) (bool, runtime.Object, error) {
 		u := a.(k8stesting.UpdateActionImpl)
 		return d.answer(u.GetObject(), u.UpdateOptions.DryRun, u.UpdateOptions.FieldManager)
+	})
+	// A dry-run delete is answered with an object that names what it
+	// deletes: its namespace and name, the resource as its kind.
+	dyn.PrependReactor("delete", "*", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		del := a.(k8stesting.DeleteActionImpl)
+		obj := &unstructured.Unstructured{}
+		obj.SetKind(del.GetResource().Resource)
+		obj.SetNamespace(del.GetNamespace())
+		obj.SetName(del.GetName())
+		handled, _, err := d.answer(obj, del.DeleteOptions.DryRun, "")
+		return handled, nil, err
 	})
 	return d
 }

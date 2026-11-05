@@ -514,8 +514,9 @@ per-caller clients (`internal/kube.CallerProvider`, built from
 there is no fallback: a request without an IdP token is refused with `401`, a
 token that expires mid-request keeps being presented and the apiserver's `401`
 fails the request, attributed to the caller. Only background work runs as the
-ServiceAccount, with RBAC of its own: the tenant reconciler (below) and the
-skills boot Secret; API version discovery at startup is what every
+ServiceAccount, with RBAC of its own: the read of namespaces that finds the
+organization namespaces (below) and the skills boot Secret; API version
+discovery at startup is what every
 authenticated principal may read. The apiserver must trust the token: with Dex the
 audience it trusts (`dex-k8s-authenticator` on Giant Swarm clusters,
 `kubernetes` in agentlab) is requested as a cross-client scope through
@@ -544,87 +545,90 @@ ModelConfigs and events read; Agents and RemoteMCPServers delete for
 the forced cases) — only for a server nothing but a trusted proxy (the
 agentgateway JWT policy, muster) can reach.
 
-## Tenants
+## Organizations
 
-With `--multi-tenant` (chart `tenants.enabled`) every namespace labelled
-`giantswarm.io/organization` (an Organization's `org-<name>`; on an
-installation without Organizations the platform team labels it) is a managed
-namespace beside `--kagent-namespace` and `--managed-namespaces`, discovered at
-run time; `--kagent-namespace` itself never is one. The tenant reconciler
-(`internal/tenants`, a controller-runtime controller in the same process) runs
-as the ServiceAccount and keeps in each tenant what follows. It reconciles a
-tenant at once when the namespace, an agent in it, one of its copies or a
-platform object they are copied from changes, and every tenant every
-`--tenant-interval` (default 10m) as a safety net. Of several replicas, the
-one that holds the Lease `agent-manager-tenants` in the pod's namespace
-reconciles; every replica knows the tenants. Its cache holds the labelled
-namespaces, its own copies, the objects of `--kagent-namespace` it copies
-from, and of the Secrets only `--tenant-model-secret`. Outside a cluster, set
-`--tenant-leader-election-namespace`. Every kind it keeps must be served
-(Agent, Harness, ModelConfig, WorkerPool, HelmRelease, OCIRepository and the
-`--tenant-network-policy-flavor` kind): without one, agent-manager does not
-start, and its error names each missing kind. When the reconciler stops at run
-time (a lost Lease, say), the API keeps serving: the replica logs the error,
-`get_info` reports it in `tenantReconciler` (`running`, `error`, `failedAt`),
-and a new reconciler starts after 10 seconds (the delay doubles, up to 5
-minutes, while new ones fail). Until it starts, that replica's API uses the
-tenant namespaces known at the failure. A new reconciler reconciles only once
-it holds the Lease, so one replica reconciles at a time.
+With `--multi-tenant` (chart `tenants.enabled`) agent-manager manages the
+organization namespaces beside `--kagent-namespace` and
+`--managed-namespaces`, and serves the organization tools. An organization is
+an `AgentPlatformOrganization` (`agent-platform.giantswarm.io/v1alpha1`, from
+[agent-platform-operator](https://github.com/giantswarm/agent-platform-operator))
+in a parent namespace; the operator creates its organization namespace,
+labelled `agent-platform.giantswarm.io/organization`, and keeps in it what an
+agent needs there (the agent chart's OCIRepository, the Helm ServiceAccount
+bound to `agent-platform-tenant-flux`, the network policies, the curated
+copies, the WorkerPool, the object quota). A Giant Swarm Organization's
+`org-<name>`, labelled `giantswarm.io/organization`, is not an organization
+namespace and is not managed. `--kagent-namespace` is never one.
 
-- always: the agent chart's OCIRepository, the `--helmrelease-service-account`
-  ServiceAccount with a RoleBinding to `agent-platform-tenant-flux` (Secrets
-  (see below), `agents` and `remotemcpservers`), and the network policies
-  `--tenant-network-policies` names, copied from `--kagent-namespace`;
-- while the namespace holds an agent (an Agent, or a HelmRelease of the agent
-  chart that runs on this cluster): copies of the platform Harness, its
-  WorkerPool with `--tenant-worker-pool-replicas` replicas and the
-  ServiceAccount its workers run as, and the default ModelConfig
-  (`--tenant-model-config`) with its key Secret (`--tenant-model-secret`, the
-  only Secret it may copy). They go with the last agent, so a tenant without
-  agents runs no workers.
+agent-manager keeps nothing in an organization namespace. Its ServiceAccount
+only finds the organization namespaces: RBAC cannot narrow a list by label, so it
+may get and list namespaces, read-only, and keeps the labelled ones.
+Everything else runs as the caller, which needs `--downstream-oauth`.
 
-It writes only objects it labels `agent-manager.giantswarm.io/tenant-object`
-and never changes or deletes another, so a tenant's own ModelConfig stays. A
-create in a tenant may name the default ModelConfig before its copy exists.
-It never writes memberships: who may use a tenant is declared in RoleBindings
-of the namespace.
+The organization tools (every name holds `organization`):
 
-Tenants need `--downstream-oauth`: a request in a tenant runs as the caller,
-whose RoleBindings there grant it. An agent in a tenant gets no installation
-skills credential (`--skills-git-auth-secret-name`): that Secret exists in the
-configured namespaces only and admission refuses it there, so it names its own.
+- for an `agent-platform:organizations-admin`: `list_organizations`,
+  `get_organization` (with what a delete erases), `create_organization`,
+  `update_organization` and `delete_organization`. A create asks first, with
+  SelfSubjectAccessReviews as the caller, whether the caller may create the
+  object and bind `agent-platform:admin` in the parent (the operator mirrors
+  the parent's organizations-admin bindings into the new namespace), dry-runs
+  the object, writes it, waits for the operator's `Ready`, then writes the
+  first admins as the RoleBinding `organization-admins`. An organization that
+  is not Ready in time keeps its first admins for a second call with the same
+  arguments. A delete answers what it erases until the caller passes
+  `confirm: <parent>/<name>`, then marks the object
+  `kustomize.toolkit.fluxcd.io/prune: enabled` (the delete intent the
+  admission policy requires) and deletes it; the operator erases it. An
+  organization Flux applies from git is refused live (commit mode is
+  giantswarm/agent-manager#292).
+- for an organization's admins (`agent-platform:admin` in its namespace):
+  `list_organization_members`, `add_organization_member` and
+  `remove_organization_member` (a group offered before a person; members
+  of a role go into the RoleBinding `organization-<role>s`, and
+  `organization-admins` is never emptied); `set_organization_model`
+  (a ModelConfig; the first model of an organization without a default
+  carries `agent-platform.giantswarm.io/default-model-config: "true"`,
+  `default: true` moves the mark, and a namespace with two marks takes no
+  new model until one is chosen); `list_organization_connectors` and
+  `set_organization_connector` (RemoteMCPServers);
+  `set_organization_egress_policy`; and `delete_organization_object`.
+- for everyone: `list_my_organizations`, the New agent picker's list: the
+  organization namespaces in which the caller may list Agents, asked with a
+  SelfSubjectAccessReview as the caller.
+
+Every write is dry-run as the caller first, all of a call's writes before any
+of them, so RBAC, schemas and admission refuse before anything changes; a
+refusal names the role that is missing and who can grant it. No tool takes or
+returns a secret value: a model's key, a connector's and an egress policy's
+credential are Secrets named by reference (`tenant-credential-…`). When one is
+missing, or `replaceCredential` asks for a new value, the answer carries the
+Dev Portal's credential form link (`--dev-portal-url`, chart `devPortal.url`)
+as text; the URL elicitation is giantswarm/agent-manager#293.
+
+A muster toolset preset excludes them all with the rule
+`pattern: x_agent-manager_*organization*`: the curated
+`agent-manager-assistant` carries the agent tools and not these.
+
+An agent in an organization namespace gets no installation skills credential
+(`--skills-git-auth-secret-name`): that Secret exists in the configured
+namespaces only and admission refuses it there, so it names its own.
 `update_agent` drops a reference to the installation's credential, under its
-current or a previous name, from an agent in a tenant, and `agent-manager
-migrate --multi-tenant` drops it from every other agent release there. The
-reconciler creates a tenant's OCIRepository once and never moves its range;
-`agent-manager migrate` does not move the tenants' chart range yet.
+current or a previous name, from such an agent.
 
-The chart renders the reconciler's ClusterRole (`bind` on
-`agent-platform-tenant-flux` only, no `escalate`), and a
-ValidatingAdmissionPolicy that refuses the ServiceAccount's writes of those
-kinds outside labelled namespaces, a RoleBinding to any other role or
-subject than the agents' Flux ServiceAccount, and any other Secret: RBAC cannot select namespaces by label.
-
-The agents' Flux identity can read and write every Secret of the tenant.
-helm-controller keeps an agent's Helm release Secrets
+The agents' Flux identity can read and write every Secret of the organization
+namespace. helm-controller keeps an agent's Helm release Secrets
 (`sh.helm.release.v1.<release>.v<N>`) in the HelmRelease's namespace, and
 Helm's Secret storage driver calls `get`, `list`, `create`, `update` and
-`delete` on them (`agent-platform-tenant-flux` grants these and no more). RBAC
-cannot narrow a `list`, so that identity can read every Secret of an
-organization namespace, the CAPI cluster kubeconfigs included, and a chart
-rendered through it can copy such a Secret with Helm `lookup` into an object
-it renders. With `create`, `update` and `delete` such a chart can also
-overwrite or delete any Secret there, and get the token of any ServiceAccount
-there (a `kubernetes.io/service-account-token` Secret it renders, read back
-with `lookup`), `automation` (`cluster-admin` in an org namespace, from
-rbac-operator) included. Whoever may create or change a HelmRelease or an
-OCIRepository in the namespace can trigger that: on a Giant Swarm management
-cluster, the organization's admins (`cluster-admin` there) and the members
-bound to `agent-platform:editor` or `agent-platform:admin`, which grant those
-writes but no Secret read. This is accepted: those members can already name
-`automation` as a HelmRelease's ServiceAccount and so reach `cluster-admin` in
-the namespace without this role. The plan for giantswarm/giantswarm#36698
-tracks closing that path.
+`delete` on them (`agent-platform-tenant-flux`, rendered by this chart, grants
+these and no more). RBAC cannot narrow a `list`, so that identity can read
+every Secret of the namespace, and a chart rendered through it can copy such
+a Secret with Helm `lookup` into an object it renders, overwrite or delete any
+Secret there, and get the token of any ServiceAccount there. Whoever may
+create or change a HelmRelease in the namespace can trigger that: the members
+bound to `agent-platform:editor` or `agent-platform:admin`. The HelmRelease
+field lock of agent-platform's connectivity chart holds such a release to the
+operator's chart source.
 
 Every create records the caller as `agent-platform.giantswarm.io/created-by`
 on the HelmRelease and, through the chart's `annotations` value, on the
@@ -821,15 +825,6 @@ the fleet's GitOps-owned `sre-agent` releases live in `flux-giantswarm` with
 `--gitops-namespaces` with a `targetNamespace` in the managed set. Releases
 outside the managed namespaces, and releases applied by a Flux Kustomization
 (`kustomize.toolkit.fluxcd.io/name`), are read and never written.
-
-With `--multi-tenant` (`AGENT_MANAGER_MULTI_TENANT`, as `serve` takes it) the
-run also finds the tenant namespaces as the tenant reconciler does and drops
-`skillsGitAuthSecretRef` from every agent release there that names the
-installation's skills credential under its current or a previous name: the
-tenant credential admission policy refuses that reference, so Flux could not
-apply the agent's next change. That is all it does in a tenant, reading and
-writing only HelmReleases; the default namespace's report lists those releases
-under `tenants`, a GitOps-owned one as pending, never written.
 
 ### 1.x → 2.x values
 

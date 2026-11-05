@@ -2,60 +2,60 @@ package agents
 
 import (
 	"context"
+	"errors"
+	"slices"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
+	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/giantswarm/agent-manager/internal/identity"
-	"github.com/giantswarm/agent-manager/internal/tenants"
 )
 
-// fakeTenants is the tenant reconciler as the service sees it.
+// fakeTenants is the organization namespace finder as the service sees it.
 type fakeTenants struct {
 	namespaces []string
-	status     tenants.Status
 }
 
-func (f *fakeTenants) Namespaces() []string   { return f.namespaces }
-func (f *fakeTenants) ModelConfig() string    { return "default-model-config" }
-func (f *fakeTenants) Status() tenants.Status { return f.status }
+func (f *fakeTenants) Names(context.Context) ([]string, error) { return f.namespaces, nil }
+func (f *fakeTenants) Holds(_ context.Context, ns string) (bool, error) {
+	return slices.Contains(f.namespaces, ns), nil
+}
 
 func withTenants(f *fixture, t *fakeTenants) {
 	f.svc.cfg.Tenants = t
 }
 
-// A tenant namespace is managed beside the configured ones, and its first
-// agent may name the platform's default ModelConfig before the reconciler
-// copied it.
+// An organization namespace is managed beside the configured ones; with the
+// tenant reconciler gone, its agents name a ModelConfig that exists there.
 func TestTenantNamespaceIsManaged(t *testing.T) {
 	f := seeded(t)
 	withTenants(f, &fakeTenants{namespaces: []string{"org-a"}})
 	ctx := context.Background()
 
-	assert.Equal(t, []string{"kagent", "tenant", "org-a"}, f.svc.Managed())
-	ns, err := f.svc.Namespace("org-a")
+	assert.Equal(t, []string{"kagent", "tenant", "org-a"}, f.svc.Managed(ctx))
+	ns, err := f.svc.Namespace(ctx, "org-a")
 	require.NoError(t, err)
 	assert.Equal(t, "org-a", ns)
-	_, err = f.svc.Namespace("org-b")
+	_, err = f.svc.Namespace(ctx, "org-b")
 	assert.ErrorIs(t, err, ErrInvalid)
+	assert.NotContains(t, err.Error(), "org-a", "an organization namespace is never named to a caller who did not ask for it")
 
-	spec := Spec{Location: In("org-a"), Name: "sre", ModelConfig: "default-model-config", Toolset: []string{"preset:read-only"}}
-	v, err := f.svc.ValidateCreate(ctx, spec)
-	require.NoError(t, err)
-	assert.True(t, v.Valid, "%v", v.Errors)
-	_, err = f.svc.Create(ctx, spec)
-	require.NoError(t, err)
+	// No platform default is accepted before it exists there any more.
+	_, err = f.svc.Create(ctx, Spec{Location: In("org-a"), Name: "sre", ModelConfig: "default-model-config", Toolset: []string{"preset:read-only"}})
+	require.ErrorIs(t, err, ErrInvalid)
+	assert.Contains(t, err.Error(), "set_organization_model")
 
-	// Any other ModelConfig must exist there.
-	_, err = f.svc.Create(ctx, Spec{Location: In("org-a"), Name: "other", ModelConfig: "qwen3-8-27b", Toolset: []string{"preset:read-only"}})
-	assert.ErrorIs(t, err, ErrInvalid)
-	// A configured namespace is not a tenant: no fallback.
-	_, err = f.svc.Create(ctx, Spec{Location: In("tenant"), Name: "sre", ModelConfig: "default-model-config", Toolset: []string{"preset:read-only"}})
-	assert.ErrorIs(t, err, ErrInvalid)
+	mustCreate(t, f, mcGVR, modelConfig("org-a", "own", "Anthropic", "claude-sonnet-4-6"))
+	_, err = f.svc.Create(ctx, Spec{Location: In("org-a"), Name: "sre", ModelConfig: "own", Toolset: []string{"preset:read-only"}})
+	require.NoError(t, err)
 }
 
 // get_info lists the managed namespaces in which the caller may create.
@@ -63,22 +63,9 @@ func TestInfoListsTheCreatableNamespaces(t *testing.T) {
 	f := seeded(t)
 	withTenants(f, &fakeTenants{namespaces: []string{"org-a", "org-b"}})
 	allowCreate(f.typed, func(ns string) bool { return ns == "org-a" })
-	assert.Equal(t, []string{"org-a"}, f.svc.Info(context.Background()).Namespaces.Managed)
-}
-
-// get_info is where an operator reads that the tenant reconciler failed
-// while the API kept serving; without tenants it says nothing about one.
-func TestInfoReportsTheTenantReconcilersFailure(t *testing.T) {
-	f := seeded(t)
-	assert.Nil(t, f.svc.Info(t.Context()).TenantReconciler)
-
-	at := time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
-	withTenants(f, &fakeTenants{status: tenants.Status{Running: false, Error: "leader election lost", FailedAt: &at}})
-	got := f.svc.Info(t.Context()).TenantReconciler
-	require.NotNil(t, got)
-	assert.False(t, got.Running)
-	assert.Equal(t, "leader election lost", got.Error)
-	assert.Equal(t, at, *got.FailedAt)
+	info := f.svc.Info(context.Background())
+	assert.Equal(t, []string{"org-a"}, info.Namespaces.Managed)
+	assert.True(t, info.Capabilities["organizations"])
 }
 
 // The creator is recorded on create, on the HelmRelease and in the values
@@ -140,6 +127,7 @@ func valuesCreator(t *testing.T, values map[string]any) string {
 func TestTenantGetsNoInstallationSkillsCredential(t *testing.T) {
 	f := seeded(t)
 	withTenants(f, &fakeTenants{namespaces: []string{"org-a"}})
+	mustCreate(t, f, mcGVR, modelConfig("org-a", "default-model-config", "Anthropic", "claude-sonnet-4-6"))
 	f.svc.cfg.Compose.SkillsGitAuthSecretName = "skills-token"
 	gitPlugin := Plugin{Path: "bundles/sre", Git: &GitSkill{URL: skillsRepo, Commit: tagHead}, Skills: []string{"triage"}}
 	values := func(ns string) map[string]any {
@@ -160,6 +148,7 @@ func TestTenantGetsNoInstallationSkillsCredential(t *testing.T) {
 func TestTenantUpdateDropsTheInstallationSkillsCredential(t *testing.T) {
 	f := seeded(t)
 	withTenants(f, &fakeTenants{namespaces: []string{"org-a"}})
+	mustCreate(t, f, mcGVR, modelConfig("org-a", "default-model-config", "Anthropic", "claude-sonnet-4-6"))
 	f.svc.cfg.Compose.SkillsGitAuthSecretName = "agent-manager-skills-token"
 	f.svc.cfg.Compose.SkillsGitAuthPreviousSecretNames = []string{"tenant-credential-agent-manager-skills-token"} // #nosec G101 -- a Secret name, not a credential
 	ctx := t.Context()
@@ -187,5 +176,61 @@ func TestTenantUpdateDropsTheInstallationSkillsCredential(t *testing.T) {
 		}
 		assert.NotContains(t, res.After, SkillsGitAuthValuesKey, ref)
 		assert.NotContains(t, mustValues(hr), SkillsGitAuthValuesKey, ref)
+	}
+}
+
+// toolchain_users never names an organization namespace whose agents the
+// caller may not list: its members' namespace names stay theirs.
+func TestToolchainUsersNamesNoOrganizationTheCallerIsNotIn(t *testing.T) {
+	svc, _, _ := newToolchainFixture(t, "github")
+	svc.cfg.Tenants = &fakeTenants{namespaces: []string{"agents-other-x7k2q"}}
+	ctx := asPerson(t.Context(), "admin@lab.local")
+	c, err := svc.kube.Client(ctx)
+	require.NoError(t, err)
+	c.Dynamic().(*dynamicfake.FakeDynamicClient).PrependReactor("list", "agents", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		if a.GetNamespace() == "agents-other-x7k2q" {
+			return true, nil, apierrors.NewForbidden(schema.GroupResource{Group: KagentAPIGroup, Resource: "agents"}, "", errors.New("RBAC: access denied"))
+		}
+		return false, nil, nil
+	})
+	users, err := svc.ToolchainUsers(ctx, "github", "")
+	require.NoError(t, err)
+	assert.Equal(t, []ToolchainAgent{{Namespace: "kagent", Name: "sre", Toolchain: "github"}}, users.Agents)
+	for _, line := range users.Unreadable {
+		assert.NotContains(t, line, "agents-other-x7k2q")
+	}
+}
+
+// A token the API server refuses fails toolchain_users without naming the
+// organization namespace it was refused in; another failure there is
+// counted, not named: the caller has shown access to none of them.
+func TestToolchainUsersNamesNoOrganizationOnAFailure(t *testing.T) {
+	for name, fail := range map[string]error{
+		"refused token": apierrors.NewUnauthorized("token expired"),
+		"server error":  apierrors.NewInternalError(errors.New("etcd timeout")),
+	} {
+		t.Run(name, func(t *testing.T) {
+			svc, _, _ := newToolchainFixture(t, "github")
+			svc.cfg.Tenants = &fakeTenants{namespaces: []string{"agents-other-x7k2q"}}
+			ctx := asPerson(t.Context(), "admin@lab.local")
+			c, err := svc.kube.Client(ctx)
+			require.NoError(t, err)
+			c.Dynamic().(*dynamicfake.FakeDynamicClient).PrependReactor("list", "agents", func(a k8stesting.Action) (bool, runtime.Object, error) {
+				if a.GetNamespace() == "agents-other-x7k2q" {
+					return true, nil, fail
+				}
+				return false, nil, nil
+			})
+			users, err := svc.ToolchainUsers(ctx, "github", "")
+			if apierrors.IsUnauthorized(fail) {
+				require.ErrorIs(t, err, ErrUnauthenticated)
+				assert.NotContains(t, err.Error(), "agents-other-x7k2q")
+				return
+			}
+			require.NoError(t, err)
+			require.Len(t, users.Unreadable, 1)
+			assert.Contains(t, users.Unreadable[0], "1 organization namespace")
+			assert.NotContains(t, users.Unreadable[0], "agents-other-x7k2q")
+		})
 	}
 }
