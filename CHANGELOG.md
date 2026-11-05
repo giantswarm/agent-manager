@@ -7,13 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking:** `tenants.enabled` no longer renders the ClusterRole `agent-platform-tenant-flux`. The Agent Platform chart renders it whenever kagent is on, so one release owns it and turning the organizations on hands nothing over between releases. An installation that runs agent-manager with `tenants.enabled` outside the Agent Platform chart renders that ClusterRole itself.
+
+## [2.20.0-rc.1] - 2026-11-05
+
 ### Added
 
 - `mode: commit` on every organization write tool (`--organizations-repository`, chart `tenants.commit`): the change is dry-run as the caller, then opened as a pull request as the caller in the installation's repository. `create_organization` puts the organization's file (with `kustomize.toolkit.fluxcd.io/prune: disabled`) under its parent and its first admins in its content path in one pull request. The member, model, connector and egress tools write their files into the content path. `delete_organization` takes two steps: without `confirm` it opens the pull request that removes the file and the whole content path and marks the organization with `agent-platform.giantswarm.io/delete-pull-request`; once that pull request is merged and the file is gone from git, `confirm` erases it. A live delete is refused while the file is in git. The layout and the CODEOWNERS rule the repository needs are in `docs/organizations-commit-mode.md` ([#292](https://github.com/giantswarm/agent-manager/issues/292)).
 
 ### Changed
 
-- **Breaking:** `tenants.enabled` no longer renders the ClusterRole `agent-platform-tenant-flux`. The Agent Platform chart renders it whenever kagent is on, so one release owns it and turning the organizations on hands nothing over between releases. An installation that runs agent-manager with `tenants.enabled` outside the Agent Platform chart renders that ClusterRole itself.
 - The organization tools answer a live change to an object Flux applies from git with `gitops_owned` naming `mode commit`.
 
 ## [2.19.0-rc.2] - 2026-11-05
@@ -583,7 +588,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Chart: the MCPServer CR carries `agent-platform.giantswarm.io/tool-group: agent-platform` next to `muster.giantswarm.io/type` — the Agent Platform tier of MCP servers (the portal's MCP servers page, the `agent-platform` toolset preset). `muster.mcpServer.labels` still adds or overrides labels. (#23)
 
-[Unreleased]: https://github.com/giantswarm/agent-manager/compare/v2.19.0-rc.2...HEAD
+[Unreleased]: https://github.com/giantswarm/agent-manager/compare/v2.20.0-rc.1...HEAD
+[2.20.0-rc.1]: https://github.com/giantswarm/agent-manager/compare/v2.19.0-rc.2...v2.20.0-rc.1
 [2.19.0-rc.2]: https://github.com/giantswarm/agent-manager/compare/v2.19.0-rc.1...v2.19.0-rc.2
 [2.19.0-rc.1]: https://github.com/giantswarm/agent-manager/compare/v2.18.0...v2.19.0-rc.1
 [2.18.0]: https://github.com/giantswarm/agent-manager/compare/v2.17.7...v2.18.0
