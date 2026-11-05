@@ -20,7 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - `modelConfig` is optional on `create_agent` and `POST /api/v1/agents`: omitted, the namespace default's name is written into the agent. A namespace without a default refuses the create, naming its ModelConfigs. `update_agent` never resolves the default.
-- The default model mark `set_organization_model` writes and moves is the annotation `agent-platform.giantswarm.io/is-default-model-config`.
+- The default model mark `set_organization_model` writes and moves is the annotation `agent-platform.giantswarm.io/is-default-model-config`, which agent-platform-operator reads from v0.1.0-rc.10.
 - `--multi-tenant` (chart `tenants.enabled`) manages the organization namespaces labelled `agent-platform.giantswarm.io/organization`, which agent-platform-operator keeps, and serves the organization tools; agent-manager keeps nothing in them. Its ServiceAccount only reads namespaces to find them; everything else runs as the caller. `--multi-tenant` now needs `--downstream-oauth`.
 
 ### Fixed

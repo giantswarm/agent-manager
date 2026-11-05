@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync/atomic"
 
+	apov1alpha1 "github.com/giantswarm/agent-platform-operator/api/v1alpha1"
 	"github.com/giantswarm/mcp-toolkit/tooldesc"
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpotel "github.com/mark3labs/mcp-go/otel"
@@ -414,7 +415,7 @@ func NewMCPServer(svc *agents.Service, version string, opts ...Option) *mcpserve
 
 	s.AddTool(mcp.NewTool(ToolListModelConfigs,
 		tooldesc.Describe("List the ModelConfigs of a namespace: the values create_agent accepts for modelConfig.",
-			"Each with provider, model, its Accepted and ResolvedRefs conditions, who manages it, and default: the one create_agent writes when modelConfig is omitted (the single ModelConfig annotated "+agents.DefaultModelConfigAnnotation+"=true; none or several is no default). Organization admins write them with set_organization_model."),
+			"Each with provider, model, its Accepted and ResolvedRefs conditions, who manages it, and default: the one create_agent writes when modelConfig is omitted (the single ModelConfig annotated "+apov1alpha1.DefaultModelConfigAnnotation+"=true; none or several is no default). Organization admins write them with set_organization_model."),
 		nsProp,
 		orgProp,
 		clusterProp,

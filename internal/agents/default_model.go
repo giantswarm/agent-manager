@@ -6,27 +6,25 @@ import (
 	"slices"
 	"strings"
 
+	apov1alpha1 "github.com/giantswarm/agent-platform-operator/api/v1alpha1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
 // A namespace's default model is the one ModelConfig there annotated
-// DefaultModelConfigAnnotation=true, as with the default IngressClass: none
-// annotated, or more than one, is no default. A create that names no
-// modelConfig writes the default's name into the agent, so an agent never
-// follows a later change of the default.
-
-// DefaultModelConfigAnnotation marks the namespace's default ModelConfig.
-const DefaultModelConfigAnnotation = "agent-platform.giantswarm.io/is-default-model-config"
+// apov1alpha1.DefaultModelConfigAnnotation=true, as with the default
+// IngressClass: none annotated, or more than one, is no default. A create
+// that names no modelConfig writes the default's name into the agent, so an
+// agent never follows a later change of the default.
 
 // transitionDefaultModelConfig counts as marked while no ModelConfig of the
-// namespace carries DefaultModelConfigAnnotation, outside organization
-// namespaces: there the mark alone decides, as it does for
+// namespace carries apov1alpha1.DefaultModelConfigAnnotation, outside
+// organization namespaces: there the mark alone decides, as it does for
 // agent-platform-operator and set_organization_model.
 const transitionDefaultModelConfig = "default-model-config"
 
 // IsMarkedDefault reports whether a ModelConfig carries the default mark.
 func IsMarkedDefault(mc *unstructured.Unstructured) bool {
-	return mc.GetAnnotations()[DefaultModelConfigAnnotation] == "true"
+	return mc.GetAnnotations()[apov1alpha1.DefaultModelConfigAnnotation] == "true"
 }
 
 // markedModelConfigs are the sorted names of the ModelConfigs marked as the
@@ -112,7 +110,7 @@ func (s *Service) resolveModelConfig(ctx context.Context, st *site, name string)
 		}
 		return ModelConfig{}, false, invalidf("modelConfig: namespace %s has no ModelConfigs, so it has no default model; %s", models.namespace, who)
 	}
-	const ask = "pass modelConfig, or have an admin mark one as the default (annotation " + DefaultModelConfigAnnotation + "=true)"
+	const ask = "pass modelConfig, or have an admin mark one as the default (annotation " + apov1alpha1.DefaultModelConfigAnnotation + "=true)"
 	if len(models.marked) > 1 {
 		return ModelConfig{}, false, invalidf("modelConfig: namespace %s has no default model, %s are all marked as the default; %s. ModelConfigs: %s",
 			models.namespace, strings.Join(models.marked, ", "), ask, strings.Join(models.names(), ", "))

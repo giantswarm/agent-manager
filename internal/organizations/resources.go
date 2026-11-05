@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 
+	apov1alpha1 "github.com/giantswarm/agent-platform-operator/api/v1alpha1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -196,7 +197,7 @@ func (s *Service) SetModel(ctx context.Context, req ModelRequest) (*ResourceResu
 				return nil, fmt.Errorf("moving the default mark takes it off %s: %w", name, err)
 			}
 			annotations := other.GetAnnotations()
-			delete(annotations, agents.DefaultModelConfigAnnotation)
+			delete(annotations, apov1alpha1.DefaultModelConfigAnnotation)
 			other.SetAnnotations(annotations)
 			unmarks = append(unmarks, write{gvr: gvr, op: opUpdate, obj: other.Object, ns: ns, name: name, what: "ModelConfig " + ns + "/" + name + " (default mark removed)", reason: way})
 		}
@@ -236,7 +237,7 @@ func setMark(obj *unstructured.Unstructured) {
 	if annotations == nil {
 		annotations = map[string]string{}
 	}
-	annotations[agents.DefaultModelConfigAnnotation] = "true"
+	annotations[apov1alpha1.DefaultModelConfigAnnotation] = "true"
 	obj.SetAnnotations(annotations)
 }
 

@@ -3,6 +3,7 @@ package agents
 import (
 	"testing"
 
+	apov1alpha1 "github.com/giantswarm/agent-platform-operator/api/v1alpha1"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -12,7 +13,7 @@ import (
 
 func markedModel(ns, name string) *unstructured.Unstructured {
 	mc := modelConfig(ns, name, "Anthropic", "claude-sonnet-4-6")
-	mc.SetAnnotations(map[string]string{DefaultModelConfigAnnotation: "true"})
+	mc.SetAnnotations(map[string]string{apov1alpha1.DefaultModelConfigAnnotation: "true"})
 	return mc
 }
 
@@ -43,12 +44,12 @@ func TestTheNamespaceDefaultModel(t *testing.T) {
 		{
 			name:    "none marked",
 			models:  []*unstructured.Unstructured{modelConfig("kagent", "claude", "Anthropic", "claude-sonnet-4-6"), modelConfig("kagent", "qwen", "OpenAI", "qwen3")},
-			refusal: "modelConfig: namespace kagent has no default model; pass modelConfig, or have an admin mark one as the default (annotation " + DefaultModelConfigAnnotation + "=true). ModelConfigs: claude, qwen",
+			refusal: "modelConfig: namespace kagent has no default model; pass modelConfig, or have an admin mark one as the default (annotation " + apov1alpha1.DefaultModelConfigAnnotation + "=true). ModelConfigs: claude, qwen",
 		},
 		{
 			name:    "two marked",
 			models:  []*unstructured.Unstructured{markedModel("kagent", "claude"), markedModel("kagent", "qwen")},
-			refusal: "modelConfig: namespace kagent has no default model, claude, qwen are all marked as the default; pass modelConfig, or have an admin mark one as the default (annotation " + DefaultModelConfigAnnotation + "=true). ModelConfigs: claude, qwen",
+			refusal: "modelConfig: namespace kagent has no default model, claude, qwen are all marked as the default; pass modelConfig, or have an admin mark one as the default (annotation " + apov1alpha1.DefaultModelConfigAnnotation + "=true). ModelConfigs: claude, qwen",
 		},
 		{
 			name:   "the transition name, none marked",
@@ -194,5 +195,5 @@ func TestTheTransitionNameIsNoDefaultInAnOrganization(t *testing.T) {
 	assert.False(t, list[0].Default)
 
 	_, err = f.svc.Create(ctx, Spec{Location: In("org-acme"), Name: "sre", Toolset: []string{"preset:none"}})
-	require.EqualError(t, err, "invalid request: modelConfig: namespace org-acme has no default model; pass modelConfig, or have an admin mark one as the default (annotation "+DefaultModelConfigAnnotation+"=true). ModelConfigs: default-model-config")
+	require.EqualError(t, err, "invalid request: modelConfig: namespace org-acme has no default model; pass modelConfig, or have an admin mark one as the default (annotation "+apov1alpha1.DefaultModelConfigAnnotation+"=true). ModelConfigs: default-model-config")
 }

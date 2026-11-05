@@ -6,7 +6,7 @@ require (
 	buf.build/gen/go/bufbuild/protovalidate/protocolbuffers/go v1.36.12-20260825204119-511051f7f437.2
 	github.com/Masterminds/semver/v3 v3.5.0
 	github.com/a2aproject/a2a-go/v2 v2.7.0
-	github.com/giantswarm/agent-platform-operator v0.1.0-rc.5
+	github.com/giantswarm/agent-platform-operator v0.1.0-rc.10
 	github.com/giantswarm/gitops-commit v0.11.10
 	github.com/giantswarm/mcp-oauth v1.9.6
 	github.com/giantswarm/mcp-toolkit v0.4.9

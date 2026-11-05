@@ -5,18 +5,17 @@ import (
 	"net/http"
 	"testing"
 
+	apov1alpha1 "github.com/giantswarm/agent-platform-operator/api/v1alpha1"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-
-	"github.com/giantswarm/agent-manager/internal/agents"
 )
 
 func markedModelConfig(name string) *unstructured.Unstructured {
 	return &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "api.kagent.dev/v1alpha3", "kind": "ModelConfig",
-		"metadata": map[string]any{"name": name, "namespace": "kagent", "annotations": map[string]any{agents.DefaultModelConfigAnnotation: "true"}},
+		"metadata": map[string]any{"name": name, "namespace": "kagent", "annotations": map[string]any{apov1alpha1.DefaultModelConfigAnnotation: "true"}},
 		"spec":     map[string]any{"provider": "Anthropic", "model": "claude-sonnet-4-6"},
 	}}
 }
@@ -61,7 +60,7 @@ func TestCreateWithoutADefaultIsRefused(t *testing.T) {
 		require.NoError(t, err)
 	}
 	const refusal = "modelConfig: namespace kagent has no default model, claude, qwen are all marked as the default; pass modelConfig, or have an admin mark one as the default (annotation " +
-		agents.DefaultModelConfigAnnotation + "=true). ModelConfigs: claude, default-model-config, qwen"
+		apov1alpha1.DefaultModelConfigAnnotation + "=true). ModelConfigs: claude, default-model-config, qwen"
 
 	text, isErr := callTool(t, NewMCPServer(svc, "test"), ToolCreateAgent, map[string]any{"name": "sre", "toolset": []string{"preset:read-only"}})
 	assert.True(t, isErr)

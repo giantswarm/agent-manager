@@ -225,7 +225,8 @@ type Spec struct {
 	// keeps the chart default. At most MaxSystemMessageLength characters.
 	SystemMessage string `json:"systemMessage,omitempty"`
 	// ModelConfig names an existing kagent ModelConfig in the namespace;
-	// empty selects the namespace default (DefaultModelConfigAnnotation).
+	// empty selects the namespace default (the ModelConfig annotated
+	// apov1alpha1.DefaultModelConfigAnnotation).
 	ModelConfig string `json:"modelConfig,omitempty"`
 	// Harness names the Harness of the namespace that runs the agent (chart
 	// agent.harness, the Agent object's spec.harnessRef.name); empty selects
@@ -561,7 +562,7 @@ type ModelConfig struct {
 	Message      string `json:"message,omitempty"`
 	ManagedBy    string `json:"managedBy,omitempty"`
 	// Default: the namespace default a create without a modelConfig takes,
-	// the one ModelConfig marked DefaultModelConfigAnnotation.
+	// the one ModelConfig marked apov1alpha1.DefaultModelConfigAnnotation.
 	Default bool `json:"default"`
 }
 
