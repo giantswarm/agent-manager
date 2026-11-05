@@ -9,7 +9,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- `tags` on `create_agent`, `update_agent`, `get_agent` and `list_agents` (REST and MCP), stored as the chart value `agent.tags` (rendered as the `ui.giantswarm.io/tags` annotation) and read from it, so a read reflects an update at once; and the `get_info` capability `tags`, true when the embedded agent chart has a tag rule and the chart in use takes `agent.tags` (2.5.0 or later). The tag rule is the embedded chart's `tag.schema.json` and `agent.tags` `maxItems`, loaded at startup, for agents and skills alike. `list_agents` and `list_skills` take a `tags` filter (any of them); `list_skills` reports a skill's tags from its `SKILL.md` frontmatter `metadata.tags` (comma-joined; a tag the rule refuses is dropped) (giantswarm/giantswarm#38901).
 - Organization tools, acting as the caller with a server-side dry run of every write first: `list_organizations`, `get_organization` (with what a delete erases), `create_organization` (writes the `AgentPlatformOrganization`, waits for its `Ready`, then binds the first admins as the RoleBinding `organization-admins`; a second call finishes the admins of one not Ready in time), `update_organization` and `delete_organization` (answers what it erases until `confirm: <parent>/<name>`, then marks `kustomize.toolkit.fluxcd.io/prune: enabled` and deletes) for an `agent-platform:organizations-admin`; `list_organization_members`, `add_organization_member`, `remove_organization_member`, `set_organization_model` (the first model carries the default mark, `default: true` moves it, a namespace with two marks takes no new model), `list_organization_connectors`, `set_organization_connector`, `set_organization_egress_policy` and `delete_organization_object` for an organization's admins; and `list_my_organizations`, the organizations in which the caller may list Agents. A refusal names the missing role and who grants it. No tool takes or returns a secret value: a missing or replaced credential is answered with the Dev Portal's credential form link. A muster preset excludes them all with `pattern: x_agent-manager_*organization*` ([#291](https://github.com/giantswarm/agent-manager/issues/291)).
 - `--dev-portal-url` (chart `devPortal.url`): the origin of the credential form links.
 - `list_model_configs` reports `default` on the model that carries the organization's default mark; `get_info` reports the capability `organizations`.
@@ -21,6 +20,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 
 - **Breaking:** the tenant reconciler. Its flags `--tenant-model-config`, `--tenant-model-secret`, `--tenant-worker-pool-replicas`, `--tenant-flux-cluster-role`, `--tenant-network-policy-flavor`, `--tenant-network-policies`, `--tenant-interval` and `--tenant-leader-election-namespace` are gone, and the chart refuses the values `tenants.modelConfig`, `tenants.workerPoolReplicas`, `tenants.networkPolicy` and `tenants.interval`: remove them before you move to this version (the agent-platform chart stops passing them in giantswarm/agent-platform#1268). The chart keeps rendering the ClusterRole `agent-platform-tenant-flux` that the agents' Helm ServiceAccount is bound to. The chart no longer renders the ClusterRole and ClusterRoleBinding `<fullname>-tenants` (cluster-wide writes, RoleBinding writes and `bind` on `agent-platform-tenant-flux`), the ValidatingAdmissionPolicy and its binding `<fullname>-tenants`, or the Role and RoleBinding `<fullname>-tenants-leader` (the Lease `agent-manager-tenants`). `get_info` no longer reports `tenantReconciler`. An agent created in a tenant names a ModelConfig that exists there: the platform default is no longer accepted before a copy exists.
+
+## [2.18.0] - 2026-11-03
+
+### Added
+
+- `tags` on `create_agent`, `update_agent`, `get_agent` and `list_agents` (REST and MCP), stored as the chart value `agent.tags` (rendered as the `ui.giantswarm.io/tags` annotation) and read from it, so a read reflects an update at once; and the `get_info` capability `tags`, true when the embedded agent chart has a tag rule and the chart in use takes `agent.tags` (2.5.0 or later). The tag rule is the embedded chart's `tag.schema.json` and `agent.tags` `maxItems`, loaded at startup, for agents and skills alike. `list_agents` and `list_skills` take a `tags` filter (any of them); `list_skills` reports a skill's tags from its `SKILL.md` frontmatter `metadata.tags` (comma-joined; a tag the rule refuses is dropped) (giantswarm/giantswarm#38901).
 
 ## [2.17.7] - 2026-10-26
 
@@ -548,7 +553,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Chart: the MCPServer CR carries `agent-platform.giantswarm.io/tool-group: agent-platform` next to `muster.giantswarm.io/type` — the Agent Platform tier of MCP servers (the portal's MCP servers page, the `agent-platform` toolset preset). `muster.mcpServer.labels` still adds or overrides labels. (#23)
 
-[Unreleased]: https://github.com/giantswarm/agent-manager/compare/v2.17.7...HEAD
+[Unreleased]: https://github.com/giantswarm/agent-manager/compare/v2.18.0...HEAD
+[2.18.0]: https://github.com/giantswarm/agent-manager/compare/v2.17.7...v2.18.0
 [2.17.7]: https://github.com/giantswarm/agent-manager/compare/v2.17.2...v2.17.7
 [2.17.2]: https://github.com/giantswarm/agent-manager/compare/v2.17.1...v2.17.2
 [2.17.1]: https://github.com/giantswarm/agent-manager/compare/v2.17.0...v2.17.1
