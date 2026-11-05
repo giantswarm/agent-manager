@@ -563,7 +563,7 @@ agent-manager keeps nothing in it any more. `--kagent-namespace` is never one.
 
 agent-manager no longer runs a tenant reconciler. Its ServiceAccount only
 finds the organization namespaces: RBAC cannot narrow a list by label, so it
-may get, list and watch namespaces, read-only, and keeps the labelled ones.
+may get and list namespaces, read-only, and keeps the labelled ones.
 Everything else runs as the caller, which needs `--downstream-oauth`.
 
 The organization tools (every name holds `organization`):

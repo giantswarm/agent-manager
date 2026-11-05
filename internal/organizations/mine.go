@@ -6,6 +6,7 @@ import (
 
 	"golang.org/x/sync/errgroup"
 	authorizationv1 "k8s.io/api/authorization/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/giantswarm/agent-manager/internal/agents"
@@ -50,6 +51,11 @@ func (s *Service) ListMine(ctx context.Context) (*Mine, error) {
 				ResourceAttributes: &authorizationv1.ResourceAttributes{Namespace: ns.Name, Verb: "list", Group: agentsGVR.Group, Resource: agentsGVR.Resource},
 			}}
 			res, err := c.Typed().AuthorizationV1().SelfSubjectAccessReviews().Create(gctx, review, metav1.CreateOptions{})
+			if apierrors.IsUnauthorized(err) {
+				// The caller's token is refused: no review answers, and
+				// "no organization" would be the wrong answer.
+				return kubeErr(err, "access review in "+ns.Name, "")
+			}
 			if err != nil {
 				s.log.Debug("access review failed; leaving the organization out", identity.LogAttr(ctx), "namespace", ns.Name, "error", err)
 				return nil
@@ -58,7 +64,9 @@ func (s *Service) ListMine(ctx context.Context) (*Mine, error) {
 			return nil
 		})
 	}
-	_ = g.Wait()
+	if err := g.Wait(); err != nil {
+		return nil, err
+	}
 	out := &Mine{Organizations: []Namespace{}}
 	for i, ns := range candidates {
 		if allowed[i] {

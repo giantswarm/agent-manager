@@ -301,17 +301,20 @@ func (s *Service) RemoveMember(ctx context.Context, req MemberRequest) (*MemberR
 		}
 		name := b.obj.GetName()
 		what := fmt.Sprintf("RoleBinding %s/%s", ns, name)
+		reason := way
+		if name == FirstAdminsBinding {
+			// Admission keeps the first admins' binding from being deleted
+			// or emptied while the organization lives; its dry run answers.
+			reason = "if " + FirstAdminsBinding + " would lose its last admin: add another admin first (add_organization_member role admin); a lockout is a cluster-admin's to fix; otherwise " + way
+		}
 		if len(kept) == 0 {
-			if name == FirstAdminsBinding {
-				return nil, fmt.Errorf("%w: %s %s is the last subject of %s, the organization's first admins, which is never emptied while the organization lives: add another admin first (add_organization_member role admin); a lockout is a cluster-admin's to fix", agents.ErrConflict, strings.ToLower(sub.Kind), sub.Name, what)
-			}
-			writes = append(writes, write{gvr: rbacGVR, op: opDelete, ns: ns, name: name, what: what, reason: way})
+			writes = append(writes, write{gvr: rbacGVR, op: opDelete, ns: ns, name: name, what: what, reason: reason})
 		} else {
 			obj := b.obj.DeepCopy()
 			if err := unstructured.SetNestedSlice(obj.Object, kept, "subjects"); err != nil {
 				return nil, err
 			}
-			writes = append(writes, write{gvr: rbacGVR, op: opUpdate, obj: obj.Object, ns: ns, name: name, what: what, reason: way})
+			writes = append(writes, write{gvr: rbacGVR, op: opUpdate, obj: obj.Object, ns: ns, name: name, what: what, reason: reason})
 		}
 		res.Bindings = append(res.Bindings, name)
 		if res.Member.Role == "" {

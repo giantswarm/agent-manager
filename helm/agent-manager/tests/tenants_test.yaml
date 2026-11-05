@@ -90,7 +90,7 @@ tests:
           value:
             - apiGroups: [""]
               resources: ["namespaces"]
-              verbs: ["get", "list", "watch"]
+              verbs: ["get", "list"]
 
   - it: binds the namespace read to the ServiceAccount
     template: templates/tenants-rbac.yaml

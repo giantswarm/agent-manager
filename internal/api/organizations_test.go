@@ -319,10 +319,32 @@ func TestUpdateAndDeleteOrganizationInApplyMode(t *testing.T) {
 				live = append(live, "update prune="+a.GetObject().(*unstructured.Unstructured).GetAnnotations()[organizations.PruneAnnotation])
 			}
 		case k8stesting.DeleteActionImpl:
-			live = append(live, "delete")
+			if len(a.DeleteOptions.DryRun) == 0 {
+				live = append(live, "delete")
+			} else {
+				live = append(live, "dry run of delete")
+			}
 		}
 	}
-	assert.Equal(t, []string{"update prune=enabled", "delete"}, live)
+	assert.Equal(t, []string{"update prune=enabled", "dry run of delete", "delete"}, live)
+}
+
+// A delete the API server refuses after the delete intent is written
+// leaves the organization as it was, without the intent.
+func TestARefusedDeleteTakesTheDeleteIntentOffAgain(t *testing.T) {
+	f := newOrgFixture(t, organization("org-acme", "payments", nil))
+	f.dryRuns.Refuse = func(u *unstructured.Unstructured) error {
+		if u.GetKind() == "agentplatformorganizations" {
+			return apierrors.NewForbidden(schema.GroupResource{Resource: "agentplatformorganizations"}, u.GetName(), errors.New("denied by policy"))
+		}
+		return nil
+	}
+	text, isErr := f.call(t, ToolDeleteOrganization, map[string]any{"namespace": "org-acme", "name": "payments", "confirm": "org-acme/payments"})
+	require.True(t, isErr)
+	assert.Contains(t, text, "dry run of delete")
+	org := f.get(t, orgGVR, "org-acme", "payments")
+	require.NotNil(t, org)
+	assert.NotContains(t, org.GetAnnotations(), organizations.PruneAnnotation)
 }
 
 // An organization Flux applies from git is not changed live.
@@ -469,10 +491,19 @@ func TestThePickerListsOnlyTheCallersOrganizations(t *testing.T) {
 	res := decode(t, text)
 	assert.Empty(t, res["organizations"])
 	assert.Contains(t, res["none"], "add_organization_member")
+
+	// A refused token is not "no organization".
+	f.typed.PrependReactor("create", "selfsubjectaccessreviews", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewUnauthorized("token expired")
+	})
+	text, isErr = f.call(t, ToolListMyOrganizations, nil)
+	require.True(t, isErr)
+	assert.True(t, strings.HasPrefix(text, "unauthenticated:"), text)
 }
 
-// Members are added into their role's binding and removed from it; the first
-// admins' binding is never emptied, and the refusal says how to go on.
+// Members are added into their role's binding and removed from it; when
+// admission keeps the first admins' last admin, the refusal says how to go
+// on.
 func TestOrganizationMembers(t *testing.T) {
 	f := newOrgFixture(t)
 	_, err := f.dyn.Resource(rbGVR).Namespace(orgNS).Create(context.Background(), &unstructured.Unstructured{Object: map[string]any{
@@ -493,9 +524,16 @@ func TestOrganizationMembers(t *testing.T) {
 	require.Len(t, members, 2)
 	assert.Equal(t, "Group", members[0].(map[string]any)["kind"], "groups first")
 
+	f.dryRuns.Refuse = func(u *unstructured.Unstructured) error {
+		if u.GetKind() == "rolebindings" && u.GetName() == organizations.FirstAdminsBinding {
+			return apierrors.NewForbidden(schema.GroupResource{Group: "rbac.authorization.k8s.io", Resource: "rolebindings"}, u.GetName(), errors.New("the first admins' binding is kept while the namespace lives"))
+		}
+		return nil
+	}
 	text, isErr = f.call(t, ToolRemoveOrganizationMember, map[string]any{"namespace": orgNS, "user": "jane@example.com"})
 	require.True(t, isErr)
-	assert.True(t, strings.HasPrefix(text, "conflict:"), text)
+	assert.NotNil(t, f.get(t, rbGVR, orgNS, organizations.FirstAdminsBinding))
+	assert.True(t, strings.HasPrefix(text, "forbidden:"), text)
 	assert.Contains(t, text, "add another admin first")
 
 	text, isErr = f.call(t, ToolRemoveOrganizationMember, map[string]any{"namespace": orgNS, "group": "payments-team"})

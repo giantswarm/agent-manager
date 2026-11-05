@@ -250,16 +250,16 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service) {
 		return t.svc.ListMembers(ctx, req.GetString(argNamespace, ""))
 	}))
 
-	memberProps := func(role string) []mcp.ToolOption {
+	memberProps := func() []mcp.ToolOption {
 		return []mcp.ToolOption{
 			orgNSProp,
 			mcp.WithString(argGroup, mcp.Description("Identity provider group, as the API server sees it; offer a group first: membership then changes in the identity provider")),
 			mcp.WithString(argUser, mcp.Description("A person, as the API server sees them; when no group fits")),
-			mcp.WithString(argRole, mcp.Description(role), mcp.Enum("admin", "editor", "user")),
 			dryRun,
 		}
 	}
-	addOpts := append(memberProps("admin manages members, models and credentials; editor creates agents; user uses them"),
+	addOpts := append(memberProps(),
+		mcp.WithString(argRole, mcp.Required(), mcp.Description("admin manages members, models and credentials; editor creates agents; user uses them"), mcp.Enum("admin", "editor", "user")),
 		mcp.WithReadOnlyHintAnnotation(false),
 		mcp.WithDestructiveHintAnnotation(false),
 		mcp.WithIdempotentHintAnnotation(true),
@@ -271,14 +271,15 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service) {
 		return t.svc.AddMember(ctx, memberRequest(req))
 	}))
 
-	removeOpts := append(memberProps("Only this role; omit for every role"),
+	removeOpts := append(memberProps(),
+		mcp.WithString(argRole, mcp.Description("Only this role; omit for every role"), mcp.Enum("admin", "editor", "user")),
 		mcp.WithReadOnlyHintAnnotation(false),
 		mcp.WithDestructiveHintAnnotation(true),
 		mcp.WithIdempotentHintAnnotation(true),
 		mcp.WithOpenWorldHintAnnotation(false))
 	s.AddTool(mcp.NewTool(ToolRemoveOrganizationMember, append([]mcp.ToolOption{
 		tooldesc.Describe("Remove a group or a person from an organization's roles, as you.",
-			"From every binding of the role that holds them, dry run first; an emptied binding goes, except organization-admins, which keeps at least one admin. Needs agent-platform:admin in the organization."),
+			"From every binding of the role that holds them, dry run first; an emptied binding goes, except organization-admins: admission keeps its last admin. Needs agent-platform:admin in the organization."),
 	}, removeOpts...)...), t.run(func(ctx context.Context, req mcp.CallToolRequest) (any, error) {
 		return t.svc.RemoveMember(ctx, memberRequest(req))
 	}))

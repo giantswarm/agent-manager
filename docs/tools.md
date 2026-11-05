@@ -74,7 +74,8 @@ Writes the RoleBinding organization-<role>s (admins: organization-admins), dry r
     }
   },
   "required": [
-    "namespace"
+    "namespace",
+    "role"
   ],
   "type": "object"
 }
@@ -985,7 +986,7 @@ Per repository: the ref read, the commit it resolved to (what a skills entry pin
 ```text
 Remove a group or a person from an organization's roles, as you.
 
-From every binding of the role that holds them, dry run first; an emptied binding goes, except organization-admins, which keeps at least one admin. Needs agent-platform:admin in the organization.
+From every binding of the role that holds them, dry run first; an emptied binding goes, except organization-admins: admission keeps its last admin. Needs agent-platform:admin in the organization.
 ```
 
 ```json

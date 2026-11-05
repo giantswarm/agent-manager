@@ -139,7 +139,8 @@ type Erasure struct {
 	// Credentials are the credential Secrets the models, connectors and
 	// egress policies name, by name only.
 	Credentials []string `json:"credentials"`
-	// Members are the RoleBindings to the organization's roles.
+	// Members are the RoleBindings to the organization's roles
+	// (agent-platform:admin, editor and user).
 	Members        []string `json:"members"`
 	SnapshotPrefix string   `json:"snapshotPrefix,omitempty"`
 	// Kept is what a delete does not erase.
@@ -150,7 +151,7 @@ type Erasure struct {
 
 // Get reads one organization and what deleting it erases.
 func (s *Service) Get(ctx context.Context, parent, name string) (*Details, error) {
-	c, org, err := s.get(ctx, parent, name)
+	c, _, org, err := s.get(ctx, parent, name)
 	if err != nil {
 		return nil, err
 	}
@@ -161,20 +162,23 @@ func (s *Service) Get(ctx context.Context, parent, name string) (*Details, error
 	return out, nil
 }
 
-func (s *Service) get(ctx context.Context, parent, name string) (kube.Client, *apov1alpha1.AgentPlatformOrganization, error) {
+// get reads an organization as the caller: the object as the API server
+// sent it, which a write changes in place so that fields this version's
+// types do not know survive, and its typed view.
+func (s *Service) get(ctx context.Context, parent, name string) (kube.Client, *unstructured.Unstructured, *apov1alpha1.AgentPlatformOrganization, error) {
 	if parent == "" || name == "" {
-		return nil, nil, invalidf("namespace (the parent namespace) and name are required")
+		return nil, nil, nil, invalidf("namespace (the parent namespace) and name are required")
 	}
 	c, err := s.caller(ctx)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	u, err := c.Dynamic().Resource(GVR).Namespace(parent).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
-		return nil, nil, kubeErr(err, fmt.Sprintf("get AgentPlatformOrganization %s/%s", parent, name), wayOrganizationsAdmin(parent))
+		return nil, nil, nil, kubeErr(err, fmt.Sprintf("get AgentPlatformOrganization %s/%s", parent, name), wayOrganizationsAdmin(parent))
 	}
 	org, err := organizationOf(u)
-	return c, org, err
+	return c, u, org, err
 }
 
 // erasure reads, as the caller, what a delete of org erases. An
@@ -231,7 +235,15 @@ func (s *Service) erasure(ctx context.Context, dyn dynamic.Interface, org *apov1
 			}
 		}
 	})
-	read("members", lister(rbacGVR), &out.Members, nil)
+	var bindings []string
+	out.Members = []string{}
+	read("members", lister(rbacGVR), &bindings, func(u *unstructured.Unstructured) {
+		kind, _, _ := unstructured.NestedString(u.Object, "roleRef", "kind")
+		role, _, _ := unstructured.NestedString(u.Object, "roleRef", "name")
+		if kind == "ClusterRole" && (role == RoleAdmin || role == RoleEditor || role == RoleUser) {
+			out.Members = append(out.Members, u.GetName())
+		}
+	})
 	out.Credentials = make([]string, 0, len(credentials))
 	for name := range credentials {
 		out.Credentials = append(out.Credentials, name)
@@ -270,7 +282,9 @@ type CreateResult struct {
 	// organization is Ready.
 	FirstAdmins *Binding `json:"firstAdmins,omitempty"`
 	// Pending says what is left and how to finish it.
-	Pending     string `json:"pending,omitempty"`
+	Pending string `json:"pending,omitempty"`
+	// Note says what this call did not do.
+	Note        string `json:"note,omitempty"`
 	RequestedBy string `json:"requestedBy,omitempty"`
 }
 
@@ -380,6 +394,9 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (*CreateResult,
 		return nil, fmt.Errorf("%w (the organization %s exists; call create_organization again with the same arguments to bind its first admins)", err, what)
 	}
 	res.FirstAdmins = binding
+	if !res.Created {
+		res.Note = "the organization existed, so only its first admins were bound; its display name, harnesses and worker replicas are as they were (update_organization changes them)"
+	}
 	return res, nil
 }
 
@@ -495,7 +512,7 @@ type UpdateResult struct {
 
 // Update changes an organization as the caller, dry run first.
 func (s *Service) Update(ctx context.Context, req UpdateRequest) (*UpdateResult, error) {
-	c, org, err := s.get(ctx, req.Parent, req.Name)
+	c, u, org, err := s.get(ctx, req.Parent, req.Name)
 	if err != nil {
 		return nil, err
 	}
@@ -503,35 +520,41 @@ func (s *Service) Update(ctx context.Context, req UpdateRequest) (*UpdateResult,
 		return nil, err
 	}
 	res := &UpdateResult{Before: summary(org), DryRun: req.DryRun, RequestedBy: identity.Caller(ctx), Changed: []string{}}
-	next := org.DeepCopy()
-	if req.DisplayName != nil && *req.DisplayName != next.Annotations[apov1alpha1.DisplayNameAnnotation] {
-		if next.Annotations == nil {
-			next.Annotations = map[string]string{}
+	next := u.DeepCopy()
+	if req.DisplayName != nil && *req.DisplayName != org.Annotations[apov1alpha1.DisplayNameAnnotation] {
+		annotations := next.GetAnnotations()
+		if annotations == nil {
+			annotations = map[string]string{}
 		}
 		if *req.DisplayName == "" {
-			delete(next.Annotations, apov1alpha1.DisplayNameAnnotation)
+			delete(annotations, apov1alpha1.DisplayNameAnnotation)
 		} else {
-			next.Annotations[apov1alpha1.DisplayNameAnnotation] = *req.DisplayName
+			annotations[apov1alpha1.DisplayNameAnnotation] = *req.DisplayName
 		}
+		next.SetAnnotations(annotations)
 		res.Changed = append(res.Changed, "displayName")
 	}
-	if req.Harnesses != nil && !slices.Equal(*req.Harnesses, next.Spec.Harnesses) {
-		next.Spec.Harnesses = slices.Clone(*req.Harnesses)
+	if req.Harnesses != nil && !slices.Equal(*req.Harnesses, org.Spec.Harnesses) {
+		if err := unstructured.SetNestedStringSlice(next.Object, *req.Harnesses, "spec", "harnesses"); err != nil {
+			return nil, err
+		}
 		res.Changed = append(res.Changed, "harnesses")
 	}
-	if req.WorkerReplicas != nil && *req.WorkerReplicas != next.Spec.Workers.Replicas {
-		next.Spec.Workers.Replicas = *req.WorkerReplicas
+	if req.WorkerReplicas != nil && *req.WorkerReplicas != org.Spec.Workers.Replicas {
+		if err := unstructured.SetNestedField(next.Object, int64(*req.WorkerReplicas), "spec", "workers", "replicas"); err != nil {
+			return nil, err
+		}
 		res.Changed = append(res.Changed, "workerReplicas")
 	}
-	res.After = summary(next)
-	if len(res.Changed) == 0 {
-		return res, nil
-	}
-	obj, err := runtime.DefaultUnstructuredConverter.ToUnstructured(next)
+	after, err := organizationOf(next)
 	if err != nil {
 		return nil, err
 	}
-	w := write{gvr: GVR, op: opUpdate, obj: obj, ns: req.Parent, name: req.Name,
+	res.After = summary(after)
+	if len(res.Changed) == 0 {
+		return res, nil
+	}
+	w := write{gvr: GVR, op: opUpdate, obj: next.Object, ns: req.Parent, name: req.Name,
 		what: fmt.Sprintf("AgentPlatformOrganization %s/%s", req.Parent, req.Name), reason: wayOrganizationsAdmin(req.Parent)}
 	if err := apply(ctx, c.Dynamic(), []write{w}, req.DryRun); err != nil {
 		return nil, err
@@ -580,7 +603,7 @@ type DeleteResult struct {
 // admission policy accepts, after an access review for the delete and a dry
 // run of the mark.
 func (s *Service) Delete(ctx context.Context, req DeleteRequest) (*DeleteResult, error) {
-	c, org, err := s.get(ctx, req.Parent, req.Name)
+	c, u, org, err := s.get(ctx, req.Parent, req.Name)
 	if err != nil {
 		return nil, err
 	}
@@ -605,33 +628,61 @@ func (s *Service) Delete(ctx context.Context, req DeleteRequest) (*DeleteResult,
 		return res, nil
 	}
 	what := "AgentPlatformOrganization " + confirm
-	var writes []write
+	orgs := c.Dynamic().Resource(GVR).Namespace(req.Parent)
+	// The delete intent comes first: the admission policy refuses a delete,
+	// a dry run of it too, of an object without it. So the delete is
+	// dry-run once the mark is written, and the mark goes again when that
+	// dry run is refused.
+	marked := false
 	if org.Annotations[PruneAnnotation] != PruneEnabled {
-		marked := org.DeepCopy()
-		if marked.Annotations == nil {
-			marked.Annotations = map[string]string{}
+		next := u.DeepCopy()
+		annotations := next.GetAnnotations()
+		if annotations == nil {
+			annotations = map[string]string{}
 		}
-		marked.Annotations[PruneAnnotation] = PruneEnabled
-		obj, err := runtime.DefaultUnstructuredConverter.ToUnstructured(marked)
-		if err != nil {
+		annotations[PruneAnnotation] = PruneEnabled
+		next.SetAnnotations(annotations)
+		w := write{gvr: GVR, op: opUpdate, obj: next.Object, ns: req.Parent, name: req.Name, what: what + " (" + PruneAnnotation + ": " + PruneEnabled + ")", reason: way}
+		if err := apply(ctx, c.Dynamic(), []write{w}, req.DryRun); err != nil {
 			return nil, err
 		}
-		writes = append(writes, write{gvr: GVR, op: opUpdate, obj: obj, ns: req.Parent, name: req.Name, what: what + " (" + PruneAnnotation + ": " + PruneEnabled + ")", reason: way})
-	}
-	if err := apply(ctx, c.Dynamic(), writes, req.DryRun); err != nil {
-		return nil, err
+		marked = !req.DryRun
 	}
 	if req.DryRun {
-		res.Next = "dry run: nothing was deleted"
+		res.Next = "dry run: nothing was written; the delete itself is dry-run once the delete intent is on the object, which a dry run does not write"
 		return res, nil
 	}
-	if err := c.Dynamic().Resource(GVR).Namespace(req.Parent).Delete(ctx, req.Name, metav1.DeleteOptions{}); err != nil {
+	if err := orgs.Delete(ctx, req.Name, metav1.DeleteOptions{DryRun: dryRunAll}); err != nil {
+		err = kubeErr(err, "dry run of delete "+what, way)
+		if marked {
+			if unmarkErr := s.unmarkPrune(ctx, c, req.Parent, req.Name); unmarkErr != nil {
+				return nil, fmt.Errorf("%w; the object keeps %s: %s, remove it: %v", err, PruneAnnotation, PruneEnabled, unmarkErr)
+			}
+		}
+		return nil, err
+	}
+	if err := orgs.Delete(ctx, req.Name, metav1.DeleteOptions{}); err != nil {
 		return nil, kubeErr(err, "delete "+what, way)
 	}
 	res.Deleted = true
 	res.Next = "the operator erases the organization now; get_organization reports its erasure step until it is gone"
 	s.log.Info("organization deleted", identity.LogAttr(ctx), "parent", req.Parent, "name", req.Name)
 	return res, nil
+}
+
+// unmarkPrune takes the delete intent off an organization a delete did not
+// delete.
+func (s *Service) unmarkPrune(ctx context.Context, c kube.Client, parent, name string) error {
+	orgs := c.Dynamic().Resource(GVR).Namespace(parent)
+	u, err := orgs.Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return err
+	}
+	annotations := u.GetAnnotations()
+	delete(annotations, PruneAnnotation)
+	u.SetAnnotations(annotations)
+	_, err = orgs.Update(ctx, u, metav1.UpdateOptions{FieldManager: agents.FieldManager})
+	return err
 }
 
 func orDefault(v, def string) string {

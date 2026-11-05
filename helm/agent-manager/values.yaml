@@ -479,7 +479,7 @@ tenants:
   # Organization's `org-<name>` labelled `giantswarm.io/organization`, is
   # managed too until its agents move. Everything a request does there runs
   # as the caller. The ServiceAccount only finds the namespaces by label:
-  # the chart grants it `get`, `list` and `watch` on namespaces, read-only,
+  # the chart grants it `get` and `list` on namespaces, read-only,
   # and renders the ClusterRole `agent-platform-tenant-flux` the agents'
   # HelmReleases run as there. Needs `oauth.downstream.enabled` and
   # `flux.helmReleaseServiceAccount`. An agent in an organization namespace
@@ -492,9 +492,7 @@ tenants:
   # delete any Secret there, and get the token of any ServiceAccount there.
   # Whoever may create or change a HelmRelease in the namespace can trigger
   # that: the members bound to `agent-platform:editor` or
-  # `agent-platform:admin`. The keys `modelConfig`, `workerPoolReplicas`,
-  # `networkPolicy` and `interval` were the retired tenant reconciler's and
-  # are refused.
+  # `agent-platform:admin`.
   enabled: false
 
 devPortal:
