@@ -86,7 +86,10 @@ func modelConfig(ns, name, provider, model string) *unstructured.Unstructured {
 		"apiVersion": kagentAPI, "kind": "ModelConfig",
 		"metadata": map[string]any{"name": name, "namespace": ns},
 		"spec":     map[string]any{"provider": provider, "model": model},
-		"status":   map[string]any{"conditions": []any{map[string]any{"type": "Accepted", "status": "True", "reason": "ModelConfigReconciled"}}},
+		"status": map[string]any{"conditions": []any{
+			map[string]any{"type": "Accepted", "status": "True", "reason": "ModelConfigReconciled"},
+			map[string]any{"type": "ResolvedRefs", "status": "True", "reason": "ModelConfigReconciled"},
+		}},
 	}}
 }
 

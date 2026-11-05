@@ -8,7 +8,6 @@ import (
 	"sort"
 	"strings"
 
-	apov1alpha1 "github.com/giantswarm/agent-platform-operator/api/v1alpha1"
 	"golang.org/x/sync/errgroup"
 	authenticationv1 "k8s.io/api/authentication/v1"
 	authorizationv1 "k8s.io/api/authorization/v1"
@@ -665,60 +664,46 @@ func (s *Service) agentHelmReleases(ctx context.Context, st *site) (map[string]*
 // ---- model configs ----------------------------------------------------------
 
 // ListModelConfigs lists the kagent ModelConfigs of a namespace, on the
-// target cluster when one is named.
+// target cluster when one is named, with the namespace default marked.
 func (s *Service) ListModelConfigs(ctx context.Context, loc Location) ([]ModelConfig, error) {
 	st, err := s.site(ctx, loc)
 	if err != nil {
 		return nil, err
 	}
-	return s.listModelConfigs(ctx, st.agent, st.ns())
+	models, err := s.readModelConfigs(ctx, st)
+	if err != nil {
+		return nil, err
+	}
+	return models.configs, nil
 }
 
-func (s *Service) listModelConfigs(ctx context.Context, dyn dynamic.Interface, ns string) ([]ModelConfig, error) {
-	list, err := dyn.Resource(s.modelConfigGVR()).Namespace(ns).List(ctx, metav1.ListOptions{})
+func (s *Service) readModelConfigs(ctx context.Context, st *site) (namespaceModels, error) {
+	ns := st.ns()
+	list, err := st.agent.Resource(s.modelConfigGVR()).Namespace(ns).List(ctx, metav1.ListOptions{})
 	if err != nil {
-		return nil, wrapKube(err, "list modelconfigs in "+ns)
+		return namespaceModels{}, wrapKube(err, "list modelconfigs in "+ns)
 	}
-	out := make([]ModelConfig, 0, len(list.Items))
+	marked, err := s.markedModelConfigs(ctx, st, list.Items)
+	if err != nil {
+		return namespaceModels{}, err
+	}
+	models := namespaceModels{namespace: ns, configs: make([]ModelConfig, 0, len(list.Items)), marked: marked}
 	for _, item := range list.Items {
 		mc := ModelConfig{Name: item.GetName(), Namespace: item.GetNamespace()}
 		mc.Provider, _, _ = unstructured.NestedString(item.Object, "spec", "provider")
 		mc.Model, _, _ = unstructured.NestedString(item.Object, "spec", "model")
 		conds := conditionsOfObject(&item)
 		mc.Accepted = conditionStatus(conds, conditionAccepted)
+		mc.ResolvedRefs = conditionStatus(conds, conditionResolvedRefs)
 		if c := findCondition(conds, conditionAccepted); c != nil {
 			mc.Message = c.Message
 		}
 		mc.ManagedBy = item.GetLabels()[ManagedByLabel]
-		mc.Default = item.GetAnnotations()[apov1alpha1.DefaultModelConfigAnnotation] == "true"
-		out = append(out, mc)
+		mc.Default = len(models.marked) == 1 && item.GetName() == models.marked[0]
+		models.configs = append(models.configs, mc)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
-	return out, nil
-}
-
-// requireModelConfig fails with the valid names when name is not a ModelConfig
-// of the site's namespace.
-func (s *Service) requireModelConfig(ctx context.Context, st *site, name string) error {
-	if strings.TrimSpace(name) == "" {
-		return invalidf("modelConfig is required")
-	}
-	ns := st.ns()
-	configs, err := s.listModelConfigs(ctx, st.agent, ns)
-	if err != nil {
-		return err
-	}
-	names := make([]string, 0, len(configs))
-	for _, mc := range configs {
-		if mc.Name == name {
-			return nil
-		}
-		names = append(names, mc.Name)
-	}
-	if len(names) == 0 {
-		return invalidf("modelConfig %q does not exist in namespace %s (no ModelConfigs there; in an organization namespace an admin of the organization adds one with set_organization_model, elsewhere a platform admin provisions them)", name, ns)
-	}
-	return invalidf("modelConfig %q does not exist in namespace %s; valid: %s", name, ns, strings.Join(names, ", "))
+	sort.Slice(models.configs, func(i, j int) bool { return models.configs[i].Name < models.configs[j].Name })
+	return models, nil
 }
 
 // harnessFor resolves the Harness an agent runs on: name, else the platform
@@ -972,11 +957,17 @@ func (s *Service) ValidateCreate(ctx context.Context, spec Spec) (*ValidateResul
 	if err := s.requireTargetMuster(st); err != nil {
 		res.addError(err)
 	}
-	if err := s.requireModelConfig(ctx, st, spec.ModelConfig); err != nil {
+	if mc, fromDefault, err := s.resolveModelConfig(ctx, st, spec.ModelConfig); err != nil {
 		if !isDomainError(err) {
 			return nil, err
 		}
 		res.addError(err)
+	} else {
+		spec.ModelConfig = mc.Name
+		res.ModelConfig, res.ModelConfigFromDefault = mc.Name, fromDefault
+		if note := modelConfigNote(mc); note != "" {
+			res.Notes = append(res.Notes, note)
+		}
 	}
 	if err := s.requireEgressPolicies(ctx, st, spec.EgressPolicyRefs); err != nil {
 		if !isDomainError(err) {
@@ -1220,9 +1211,11 @@ func (s *Service) Create(ctx context.Context, spec Spec) (*CreateResult, error) 
 	if err := s.requireFreeName(ctx, st, spec.Name); err != nil {
 		return nil, err
 	}
-	if err := s.requireModelConfig(ctx, st, spec.ModelConfig); err != nil {
+	mc, fromDefault, err := s.resolveModelConfig(ctx, st, spec.ModelConfig)
+	if err != nil {
 		return nil, err
 	}
+	spec.ModelConfig = mc.Name
 	if err := s.requireEgressPolicies(ctx, st, spec.EgressPolicyRefs); err != nil {
 		return nil, err
 	}
@@ -1267,7 +1260,7 @@ func (s *Service) Create(ctx context.Context, spec Spec) (*CreateResult, error) 
 		return nil, err
 	}
 
-	res := &CreateResult{RequestedBy: identity.Caller(ctx), WriteOutcome: WriteOutcome{Mode: mode, DryRun: spec.DryRun}}
+	res := &CreateResult{RequestedBy: identity.Caller(ctx), ModelConfig: mc.Name, ModelConfigFromDefault: fromDefault, WriteOutcome: WriteOutcome{Mode: mode, DryRun: spec.DryRun}}
 	res.Manifests = st.manifests(spec.Name, values)
 	if mode == ModeCommit {
 		return s.createCommit(ctx, st, spec, values, res)

@@ -172,9 +172,11 @@ paths:
         Composes the OCIRepository (created when missing, tracking `2.x`) and
         the HelmRelease, pins every skill (a branch or tag to its head commit,
         an image tag to its digest), validates the values against the chart
-        schema and the modelConfig against the namespace, then applies. A
-        validation failure writes nothing (`400 invalid_request`, the message
-        lists the valid model configs or names the unresolvable skill
+        schema and the modelConfig against the namespace (omitted, the
+        namespace default, written by name and reported as `modelConfig`),
+        then applies. A validation failure writes nothing
+        (`400 invalid_request`, the message lists the valid model configs,
+        or the namespace has no default, or names the unresolvable skill
         reference). `409 conflict` when a HelmRelease or Agent of that
         name exists. `dryRun` and `mode: commit` answer `200` and create
         nothing on the installation; commit reports the pull request in
@@ -868,7 +870,7 @@ components:
       items: { type: string }
     Spec:
       type: object
-      required: [name, modelConfig, toolset]
+      required: [name, toolset]
       properties:
         namespace: { type: string }
         organization: { type: string, description: "With cluster: the organization owning the workload cluster the agent runs on (namespace org-<organization> on the installation holds the cluster's kubeconfig Secret and the HelmRelease)" }
@@ -878,7 +880,7 @@ components:
         tags: { $ref: "#/components/schemas/Tags" }
         description: { type: string }
         systemMessage: { type: string }
-        modelConfig: { type: string, description: An existing ModelConfig of the namespace }
+        modelConfig: { type: string, description: "An existing ModelConfig of the namespace; omitted, the namespace default (GET /modelconfigs default: true) is written into the agent, and a namespace without one refuses the create with 400, naming its ModelConfigs" }
         harness: { type: string, description: "Harness of the namespace that runs the agent (chart agent.harness, the Agent's spec.harnessRef.name); omitted, the platform Harness (GET /info harness.name). Must exist in the namespace" }
         iconUrl: { type: string, description: Avatar URL (chart agent.iconUrl, the ui.giantswarm.io/icon-url annotation) }
         skills: { $ref: "#/components/schemas/Skills" }
@@ -1032,7 +1034,9 @@ components:
         valid: { type: boolean }
         mode: { type: string, enum: [create, update] }
         errors: { type: array, items: { type: string } }
-        notes: { type: array, items: { type: string }, description: Checks the dry run could not make, such as the name check for a caller who may not read the namespace's HelmReleases }
+        notes: { type: array, items: { type: string }, description: "Checks the dry run could not make, such as the name check for a caller who may not read the namespace's HelmReleases, and a ModelConfig that is not ResolvedRefs=True" }
+        modelConfig: { type: string, description: The ModelConfig a create would write }
+        modelConfigFromDefault: { type: boolean, description: "modelConfig is the namespace default: the request named none" }
         schemaVersion: { type: string }
         schemaSource: { type: string, enum: [registry, embedded] }
         manifests: { $ref: "#/components/schemas/Manifests" }
@@ -1047,6 +1051,8 @@ components:
             ociRepository: { type: boolean }
             helmRelease: { type: boolean }
         status: { $ref: "#/components/schemas/Status" }
+        modelConfig: { type: string, description: The ModelConfig written into the agent }
+        modelConfigFromDefault: { type: boolean, description: "modelConfig is the namespace default: the request named none" }
         requestedBy: { type: string, description: The authenticated caller the write ran as (email, else subject); absent without OAuth }
         mode: { type: string, enum: [apply, commit] }
         dryRun: { type: boolean }
@@ -1150,9 +1156,10 @@ components:
         provider: { type: string }
         model: { type: string }
         accepted: { type: [boolean, "null"] }
-        message: { type: string }
+        resolvedRefs: { type: [boolean, "null"], description: The ResolvedRefs condition (its key Secret found, say); null while unreported }
+        message: { type: string, description: The Accepted condition's message }
         managedBy: { type: string }
-        default: { type: boolean, description: "It carries the organization's default mark (agent-platform.giantswarm.io/default-model-config: \"true\")" }
+        default: { type: boolean, description: "The namespace default a create without modelConfig writes: the one ModelConfig annotated agent-platform.giantswarm.io/is-default-model-config: \"true\"; none or several annotated is no default" }
     EgressPolicy:
       type: object
       properties:

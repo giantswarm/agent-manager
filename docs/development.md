@@ -79,7 +79,7 @@ curl -s localhost:18080/api/v1/info
 curl -s localhost:18080/api/v1/modelconfigs
 curl -s localhost:18080/api/v1/skills
 curl -s -X POST localhost:18080/api/v1/agents/validate -d '{"name":"probe","modelConfig":"default-model-config","displayName":"Probe","toolset":["preset:read-only"],"skills":[{"git":{"url":"https://github.com/giantswarm/agent-skills","ref":"main"},"path":"agent-self-awareness"}]}'
-curl -s -X POST localhost:18080/api/v1/agents -d '{"name":"probe","modelConfig":"default-model-config","displayName":"Probe","toolset":["preset:read-only"]}'
+curl -s -X POST localhost:18080/api/v1/agents -d '{"name":"probe","displayName":"Probe","toolset":["preset:read-only"]}'
 curl -s localhost:18080/api/v1/agents/kagent/probe/status
 curl -s -X PATCH localhost:18080/api/v1/agents/kagent/probe -d '{"refreshSkills":true}'
 curl -s -X DELETE localhost:18080/api/v1/agents/kagent/probe

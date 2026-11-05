@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	apov1alpha1 "github.com/giantswarm/agent-platform-operator/api/v1alpha1"
 	"github.com/giantswarm/mcp-toolkit/tooldesc"
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
@@ -286,7 +287,7 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service) {
 
 	s.AddTool(mcp.NewTool(ToolSetOrganizationModel,
 		tooldesc.Describe("Create or change an organization's model (a ModelConfig) as you; its API key is a Secret named by reference.",
-			"The first model of an organization without a default becomes its default (annotation agent-platform.giantswarm.io/default-model-config); default true moves the mark here. Never pass a key: when its Secret is missing, credentials[].next carries the Dev Portal's credential form link for the person. list_model_configs lists the models. Needs agent-platform:admin."),
+			"The first model of an organization without a default becomes its default (annotation "+apov1alpha1.DefaultModelConfigAnnotation+"); default true moves the mark here. Never pass a key: when its Secret is missing, credentials[].next carries the Dev Portal's credential form link for the person. list_model_configs lists the models. Needs agent-platform:admin."),
 		orgNSProp,
 		mcp.WithString(argName, mcp.Required(), mcp.Description("ModelConfig name")),
 		mcp.WithString(argProvider, mcp.Description("Provider as kagent's ModelConfig takes it, e.g. Anthropic, OpenAI; required to create")),
