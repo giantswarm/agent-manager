@@ -640,16 +640,16 @@ Read through agentgateway as you. allCreators includes every person's sessions, 
 ## `list_skills`
 
 ```text
-List the skills agents can mount, from the configured skill repositories, with each repository's head commit.
+Deprecated, use skill-manager's list_skills: the skills agents can mount, per repository with its head commit.
 
-Per repository: the ref read, the commit it resolved to (what a skills entry pins) and each SKILL.md's name, description, path and tags (metadata.tags). Cached briefly; refresh re-reads GitHub.
+Per repository: the ref read, the commit it resolved to (what a skills entry pins) and each SKILL.md's name, description, path and tags (metadata.tags). Cached briefly; refresh re-reads GitHub. With skill-manager (get_info skillManager) this is its list_skills, as you.
 ```
 
 ```json
 {
   "properties": {
     "ref": {
-      "description": "Git ref to read; default: the default branch (the ref refreshSkills follows)",
+      "description": "Git ref to read; default: the default branch (the ref refreshSkills follows). Refused with skill-manager",
       "type": "string"
     },
     "refresh": {
@@ -919,7 +919,7 @@ Lists are skills, plugins, egress and toolset. "" clears a text field back to th
       "type": "array"
     },
     "refreshSkills": {
-      "description": "Re-pin every git skill and git plugin to its default-branch head and change nothing else on the release (default false).",
+      "description": "Re-pin every git skill and git plugin to its default-branch head (with skill-manager: its source's ref); nothing else changes (default false).",
       "type": "boolean"
     },
     "repository": {
@@ -1142,7 +1142,7 @@ Checks the name, modelConfig, egressPolicyRefs, harness and toolset (required fo
       "type": "array"
     },
     "refreshSkills": {
-      "description": "Re-pin every git skill and git plugin to its default-branch head and change nothing else on the release (default false).",
+      "description": "Re-pin every git skill and git plugin to its default-branch head (with skill-manager: its source's ref); nothing else changes (default false).",
       "type": "boolean"
     },
     "skills": {

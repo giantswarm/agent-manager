@@ -404,8 +404,13 @@ paths:
   /api/v1/skills:
     get:
       tags: [skills]
-      summary: Discover skills in the configured repositories
+      summary: Discover skills in the configured repositories (deprecated)
+      deprecated: true
       description: |
+        Deprecated: skill-manager's `GET /v1/skills` lists them. With
+        skill-manager configured (`GET /info` `skillManager`) this proxies
+        it as the caller and refuses `ref`.
+
         Every `SKILL.md` of a GitHub repository is one skill (frontmatter
         `name`/`description`), listed once under its repository; the
         repository carries the ref it was read from and the head commit that
@@ -421,7 +426,7 @@ paths:
           schema: { type: string }
         - name: ref
           in: query
-          description: Git ref; default the default branch (the ref refreshSkills follows)
+          description: Git ref; default the default branch (the ref refreshSkills follows). Refused with skill-manager
           schema: { type: string }
         - name: refresh
           in: query
@@ -786,7 +791,8 @@ components:
           type: object
           properties:
             url: { type: string, description: The muster MCP URL composed into every agent as muster.url; empty means the chart default applies }
-        skillsRepositories: { type: array, items: { type: string } }
+        skillsRepositories: { type: array, items: { type: string }, description: "The configured skill repositories; empty with skill-manager" }
+        skillManager: { type: string, description: "skill-manager's URL when it serves the skills: every pin goes through it, its tools list the sources and skills; absent otherwise" }
         skillsGitAuthSecretName: { type: string, description: "The installation's skills credential Secret (key token) every agent with a git skill is fetched with unless it names its own; absent: anonymous" }
         skillsGitAuthMint:
           type: object
@@ -919,7 +925,7 @@ components:
         egress: { $ref: "#/components/schemas/Egress", description: "Replaces the agent's whole egress list; [] clears it" }
         egressPolicyRefs: { $ref: "#/components/schemas/EgressPolicyRefs", description: "Replaces the agent's whole list of EgressPolicies; [] clears it" }
         gitAuthSecretName: { type: string, description: "Replaces the skills credential Secret; an empty string goes back to the installation's" }
-        refreshSkills: { type: boolean, description: Re-resolve every git skill to the head of its repository's default branch (a skill in skills with a ref goes to that ref's head); nothing else changes }
+        refreshSkills: { type: boolean, description: "Re-resolve every git skill to the head of its repository's default branch (a skill in skills with a ref goes to that ref's head; with skill-manager, one with none to its skill source's ref); nothing else changes" }
         toolset: { $ref: "#/components/schemas/Toolset" }
         labels: { type: object, additionalProperties: { type: string } }
         annotations: { type: object, additionalProperties: { type: string } }

@@ -87,6 +87,9 @@ spec:
             {{- end }}
             - --tenant-interval={{ .Values.tenants.interval }}
             {{- end }}
+            {{- with .Values.skillManager.url }}
+            - --skill-manager-url={{ . }}
+            {{- end }}
             {{- with .Values.skills.repositories }}
             - --skills-repositories={{ join "," . }}
             {{- end }}

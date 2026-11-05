@@ -9,7 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `skillManager.url` (`--skill-manager-url`): skills and plugins are pinned through skill-manager's `POST /v1/resolve` as the caller — `create_agent`, `update_agent` (with `refreshSkills`), `validate_agent` and `migrate` (`--skill-manager-token`); an entry with no ref below a skill-manager source's path pins that source's ref. `list_skills` and `GET /skills` proxy its `GET /v1/skills` and refuse `ref`; `get_info` reports `skillManager`. skill-manager's 403 is `403`, 400 and 404 are `400`, 401 is `401`, 5xx `502` (giantswarm/giantswarm#38322).
 - Agents the Agent Platform ships (HelmRelease label `agent-platform.giantswarm.io/managed-by: agent-platform`) are `managed: platform` in `list_agents` and `get_agent`; `update_agent` (with `refreshSkills` too), `validate_agent` with `update` and `delete_agent` refuse them in every mode with `409 conflict`: they change through the platform's configuration. The label on the Agent alone suffices, and the `migrate` command and the start-up source convergence report such a release, and the source it uses, without writing them (giantswarm/giantswarm#38970).
+
+### Deprecated
+
+- In-process skill discovery and pinning (`skills.repositories`, no `skillManager.url`), and `list_skills` / `GET /skills`: skill-manager's tools list the skills (giantswarm/giantswarm#38322).
 
 ## [2.18.0] - 2026-11-03
 
