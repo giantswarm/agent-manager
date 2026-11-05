@@ -1,7 +1,6 @@
 package skillmanager
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -17,29 +16,31 @@ import (
 )
 
 const (
-	repo   = "https://github.com/giantswarm/agent-platform"
-	commit = "0123456789abcdef0123456789abcdef01234567"
-	digest = "sha256:" + "ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12"
+	repo        = "https://github.com/giantswarm/agent-platform"
+	privateRepo = "https://github.com/giantswarm/private-skills"
+	mainHead    = "0123456789abcdef0123456789abcdef01234567"
+	tagHead     = "89abcdef0123456789abcdef0123456789abcdef"
+	digest      = "sha256:" + "ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12"
 )
 
-// fakeSkillManager serves skill-manager's REST API as the contract states
-// it: POST /v1/resolve pins each item, GET /v1/skills answers the catalogue.
+// fakeSkillManager serves skill-manager's REST API as its docs/api.md
+// states it. A git item without ref below skills/ of repo is the platform
+// source's (tagHead), any other the default branch's (mainHead); a commit is
+// kept; privateRepo is unreadable (403); a path "missing" is 404; a git
+// plugin below claude/ is Claude-format.
 type fakeSkillManager struct {
 	mu       sync.Mutex
 	requests []*http.Request
-	bodies   []map[string]any
+	bodies   []resolveBody
 	// fail answers every call with this status and body when set.
 	fail     int
 	failBody string
-	// refs maps a git item's ref (with "@path" when it has a path) to its
-	// commit; an unknown one is 404.
-	refs map[string]string
 }
 
 func (f *fakeSkillManager) start(t *testing.T) *httptest.Server {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var body map[string]any
+		var body resolveBody
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		f.mu.Lock()
 		f.requests = append(f.requests, r)
@@ -54,9 +55,8 @@ func (f *fakeSkillManager) start(t *testing.T) *httptest.Server {
 		case r.Method == http.MethodPost && r.URL.Path == "/v1/resolve":
 			f.resolve(w, body)
 		case r.Method == http.MethodGet && r.URL.Path == "/v1/skills":
-			_, _ = w.Write([]byte(`{"repositories":[{"repoUrl":"` + repo + `","ref":"v1.2.0","commit":"` + commit + `","path":"skills","readOnly":true,"skills":[` +
-				`{"name":"kubectl","description":"k","path":"skills/kubectl","tags":["kubernetes"]},` +
-				`{"name":"pagerduty","description":"p","path":"skills/pagerduty","tags":["alerting"]}]}]}`))
+			_, _ = w.Write([]byte(`{"repositories":[{"repoUrl":"` + repo + `","ref":"v1.2.0","commit":"` + tagHead + `","path":"skills","readOnly":true,"skills":[` +
+				`{"name":"kubectl","description":"k","path":"skills/kubectl","tags":["kubernetes"]}]}]}`))
 		default:
 			http.NotFound(w, r)
 		}
@@ -65,40 +65,68 @@ func (f *fakeSkillManager) start(t *testing.T) *httptest.Server {
 	return srv
 }
 
-func (f *fakeSkillManager) resolve(w http.ResponseWriter, body map[string]any) {
-	items, _ := body["skills"].([]any)
-	out := []any{}
-	for i, raw := range items {
-		item := raw.(map[string]any)
-		if oci, ok := item["oci"].(map[string]any); ok {
-			ref := oci["ref"].(string)
-			out = append(out, map[string]any{"name": item["name"], "oci": map[string]any{"ref": ref + "@" + digest}})
-			continue
-		}
-		git := item["git"].(map[string]any)
-		key, _ := git["ref"].(string)
-		if p, _ := item["path"].(string); p != "" {
-			key += "@" + p
-		}
-		pin, ok := f.refs[key]
-		if !ok {
-			w.WriteHeader(http.StatusNotFound)
-			_ = json.NewEncoder(w).Encode(map[string]any{"error": "ref " + key + " not found", "item": i})
-			return
-		}
-		pinned := map[string]any{"name": item["name"], "git": map[string]any{"url": git["url"], "commit": pin}}
-		if p, ok := item["path"]; ok {
-			pinned["path"] = p
-		}
-		out = append(out, pinned)
-	}
-	_ = json.NewEncoder(w).Encode(map[string]any{"skills": out, "plugins": []any{}})
+func refuse(w http.ResponseWriter, status int, list string, i int, msg string) {
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]any{"error": msg, "item": i, "list": list})
 }
 
-func (f *fakeSkillManager) last() (*http.Request, map[string]any) {
+func (f *fakeSkillManager) resolve(w http.ResponseWriter, body resolveBody) {
+	out := resolveBody{Skills: []Item{}, Plugins: []Item{}}
+	for _, list := range []string{ListSkills, ListPlugins} {
+		items := body.Skills
+		if list == ListPlugins {
+			items = body.Plugins
+		}
+		for i, it := range items {
+			switch {
+			case it.OCI != nil:
+				it.OCI = &OCI{Ref: strings.SplitN(it.OCI.Ref, ":", 2)[0] + "@" + digest}
+			case it.Git.URL == privateRepo:
+				refuse(w, http.StatusForbidden, list, i, "the caller cannot read "+privateRepo)
+				return
+			case it.Path == "missing":
+				refuse(w, http.StatusNotFound, list, i, "path missing not found")
+				return
+			default:
+				g := *it.Git
+				switch {
+				case g.Commit != "":
+				case g.Ref == "" && g.URL == repo && strings.HasPrefix(it.Path, "skills/"):
+					g.Commit = tagHead
+				default:
+					g.Commit = mainHead
+				}
+				g.Ref = ""
+				it.Git = &g
+				if list == ListPlugins {
+					claude := strings.HasPrefix(it.Path, "claude")
+					if it.ClaudeFormat != nil && *it.ClaudeFormat && !claude {
+						refuse(w, http.StatusBadRequest, list, i, "not a Claude Code plugin")
+						return
+					}
+					it.ClaudeFormat = &claude
+				}
+			}
+			if list == ListPlugins {
+				out.Plugins = append(out.Plugins, it)
+			} else {
+				out.Skills = append(out.Skills, it)
+			}
+		}
+	}
+	_ = json.NewEncoder(w).Encode(out)
+}
+
+func (f *fakeSkillManager) last() (*http.Request, resolveBody) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.requests[len(f.requests)-1], f.bodies[len(f.bodies)-1]
+}
+
+func (f *fakeSkillManager) calls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.requests)
 }
 
 func newClient(t *testing.T, f *fakeSkillManager, token string) *Client {
@@ -108,44 +136,55 @@ func newClient(t *testing.T, f *fakeSkillManager, token string) *Client {
 	return c
 }
 
-func TestGitHeadPinsThroughResolveAsTheCaller(t *testing.T) {
-	f := &fakeSkillManager{refs: map[string]string{"main": commit}}
+// Skills and plugins are pinned in one call, as the caller: no ref below a
+// source's path takes its ref, a commit is kept, an image tag its digest;
+// a plugin is answered with its format.
+func TestResolvePinsSkillsAndPluginsInOneCall(t *testing.T) {
+	f := &fakeSkillManager{}
 	c := newClient(t, f, "")
 	ctx := identity.ContextWithToken(t.Context(), "id-token")
 
-	got, err := c.GitHead(ctx, repo, "main")
+	gotSkills, gotPlugins, err := c.Resolve(ctx,
+		[]Item{
+			{Name: "kubectl", Path: "skills/kubectl", Git: &Git{URL: repo}},
+			{Name: "runbooks", Path: "runbooks", Git: &Git{URL: repo, Commit: tagHead}},
+			{Name: "img", OCI: &OCI{Ref: "ghcr.io/giantswarm/skills/kubectl:1.4.0"}},
+		},
+		[]Item{{Path: "claude/review", Git: &Git{URL: repo, Ref: "main"}}})
 	require.NoError(t, err)
-	assert.Equal(t, commit, got)
+	assert.Equal(t, 1, f.calls())
+	assert.Equal(t, &Git{URL: repo, Commit: tagHead}, gotSkills[0].Git)
+	assert.Equal(t, &Git{URL: repo, Commit: tagHead}, gotSkills[1].Git)
+	assert.Equal(t, &OCI{Ref: "ghcr.io/giantswarm/skills/kubectl@" + digest}, gotSkills[2].OCI)
+	assert.Equal(t, &Git{URL: repo, Commit: mainHead}, gotPlugins[0].Git)
+	require.NotNil(t, gotPlugins[0].ClaudeFormat)
+	assert.True(t, *gotPlugins[0].ClaudeFormat)
+
 	req, body := f.last()
 	assert.Equal(t, "Bearer id-token", req.Header.Get("Authorization"))
 	assert.Equal(t, "application/json", req.Header.Get("Content-Type"))
-	item := body["skills"].([]any)[0].(map[string]any)
-	assert.Equal(t, map[string]any{"url": repo, "ref": "main"}, item["git"])
-	assert.NotEmpty(t, item["name"])
-}
+	assert.Equal(t, Item{Name: "kubectl", Path: "skills/kubectl", Git: &Git{URL: repo}}, body.Skills[0])
+	assert.Len(t, body.Plugins, 1, "plugins go in the plugins list")
 
-// An item with no ref is sent with its path: skill-manager gives an item
-// below a configured source's path that source's ref.
-func TestGitHeadAtSendsThePath(t *testing.T) {
-	f := &fakeSkillManager{refs: map[string]string{"@skills/kubectl": commit}}
-	c := newClient(t, f, "")
-
-	got, err := c.GitHeadAt(identity.ContextWithToken(t.Context(), "id-token"), repo, "", "skills/kubectl")
+	// The format resolve reported answers ClaudeFormatPlugin without a call.
+	claude, err := c.ClaudeFormatPlugin(ctx, repo, mainHead, "claude/review")
 	require.NoError(t, err)
-	assert.Equal(t, commit, got)
-	_, body := f.last()
-	item := body["skills"].([]any)[0].(map[string]any)
-	assert.Equal(t, "skills/kubectl", item["path"])
-	assert.Equal(t, map[string]any{"url": repo}, item["git"], "no ref: skill-manager picks it")
-	assert.Equal(t, "kubectl", item["name"])
+	assert.True(t, claude)
+	assert.Equal(t, 1, f.calls())
+	// One it has not seen is resolved at its commit.
+	claude, err = c.ClaudeFormatPlugin(ctx, repo, tagHead, "plugins/ops")
+	require.NoError(t, err)
+	assert.False(t, claude)
+	_, body = f.last()
+	assert.Equal(t, []Item{{Path: "plugins/ops", Git: &Git{URL: repo, Commit: tagHead}}}, body.Plugins)
 }
 
 // On the GitHub registration the bearer agent-manager received is the
 // person's GitHub token, the ID token rides in muster's forwarded header:
 // skill-manager is called the same way.
 func TestTheGitHubRegistrationsBearerIsForwardedAsReceived(t *testing.T) {
-	f := &fakeSkillManager{refs: map[string]string{"main": commit}}
-	c := newClient(t, f, "static")
+	f := &fakeSkillManager{}
+	c := newClient(t, f, "service")
 	ctx := identity.ContextWithToken(t.Context(), "id-token")
 	ctx = identity.ContextWithGitHub(ctx, &identity.GitHub{Login: "alice", Token: "gh-token"})
 
@@ -156,15 +195,16 @@ func TestTheGitHubRegistrationsBearerIsForwardedAsReceived(t *testing.T) {
 	assert.Equal(t, "id-token", req.Header.Get("X-Muster-Id-Token"))
 }
 
-// The migrate command has no caller: its configured token is the bearer.
-func TestWithoutACallerTheConfiguredTokenIsTheBearer(t *testing.T) {
-	f := &fakeSkillManager{refs: map[string]string{"main": commit}}
-	c := newClient(t, f, "static")
+// The migrate command has no caller: the service token is the bearer.
+func TestWithoutACallerTheServiceTokenIsTheBearer(t *testing.T) {
+	f := &fakeSkillManager{}
+	c := newClient(t, f, "service")
 
-	_, err := c.GitHead(t.Context(), repo, "main")
+	got, err := c.GitHead(t.Context(), repo, "main")
 	require.NoError(t, err)
+	assert.Equal(t, mainHead, got)
 	req, _ := f.last()
-	assert.Equal(t, "Bearer static", req.Header.Get("Authorization"))
+	assert.Equal(t, "Bearer service", req.Header.Get("Authorization"))
 }
 
 func TestOCIDigestPinsThroughResolve(t *testing.T) {
@@ -173,47 +213,52 @@ func TestOCIDigestPinsThroughResolve(t *testing.T) {
 
 	got, err := c.OCIDigest(t.Context(), "ghcr.io/giantswarm/skills/kubectl:1.4.0")
 	require.NoError(t, err)
-	assert.Equal(t, "ghcr.io/giantswarm/skills/kubectl:1.4.0@"+digest, got)
+	assert.Equal(t, "ghcr.io/giantswarm/skills/kubectl@"+digest, got)
 	_, body := f.last()
-	item := body["skills"].([]any)[0].(map[string]any)
-	assert.Equal(t, map[string]any{"ref": "ghcr.io/giantswarm/skills/kubectl:1.4.0"}, item["oci"])
+	assert.Equal(t, &OCI{Ref: "ghcr.io/giantswarm/skills/kubectl:1.4.0"}, body.Skills[0].OCI)
 }
 
-// RequireReadable asks skill-manager to resolve the repository's default
-// branch: it refuses a repository the caller cannot read with 403.
-func TestRequireReadableIsSkillManagersCheck(t *testing.T) {
-	f := &fakeSkillManager{refs: map[string]string{"": commit}}
+// Readability is skill-manager's, inside resolve: RequireReadable asks
+// nothing.
+func TestRequireReadableAsksNothing(t *testing.T) {
+	f := &fakeSkillManager{}
 	c := newClient(t, f, "t")
-	require.NoError(t, c.RequireReadable(t.Context(), repo, "alice"))
-	_, body := f.last()
-	assert.Equal(t, map[string]any{"url": repo}, body["skills"].([]any)[0].(map[string]any)["git"])
+	require.NoError(t, c.RequireReadable(t.Context(), privateRepo, "alice"))
+	assert.Zero(t, f.calls())
 
-	f.fail, f.failBody = http.StatusForbidden, `{"error":"alice cannot read giantswarm/private","item":0}`
-	err := c.RequireReadable(t.Context(), repo, "alice")
+	_, _, err := c.Resolve(t.Context(), nil, []Item{{Git: &Git{URL: privateRepo}}})
 	require.ErrorIs(t, err, skills.ErrNotReadable)
-	assert.Contains(t, err.Error(), "alice cannot read giantswarm/private")
+	var refused *ResolveError
+	require.ErrorAs(t, err, &refused)
+	assert.Equal(t, ListPlugins, refused.List)
+	assert.Equal(t, 0, refused.Item)
+	assert.Contains(t, err.Error(), "cannot read")
 }
 
-func TestSkillManagerErrorsAreMapped(t *testing.T) {
+func TestResolveErrorsAreMapped(t *testing.T) {
 	for _, tc := range []struct {
 		status int
 		body   string
 		is     error
-		says   string
+		list   string
+		item   int
 	}{
-		{http.StatusBadRequest, `{"error":"skills[0].git.url must be a GitHub URL","item":0}`, skills.ErrUnresolvable, "must be a GitHub URL"},
-		{http.StatusNotFound, `{"error":"ref nope not found","item":0}`, skills.ErrUnresolvable, "ref nope not found"},
-		{http.StatusForbidden, `{"error":"not readable","item":0}`, skills.ErrNotReadable, "not readable"},
-		{http.StatusUnauthorized, `{"error":"invalid token"}`, ErrUnauthenticated, "invalid token"},
-		{http.StatusBadGateway, `{"error":"GitHub answered 500"}`, ErrUnavailable, "GitHub answered 500"},
-		{http.StatusServiceUnavailable, `upstream down`, ErrUnavailable, "upstream down"},
+		{http.StatusBadRequest, `{"error":"not a Claude Code plugin","item":2,"list":"plugins"}`, skills.ErrUnresolvable, ListPlugins, 2},
+		{http.StatusNotFound, `{"error":"ref nope not found","item":1,"list":"skills"}`, skills.ErrUnresolvable, ListSkills, 1},
+		{http.StatusForbidden, `{"error":"not readable","item":0,"list":"skills"}`, skills.ErrNotReadable, ListSkills, 0},
+		{http.StatusUnauthorized, `{"error":"invalid token"}`, ErrUnauthenticated, "", -1},
+		{http.StatusBadGateway, `{"error":"GitHub answered 500","item":0,"list":"skills"}`, ErrUnavailable, ListSkills, 0},
+		{http.StatusServiceUnavailable, `upstream down`, ErrUnavailable, "", -1},
 	} {
 		t.Run(http.StatusText(tc.status), func(t *testing.T) {
 			f := &fakeSkillManager{fail: tc.status, failBody: tc.body}
 			c := newClient(t, f, "t")
-			_, err := c.GitHead(t.Context(), repo, "nope")
+			_, _, err := c.Resolve(t.Context(), []Item{{Git: &Git{URL: repo}}}, nil)
 			require.ErrorIs(t, err, tc.is)
-			assert.Contains(t, err.Error(), tc.says)
+			var refused *ResolveError
+			require.ErrorAs(t, err, &refused)
+			assert.Equal(t, tc.list, refused.List)
+			assert.Equal(t, tc.item, refused.Item)
 			assert.Contains(t, err.Error(), "skill-manager")
 		})
 	}
@@ -231,7 +276,7 @@ func TestAnUnreachableSkillManagerIsUnavailable(t *testing.T) {
 
 func TestAMalformedPinIsUnavailable(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(`{"skills":[{"name":"x","git":{"url":"` + repo + `","commit":"main"}}]}`))
+		_, _ = w.Write([]byte(`{"skills":[{"name":"x","git":{"url":"` + repo + `","commit":"main"}}],"plugins":[]}`))
 	}))
 	t.Cleanup(srv.Close)
 	c, err := New(Config{URL: srv.URL})
@@ -274,29 +319,4 @@ func TestNewRefusesABadURL(t *testing.T) {
 		_, err := New(Config{URL: u})
 		require.Error(t, err, u)
 	}
-}
-
-// ClaudeFormatPlugin is not part of skill-manager's API: the configured
-// checker answers it; without one no plugin is taken for Claude-format, as
-// with a pinner that cannot tell.
-func TestClaudeFormatPluginIsDelegated(t *testing.T) {
-	c, err := New(Config{URL: "http://skill-manager:8080", Formats: formatsFunc(func(_ context.Context, _, _, path string) (bool, error) {
-		return strings.HasPrefix(path, "claude"), nil
-	})})
-	require.NoError(t, err)
-	got, err := c.ClaudeFormatPlugin(t.Context(), repo, commit, "claude-format")
-	require.NoError(t, err)
-	assert.True(t, got)
-
-	bare, err := New(Config{URL: "http://skill-manager:8080"})
-	require.NoError(t, err)
-	got, err = bare.ClaudeFormatPlugin(t.Context(), repo, commit, "claude-format")
-	require.NoError(t, err)
-	assert.False(t, got)
-}
-
-type formatsFunc func(ctx context.Context, repoURL, commit, path string) (bool, error)
-
-func (f formatsFunc) ClaudeFormatPlugin(ctx context.Context, repoURL, commit, path string) (bool, error) {
-	return f(ctx, repoURL, commit, path)
 }

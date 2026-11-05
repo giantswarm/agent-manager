@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 
@@ -19,12 +20,17 @@ import (
 
 const platformSkillsRepo = "https://github.com/giantswarm/agent-platform"
 
-// fakeSkillManager is skill-manager's REST API as the contract states it.
-// An item with no ref below skills/ is the platform source's, pinned at
-// tagHead; any other item without a ref is the default branch, mainHead.
+// fakeSkillManager is skill-manager's REST API as its docs/api.md states
+// it. A git item without ref below skills/ of platformSkillsRepo is the
+// platform source's (tagHead); ref feature is featureHead; any other without
+// ref or commit the default branch (mainHead); a commit is kept;
+// privateSkillsRepo is unreadable (403); a git plugin at claude-format is
+// Claude-format.
 type fakeSkillManager struct {
 	mu      sync.Mutex
-	items   []map[string]any
+	skills  []skillmanager.Item
+	plugins []skillmanager.Item
+	calls   int
 	bearers []string
 	// status, when set, is every answer's status with body.
 	status int
@@ -46,30 +52,48 @@ func (f *fakeSkillManager) start(t *testing.T) *httptest.Server {
 		switch r.URL.Path {
 		case "/v1/resolve":
 			var body struct {
-				Skills []map[string]any `json:"skills"`
+				Skills  []skillmanager.Item `json:"skills"`
+				Plugins []skillmanager.Item `json:"plugins"`
 			}
 			_ = json.NewDecoder(r.Body).Decode(&body)
-			out := []map[string]any{}
-			for _, it := range body.Skills {
-				f.mu.Lock()
-				f.items = append(f.items, it)
-				f.mu.Unlock()
-				git := it["git"].(map[string]any)
-				commit := mainHead
-				path, _ := it["path"].(string)
-				switch ref, _ := git["ref"].(string); {
-				case ref == "feature":
-					commit = featureHead
-				case ref == "" && git["url"] == platformSkillsRepo && len(path) > len("skills/") && path[:len("skills/")] == "skills/":
-					commit = tagHead
+			f.mu.Lock()
+			f.calls++
+			f.skills = append(f.skills, body.Skills...)
+			f.plugins = append(f.plugins, body.Plugins...)
+			f.mu.Unlock()
+			out := map[string][]skillmanager.Item{"skills": {}, "plugins": {}}
+			for list, items := range map[string][]skillmanager.Item{"skills": body.Skills, "plugins": body.Plugins} {
+				for i, it := range items {
+					if it.OCI != nil {
+						it.OCI = &skillmanager.OCI{Ref: kubectlRef + "@" + kubectlSum}
+						out[list] = append(out[list], it)
+						continue
+					}
+					if it.Git.URL == privateSkillsRepo {
+						w.WriteHeader(http.StatusForbidden)
+						_ = json.NewEncoder(w).Encode(map[string]any{"error": "the caller cannot read " + privateSkillsRepo, "item": i, "list": list})
+						return
+					}
+					g := *it.Git
+					switch {
+					case g.Commit != "":
+					case g.Ref == "feature":
+						g.Commit = featureHead
+					case g.Ref == "" && g.URL == platformSkillsRepo && strings.HasPrefix(it.Path, "skills/"):
+						g.Commit = tagHead
+					default:
+						g.Commit = mainHead
+					}
+					g.Ref = ""
+					it.Git = &g
+					if list == "plugins" {
+						claude := it.Path == "claude-format"
+						it.ClaudeFormat = &claude
+					}
+					out[list] = append(out[list], it)
 				}
-				pinned := map[string]any{"name": it["name"], "git": map[string]any{"url": git["url"], "commit": commit}}
-				if path != "" {
-					pinned["path"] = path
-				}
-				out = append(out, pinned)
 			}
-			_ = json.NewEncoder(w).Encode(map[string]any{"skills": out, "plugins": []any{}})
+			_ = json.NewEncoder(w).Encode(out)
 		case "/v1/skills":
 			_, _ = w.Write([]byte(`{"repositories":[{"repoUrl":"` + platformSkillsRepo + `","ref":"v1.2.0","commit":"` + tagHead + `","path":"skills","readOnly":true,"skills":[` +
 				`{"name":"kubectl","path":"skills/kubectl","tags":["kubernetes"]},{"name":"pagerduty","path":"skills/pagerduty","tags":["alerting"]}]}]}`))
@@ -112,7 +136,8 @@ func TestCreatePinsThroughSkillManager(t *testing.T) {
 		{Name: "kubectl", Path: "skills/kubectl", Git: &GitSkill{URL: platformSkillsRepo, Commit: tagHead}},
 		{Name: "runbooks", Path: "runbooks", Git: &GitSkill{URL: skillsRepo, Commit: featureHead}},
 	}, res.Agent.Skills)
-	assert.Contains(t, sm.items, map[string]any{"name": "kubectl", "path": "skills/kubectl", "git": map[string]any{"url": platformSkillsRepo}})
+	assert.Equal(t, 1, sm.calls, "one resolve for the whole list, readability included")
+	assert.Contains(t, sm.skills, skillmanager.Item{Name: "kubectl", Path: "skills/kubectl", Git: &skillmanager.Git{URL: platformSkillsRepo}})
 	for _, b := range sm.bearers {
 		assert.Equal(t, "Bearer id-token", b)
 	}
@@ -153,12 +178,14 @@ func TestSkillManagerRefusalsAreMapped(t *testing.T) {
 		{http.StatusBadGateway, skillmanager.ErrUnavailable, ErrInvalid},
 	} {
 		t.Run(http.StatusText(tc.status), func(t *testing.T) {
-			sm := &fakeSkillManager{status: tc.status, body: `{"error":"the answer","item":0}`}
+			sm := &fakeSkillManager{status: tc.status, body: `{"error":"the answer","item":1,"list":"skills"}`}
 			f := withSkillManager(t, sm)
 			_, err := f.svc.Create(t.Context(), Spec{Name: "sre", ModelConfig: "default-model-config", Toolset: []string{"preset:read-only"}, Skills: Skills{
 				{Git: &GitSkill{URL: skillsRepo, Ref: "main"}, Path: "runbooks"},
+				{Git: &GitSkill{URL: skillsRepo, Ref: "main"}, Path: "ops"},
 			}})
 			require.ErrorIs(t, err, tc.is)
+			assert.Contains(t, err.Error(), "skills[1] (ops)", "the item skill-manager names")
 			assert.NotErrorIs(t, err, tc.not)
 			assert.Contains(t, err.Error(), "the answer")
 			assert.Contains(t, err.Error(), "skill-manager")
@@ -201,4 +228,35 @@ func TestListSkillsProxiesSkillManager(t *testing.T) {
 	assert.Equal(t, sm.url, info.SkillManager)
 	assert.True(t, info.Capabilities["skills"])
 	assert.Empty(t, info.SkillsRepositories)
+}
+
+// Plugins are pinned in the plugins list; the format skill-manager answers
+// is what the Agent Plugins Harness guard refuses a Claude-format one by,
+// with no other lookup.
+func TestPluginsPinThroughSkillManager(t *testing.T) {
+	sm := &fakeSkillManager{}
+	f := withSkillManager(t, sm)
+	ctx := identity.ContextWithToken(t.Context(), "id-token")
+
+	res, err := f.svc.Create(ctx, Spec{Name: "sre", ModelConfig: "default-model-config", Toolset: []string{"preset:read-only"}, Plugins: Plugins{
+		{Git: &GitSkill{URL: skillsRepo, Ref: "feature"}, Path: "plugins/ops", Skills: []string{"triage"}},
+	}})
+	require.NoError(t, err)
+	assert.Equal(t, Plugins{{Path: "plugins/ops", Skills: []string{"triage"}, Git: &GitSkill{URL: skillsRepo, Commit: featureHead}}}, res.Agent.Plugins)
+	assert.Equal(t, []skillmanager.Item{{Path: "plugins/ops", Skills: []string{"triage"}, Git: &skillmanager.Git{URL: skillsRepo, Ref: "feature"}}}, sm.plugins)
+	assert.Empty(t, sm.skills)
+
+	calls := sm.calls
+	_, err = f.svc.Create(ctx, Spec{Name: "claude", ModelConfig: "default-model-config", Toolset: []string{"preset:read-only"}, Plugins: Plugins{
+		{Git: &GitSkill{URL: skillsRepo}, Path: "claude-format"},
+	}})
+	require.ErrorIs(t, err, ErrInvalid)
+	assert.Contains(t, err.Error(), "Claude-format")
+	assert.Equal(t, calls+1, sm.calls, "the format came with the pin")
+
+	_, err = f.svc.Create(ctx, Spec{Name: "private", ModelConfig: "default-model-config", Toolset: []string{"preset:read-only"}, Plugins: Plugins{
+		{Git: &GitSkill{URL: skillsRepo}, Path: "plugins/ops"}, {Git: &GitSkill{URL: privateSkillsRepo}},
+	}})
+	require.ErrorIs(t, err, ErrForbidden)
+	assert.Contains(t, err.Error(), "plugins[1]")
 }

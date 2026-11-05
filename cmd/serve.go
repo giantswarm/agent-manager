@@ -297,22 +297,22 @@ func runServe(ctx context.Context, o *serveOptions) error {
 	// Skills are pinned before they are written: a branch or tag to its head
 	// commit, an image tag to its digest — through skill-manager when it is
 	// configured, else in process through the GitHub API (deprecated).
-	inProcess := skills.NewResolver(o.skillsGitHubAPI, skillsTokens, nil, nil)
 	var (
 		discoverer   *skills.Discoverer
-		pinner       agents.SkillPinner = inProcess
+		pinner       agents.SkillPinner
 		skillManager agents.SkillCatalog
 	)
 	if o.skillManagerURL != "" {
-		// skill-manager's API tells no plugin format: the in-process
-		// resolver still answers that.
-		client, err := skillmanager.New(skillmanager.Config{URL: o.skillManagerURL, Formats: inProcess})
+		client, err := skillmanager.New(skillmanager.Config{URL: o.skillManagerURL})
 		if err != nil {
 			return fmt.Errorf("--skill-manager-url: %w", err)
 		}
 		pinner, skillManager = client, client
-	} else if repos := splitList(o.skillsRepositories); len(repos) > 0 {
-		discoverer = skills.New(skills.Config{Repositories: repos, APIURL: o.skillsGitHubAPI, Tokens: skillsTokens, CacheTTL: o.skillsCacheTTL, Tags: tagRule}, log)
+	} else {
+		pinner = skills.NewResolver(o.skillsGitHubAPI, skillsTokens, nil, nil)
+		if repos := splitList(o.skillsRepositories); len(repos) > 0 {
+			discoverer = skills.New(skills.Config{Repositories: repos, APIURL: o.skillsGitHubAPI, Tokens: skillsTokens, CacheTTL: o.skillsCacheTTL, Tags: tagRule}, log)
+		}
 	}
 
 	// The one thing agent-manager does without a caller: the boot Secret of

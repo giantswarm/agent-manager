@@ -1,7 +1,7 @@
 // Package skillmanager is agent-manager's client of skill-manager's REST API
-// (giantswarm/skill-manager): it pins skills and plugins through
+// (giantswarm/skill-manager, docs/api.md): it pins skills and plugins through
 // POST /v1/resolve and lists the skill catalogue through GET /v1/skills, as
-// the caller. Its Client is an agents.SkillPinner.
+// the caller.
 package skillmanager
 
 import (
@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"path"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/giantswarm/agent-manager/internal/identity"
@@ -23,48 +24,64 @@ import (
 
 // The errors of a call beyond skill-manager's 400, 403 and 404, which wrap
 // skills.ErrUnresolvable (400 and 404 on a resolve), skills.ErrNotReadable
-// (403) and ErrInvalid (400 on a list).
+// (403) and ErrInvalid (400 and 404 on a list).
 var (
-	// ErrUnavailable: skill-manager, or GitHub behind it, could not answer
-	// (5xx, unreachable, or an answer that is not the contract's).
+	// ErrUnavailable: skill-manager, or GitHub or a registry behind it,
+	// could not answer (5xx, unreachable, or an answer that is not the API's).
 	ErrUnavailable = errors.New("skill-manager unavailable")
 	// ErrUnauthenticated: skill-manager refused the bearer (401).
 	ErrUnauthenticated = errors.New("skill-manager refused the bearer")
-	// ErrInvalid: skill-manager refused a list request (400), e.g. a source
-	// it does not serve.
+	// ErrInvalid: skill-manager refused a list request (400, 404), e.g. a
+	// source it does not serve.
 	ErrInvalid = errors.New("skill-manager refused the request")
 )
+
+// The lists of a resolve, as its errors name them.
+const (
+	ListSkills  = "skills"
+	ListPlugins = "plugins"
+)
+
+// ResolveError is skill-manager refusing one item of a resolve: Item is its
+// index in List (-1 when the answer names none). It wraps the sentinel of
+// its status.
+type ResolveError struct {
+	List    string
+	Item    int
+	Status  int
+	Message string
+	kind    error
+}
+
+func (e *ResolveError) Error() string {
+	return fmt.Sprintf("%v: skill-manager (%d): %s", e.kind, e.Status, e.Message)
+}
+
+func (e *ResolveError) Unwrap() error { return e.kind }
 
 // forwardedIdentityHeader is muster's forwarded ID token header
 // (server.ForwardedIdentityHeader), sent next to a GitHub bearer.
 const forwardedIdentityHeader = "X-Muster-Id-Token"
 
-// PluginFormats tells a Claude-format plugin (agents.PluginFormats);
-// skill-manager's API has no such call.
-type PluginFormats interface {
-	ClaudeFormatPlugin(ctx context.Context, repoURL, commit, path string) (bool, error)
-}
-
 // Config configures the client.
 type Config struct {
 	// URL is skill-manager's base URL (http://skill-manager.agent-platform.svc:8080).
 	URL string
-	// Token is the bearer of a call with no caller on its context (the
-	// migrate command); empty sends none.
+	// Token is the bearer of a call with no caller on its context: the
+	// service token of the migrate command. Empty sends none.
 	Token string
-	// Formats answers ClaudeFormatPlugin; nil takes no plugin for
-	// Claude-format.
-	Formats PluginFormats
 	// HTTPClient overrides the client (tests); default 30s timeout.
 	HTTPClient *http.Client
 }
 
 // Client calls skill-manager as the caller.
 type Client struct {
-	base    *url.URL
-	token   string
-	formats PluginFormats
-	http    *http.Client
+	base  *url.URL
+	token string
+	http  *http.Client
+
+	mu      sync.Mutex
+	formats map[string]bool
 }
 
 // New builds the client of skill-manager at cfg.URL.
@@ -77,80 +94,139 @@ func New(cfg Config) (*Client, error) {
 	if hc == nil {
 		hc = &http.Client{Timeout: 30 * time.Second}
 	}
-	return &Client{base: u, token: cfg.Token, formats: cfg.Formats, http: hc}, nil
+	return &Client{base: u, token: cfg.Token, http: hc, formats: map[string]bool{}}, nil
 }
 
 // URL is skill-manager's base URL.
 func (c *Client) URL() string { return c.base.String() }
 
-// gitSource and item are POST /v1/resolve's item shape.
-type gitSource struct {
+// Git is a git source: a URL with a ref to resolve or a commit to keep.
+type Git struct {
 	URL    string `json:"url"`
 	Ref    string `json:"ref,omitempty"`
 	Commit string `json:"commit,omitempty"`
 }
 
-type ociSource struct {
+// OCI is an image source.
+type OCI struct {
 	Ref string `json:"ref"`
 }
 
-type item struct {
-	Name string     `json:"name"`
-	Path string     `json:"path,omitempty"`
-	Git  *gitSource `json:"git,omitempty"`
-	OCI  *ociSource `json:"oci,omitempty"`
+// Item is a skill or plugin of a resolve, in skill-manager's shape.
+type Item struct {
+	Name   string   `json:"name,omitempty"`
+	Path   string   `json:"path,omitempty"`
+	Skills []string `json:"skills,omitempty"`
+	// ClaudeFormat answers, for a git plugin, whether it is Claude-format;
+	// true in a request refuses one that is not.
+	ClaudeFormat *bool `json:"claudeFormat,omitempty"`
+	Git          *Git  `json:"git,omitempty"`
+	OCI          *OCI  `json:"oci,omitempty"`
 }
 
 type resolveBody struct {
-	Skills  []item `json:"skills"`
-	Plugins []item `json:"plugins"`
+	Skills  []Item `json:"skills"`
+	Plugins []Item `json:"plugins"`
+}
+
+// Resolve pins skills and plugins in one call, as the caller: a git item to
+// a commit (its ref's; no ref: the configured source's holding its path,
+// else the default branch; a commit is kept), an OCI item to its digest.
+// skill-manager refuses a repository the caller cannot read and a path
+// missing at the commit. Every git plugin's format is remembered for
+// ClaudeFormatPlugin.
+func (c *Client) Resolve(ctx context.Context, skillItems, pluginItems []Item) ([]Item, []Item, error) {
+	if skillItems == nil {
+		skillItems = []Item{}
+	}
+	if pluginItems == nil {
+		pluginItems = []Item{}
+	}
+	raw, err := c.do(ctx, http.MethodPost, "/v1/resolve", nil, resolveBody{Skills: skillItems, Plugins: pluginItems})
+	if err != nil {
+		return nil, nil, err
+	}
+	var out resolveBody
+	if err := json.Unmarshal(raw, &out); err != nil || len(out.Skills) != len(skillItems) || len(out.Plugins) != len(pluginItems) {
+		return nil, nil, fmt.Errorf("%w: POST /v1/resolve answered other items than it was asked", ErrUnavailable)
+	}
+	for list, items := range map[string][]Item{ListSkills: out.Skills, ListPlugins: out.Plugins} {
+		for i, it := range items {
+			switch {
+			case it.Git != nil && !skills.CommitPattern.MatchString(it.Git.Commit):
+				return nil, nil, fmt.Errorf("%w: POST /v1/resolve answered no commit for %s[%d]", ErrUnavailable, list, i)
+			case it.OCI != nil && !skills.DigestRefPattern.MatchString(it.OCI.Ref):
+				return nil, nil, fmt.Errorf("%w: POST /v1/resolve answered no digest for %s[%d]", ErrUnavailable, list, i)
+			case it.Git == nil && it.OCI == nil:
+				return nil, nil, fmt.Errorf("%w: POST /v1/resolve answered no source for %s[%d]", ErrUnavailable, list, i)
+			}
+		}
+	}
+	c.mu.Lock()
+	if len(c.formats) > 4096 {
+		c.formats = map[string]bool{}
+	}
+	for _, it := range out.Plugins {
+		if it.Git != nil && it.ClaudeFormat != nil {
+			c.formats[formatKey(it.Git.URL, it.Git.Commit, it.Path)] = *it.ClaudeFormat
+		}
+	}
+	c.mu.Unlock()
+	return out.Skills, out.Plugins, nil
 }
 
 // GitHead resolves ref of repoURL (empty: the default branch) to a commit.
 func (c *Client) GitHead(ctx context.Context, repoURL, ref string) (string, error) {
-	return c.GitHeadAt(ctx, repoURL, ref, "")
-}
-
-// GitHeadAt resolves ref of repoURL for the source at path: with no ref,
-// skill-manager takes the ref of the configured source path lies below,
-// else the default branch.
-func (c *Client) GitHeadAt(ctx context.Context, repoURL, ref, at string) (string, error) {
-	got, err := c.resolve(ctx, item{Name: itemName(repoURL, at), Path: at, Git: &gitSource{URL: repoURL, Ref: ref}})
+	got, _, err := c.Resolve(ctx, []Item{{Name: itemName(repoURL), Git: &Git{URL: repoURL, Ref: ref}}}, nil)
 	if err != nil {
 		return "", err
 	}
-	if got.Git == nil || !skills.CommitPattern.MatchString(got.Git.Commit) {
-		return "", fmt.Errorf("%w: POST /v1/resolve answered no commit for %s", ErrUnavailable, repoURL)
+	if got[0].Git == nil {
+		return "", errOtherSource
 	}
-	return got.Git.Commit, nil
+	return got[0].Git.Commit, nil
 }
 
-// OCIDigest pins an OCI reference to <reference>@sha256:<digest>.
+// OCIDigest pins an OCI reference to <repository>@sha256:<digest>.
 func (c *Client) OCIDigest(ctx context.Context, ref string) (string, error) {
-	got, err := c.resolve(ctx, item{Name: itemName(ref, ""), OCI: &ociSource{Ref: ref}})
+	got, _, err := c.Resolve(ctx, []Item{{Name: itemName(ref), OCI: &OCI{Ref: ref}}}, nil)
 	if err != nil {
 		return "", err
 	}
-	if got.OCI == nil || !skills.DigestRefPattern.MatchString(got.OCI.Ref) {
-		return "", fmt.Errorf("%w: POST /v1/resolve answered no digest for %s", ErrUnavailable, ref)
+	if got[0].OCI == nil {
+		return "", errOtherSource
 	}
-	return got.OCI.Ref, nil
+	return got[0].OCI.Ref, nil
 }
 
-// RequireReadable has skill-manager resolve repoURL's default branch as the
-// caller: it refuses a repository the caller cannot read (403,
-// skills.ErrNotReadable). login is skill-manager's to take from the bearer.
-func (c *Client) RequireReadable(ctx context.Context, repoURL, _ string) error {
-	_, err := c.GitHead(ctx, repoURL, "")
-	return err
-}
+var errOtherSource = fmt.Errorf("%w: POST /v1/resolve answered another kind of source", ErrUnavailable)
 
-// ClaudeFormatPlugin asks the configured checker.
+// RequireReadable is a no-op: skill-manager checks readability as it
+// resolves, which every write does for every git item.
+func (c *Client) RequireReadable(context.Context, string, string) error { return nil }
+
+// ClaudeFormatPlugin answers from the formats resolve reported, else
+// resolves the plugin at commit to learn it.
 func (c *Client) ClaudeFormatPlugin(ctx context.Context, repoURL, commit, at string) (bool, error) {
-	if c.formats == nil {
-		return false, nil
+	key := formatKey(repoURL, commit, at)
+	c.mu.Lock()
+	claude, ok := c.formats[key]
+	c.mu.Unlock()
+	if ok {
+		return claude, nil
 	}
-	return c.formats.ClaudeFormatPlugin(ctx, repoURL, commit, at)
+	_, got, err := c.Resolve(ctx, nil, []Item{{Path: at, Git: &Git{URL: repoURL, Commit: commit}}})
+	if err != nil {
+		return false, err
+	}
+	if got[0].ClaudeFormat == nil {
+		return false, fmt.Errorf("%w: POST /v1/resolve answered no claudeFormat for the plugin %s", ErrUnavailable, repoURL)
+	}
+	return *got[0].ClaudeFormat, nil
+}
+
+func formatKey(repoURL, commit, at string) string {
+	return repoURL + "@" + commit + ":" + strings.Trim(at, "/")
 }
 
 // Skills is GET /v1/skills: the catalogue of every configured source, or of
@@ -172,19 +248,6 @@ func (c *Client) Skills(ctx context.Context, source string, refresh bool) (map[s
 		return nil, fmt.Errorf("%w: GET /v1/skills answered no JSON object", ErrUnavailable)
 	}
 	return out, nil
-}
-
-// resolve pins one item.
-func (c *Client) resolve(ctx context.Context, it item) (item, error) {
-	raw, err := c.do(ctx, http.MethodPost, "/v1/resolve", nil, resolveBody{Skills: []item{it}, Plugins: []item{}})
-	if err != nil {
-		return item{}, err
-	}
-	var out resolveBody
-	if err := json.Unmarshal(raw, &out); err != nil || len(out.Skills) != 1 {
-		return item{}, fmt.Errorf("%w: POST /v1/resolve answered no pinned item", ErrUnavailable)
-	}
-	return out.Skills[0], nil
 }
 
 // maxAnswer bounds what is read of an answer.
@@ -228,7 +291,7 @@ func (c *Client) do(ctx context.Context, method, p string, q url.Values, body an
 
 // authorize sets the bearer as agent-manager received it: on the GitHub
 // registration the person's GitHub token with the ID token in muster's
-// forwarded header, else the ID token; with no caller, the configured token.
+// forwarded header, else the ID token; with no caller, the service token.
 func (c *Client) authorize(ctx context.Context, req *http.Request) {
 	idToken, _ := identity.TokenFromContext(ctx)
 	if gh, ok := identity.GitHubFromContext(ctx); ok {
@@ -247,10 +310,13 @@ func (c *Client) authorize(ctx context.Context, req *http.Request) {
 	}
 }
 
-// answerError maps skill-manager's refusal ({"error": "...", "item": n}).
+// answerError maps skill-manager's refusal
+// ({"error": "...", "item": n, "list": "skills" | "plugins"}).
 func answerError(method, p string, status int, raw []byte) error {
 	var body struct {
 		Error string `json:"error"`
+		Item  *int   `json:"item"`
+		List  string `json:"list"`
 	}
 	msg := strings.TrimSpace(string(raw))
 	if json.Unmarshal(raw, &body) == nil && body.Error != "" {
@@ -259,28 +325,33 @@ func answerError(method, p string, status int, raw []byte) error {
 	if msg == "" {
 		msg = http.StatusText(status)
 	}
-	what := fmt.Sprintf("skill-manager %s %s (%d): %s", method, p, status, msg)
 	resolve := p == "/v1/resolve"
+	var kind error
 	switch {
 	case status == http.StatusForbidden:
-		return fmt.Errorf("%w: %s", skills.ErrNotReadable, what)
+		kind = skills.ErrNotReadable
 	case status == http.StatusUnauthorized:
-		return fmt.Errorf("%w: %s", ErrUnauthenticated, what)
+		kind = ErrUnauthenticated
 	case resolve && (status == http.StatusBadRequest || status == http.StatusNotFound):
-		return fmt.Errorf("%w: %s", skills.ErrUnresolvable, what)
+		kind = skills.ErrUnresolvable
 	case status == http.StatusBadRequest || status == http.StatusNotFound:
-		return fmt.Errorf("%w: %s", ErrInvalid, what)
+		kind = ErrInvalid
 	default:
-		return fmt.Errorf("%w: %s", ErrUnavailable, what)
+		kind = ErrUnavailable
 	}
+	if !resolve {
+		return fmt.Errorf("%w: skill-manager %s %s (%d): %s", kind, method, p, status, msg)
+	}
+	e := &ResolveError{List: body.List, Item: -1, Status: status, Message: msg, kind: kind}
+	if body.Item != nil {
+		e.Item = *body.Item
+	}
+	return e
 }
 
-// itemName names an item for skill-manager: the last segment of its path,
-// else of its repository or image.
-func itemName(source, at string) string {
-	if at = strings.Trim(at, "/"); at != "" {
-		return path.Base(at)
-	}
+// itemName names a single-source item: the last segment of its repository
+// or image.
+func itemName(source string) string {
 	source = strings.TrimSuffix(strings.Trim(source, "/"), ".git")
 	if i := strings.LastIndex(source, "/"); i >= 0 {
 		source = source[i+1:]
