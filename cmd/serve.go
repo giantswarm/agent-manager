@@ -84,6 +84,7 @@ type serveOptions struct {
 
 	multiTenant  bool
 	devPortalURL string
+	installation string
 	// orgsRepository, orgsBranch, orgsObjectsPath and orgsContentPrefix
 	// are where the organization tools' mode commit writes.
 	orgsRepository    string
@@ -168,6 +169,7 @@ environment variable named next to it; flags win over the environment.`,
 	f.StringVar(&o.orgsBranch, "organizations-branch", envOr("AGENT_MANAGER_ORGANIZATIONS_BRANCH", "main"), "The branch of --organizations-repository the pull requests go to (AGENT_MANAGER_ORGANIZATIONS_BRANCH)")
 	f.StringVar(&o.orgsObjectsPath, "organizations-objects-path", envOr("AGENT_MANAGER_ORGANIZATIONS_OBJECTS_PATH", ""), "The directory of --organizations-repository the installation's Kustomization applies the organization objects from, one directory per parent namespace; its kustomization.yaml lists them (AGENT_MANAGER_ORGANIZATIONS_OBJECTS_PATH)")
 	f.StringVar(&o.orgsContentPrefix, "organizations-content-prefix", envOr("AGENT_MANAGER_ORGANIZATIONS_CONTENT_PREFIX", organizations.DefaultContentPrefix), "The directory of --organizations-repository that holds the organizations' content paths, <prefix>/<parent>/<name>: agent-platform-operator's --organization-path without {parent}/{name} (AGENT_MANAGER_ORGANIZATIONS_CONTENT_PREFIX)")
+	f.StringVar(&o.installation, "installation", envOr("AGENT_MANAGER_INSTALLATION", ""), "The installation's name in the Dev Portal, which get_info reports: a portal agent id is <installation>/<namespace>/<name> (AGENT_MANAGER_INSTALLATION)")
 	f.StringVar(&o.devPortalURL, "dev-portal-url", envOr("AGENT_MANAGER_DEV_PORTAL_URL", ""), "The Dev Portal's base URL (https://portal.example.com): the organization tools answer a missing or replaced credential with its credential form's link; empty names the Secret without a link (AGENT_MANAGER_DEV_PORTAL_URL)")
 	f.BoolVar(&o.mcpEnabled, "mcp-enabled", envBool("AGENT_MANAGER_MCP_ENABLED", true), "Serve the MCP streamable-HTTP endpoint (AGENT_MANAGER_MCP_ENABLED)")
 	f.StringVar(&o.mcpPath, "mcp-path", envOr("AGENT_MANAGER_MCP_PATH", "/mcp"), "MCP endpoint path (AGENT_MANAGER_MCP_PATH)")
@@ -431,6 +433,7 @@ func runServe(ctx context.Context, o *serveOptions) error {
 		Toolchains:       toolchains,
 		Tenants:          tenantSetOrNil(orgNamespaces),
 		SkillManager:     skillManager,
+		Installation:     o.installation,
 	}, log)
 
 	srvCfg := server.Config{Addr: o.listen, MCPEnabled: o.mcpEnabled, MCPPath: o.mcpPath}

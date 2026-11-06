@@ -98,6 +98,9 @@ type Config struct {
 	// the caller; the service's pinner is then skill-manager's too. Nil:
 	// skills are discovered in process (deprecated).
 	SkillManager SkillCatalog
+	// Installation is the installation's Dev Portal name, which get_info
+	// reports: a portal agent id is <installation>/<namespace>/<name>.
+	Installation string
 }
 
 // SkillCatalog is skill-manager's catalogue (GET /v1/skills).
@@ -250,6 +253,9 @@ type InfoResponse struct {
 		// clusters; empty: target clusters are refused.
 		TargetURL string `json:"targetUrl,omitempty"`
 	} `json:"muster"`
+	// Installation is the installation's Dev Portal name: a portal agent
+	// id is <installation>/<namespace>/<name>. Empty when unset.
+	Installation string `json:"installation"`
 	// DefaultAgent is the installation's default agent, namespace/name,
 	// which clients preselect; empty when none is labelled.
 	DefaultAgent string `json:"defaultAgent"`
@@ -325,6 +331,7 @@ func (s *Service) Info(ctx context.Context) InfoResponse {
 	out.Muster.URL = s.cfg.Compose.MusterURL
 	out.Muster.TargetURL = s.cfg.Compose.TargetMusterURL
 	out.DefaultAgent = s.defaultAgent(ctx)
+	out.Installation = s.cfg.Installation
 	switch {
 	case s.cfg.SkillManager != nil:
 		out.SkillsRepositories = []string{}

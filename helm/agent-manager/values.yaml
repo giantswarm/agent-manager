@@ -530,6 +530,11 @@ devPortal:
   # a link.
   url: ""
 
+# -- The installation's name in the Dev Portal, reported by `get_info` as
+# `installation`: a portal agent id is `<installation>/<namespace>/<name>`.
+# Empty: not reported.
+installation: ""
+
 # -- Annotations on the pod.
 podAnnotations: {}  # @schema additionalProperties: true
 # -- Labels on the pod.

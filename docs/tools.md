@@ -640,7 +640,7 @@ From the Agent's conditions and warnings, the HelmRelease's conditions and histo
 ```text
 Where you can create agents and what this installation offers: managed namespaces, chart, Harness, capabilities.
 
-Call it first: capabilities says whether this installation offers mode commit, the session tools and workload clusters; defaultAgent (namespace/name) is the agent to preselect when starting a session. Also the service version, the served API versions, the muster URL and Flux settings composed into every agent, and how writes are authenticated.
+Call it first: capabilities says whether this installation offers mode commit, the session tools and workload clusters; defaultAgent (namespace/name) is the agent to preselect when starting a session; a portal agent id is <installation>/<namespace>/<name>. Also the service version, the served API versions, the muster URL and Flux settings composed into every agent, and how writes are authenticated.
 ```
 
 ```json

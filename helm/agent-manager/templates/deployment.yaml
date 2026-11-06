@@ -87,6 +87,9 @@ spec:
             {{- with .Values.devPortal.url }}
             - {{ printf "--dev-portal-url=%s" . | quote }}
             {{- end }}
+            {{- with .Values.installation }}
+            - {{ printf "--installation=%s" . | quote }}
+            {{- end }}
             {{- with .Values.skillManager.url }}
             - --skill-manager-url={{ . }}
             {{- end }}

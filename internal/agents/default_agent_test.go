@@ -1,6 +1,7 @@
 package agents
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -72,4 +73,17 @@ func TestOneDefaultWhenSeveralAreLabelled(t *testing.T) {
 		PlatformManagedByLabel: PlatformManagedByValue, DefaultAgentLabel: "true"}))
 	assert.Equal(t, "tenant/zeta", f.svc.Info(t.Context()).DefaultAgent, "the platform's wins")
 	assert.Equal(t, map[string]bool{"verifier": false, "alpha": false, "beta": false}, defaultsOf(t, f))
+}
+
+// get_info names the installation as the Dev Portal does, the first part of
+// a portal agent id; empty when unset.
+func TestInfoReportsTheInstallation(t *testing.T) {
+	f := seeded(t)
+	assert.Empty(t, f.svc.Info(t.Context()).Installation)
+
+	f.svc.cfg.Installation = "golem"
+	assert.Equal(t, "golem", f.svc.Info(t.Context()).Installation)
+	raw, err := json.Marshal(f.svc.Info(t.Context()))
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), `"installation":"golem"`)
 }

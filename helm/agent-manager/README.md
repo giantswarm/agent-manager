@@ -172,6 +172,7 @@ meta chart (`components.agent-manager.enabled`), which sets `kagent.namespace`,
 | tenants.commit.objectsPath | string | `""` | The directory the installation's Kustomization applies the organization objects from: `<objectsPath>/<parent>/<name>.yaml`. |
 | tenants.commit.contentPrefix | string | `"agent-platform/organizations"` | The directory of the organizations' content paths, `<contentPrefix>/<parent>/<name>`: agent-platform-operator's `commitMode.path` without `{parent}/{name}`. |
 | devPortal.url | string | `""` | The Dev Portal's base URL (`https://portal.example.com`). The organization tools answer a missing or replaced credential (a model's key, a connector's or an egress policy's credential) with the link to its credential form, `<url>/agent-platform/organizations/<parent>/<organization>/credentials/<secret>/<key>/<kind>/<name>`, which holds no value and no token. Empty: the Secret is named without a link. |
+| installation | string | `""` | The installation's name in the Dev Portal, reported by `get_info` as `installation`: a portal agent id is `<installation>/<namespace>/<name>`. Empty: not reported. |
 | podAnnotations | object | `{}` | Annotations on the pod. |
 | podLabels | object | `{}` | Labels on the pod. |
 | podSecurityContext | object | `{"fsGroup":1000,"runAsGroup":1000,"runAsNonRoot":true,"runAsUser":1000,"seccompProfile":{"type":"RuntimeDefault"}}` | Pod security context. |

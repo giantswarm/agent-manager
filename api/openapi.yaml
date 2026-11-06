@@ -794,6 +794,7 @@ components:
           properties:
             url: { type: string, description: The muster MCP URL composed into every agent as muster.url; empty means the chart default applies }
         skillsRepositories: { type: array, items: { type: string }, description: "The configured skill repositories; empty with skill-manager" }
+        installation: { type: string, description: "The installation's Dev Portal name; a portal agent id is <installation>/<namespace>/<name>. Empty when unset" }
         defaultAgent: { type: string, description: "The installation's default agent, namespace/name, which clients preselect; empty when none is labelled. Of several, a platform-owned one, then the first by namespace/name" }
         skillManager: { type: string, description: "skill-manager's URL when it serves the skills: every pin goes through it, its tools list the sources and skills; absent otherwise" }
         skillsGitAuthSecretName: { type: string, description: "The installation's skills credential Secret (key token) every agent with a git skill is fetched with unless it names its own; absent: anonymous" }

@@ -317,6 +317,10 @@
             "type": "array",
             "description": "Image pull secrets."
         },
+        "installation": {
+            "type": "string",
+            "description": "The installation's name in the Dev Portal, reported by `get_info` as `installation`: a portal agent id is `<installation>/<namespace>/<name>`. Empty: not reported."
+        },
         "kagent": {
             "type": "object",
             "additionalProperties": false,
