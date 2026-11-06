@@ -14,13 +14,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Agents the Agent Platform ships (HelmRelease label `agent-platform.giantswarm.io/managed-by: agent-platform`) are `managed: platform` in `list_agents` and `get_agent`; `update_agent` (with `refreshSkills` too), `validate_agent` with `update` and `delete_agent` refuse them in every mode with `409 conflict`: they change through the platform's configuration. The label on the Agent alone suffices, and the `migrate` command and the start-up source convergence report such a release, and the source it uses, without writing them (giantswarm/giantswarm#38970).
 - With `skillManager.url`, two checks run where they did not: `refreshSkills` and the Harness plugin-format check go through skill-manager's read check as the caller, so a collaborator who cannot read an agent's private skill repository cannot refresh that agent; and every skill and plugin path must exist at its commit.
 
-### Changed
-
-- **Breaking:** a ModelConfig named `default-model-config` no longer counts as a namespace's default while none is annotated. Only the annotation `agent-platform.giantswarm.io/is-default-model-config: "true"` marks the default.
-
 ### Deprecated
 
 - In-process skill discovery and pinning (`skills.repositories`, no `skillManager.url`), and `list_skills` / `GET /skills`: skill-manager's tools list the skills (giantswarm/giantswarm#38322).
+
+## [2.21.0] - 2026-11-06
+
+### Changed
+
+- **Breaking:** a ModelConfig named `default-model-config` no longer counts as a namespace's default while none is annotated. Only the annotation `agent-platform.giantswarm.io/is-default-model-config: "true"` marks the default.
 
 ## [2.20.0] - 2026-11-06
 
@@ -605,7 +607,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Chart: the MCPServer CR carries `agent-platform.giantswarm.io/tool-group: agent-platform` next to `muster.giantswarm.io/type` — the Agent Platform tier of MCP servers (the portal's MCP servers page, the `agent-platform` toolset preset). `muster.mcpServer.labels` still adds or overrides labels. (#23)
 
-[Unreleased]: https://github.com/giantswarm/agent-manager/compare/v2.20.0...HEAD
+[Unreleased]: https://github.com/giantswarm/agent-manager/compare/v2.21.0...HEAD
+[2.21.0]: https://github.com/giantswarm/agent-manager/compare/v2.20.0...v2.21.0
 [2.20.0]: https://github.com/giantswarm/agent-manager/compare/v2.20.0-rc.1...v2.20.0
 [2.20.0-rc.1]: https://github.com/giantswarm/agent-manager/compare/v2.19.0-rc.2...v2.20.0-rc.1
 [2.19.0-rc.2]: https://github.com/giantswarm/agent-manager/compare/v2.19.0-rc.1...v2.19.0-rc.2
