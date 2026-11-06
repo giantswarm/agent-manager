@@ -191,8 +191,8 @@ github.com/getsops/gopgagent v0.0.0-20241224165529-7044f28e491e h1:y/1nzrdF+RPds
 github.com/getsops/gopgagent v0.0.0-20241224165529-7044f28e491e/go.mod h1:awFzISqLJoZLm+i9QQ4SgMNHDqljH6jWV0B36V5MrUM=
 github.com/getsops/sops/v3 v3.13.3 h1:saYczbT88kD1saNChe1cAbFQe5mrRhTIfEw3TaEcmK0=
 github.com/getsops/sops/v3 v3.13.3/go.mod h1:3mUuUtKnJ63IzIvU4LQoDXdp0ZvorY5s2hEc7UVNfx8=
-github.com/giantswarm/agent-platform-operator v0.1.0-rc.13 h1:kT4J4b+jowZriLcTlQUlFrKl0mi2+KI8JeuK2gywbew=
-github.com/giantswarm/agent-platform-operator v0.1.0-rc.13/go.mod h1:PpTMmfg95uF0+dvVE1X70UeHS/g4s4ja1tgGVs9qlns=
+github.com/giantswarm/agent-platform-operator v0.1.1 h1:tQx683l2KLyCf7MJwRjaiPBthgYdqG8evoPnP1ICWxY=
+github.com/giantswarm/agent-platform-operator v0.1.1/go.mod h1:OrqNrXXAXHP1ma6bjIYK81EH5L/5r/fUhJ9rKkiu5fI=
 github.com/giantswarm/gitops-commit v0.12.0-rc.2 h1:IiM8c7tu3azcVrOSemOiGszW4ZTeqoRCnhk8kzqtKt8=
 github.com/giantswarm/gitops-commit v0.12.0-rc.2/go.mod h1:ytq7tYCrBVBJq5FnWJdn7MwPa+UJXDZrb3uqaQCEuQw=
 github.com/giantswarm/mcp-oauth v1.9.6 h1:tOE8BUcIXqM5LBZU4YFwp196m32rhMXiO66rnjM7oGg=
