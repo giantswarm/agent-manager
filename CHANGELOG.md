@@ -10,6 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **Breaking:** a ModelConfig named `default-model-config` no longer counts as a namespace's default while none is annotated. Only the annotation `agent-platform.giantswarm.io/is-default-model-config: "true"` marks the default.
+
+## [2.20.0] - 2026-11-06
+
+### Changed
+
 - **Breaking:** `tenants.enabled` no longer renders the ClusterRole `agent-platform-tenant-flux`. The Agent Platform chart renders it whenever kagent is on, so one release owns it and turning the organizations on hands nothing over between releases. An installation that runs agent-manager with `tenants.enabled` outside the Agent Platform chart renders that ClusterRole itself.
 
 ## [2.20.0-rc.1] - 2026-11-05
@@ -589,7 +594,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Chart: the MCPServer CR carries `agent-platform.giantswarm.io/tool-group: agent-platform` next to `muster.giantswarm.io/type` — the Agent Platform tier of MCP servers (the portal's MCP servers page, the `agent-platform` toolset preset). `muster.mcpServer.labels` still adds or overrides labels. (#23)
 
-[Unreleased]: https://github.com/giantswarm/agent-manager/compare/v2.20.0-rc.1...HEAD
+[Unreleased]: https://github.com/giantswarm/agent-manager/compare/v2.20.0...HEAD
+[2.20.0]: https://github.com/giantswarm/agent-manager/compare/v2.20.0-rc.1...v2.20.0
 [2.20.0-rc.1]: https://github.com/giantswarm/agent-manager/compare/v2.19.0-rc.2...v2.20.0-rc.1
 [2.19.0-rc.2]: https://github.com/giantswarm/agent-manager/compare/v2.19.0-rc.1...v2.19.0-rc.2
 [2.19.0-rc.1]: https://github.com/giantswarm/agent-manager/compare/v2.18.0...v2.19.0-rc.1
