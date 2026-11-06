@@ -11,7 +11,7 @@ require (
 	github.com/giantswarm/gitops-commit v0.12.0-rc.2
 	github.com/giantswarm/mcp-oauth v1.9.6
 	github.com/giantswarm/mcp-toolkit v0.4.12
-	github.com/go-jose/go-jose/v4 v4.1.8
+	github.com/go-jose/go-jose/v4 v4.1.9
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/uuid v1.6.0
 	github.com/mark3labs/mcp-go v1.5.0
