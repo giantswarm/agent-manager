@@ -99,6 +99,11 @@ const (
 	// Agent Platform ships: no write of agent-manager reaches it.
 	PlatformManagedByLabel = "agent-platform.giantswarm.io/managed-by"
 	PlatformManagedByValue = "agent-platform"
+	// DefaultAgentLabel ("true") on a HelmRelease or its Agent marks the
+	// installation's default agent, which clients preselect. One is
+	// reported: a platform-owned one first, then the first by
+	// namespace/name.
+	DefaultAgentLabel = "agent-platform.giantswarm.io/default"
 	// ManagedByLabel / ManagedByValue mark the HelmReleases and
 	// OCIRepositories agent-manager created.
 	ManagedByLabel = "app.kubernetes.io/managed-by"
@@ -469,8 +474,10 @@ type Agent struct {
 	Ready *bool `json:"ready"`
 	// Status is the Agent object's status, when it exists.
 	Status *ObjectStatus `json:"status,omitempty"`
-	// Managed is helmrelease, gitops or none.
-	Managed     string          `json:"managed"`
+	// Managed is helmrelease, gitops, platform or none.
+	Managed string `json:"managed"`
+	// Default: the installation's default agent, which clients preselect.
+	Default     bool            `json:"default,omitempty"`
 	HelmRelease *HelmReleaseRef `json:"helmRelease,omitempty"`
 	// Values are the HelmRelease's inline values (the chart contract), when a
 	// HelmRelease owns the agent.
@@ -499,6 +506,7 @@ type AgentSummary struct {
 	ToolsetBound              bool     `json:"toolsetBound,omitempty"`
 	Ready                     *bool    `json:"ready"`
 	Managed                   string   `json:"managed"`
+	Default                   bool     `json:"default,omitempty"`
 	// The owning HelmRelease's state, when it needs attention: suspended,
 	// being uninstalled, or not Ready (its reason and message).
 	Suspended      bool   `json:"suspended,omitempty"`
@@ -528,6 +536,7 @@ func (a Agent) Summary() AgentSummary {
 		ToolsetBound:              a.ToolsetBound,
 		Ready:                     a.Ready,
 		Managed:                   a.Managed,
+		Default:                   a.Default,
 	}
 	if hr := a.HelmRelease; hr != nil {
 		s.Suspended = hr.Suspended

@@ -792,6 +792,7 @@ components:
           properties:
             url: { type: string, description: The muster MCP URL composed into every agent as muster.url; empty means the chart default applies }
         skillsRepositories: { type: array, items: { type: string }, description: "The configured skill repositories; empty with skill-manager" }
+        defaultAgent: { type: string, description: "The installation's default agent, namespace/name, which clients preselect; empty when none is labelled. Of several, a platform-owned one, then the first by namespace/name" }
         skillManager: { type: string, description: "skill-manager's URL when it serves the skills: every pin goes through it, its tools list the sources and skills; absent otherwise" }
         skillsGitAuthSecretName: { type: string, description: "The installation's skills credential Secret (key token) every agent with a git skill is fetched with unless it names its own; absent: anonymous" }
         skillsGitAuthMint:
@@ -1003,6 +1004,7 @@ components:
         implicitFullAccess: { type: boolean }
         ready: { type: [boolean, "null"] }
         managed: { type: string, enum: [helmrelease, gitops, platform, none] }
+        default: { type: boolean, description: "The installation's default agent (label agent-platform.giantswarm.io/default); clients preselect it. Absent when not" }
         suspended: { type: boolean, description: The HelmRelease is suspended (absent when not) }
         deleting: { type: boolean, description: helm-controller is uninstalling the release (absent when not) }
         releaseReason: { type: string, description: The HelmRelease's Ready reason, when it is not Ready }
@@ -1033,6 +1035,7 @@ components:
         ready: { type: [boolean, "null"], description: The Agent's verdict (Ready and the desired revision is the latest successful one); null while unreported }
         status: { $ref: "#/components/schemas/ObjectStatus" }
         managed: { type: string, enum: [helmrelease, gitops, platform, none] }
+        default: { type: boolean, description: "The installation's default agent (label agent-platform.giantswarm.io/default); clients preselect it. Absent when not" }
         helmRelease: { $ref: "#/components/schemas/HelmReleaseRef" }
         values: { type: object, description: The HelmRelease's inline values (the chart contract) }
     Manifests:

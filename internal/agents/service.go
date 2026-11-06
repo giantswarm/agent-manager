@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"maps"
 	"slices"
 	"sort"
 	"strings"
@@ -238,6 +239,9 @@ type InfoResponse struct {
 		// clusters; empty: target clusters are refused.
 		TargetURL string `json:"targetUrl,omitempty"`
 	} `json:"muster"`
+	// DefaultAgent is the installation's default agent, namespace/name,
+	// which clients preselect; empty when none is labelled.
+	DefaultAgent string `json:"defaultAgent"`
 	// SkillsRepositories are the configured skill repositories; empty when
 	// skill-manager serves the skills.
 	SkillsRepositories []string `json:"skillsRepositories"`
@@ -310,6 +314,7 @@ func (s *Service) Info(ctx context.Context) InfoResponse {
 	out.Harness.Name = s.cfg.Compose.HarnessName
 	out.Muster.URL = s.cfg.Compose.MusterURL
 	out.Muster.TargetURL = s.cfg.Compose.TargetMusterURL
+	out.DefaultAgent = s.defaultAgent(ctx)
 	switch {
 	case s.cfg.SkillManager != nil:
 		out.SkillsRepositories = []string{}
@@ -512,12 +517,67 @@ func (s *Service) List(ctx context.Context, loc Location, filter tags.Filter) ([
 			out = append(out, *a)
 		}
 	}
+	def := s.defaultAgentAt(ctx, st)
 	for i := range out {
 		s.markToolsetBound(&out[i])
 		s.effectiveDefaultToolchains(&out[i])
+		out[i].Default = def != "" && def == out[i].Namespace+"/"+out[i].Name
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, nil
+}
+
+// defaultAgentAt is defaultAgent on the installation's own cluster, empty
+// on a target cluster.
+func (s *Service) defaultAgentAt(ctx context.Context, st *site) string {
+	if st.loc.IsSet() {
+		return ""
+	}
+	return s.defaultAgent(ctx)
+}
+
+// defaultAgent is the installation's default agent, namespace/name: the
+// HelmReleases and Agents labelled DefaultAgentLabel in the managed
+// namespaces, as the caller reads them; of several, a platform-owned one,
+// then the first by namespace/name, with a warning. Empty when none.
+func (s *Service) defaultAgent(ctx context.Context) string {
+	dyn, _, err := s.dyn(ctx)
+	if err != nil {
+		return ""
+	}
+	selector := metav1.ListOptions{LabelSelector: DefaultAgentLabel + "=true"}
+	platform := map[string]bool{}
+	for _, ns := range s.Managed() {
+		for _, gvr := range []schema.GroupVersionResource{s.helmReleaseGVR(), s.agentGVR()} {
+			list, err := dyn.Resource(gvr).Namespace(ns).List(ctx, selector)
+			if err != nil {
+				s.log.Debug("default agent: list failed; leaving the namespace out", identity.LogAttr(ctx), "namespace", ns, "resource", gvr.Resource, "error", err)
+				continue
+			}
+			for i := range list.Items {
+				obj := &list.Items[i]
+				key := ns + "/" + obj.GetName()
+				platform[key] = platform[key] || PlatformOwned(obj)
+			}
+		}
+	}
+	if len(platform) == 0 {
+		return ""
+	}
+	keys := slices.Sorted(maps.Keys(platform))
+	slices.SortStableFunc(keys, func(a, b string) int {
+		switch {
+		case platform[a] == platform[b]:
+			return 0
+		case platform[a]:
+			return -1
+		}
+		return 1
+	})
+	if len(keys) > 1 {
+		s.log.Warn("several agents are labelled the default; reporting one", "label", DefaultAgentLabel, "default", keys[0], "labelled", keys)
+	}
+	return keys[0]
 }
 
 // Get returns one agent by name.
@@ -550,6 +610,9 @@ func (s *Service) get(ctx context.Context, st *site, name string) (*Agent, error
 	}
 	s.markToolsetBound(&a)
 	s.effectiveDefaultToolchains(&a)
+	if def := s.defaultAgentAt(ctx, st); def != "" {
+		a.Default = def == a.Namespace+"/"+a.Name
+	}
 	return &a, nil
 }
 

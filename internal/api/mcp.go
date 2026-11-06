@@ -242,7 +242,7 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 	// for the tools that only read and write this installation's own resources.
 	s.AddTool(mcp.NewTool(ToolGetInfo,
 		tooldesc.Describe("Where you can create agents and what this installation offers: managed namespaces, chart, Harness, capabilities.",
-			"Call it first: capabilities says whether this installation offers mode commit, the session tools and workload clusters. Also the service version, the served API versions, the muster URL and Flux settings composed into every agent, and how writes are authenticated."),
+			"Call it first: capabilities says whether this installation offers mode commit, the session tools and workload clusters; defaultAgent (namespace/name) is the agent to preselect when starting a session. Also the service version, the served API versions, the muster URL and Flux settings composed into every agent, and how writes are authenticated."),
 		mcp.WithReadOnlyHintAnnotation(true),
 		mcp.WithDestructiveHintAnnotation(false),
 		mcp.WithIdempotentHintAnnotation(false),
@@ -251,7 +251,7 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 
 	s.AddTool(mcp.NewTool(ToolListAgents,
 		tooldesc.Describe("List the agents of a namespace, one summary each: model, Harness, toolset, readiness and how it is managed.",
-			"managed: helmrelease is writable here, gitops changes only with mode commit, platform ships with the Agent Platform and is read-only, none is a bare Agent object. implicitFullAccess: true means the agent sees every gateway tool and still needs a toolset (update_agent). toolsetBound: true means the toolset is bound to each session at its start, for every process of its sandbox; otherwise the agent's runtime declares it. An agent's prompt, skills, plugins and values come from get_agent."),
+			"managed: helmrelease is writable here, gitops only with mode commit, platform ships with the Agent Platform, read-only; none is a bare Agent. default: true is the installation's default agent: preselect it when starting a session. implicitFullAccess: true: the agent sees every gateway tool and still needs a toolset (update_agent). toolsetBound: true: the toolset is bound to each session at its start; else the runtime declares it. Prompt, skills, plugins and values come from get_agent."),
 		nsProp,
 		orgProp,
 		clusterProp,
@@ -265,7 +265,7 @@ func NewMCPServer(svc *agents.Service, version string) *mcpserver.MCPServer {
 
 	s.AddTool(mcp.NewTool(ToolGetAgent,
 		tooldesc.Describe("Get one agent: its HelmRelease values, Harness, pinned skills and plugins, toolset and Agent status.",
-			""),
+			"default: true is the installation's default agent, to preselect when starting a session."),
 		mcp.WithString(argName, mcp.Required(), mcp.Description("Agent name")),
 		nsProp,
 		orgProp,

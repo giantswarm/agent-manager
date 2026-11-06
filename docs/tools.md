@@ -341,6 +341,8 @@ Another person's session is refused as not_found. While another operation on it 
 
 ```text
 Get one agent: its HelmRelease values, Harness, pinned skills and plugins, toolset and Agent status.
+
+default: true is the installation's default agent, to preselect when starting a session.
 ```
 
 ```json
@@ -410,7 +412,7 @@ From the Agent's conditions and warnings, the HelmRelease's conditions and histo
 ```text
 Where you can create agents and what this installation offers: managed namespaces, chart, Harness, capabilities.
 
-Call it first: capabilities says whether this installation offers mode commit, the session tools and workload clusters. Also the service version, the served API versions, the muster URL and Flux settings composed into every agent, and how writes are authenticated.
+Call it first: capabilities says whether this installation offers mode commit, the session tools and workload clusters; defaultAgent (namespace/name) is the agent to preselect when starting a session. Also the service version, the served API versions, the muster URL and Flux settings composed into every agent, and how writes are authenticated.
 ```
 
 ```json
@@ -513,7 +515,7 @@ detail: transcript (default) clips tool arguments and gives tool results as stub
 ```text
 List the agents of a namespace, one summary each: model, Harness, toolset, readiness and how it is managed.
 
-managed: helmrelease is writable here, gitops changes only with mode commit, platform ships with the Agent Platform and is read-only, none is a bare Agent object. implicitFullAccess: true means the agent sees every gateway tool and still needs a toolset (update_agent). toolsetBound: true means the toolset is bound to each session at its start, for every process of its sandbox; otherwise the agent's runtime declares it. An agent's prompt, skills, plugins and values come from get_agent.
+managed: helmrelease is writable here, gitops only with mode commit, platform ships with the Agent Platform, read-only; none is a bare Agent. default: true is the installation's default agent: preselect it when starting a session. implicitFullAccess: true: the agent sees every gateway tool and still needs a toolset (update_agent). toolsetBound: true: the toolset is bound to each session at its start; else the runtime declares it. Prompt, skills, plugins and values come from get_agent.
 ```
 
 ```json
