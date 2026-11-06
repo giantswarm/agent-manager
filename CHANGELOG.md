@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - The server advertises the Giant Swarm logo as its MCP icon (`serverInfo.icons`), so muster and the developer portal show it.
+- An agent records its creator's display name: a create writes the caller's IdP name, when there is one, as `agent-platform.giantswarm.io/created-by-name` beside `created-by`, under the same rules. `get_agent` and `list_agents` report it as `createdByName`, for display only.
 
 ## [2.21.0] - 2026-11-06
 

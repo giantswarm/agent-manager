@@ -655,8 +655,10 @@ operator's chart source.
 
 Every create records the caller as `agent-platform.giantswarm.io/created-by`
 on the HelmRelease and, through the chart's `annotations` value, on the
-Agent; an update keeps it and nobody can set or change it. `createdBy` on
-`get_agent` and `list_agents` is for display and filtering only, never for
+Agent, and the caller's display name, when the IdP gives one, as
+`agent-platform.giantswarm.io/created-by-name`; an update keeps both and
+nobody can set or change them. `createdBy` and `createdByName` on
+`get_agent` and `list_agents` are for display and filtering only, never for
 authorization. `get_info` lists in `namespaces.managed` only the managed
 namespaces in which the caller may create a HelmRelease.
 
