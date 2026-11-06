@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The server advertises the Giant Swarm logo as its MCP icon (`serverInfo.icons`), so muster and the developer portal show it.
 
+## [2.21.0] - 2026-11-06
+
 ### Changed
 
 - **Breaking:** a ModelConfig named `default-model-config` no longer counts as a namespace's default while none is annotated. Only the annotation `agent-platform.giantswarm.io/is-default-model-config: "true"` marks the default.
@@ -598,7 +600,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Chart: the MCPServer CR carries `agent-platform.giantswarm.io/tool-group: agent-platform` next to `muster.giantswarm.io/type` — the Agent Platform tier of MCP servers (the portal's MCP servers page, the `agent-platform` toolset preset). `muster.mcpServer.labels` still adds or overrides labels. (#23)
 
-[Unreleased]: https://github.com/giantswarm/agent-manager/compare/v2.20.0...HEAD
+[Unreleased]: https://github.com/giantswarm/agent-manager/compare/v2.21.0...HEAD
+[2.21.0]: https://github.com/giantswarm/agent-manager/compare/v2.20.0...v2.21.0
 [2.20.0]: https://github.com/giantswarm/agent-manager/compare/v2.20.0-rc.1...v2.20.0
 [2.20.0-rc.1]: https://github.com/giantswarm/agent-manager/compare/v2.19.0-rc.2...v2.20.0-rc.1
 [2.19.0-rc.2]: https://github.com/giantswarm/agent-manager/compare/v2.19.0-rc.1...v2.19.0-rc.2
