@@ -9,7 +9,7 @@ require (
 	github.com/a2aproject/a2a-go/v2 v2.7.0
 	github.com/giantswarm/agent-platform-operator v0.1.1
 	github.com/giantswarm/gitops-commit v0.12.0-rc.2
-	github.com/giantswarm/mcp-oauth v1.9.6
+	github.com/giantswarm/mcp-oauth v1.10.2
 	github.com/giantswarm/mcp-toolkit v0.4.12
 	github.com/go-jose/go-jose/v4 v4.1.9
 	github.com/golang-jwt/jwt/v5 v5.3.1
