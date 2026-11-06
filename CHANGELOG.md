@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- The server advertises the Giant Swarm logo as its MCP icon (`serverInfo.icons`), so muster and the developer portal show it.
+
 ### Changed
 
 - **Breaking:** a ModelConfig named `default-model-config` no longer counts as a namespace's default while none is annotated. Only the annotation `agent-platform.giantswarm.io/is-default-model-config: "true"` marks the default.

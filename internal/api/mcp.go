@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 
 	apov1alpha1 "github.com/giantswarm/agent-platform-operator/api/v1alpha1"
+	"github.com/giantswarm/mcp-toolkit/brand"
 	"github.com/giantswarm/mcp-toolkit/tooldesc"
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpotel "github.com/mark3labs/mcp-go/otel"
@@ -158,6 +159,7 @@ func NewMCPServer(svc *agents.Service, version string, opts ...Option) *mcpserve
 		// The HTTP server span already joined the inbound traceparent, so the
 		// MCP spans nest under it instead of extracting it a second time.
 		mcpotel.WithServerTracingPropagator(otel.Tracer(tracerName), propagation.NewCompositeTextMapPropagator()),
+		brand.WithGiantSwarmIcon(),
 		mcpserver.WithToolCapabilities(false),
 		mcpserver.WithInstructions("Manage the agents of the Agent Platform. An agent is a Flux HelmRelease of the Generic agent chart, which renders a kagent Agent, its Harness reference and the agent's muster RemoteMCPServer carrying its toolset. Call get_info first, and list_model_configs and list_skills before create_agent. Names are DNS-1123 labels the person chooses and confirms. Every agent needs a toolset. create_agent, update_agent and delete_agent take dryRun and mode: apply writes live as you, commit opens a pull request as you in the repository that owns the namespace. organization and cluster (both or neither) place an agent on a workload cluster and address it in every later call of a tool that takes them. Talk to an agent with start_session and get_session. Organizations: list_my_organizations lists the organization namespaces you can create agents in; the *_organization* tools manage organizations, their members, models, connectors and egress policies as you, and never take a secret value."),
 	)
