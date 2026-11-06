@@ -985,6 +985,7 @@ components:
         tags: { $ref: "#/components/schemas/Tags" }
         description: { type: string }
         createdBy: { type: string, description: The caller who created the agent (agent-platform.giantswarm.io/created-by); for display and filtering only }
+        createdByName: { type: string, description: "The creator's display name (agent-platform.giantswarm.io/created-by-name); absent when the IdP gave none. Display only, never for authorization" }
         modelConfig: { type: string }
         toolset: { $ref: "#/components/schemas/Toolset" }
         implicitFullAccess: { type: boolean }
@@ -1006,6 +1007,7 @@ components:
         tags: { $ref: "#/components/schemas/Tags", description: "From the ui.giantswarm.io/tags annotation (the chart value agent.tags while nothing is rendered)" }
         description: { type: string }
         createdBy: { type: string, description: "The caller who created the agent: the agent-platform.giantswarm.io/created-by annotation of the Agent, else of the HelmRelease. Set on create, never changed; for display and filtering only, never for authorization" }
+        createdByName: { type: string, description: "The creator's display name from the IdP: the agent-platform.giantswarm.io/created-by-name annotation, under the rules of createdBy; absent when the IdP gave none. Display only, never for authorization; createdBy is the identifier" }
         modelConfig: { type: string }
         iconUrl: { type: string, description: From the ui.giantswarm.io/icon-url annotation }
         systemMessage: { type: string }

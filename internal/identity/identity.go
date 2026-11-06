@@ -82,6 +82,15 @@ func Caller(ctx context.Context) string {
 	return id.String()
 }
 
+// CallerName is the caller's display name, or "" without one. For display
+// only: Caller is the identifier.
+func CallerName(ctx context.Context) string {
+	if id, ok := FromContext(ctx); ok {
+		return id.Name
+	}
+	return ""
+}
+
 // LogAttr is the structured-log attribute every mutation carries: the caller,
 // or the ServiceAccount marker when the server runs without OAuth.
 func LogAttr(ctx context.Context) slog.Attr {
