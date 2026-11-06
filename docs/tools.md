@@ -4,30 +4,97 @@ Generated from the registered tools (`make tools-doc`); through muster every too
 
 | Tool | Kind |
 |---|---|
+| `add_organization_member` | write |
 | `create_agent` | write |
+| `create_organization` | write |
 | `delete_agent` | write, destructive |
+| `delete_organization` | write, destructive |
+| `delete_organization_object` | write, destructive |
 | `delete_session` | write, destructive |
 | `get_agent` | read-only |
 | `get_agent_status` | read-only |
 | `get_info` | read-only |
+| `get_organization` | read-only |
 | `get_session` | read-only |
 | `get_session_turn` | read-only |
 | `list_agents` | read-only |
 | `list_egress_policies` | read-only |
 | `list_model_configs` | read-only |
+| `list_my_organizations` | read-only |
+| `list_organization_connectors` | read-only |
+| `list_organization_members` | read-only |
+| `list_organizations` | read-only |
 | `list_sessions` | read-only |
 | `list_skills` | read-only |
+| `remove_organization_member` | write, destructive |
+| `set_organization_connector` | write, destructive |
+| `set_organization_egress_policy` | write, destructive |
+| `set_organization_model` | write, destructive |
 | `start_session` | write |
 | `toolchain_users` | read-only |
 | `update_agent` | write, destructive |
+| `update_organization` | write, destructive |
 | `validate_agent` | read-only |
+
+## `add_organization_member`
+
+```text
+Add a group or a person to an organization with a role, as you.
+
+Writes the RoleBinding organization-<role>s (admins: organization-admins), dry run first; a member already holding the role is left as is. Needs agent-platform:admin in the organization, or agent-platform:organizations-admin.
+```
+
+```json
+{
+  "properties": {
+    "dryRun": {
+      "description": "Check every write with the API server as you and write nothing (default false)",
+      "type": "boolean"
+    },
+    "group": {
+      "description": "Identity provider group, as the API server sees it; offer a group first: membership then changes in the identity provider",
+      "type": "string"
+    },
+    "mode": {
+      "description": "apply (default): write live as you; refused with gitops_owned for what git applies. commit: dry-run as you, then open a pull request as you",
+      "enum": [
+        "apply",
+        "commit"
+      ],
+      "type": "string"
+    },
+    "namespace": {
+      "description": "The organization namespace, e.g. agents-payments-x7k2q (list_my_organizations, get_organization)",
+      "type": "string"
+    },
+    "role": {
+      "description": "admin manages members, models and credentials; editor creates agents; user uses them",
+      "enum": [
+        "admin",
+        "editor",
+        "user"
+      ],
+      "type": "string"
+    },
+    "user": {
+      "description": "A person, as the API server sees them; when no group fits",
+      "type": "string"
+    }
+  },
+  "required": [
+    "namespace",
+    "role"
+  ],
+  "type": "object"
+}
+```
 
 ## `create_agent`
 
 ```text
 Create an agent: a HelmRelease of the Generic agent chart. It needs a toolset; confirm its name with the person.
 
-name is the DNS-1123 name the person chose, never derived from displayName. modelConfig must exist in the namespace (list_model_configs; a refusal names the valid ones). Skills and plugins are pinned at write time (list_skills) the values pass the chart schema and the API server's dry-run of the rendered objects; a failure writes nothing. Presets: preset:read-only, preset:none, preset:infrastructure, preset:agent-platform, preset:full. Poll get_agent_status until ready.
+name is the DNS-1123 name the person chose, never derived from displayName. modelConfig must exist (list_model_configs); omitted, the namespace default is written and reported. Skills and plugins are pinned at write time (list_skills) the values pass the chart schema and the API server's dry-run of the rendered objects; a failure writes nothing. Presets: preset:read-only, preset:none, preset:infrastructure, preset:agent-platform, preset:full. Poll get_agent_status until ready.
 ```
 
 ```json
@@ -115,7 +182,7 @@ name is the DNS-1123 name the person chose, never derived from displayName. mode
       "type": "string"
     },
     "modelConfig": {
-      "description": "Name of an existing kagent ModelConfig in the namespace (list_model_configs)",
+      "description": "Name of an existing kagent ModelConfig in the namespace (list_model_configs); omit for the namespace default",
       "type": "string"
     },
     "name": {
@@ -244,8 +311,76 @@ name is the DNS-1123 name the person chose, never derived from displayName. mode
   },
   "required": [
     "name",
-    "modelConfig",
     "toolset"
+  ],
+  "type": "object"
+}
+```
+
+## `create_organization`
+
+```text
+Create an organization as you, then bind its first admins in its namespace.
+
+Asks first whether you may bind them and dry-runs the object, so a refusal comes before anything exists. Waits for the operator's Ready (it creates the namespace), then writes the RoleBinding organization-admins to agent-platform:admin as you. Not Ready in time: call again with the same arguments. mode commit opens one pull request with the object and organization-admins instead. Offer an identity provider group as admin before a person. Needs agent-platform:organizations-admin in the parent namespace.
+```
+
+```json
+{
+  "properties": {
+    "adminGroups": {
+      "description": "First admins: identity provider groups, as the API server sees them (preferred)",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "adminUsers": {
+      "description": "First admins: users, as the API server sees them",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "displayName": {
+      "description": "Name people see",
+      "type": "string"
+    },
+    "dryRun": {
+      "description": "Check every write with the API server as you and write nothing (default false)",
+      "type": "boolean"
+    },
+    "harnesses": {
+      "description": "Curated Harnesses the organization gets",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "mode": {
+      "description": "apply (default): write live as you; refused with gitops_owned for what git applies. commit: dry-run as you, then open a pull request as you",
+      "enum": [
+        "apply",
+        "commit"
+      ],
+      "type": "string"
+    },
+    "name": {
+      "description": "The organization's name (at most 50 characters, no dot)",
+      "type": "string"
+    },
+    "namespace": {
+      "description": "The parent namespace the organization lives in, e.g. org-acme",
+      "type": "string"
+    },
+    "workerReplicas": {
+      "description": "Warm workers of its WorkerPool",
+      "type": "number"
+    }
+  },
+  "required": [
+    "namespace",
+    "name"
   ],
   "type": "object"
 }
@@ -308,6 +443,99 @@ The chart's shared OCIRepository goes too when nothing else in the namespace use
     }
   },
   "required": [
+    "name"
+  ],
+  "type": "object"
+}
+```
+
+## `delete_organization`
+
+```text
+Delete an organization as you, which erases it: its namespace, agents, sessions, snapshots and credentials.
+
+Without confirm it only answers what would be erased: show that to the person and ask them to type <parent>/<name>, then call again with confirm set to it. Marks the object kustomize.toolkit.fluxcd.io/prune: enabled, the delete intent, then deletes it; the operator erases it. mode commit: without confirm it opens the pull request removing it from git and marks the object; once merged (Pending erase), confirm erases it. Session tombstones stay. Needs agent-platform:organizations-admin.
+```
+
+```json
+{
+  "properties": {
+    "confirm": {
+      "description": "<parent>/<name>, as the person typed it",
+      "type": "string"
+    },
+    "dryRun": {
+      "description": "Check every write with the API server as you and write nothing (default false)",
+      "type": "boolean"
+    },
+    "mode": {
+      "description": "apply (default): write live as you; refused with gitops_owned for what git applies. commit: dry-run as you, then open a pull request as you",
+      "enum": [
+        "apply",
+        "commit"
+      ],
+      "type": "string"
+    },
+    "name": {
+      "description": "The organization's name (at most 50 characters, no dot)",
+      "type": "string"
+    },
+    "namespace": {
+      "description": "The parent namespace the organization lives in, e.g. org-acme",
+      "type": "string"
+    }
+  },
+  "required": [
+    "namespace",
+    "name"
+  ],
+  "type": "object"
+}
+```
+
+## `delete_organization_object`
+
+```text
+Delete an organization's model, connector or egress policy as you.
+
+Dry run first. Its credential Secret stays. Deleting the default model leaves the organization without one until another is marked. Copies the platform curates are refused. Needs agent-platform:admin.
+```
+
+```json
+{
+  "properties": {
+    "dryRun": {
+      "description": "Check every write with the API server as you and write nothing (default false)",
+      "type": "boolean"
+    },
+    "kind": {
+      "enum": [
+        "model",
+        "connector",
+        "egressPolicy"
+      ],
+      "type": "string"
+    },
+    "mode": {
+      "description": "apply (default): write live as you; refused with gitops_owned for what git applies. commit: dry-run as you, then open a pull request as you",
+      "enum": [
+        "apply",
+        "commit"
+      ],
+      "type": "string"
+    },
+    "name": {
+      "description": "Object name",
+      "type": "string"
+    },
+    "namespace": {
+      "description": "The organization namespace, e.g. agents-payments-x7k2q (list_my_organizations, get_organization)",
+      "type": "string"
+    }
+  },
+  "required": [
+    "namespace",
+    "kind",
     "name"
   ],
   "type": "object"
@@ -419,6 +647,34 @@ Call it first: capabilities says whether this installation offers mode commit, t
 {
   "properties": {},
   "required": [],
+  "type": "object"
+}
+```
+
+## `get_organization`
+
+```text
+Read one organization and what deleting it would erase.
+
+erases lists, as you can read them in the organization namespace, its agents, HelmReleases, models, connectors, egress policies, credential Secrets (names only), member bindings and snapshot prefix; what you may not read is named in unreadable.
+```
+
+```json
+{
+  "properties": {
+    "name": {
+      "description": "The organization's name (at most 50 characters, no dot)",
+      "type": "string"
+    },
+    "namespace": {
+      "description": "The parent namespace the organization lives in, e.g. org-acme",
+      "type": "string"
+    }
+  },
+  "required": [
+    "namespace",
+    "name"
+  ],
   "type": "object"
 }
 ```
@@ -555,7 +811,7 @@ managed: helmrelease is writable here, gitops only with mode commit, platform sh
 ```text
 List the EgressPolicies of a namespace: the names create_agent and update_agent accept for egressPolicyRefs.
 
-Each with its origins and, where the egress gateway adds a credential, the header's name; never the Secret. Read as you; tenant admins write them, agent-manager never does. A change to a policy reaches every agent that picks it from its next Session on.
+Each with its origins and, where the egress gateway adds a credential, the header's name; never the Secret. Read as you; organization admins write them with set_organization_egress_policy. A change to a policy reaches every agent that picks it from its next Session on.
 ```
 
 ```json
@@ -584,7 +840,7 @@ Each with its origins and, where the egress gateway adds a credential, the heade
 ```text
 List the ModelConfigs of a namespace: the values create_agent accepts for modelConfig.
 
-Each with provider, model, its Accepted condition and who manages it; agent-manager never writes them. In a tenant namespace without agents yet, the platform default ModelConfig comes with the first agent.
+Each with provider, model, its Accepted and ResolvedRefs conditions, who manages it, and default: the one create_agent writes when modelConfig is omitted (the single ModelConfig annotated agent-platform.giantswarm.io/is-default-model-config=true; none or several is no default). Organization admins write them with set_organization_model.
 ```
 
 ```json
@@ -600,6 +856,89 @@ Each with provider, model, its Accepted condition and who manages it; agent-mana
     },
     "organization": {
       "description": "With cluster: the organization owning the workload cluster the agent runs on. Omit both for the installation's own cluster.",
+      "type": "string"
+    }
+  },
+  "required": [],
+  "type": "object"
+}
+```
+
+## `list_my_organizations`
+
+```text
+List the organizations you belong to: the namespaces a New agent can go into.
+
+An organization namespace is listed when you may list its Agents, which every organization role grants, asked with your own token. none says who can add you when there is none.
+```
+
+```json
+{
+  "properties": {},
+  "required": [],
+  "type": "object"
+}
+```
+
+## `list_organization_connectors`
+
+```text
+List an organization's connectors (RemoteMCPServers): URL, description and the credential headers by Secret name.
+
+Read as you. A credential in a URL written elsewhere is shown as REDACTED. curated marks a read-only copy of what the platform curates.
+```
+
+```json
+{
+  "properties": {
+    "namespace": {
+      "description": "The organization namespace, e.g. agents-payments-x7k2q (list_my_organizations, get_organization)",
+      "type": "string"
+    }
+  },
+  "required": [
+    "namespace"
+  ],
+  "type": "object"
+}
+```
+
+## `list_organization_members`
+
+```text
+List an organization's members: the groups and people bound to agent-platform:admin, editor or user, groups first.
+
+Read as you; every member may read them.
+```
+
+```json
+{
+  "properties": {
+    "namespace": {
+      "description": "The organization namespace, e.g. agents-payments-x7k2q (list_my_organizations, get_organization)",
+      "type": "string"
+    }
+  },
+  "required": [
+    "namespace"
+  ],
+  "type": "object"
+}
+```
+
+## `list_organizations`
+
+```text
+List the Agent Platform organizations (AgentPlatformOrganizations) of a parent namespace, or of all, as you.
+
+Each with its organization namespace, harnesses, worker replicas and the operator's Ready, DefaultModelConfigured and Orphaned conditions. Needs agent-platform:organizations-admin; omit namespace only when it is bound to you cluster-wide.
+```
+
+```json
+{
+  "properties": {
+    "namespace": {
+      "description": "Parent namespace; omit for all",
       "type": "string"
     }
   },
@@ -671,6 +1010,267 @@ Per repository: the ref read, the commit it resolved to (what a skills entry pin
     }
   },
   "required": [],
+  "type": "object"
+}
+```
+
+## `remove_organization_member`
+
+```text
+Remove a group or a person from an organization's roles, as you.
+
+From every binding of the role that holds them, dry run first; an emptied binding goes, except organization-admins: admission keeps its last admin. Needs agent-platform:admin in the organization.
+```
+
+```json
+{
+  "properties": {
+    "dryRun": {
+      "description": "Check every write with the API server as you and write nothing (default false)",
+      "type": "boolean"
+    },
+    "group": {
+      "description": "Identity provider group, as the API server sees it; offer a group first: membership then changes in the identity provider",
+      "type": "string"
+    },
+    "mode": {
+      "description": "apply (default): write live as you; refused with gitops_owned for what git applies. commit: dry-run as you, then open a pull request as you",
+      "enum": [
+        "apply",
+        "commit"
+      ],
+      "type": "string"
+    },
+    "namespace": {
+      "description": "The organization namespace, e.g. agents-payments-x7k2q (list_my_organizations, get_organization)",
+      "type": "string"
+    },
+    "role": {
+      "description": "Only this role; omit for every role",
+      "enum": [
+        "admin",
+        "editor",
+        "user"
+      ],
+      "type": "string"
+    },
+    "user": {
+      "description": "A person, as the API server sees them; when no group fits",
+      "type": "string"
+    }
+  },
+  "required": [
+    "namespace"
+  ],
+  "type": "object"
+}
+```
+
+## `set_organization_connector`
+
+```text
+Create or change an organization's connector (a RemoteMCPServer) as you; its credential is a Secret named by reference.
+
+A credential field sets the Secret-backed header it names (default: the only one, else Authorization; Secret tenant-credential-<name>, key token, the whole value); other headers stay; noCredential removes them. A URL with userinfo, a fragment, a credential-like query parameter or a query that does not parse is refused. Never pass a value: a missing Secret is answered with the Dev Portal's form link in credentials[].next. Needs agent-platform:admin.
+```
+
+```json
+{
+  "properties": {
+    "credentialHeader": {
+      "description": "Header the credential goes in; default Authorization",
+      "type": "string"
+    },
+    "credentialKey": {
+      "description": "Key of that Secret; default token",
+      "type": "string"
+    },
+    "credentialSecret": {
+      "description": "Secret in the organization namespace that holds the credential, by name (tenant-credential-...); never a value",
+      "type": "string"
+    },
+    "description": {
+      "description": "What the server offers",
+      "type": "string"
+    },
+    "dryRun": {
+      "description": "Check every write with the API server as you and write nothing (default false)",
+      "type": "boolean"
+    },
+    "mode": {
+      "description": "apply (default): write live as you; refused with gitops_owned for what git applies. commit: dry-run as you, then open a pull request as you",
+      "enum": [
+        "apply",
+        "commit"
+      ],
+      "type": "string"
+    },
+    "name": {
+      "description": "RemoteMCPServer name",
+      "type": "string"
+    },
+    "namespace": {
+      "description": "The organization namespace, e.g. agents-payments-x7k2q (list_my_organizations, get_organization)",
+      "type": "string"
+    },
+    "noCredential": {
+      "description": "Remove the credential header (default false)",
+      "type": "boolean"
+    },
+    "replaceCredential": {
+      "description": "Answer with the Dev Portal's credential form to enter a new value (default false)",
+      "type": "boolean"
+    },
+    "url": {
+      "description": "MCP endpoint URL, without a credential in it; required to create",
+      "type": "string"
+    }
+  },
+  "required": [
+    "namespace",
+    "name"
+  ],
+  "type": "object"
+}
+```
+
+## `set_organization_egress_policy`
+
+```text
+Create or replace an organization's egress policy as you: origins its agents may reach, credentials by Secret name.
+
+destinations replaces the whole list. A credentialHeader makes the egress gateway add that header from the Secret (default tenant-credential-<policy>, key token). Never pass a value: a missing Secret is answered with the Dev Portal's credential form link in credentials[].next. list_egress_policies lists them. Needs agent-platform:admin.
+```
+
+```json
+{
+  "properties": {
+    "destinations": {
+      "description": "Origins, each {origin, credentialHeader, credentialPrefix, credentialSecret, credentialKey}",
+      "items": {
+        "properties": {
+          "credentialHeader": {
+            "description": "Header the gateway adds; omit for no credential",
+            "type": "string"
+          },
+          "credentialKey": {
+            "description": "Key of that Secret; default token",
+            "type": "string"
+          },
+          "credentialPrefix": {
+            "description": "Text before the value, e.g. \"Bearer \"",
+            "type": "string"
+          },
+          "credentialSecret": {
+            "description": "Secret in the organization namespace that holds the credential, by name (tenant-credential-...); never a value",
+            "type": "string"
+          },
+          "origin": {
+            "description": "https://host[:port]; a host may start with *.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "origin"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "dryRun": {
+      "description": "Check every write with the API server as you and write nothing (default false)",
+      "type": "boolean"
+    },
+    "mode": {
+      "description": "apply (default): write live as you; refused with gitops_owned for what git applies. commit: dry-run as you, then open a pull request as you",
+      "enum": [
+        "apply",
+        "commit"
+      ],
+      "type": "string"
+    },
+    "name": {
+      "description": "EgressPolicy name",
+      "type": "string"
+    },
+    "namespace": {
+      "description": "The organization namespace, e.g. agents-payments-x7k2q (list_my_organizations, get_organization)",
+      "type": "string"
+    },
+    "replaceCredential": {
+      "description": "Answer with the Dev Portal's credential form to enter a new value (default false)",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "namespace",
+    "name",
+    "destinations"
+  ],
+  "type": "object"
+}
+```
+
+## `set_organization_model`
+
+```text
+Create or change an organization's model (a ModelConfig) as you; its API key is a Secret named by reference.
+
+The first model of an organization without a default becomes its default (annotation agent-platform.giantswarm.io/is-default-model-config); default true moves the mark here. Never pass a key: when its Secret is missing, credentials[].next carries the Dev Portal's credential form link for the person. list_model_configs lists the models. Needs agent-platform:admin.
+```
+
+```json
+{
+  "properties": {
+    "credentialKey": {
+      "description": "Key of that Secret; default apiKey",
+      "type": "string"
+    },
+    "credentialSecret": {
+      "description": "Secret in the organization namespace that holds the credential, by name (tenant-credential-...); never a value; default tenant-credential-<name>",
+      "type": "string"
+    },
+    "default": {
+      "description": "Make this the organization's default model, moving the mark (default false)",
+      "type": "boolean"
+    },
+    "dryRun": {
+      "description": "Check every write with the API server as you and write nothing (default false)",
+      "type": "boolean"
+    },
+    "mode": {
+      "description": "apply (default): write live as you; refused with gitops_owned for what git applies. commit: dry-run as you, then open a pull request as you",
+      "enum": [
+        "apply",
+        "commit"
+      ],
+      "type": "string"
+    },
+    "model": {
+      "description": "Model id, e.g. claude-sonnet-4-6; required to create",
+      "type": "string"
+    },
+    "name": {
+      "description": "ModelConfig name",
+      "type": "string"
+    },
+    "namespace": {
+      "description": "The organization namespace, e.g. agents-payments-x7k2q (list_my_organizations, get_organization)",
+      "type": "string"
+    },
+    "provider": {
+      "description": "Provider as kagent's ModelConfig takes it, e.g. Anthropic, OpenAI; required to create",
+      "type": "string"
+    },
+    "replaceCredential": {
+      "description": "Answer with the Dev Portal's credential form to enter a new value (default false)",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "namespace",
+    "name"
+  ],
   "type": "object"
 }
 ```
@@ -995,12 +1595,67 @@ Lists are skills, plugins, egress and toolset. "" clears a text field back to th
 }
 ```
 
+## `update_organization`
+
+```text
+Change an organization's display name, harnesses or worker replicas as you.
+
+An omitted field stays; harnesses replaces the whole list; displayName "" removes it. Dry-runs as you first. An organization Flux applies from git is changed with mode commit. Needs agent-platform:organizations-admin.
+```
+
+```json
+{
+  "properties": {
+    "displayName": {
+      "description": "Name people see",
+      "type": "string"
+    },
+    "dryRun": {
+      "description": "Check every write with the API server as you and write nothing (default false)",
+      "type": "boolean"
+    },
+    "harnesses": {
+      "description": "Curated Harnesses the organization gets",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "mode": {
+      "description": "apply (default): write live as you; refused with gitops_owned for what git applies. commit: dry-run as you, then open a pull request as you",
+      "enum": [
+        "apply",
+        "commit"
+      ],
+      "type": "string"
+    },
+    "name": {
+      "description": "The organization's name (at most 50 characters, no dot)",
+      "type": "string"
+    },
+    "namespace": {
+      "description": "The parent namespace the organization lives in, e.g. org-acme",
+      "type": "string"
+    },
+    "workerReplicas": {
+      "description": "Warm workers of its WorkerPool",
+      "type": "number"
+    }
+  },
+  "required": [
+    "namespace",
+    "name"
+  ],
+  "type": "object"
+}
+```
+
 ## `validate_agent`
 
 ```text
 Dry run of create_agent, or of update_agent with update: true: the manifests and every violation. Writes nothing.
 
-Checks the name, modelConfig, egressPolicyRefs, harness and toolset (required for a create), pins the skills and plugins, validates the values against the chart schema and has the API server dry-run the rendered Agent and RemoteMCPServer (its field errors are the errors; an object the caller may not write is a note). mode answers as the write would. With update: true, lists, labels and annotations replace the whole value, as in update_agent.
+Checks the name, modelConfig (omitted: the default), egressPolicyRefs, harness and toolset (required for a create), pins the skills and plugins, validates the values against the chart schema and has the API server dry-run the rendered Agent and RemoteMCPServer (its field errors are the errors; an object the caller may not write is a note). mode answers as the write would. With update: true, lists, labels and annotations replace the whole value, as in update_agent.
 ```
 
 ```json
@@ -1084,7 +1739,7 @@ Checks the name, modelConfig, egressPolicyRefs, harness and toolset (required fo
       "type": "string"
     },
     "modelConfig": {
-      "description": "ModelConfig name (required for a create)",
+      "description": "ModelConfig name; omitted on a create, the namespace default. The result names the one a create writes, with a note when it is not ResolvedRefs=True",
       "type": "string"
     },
     "name": {

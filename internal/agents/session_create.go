@@ -65,8 +65,14 @@ func (s *Service) createSession(ctx context.Context, token string, in kagent.Ses
 		if err == nil || !retryableCreate(err) {
 			return session, err
 		}
-		if ctx.Err() == nil || last == nil {
+		if !budgetSpent(ctx) || last == nil {
 			last = err
+		}
+		if budgetSpent(ctx) {
+			// gRPC's own deadline can fire before the context's: the attempt
+			// was cut short all the same, and no other one starts.
+			<-ctx.Done()
+			return nil, sessionCreateTimeout(ctx, in.RequestID, last)
 		}
 		s.log.InfoContext(ctx, "kagent has not created the session yet; retrying with the same request id",
 			"agent", in.Agent.Tenant(), "attempt", attempt, "error", err)
@@ -76,6 +82,16 @@ func (s *Service) createSession(ctx context.Context, token string, in kagent.Ses
 		case <-time.After(sessionCreateRetryDelay):
 		}
 	}
+}
+
+// budgetSpent tells whether ctx has ended or its deadline has passed, which
+// gRPC can see before the context's own timer marks it done.
+func budgetSpent(ctx context.Context) bool {
+	if ctx.Err() != nil {
+		return true
+	}
+	deadline, ok := ctx.Deadline()
+	return ok && !time.Now().Before(deadline)
 }
 
 // retryableCreate tells whether kagent may still create the Session on a

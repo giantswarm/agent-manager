@@ -10,6 +10,7 @@
 //
 //	go run ./hack/changelog cut     # rewrite CHANGELOG.md
 //	go run ./hack/changelog check   # fail when Unreleased holds a released entry
+//	                                # and the branch changes CHANGELOG.md
 package main
 
 import (
@@ -44,6 +45,10 @@ func main() {
 }
 
 func run(mode string) error {
+	if mode == "check" && !changelogTouched() {
+		fmt.Println("CHANGELOG.md: this branch does not change it, so its Unreleased section is not this branch's to cut.")
+		return nil
+	}
 	raw, err := os.ReadFile(changelogPath)
 	if err != nil {
 		return err
@@ -125,6 +130,20 @@ func gitTags() ([]tag, error) {
 	}
 	sort.Slice(tags, func(i, j int) bool { return tags[i].version.LessThan(tags[j].version) })
 	return tags, nil
+}
+
+// changelogTouched reports whether the branch changes CHANGELOG.md since it
+// left origin/main. A released entry left under Unreleased is the debt of the
+// branch that adds the next entry: a branch that writes none, such as a
+// dependency bump, cannot cut it. Without origin/main it reports true, so the
+// check runs in full.
+func changelogTouched() bool {
+	base, err := git("merge-base", "HEAD", "origin/main")
+	if err != nil {
+		return true
+	}
+	_, err = git("diff", "--quiet", strings.TrimSpace(base), "--", changelogPath)
+	return err != nil
 }
 
 func git(args ...string) (string, error) {

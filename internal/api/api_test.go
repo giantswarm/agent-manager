@@ -366,6 +366,23 @@ var wantHints = map[string]hints{
 	// delete_session ends a conversation for good, so clients ask first.
 	ToolDeleteSession:  annotations(writes, destructive, notIdempotent, closedWorld),
 	ToolToolchainUsers: annotations(readOnly, additive, notIdempotent, closedWorld),
+	// The organization tools act on the cluster only. A create adds; a set or
+	// a member change converges on the arguments (idempotent) and may
+	// replace what was there; a delete erases.
+	ToolListOrganizations:         annotations(readOnly, additive, notIdempotent, closedWorld),
+	ToolGetOrganization:           annotations(readOnly, additive, notIdempotent, closedWorld),
+	ToolListMyOrganizations:       annotations(readOnly, additive, notIdempotent, closedWorld),
+	ToolListOrganizationMembers:   annotations(readOnly, additive, notIdempotent, closedWorld),
+	ToolListOrganizationConnector: annotations(readOnly, additive, notIdempotent, closedWorld),
+	ToolCreateOrganization:        annotations(writes, additive, notIdempotent, closedWorld),
+	ToolUpdateOrganization:        annotations(writes, destructive, idempotent, closedWorld),
+	ToolDeleteOrganization:        annotations(writes, destructive, notIdempotent, closedWorld),
+	ToolAddOrganizationMember:     annotations(writes, additive, idempotent, closedWorld),
+	ToolRemoveOrganizationMember:  annotations(writes, destructive, idempotent, closedWorld),
+	ToolSetOrganizationModel:      annotations(writes, destructive, idempotent, closedWorld),
+	ToolSetOrganizationConnector:  annotations(writes, destructive, idempotent, closedWorld),
+	ToolSetOrganizationEgress:     annotations(writes, destructive, idempotent, closedWorld),
+	ToolDeleteOrganizationObject:  annotations(writes, destructive, notIdempotent, closedWorld),
 }
 
 func TestMCPToolsMirrorREST(t *testing.T) {
@@ -398,6 +415,7 @@ func TestMCPToolsMirrorREST(t *testing.T) {
 		switch tool.Name {
 		case ToolCreateAgent:
 			assert.Contains(t, tool.InputSchema.Required, "toolset")
+			assert.NotContains(t, tool.InputSchema.Required, "modelConfig", "omitted, the namespace default")
 			assert.Contains(t, tool.InputSchema.Properties["toolset"].(map[string]any)["description"], "preset:none")
 			skills := tool.InputSchema.Properties["skills"].(map[string]any)
 			assert.Equal(t, "array", skills["type"], "skills is a list")
@@ -433,10 +451,10 @@ func TestMCPToolsMirrorREST(t *testing.T) {
 		require.True(t, known, "no expected hints for %s", tool.Name)
 		assert.Equal(t, want, tool.Annotations, tool.Name)
 	}
-	for _, want := range ToolNames() {
+	for _, want := range AllToolNames() {
 		assert.True(t, names[want], "tool %s missing", want)
 	}
-	assert.Len(t, listed.Result.Tools, len(ToolNames()))
+	assert.Len(t, listed.Result.Tools, len(AllToolNames()))
 
 	text, isErr := callTool(t, srv, ToolGetInfo, nil)
 	require.False(t, isErr, text)

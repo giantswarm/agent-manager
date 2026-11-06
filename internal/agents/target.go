@@ -210,7 +210,7 @@ func (st *site) ownsRelease(hr *unstructured.Unstructured) bool {
 // installation's client and, for a target, the workload cluster's client
 // from its kubeconfig Secret, read as the caller.
 func (s *Service) site(ctx context.Context, loc Location) (*site, error) {
-	ns, err := s.Namespace(loc.Namespace)
+	ns, err := s.Namespace(ctx, loc.Namespace)
 	if err != nil {
 		return nil, err
 	}
@@ -224,7 +224,11 @@ func (s *Service) site(ctx context.Context, loc Location) (*site, error) {
 	}
 	st := &site{loc: loc, flux: dyn, fluxClient: client, fluxNS: ns, agent: dyn, agentClient: client, compose: s.cfg.Compose}
 	if !loc.IsSet() {
-		if s.isTenant(ns) {
+		tenant, err := s.isTenant(ctx, ns)
+		if err != nil {
+			return nil, err
+		}
+		if tenant {
 			// The installation's skills credential lives in the configured
 			// namespaces only, and admission refuses it in a tenant: an
 			// agent there names its own.

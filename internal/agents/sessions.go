@@ -952,7 +952,7 @@ func (s *Service) sessionCall(ctx context.Context, namespace, name string) (kage
 	if err := ValidateName(name); err != nil {
 		return kagent.Ref{}, "", err
 	}
-	ns, err := s.Namespace(namespace)
+	ns, err := s.Namespace(ctx, namespace)
 	if err != nil {
 		return kagent.Ref{}, "", err
 	}

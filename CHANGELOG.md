@@ -14,9 +14,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Agents the Agent Platform ships (HelmRelease label `agent-platform.giantswarm.io/managed-by: agent-platform`) are `managed: platform` in `list_agents` and `get_agent`; `update_agent` (with `refreshSkills` too), `validate_agent` with `update` and `delete_agent` refuse them in every mode with `409 conflict`: they change through the platform's configuration. The label on the Agent alone suffices, and the `migrate` command and the start-up source convergence report such a release, and the source it uses, without writing them (giantswarm/giantswarm#38970).
 - With `skillManager.url`, two checks run where they did not: `refreshSkills` and the Harness plugin-format check go through skill-manager's read check as the caller, so a collaborator who cannot read an agent's private skill repository cannot refresh that agent; and every skill and plugin path must exist at its commit.
 
+### Changed
+
+- **Breaking:** a ModelConfig named `default-model-config` no longer counts as a namespace's default while none is annotated. Only the annotation `agent-platform.giantswarm.io/is-default-model-config: "true"` marks the default.
+
 ### Deprecated
 
 - In-process skill discovery and pinning (`skills.repositories`, no `skillManager.url`), and `list_skills` / `GET /skills`: skill-manager's tools list the skills (giantswarm/giantswarm#38322).
+
+## [2.20.0] - 2026-11-06
+
+### Changed
+
+- **Breaking:** `tenants.enabled` no longer renders the ClusterRole `agent-platform-tenant-flux`. The Agent Platform chart renders it whenever kagent is on, so one release owns it and turning the organizations on hands nothing over between releases. An installation that runs agent-manager with `tenants.enabled` outside the Agent Platform chart renders that ClusterRole itself.
+
+## [2.20.0-rc.1] - 2026-11-05
+
+### Added
+
+- `mode: commit` on every organization write tool (`--organizations-repository`, chart `tenants.commit`): the change is dry-run as the caller, then opened as a pull request as the caller in the installation's repository. `create_organization` puts the organization's file (with `kustomize.toolkit.fluxcd.io/prune: disabled`) under its parent and its first admins in its content path in one pull request. The member, model, connector and egress tools write their files into the content path. `delete_organization` takes two steps: without `confirm` it opens the pull request that removes the file and the whole content path and marks the organization with `agent-platform.giantswarm.io/delete-pull-request`; once that pull request is merged and the file is gone from git, `confirm` erases it. A live delete is refused while the file is in git. The layout and the CODEOWNERS rule the repository needs are in `docs/organizations-commit-mode.md` ([#292](https://github.com/giantswarm/agent-manager/issues/292)).
+
+### Changed
+
+- The organization tools answer a live change to an object Flux applies from git with `gitops_owned` naming `mode commit`.
+
+## [2.19.0-rc.2] - 2026-11-05
+
+### Added
+
+- `default` and `resolvedRefs` on every ModelConfig of `list_model_configs` and `GET /api/v1/modelconfigs`, in every namespace. The default is the one ModelConfig of the namespace annotated `agent-platform.giantswarm.io/is-default-model-config: "true"`; none or several annotated is no default. While no ModelConfig of a namespace outside the organization namespaces carries the annotation, one named `default-model-config` counts as marked ([#295](https://github.com/giantswarm/agent-manager/issues/295)).
+- `modelConfig` and `modelConfigFromDefault` in the result of `create_agent` and `POST /api/v1/agents` (the ModelConfig written into the agent) and of `validate_agent` (the one a create would write). `validate_agent` adds a note when that ModelConfig is not `ResolvedRefs=True`.
+
+### Changed
+
+- `modelConfig` is optional on `create_agent` and `POST /api/v1/agents`: omitted, the namespace default's name is written into the agent. A namespace without a default refuses the create, naming its ModelConfigs. `update_agent` never resolves the default.
+- The default model mark `set_organization_model` writes and moves is the annotation `agent-platform.giantswarm.io/is-default-model-config`, which agent-platform-operator reads from v0.1.0-rc.10.
+
+## [2.19.0-rc.1] - 2026-11-05
+
+### Added
+
+- Organization tools, acting as the caller with a server-side dry run of every write first: `list_organizations`, `get_organization` (with what a delete erases), `create_organization` (writes the `AgentPlatformOrganization`, waits for its `Ready`, then binds the first admins as the RoleBinding `organization-admins`; a second call finishes the admins of one not Ready in time), `update_organization` and `delete_organization` (answers what it erases until `confirm: <parent>/<name>`, then marks `kustomize.toolkit.fluxcd.io/prune: enabled` and deletes) for an `agent-platform:organizations-admin`; `list_organization_members`, `add_organization_member`, `remove_organization_member`, `set_organization_model` (the first model carries the default mark, `default: true` moves it, a namespace with two marks takes no new model), `list_organization_connectors`, `set_organization_connector`, `set_organization_egress_policy` and `delete_organization_object` for an organization's admins; and `list_my_organizations`, the organizations in which the caller may list Agents. A refusal names the missing role and who grants it, and a creator whose rights do not reach the new namespace is told who binds the first admins. No tool takes or returns a secret value: a missing or replaced credential is answered with the Dev Portal's credential form link, and a connector URL with userinfo, a fragment, a credential-like query parameter or a query that does not parse is refused, never echoed, and shown redacted when written elsewhere. A muster preset excludes them all with `pattern: x_agent-manager_*organization*` ([#291](https://github.com/giantswarm/agent-manager/issues/291)).
+- `--dev-portal-url` (chart `devPortal.url`): the origin of the credential form links.
+- A namespace the agent tools refuse, `toolchain_users` and `list_my_organizations` name no organization namespace the caller has not shown access to, also when the API server refuses the caller's token.
+- The organization tools refuse a live change to a model, connector, egress policy or member binding that a Flux Kustomization applies from git (`gitops_owned`), as they do for the organization itself, also when `create_organization` would bind the first admins of a git-applied organization.
+- `list_model_configs` reports `default` on the model that carries the organization's default mark; `get_info` reports the capability `organizations`.
+
+### Changed
+
+- `--multi-tenant` (chart `tenants.enabled`) manages the organization namespaces labelled `agent-platform.giantswarm.io/organization`, which agent-platform-operator keeps, and serves the organization tools; agent-manager keeps nothing in them. Its ServiceAccount only reads namespaces to find them; everything else runs as the caller. `--multi-tenant` now needs `--downstream-oauth`.
+
+### Removed
+
+- **Breaking:** the tenant reconciler. Its flags `--tenant-model-config`, `--tenant-model-secret`, `--tenant-worker-pool-replicas`, `--tenant-flux-cluster-role`, `--tenant-network-policy-flavor`, `--tenant-network-policies`, `--tenant-interval` and `--tenant-leader-election-namespace` are gone, and the chart refuses the values `tenants.modelConfig`, `tenants.workerPoolReplicas`, `tenants.networkPolicy` and `tenants.interval`: remove them before you move to this version (the agent-platform chart stops passing them in giantswarm/agent-platform#1268). The chart keeps rendering the ClusterRole `agent-platform-tenant-flux` that the agents' Helm ServiceAccount is bound to. The chart no longer renders the ClusterRole and ClusterRoleBinding `<fullname>-tenants` (cluster-wide writes, RoleBinding writes and `bind` on `agent-platform-tenant-flux`), the ValidatingAdmissionPolicy and its binding `<fullname>-tenants`, or the Role and RoleBinding `<fullname>-tenants-leader` (the Lease `agent-manager-tenants`). `get_info` no longer reports `tenantReconciler`. An agent created in a tenant names a ModelConfig that exists there: the platform default is no longer accepted before a copy exists.
+- **Breaking:** the old tenants mode. A Giant Swarm Organization's `org-<name>`, labelled `giantswarm.io/organization`, is no longer managed: its agents no longer show in `list_agents`, `get_info` or `toolchain_users`, and a call naming it is refused. `agent-manager migrate` loses `--multi-tenant` and its pass over those namespaces (`AGENT_MANAGER_MULTI_TENANT` is ignored there), and its report loses `tenants`. A delete no longer keeps an OCIRepository labelled `agent-manager.giantswarm.io/tenant-object`. On graveler: move to the agent-platform release that drops the old mode and keeps agent-manager's `tenants.enabled` on with agent-platform-operator (giantswarm/agent-platform#1268, in giantswarm/agent-platform#1272), then create each organization with `create_organization`, its models, connectors and members with the organization tools, and its agents in the organization namespace. The agents in `org-<name>` keep running through Flux, but the agent tools no longer list or delete them: delete their HelmReleases (with kubectl or in their GitOps source) once the new ones work. Then delete what the retired tenant reconciler left in each `org-<name>`: a copy of the platform model key Secret, the WorkerPool (with warm workers) and its ServiceAccount, the Harness and ModelConfig copies, the Helm ServiceAccount and its RoleBinding to `agent-platform-tenant-flux`, the network policies and the OCIRepository. agent-manager no longer removes them. They all carry `agent-manager.giantswarm.io/tenant-object`, which nothing else sets: `kubectl delete secrets,serviceaccounts,rolebindings,ocirepositories.source.toolkit.fluxcd.io,workerpools.ate.dev,harnesses.api.kagent.dev,modelconfigs.api.kagent.dev,ciliumnetworkpolicies.cilium.io -A -l agent-manager.giantswarm.io/tenant-object` (`networkpolicies.networking.k8s.io` in place of `ciliumnetworkpolicies.cilium.io` with the kubernetes network flavor).
+
+### Fixed
+
+- A `start_session` that runs out of its time budget answers with kagent's last answer and starts no further attempt, also when gRPC's deadline ends the attempt just before the request's own.
 
 ## [2.18.0] - 2026-11-03
 
@@ -550,7 +605,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Chart: the MCPServer CR carries `agent-platform.giantswarm.io/tool-group: agent-platform` next to `muster.giantswarm.io/type` — the Agent Platform tier of MCP servers (the portal's MCP servers page, the `agent-platform` toolset preset). `muster.mcpServer.labels` still adds or overrides labels. (#23)
 
-[Unreleased]: https://github.com/giantswarm/agent-manager/compare/v2.18.0...HEAD
+[Unreleased]: https://github.com/giantswarm/agent-manager/compare/v2.20.0...HEAD
+[2.20.0]: https://github.com/giantswarm/agent-manager/compare/v2.20.0-rc.1...v2.20.0
+[2.20.0-rc.1]: https://github.com/giantswarm/agent-manager/compare/v2.19.0-rc.2...v2.20.0-rc.1
+[2.19.0-rc.2]: https://github.com/giantswarm/agent-manager/compare/v2.19.0-rc.1...v2.19.0-rc.2
+[2.19.0-rc.1]: https://github.com/giantswarm/agent-manager/compare/v2.18.0...v2.19.0-rc.1
 [2.18.0]: https://github.com/giantswarm/agent-manager/compare/v2.17.7...v2.18.0
 [2.17.7]: https://github.com/giantswarm/agent-manager/compare/v2.17.2...v2.17.7
 [2.17.2]: https://github.com/giantswarm/agent-manager/compare/v2.17.1...v2.17.2

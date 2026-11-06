@@ -29,7 +29,6 @@ import (
 	"github.com/giantswarm/agent-manager/internal/identity"
 	"github.com/giantswarm/agent-manager/internal/kube"
 	"github.com/giantswarm/agent-manager/internal/tags/tagstest"
-	"github.com/giantswarm/agent-manager/internal/tenants"
 )
 
 const kagentAPI = "api.kagent.dev/v1alpha3"
@@ -87,7 +86,10 @@ func modelConfig(ns, name, provider, model string) *unstructured.Unstructured {
 		"apiVersion": kagentAPI, "kind": "ModelConfig",
 		"metadata": map[string]any{"name": name, "namespace": ns},
 		"spec":     map[string]any{"provider": provider, "model": model},
-		"status":   map[string]any{"conditions": []any{map[string]any{"type": "Accepted", "status": "True", "reason": "ModelConfigReconciled"}}},
+		"status": map[string]any{"conditions": []any{
+			map[string]any{"type": "Accepted", "status": "True", "reason": "ModelConfigReconciled"},
+			map[string]any{"type": "ResolvedRefs", "status": "True", "reason": "ModelConfigReconciled"},
+		}},
 	}}
 }
 
@@ -864,12 +866,13 @@ func TestForcedDeleteKeepsAPlatformOwnedAgent(t *testing.T) {
 	require.NoError(t, err, "the Agent is kept")
 }
 
-func TestDeleteKeepsTheTenantReconcilersSource(t *testing.T) {
+// A delete never takes the chart source agent-platform-operator keeps.
+func TestDeleteKeepsTheOperatorsSource(t *testing.T) {
 	f := seeded(t)
 	ctx := context.Background()
 	src, err := f.dyn.Resource(ociGVR).Namespace("kagent").Get(ctx, "agent", metav1.GetOptions{})
 	require.NoError(t, err)
-	src.SetLabels(map[string]string{tenants.ObjectLabel: "namespace"})
+	src.SetLabels(map[string]string{OperatorObjectLabel: "namespace"})
 	_, err = f.dyn.Resource(ociGVR).Namespace("kagent").Update(ctx, src, metav1.UpdateOptions{})
 	require.NoError(t, err)
 
@@ -877,9 +880,9 @@ func TestDeleteKeepsTheTenantReconcilersSource(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, res.HelmReleaseDeleted)
 	assert.False(t, res.OCIRepositoryDeleted)
-	assert.Contains(t, res.OCIRepositoryKept, "tenant reconciler")
+	assert.Contains(t, res.OCIRepositoryKept, "agent-platform-operator")
 	_, err = f.dyn.Resource(ociGVR).Namespace("kagent").Get(ctx, "agent", metav1.GetOptions{})
-	require.NoError(t, err, "the last release leaves the tenant's source in place")
+	require.NoError(t, err, "the last release leaves the source in place")
 }
 
 func mustValues(hr *unstructured.Unstructured) map[string]any {

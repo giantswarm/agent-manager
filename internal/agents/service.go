@@ -25,7 +25,6 @@ import (
 	"github.com/giantswarm/agent-manager/internal/kube"
 	"github.com/giantswarm/agent-manager/internal/skills"
 	"github.com/giantswarm/agent-manager/internal/tags"
-	"github.com/giantswarm/agent-manager/internal/tenants"
 )
 
 // ChartSource is what the service needs to know about the agent chart.
@@ -88,8 +87,8 @@ type Config struct {
 	// start_session holds a Session's toolchains to, asked as the caller.
 	// Nil: any version the registry carries starts.
 	ToolchainCatalog ToolchainCatalog
-	// Tenants are the tenant namespaces the tenant reconciler keeps, managed
-	// beside ManagedNamespaces. Nil: no tenants.
+	// Tenants finds the organization namespaces, managed beside
+	// ManagedNamespaces. Nil: none.
 	Tenants TenantSet
 	// Tags is the agent chart's tag rule, loaded from the embedded chart
 	// (chart.EmbeddedSchema().Tags). Nil: the chart takes no tags; agents
@@ -110,15 +109,13 @@ type SkillCatalog interface {
 	Skills(ctx context.Context, source string, refresh bool) (map[string]any, error)
 }
 
-// TenantSet is the tenant reconciler as the service sees it.
+// TenantSet finds the organization namespaces agent-platform-operator keeps,
+// by their label.
 type TenantSet interface {
-	// Namespaces are the tenant namespaces found so far.
-	Namespaces() []string
-	// ModelConfig is the ModelConfig a tenant receives with its first agent.
-	ModelConfig() string
-	// Status is whether the reconciler runs on this replica, and its last
-	// failure.
-	Status() tenants.Status
+	// Names are the organization namespaces, sorted.
+	Names(ctx context.Context) ([]string, error)
+	// Holds reports whether ns is one.
+	Holds(ctx context.Context, ns string) (bool, error)
 }
 
 // Service is the agent lifecycle.
@@ -170,13 +167,19 @@ func ManagedNamespaces(def string, additional []string) []string {
 }
 
 // Managed are the namespaces the service manages: the configured ones, then
-// the tenants.
-func (s *Service) Managed() []string {
+// the organization namespaces. When those cannot be listed, the configured
+// ones alone, logged.
+func (s *Service) Managed(ctx context.Context) []string {
 	managed := slices.Clone(s.cfg.ManagedNamespaces)
 	if s.cfg.Tenants == nil {
 		return managed
 	}
-	for _, ns := range s.cfg.Tenants.Namespaces() {
+	found, err := s.cfg.Tenants.Names(ctx)
+	if err != nil {
+		s.log.Warn("the organization namespaces could not be listed; only the configured namespaces are managed for this request", "error", err)
+		return managed
+	}
+	for _, ns := range found {
 		if !slices.Contains(managed, ns) {
 			managed = append(managed, ns)
 		}
@@ -184,9 +187,17 @@ func (s *Service) Managed() []string {
 	return managed
 }
 
-// isTenant reports whether ns is a tenant namespace.
-func (s *Service) isTenant(ns string) bool {
-	return s.cfg.Tenants != nil && slices.Contains(s.cfg.Tenants.Namespaces(), ns)
+// isTenant reports whether ns is an organization namespace (a configured
+// namespace never is).
+func (s *Service) isTenant(ctx context.Context, ns string) (bool, error) {
+	if s.cfg.Tenants == nil || slices.Contains(s.cfg.ManagedNamespaces, ns) {
+		return false, nil
+	}
+	ok, err := s.cfg.Tenants.Holds(ctx, ns)
+	if err != nil {
+		return false, fmt.Errorf("%w: whether %s is an organization namespace: %v", ErrUnsupported, ns, err)
+	}
+	return ok, nil
 }
 
 // InfoResponse is GET /info: what this installation can do, so the portal and
@@ -256,10 +267,6 @@ type InfoResponse struct {
 	// it filled with the skills GitHub App's token: the last refresh, the
 	// token's expiry and a failed refresh's error.
 	SkillsGitAuthMint *skills.BootSecretStatus `json:"skillsGitAuthMint,omitempty"`
-	// TenantReconciler is the state of the tenant reconciler when
-	// agent-manager keeps the tenants: whether it runs on this replica, and
-	// its last failure.
-	TenantReconciler *tenants.Status `json:"tenantReconciler,omitempty"`
 }
 
 // Info reports the installation's capabilities.
@@ -298,6 +305,9 @@ func (s *Service) Info(ctx context.Context) InfoResponse {
 		// tags: create_agent, update_agent and the reads carry tags; only
 		// a chart whose schema takes agent.tags accepts a write that sets them.
 		"tags": s.cfg.Tags != nil && s.chartTakesTags(ctx),
+		// organizations: the organization namespaces are managed beside the
+		// configured ones, and the organization tools answer.
+		"organizations": s.cfg.Tenants != nil,
 	}
 	out.Identity = s.kube.Identity()
 	kagentAPI := KagentAPIGroup + "/" + s.cfg.KagentAPIVersion
@@ -329,10 +339,6 @@ func (s *Service) Info(ctx context.Context) InfoResponse {
 		st := s.cfg.SkillsBootSecret.Status()
 		out.SkillsGitAuthMint = &st
 	}
-	if s.cfg.Tenants != nil {
-		st := s.cfg.Tenants.Status()
-		out.TenantReconciler = &st
-	}
 	return out
 }
 
@@ -341,7 +347,7 @@ func (s *Service) Info(ctx context.Context) InfoResponse {
 // the caller (the ServiceAccount without OAuth). A namespace whose review
 // fails is left out: the list never offers what a create would refuse.
 func (s *Service) creatableNamespaces(ctx context.Context) []string {
-	managed := s.Managed()
+	managed := s.Managed(ctx)
 	c, err := s.kube.Client(ctx)
 	if err != nil {
 		return []string{}
@@ -403,16 +409,29 @@ func (s *Service) modelConfigGVR() schema.GroupVersionResource { return s.kagent
 
 // ---- namespaces -------------------------------------------------------------
 
-// Namespace resolves an optional namespace argument against the managed set.
-func (s *Service) Namespace(ns string) (string, error) {
+// Namespace resolves an optional namespace argument against the managed set:
+// a configured namespace or an organization namespace.
+func (s *Service) Namespace(ctx context.Context, ns string) (string, error) {
 	if ns == "" {
 		return s.cfg.DefaultNamespace, nil
 	}
-	managed := s.Managed()
-	if slices.Contains(managed, ns) {
+	if slices.Contains(s.cfg.ManagedNamespaces, ns) {
 		return ns, nil
 	}
-	return "", invalidf("namespace %q is not managed by agent-manager (managed: %s)", ns, strings.Join(managed, ", "))
+	tenant, err := s.isTenant(ctx, ns)
+	if err != nil {
+		return "", err
+	}
+	if tenant {
+		return ns, nil
+	}
+	// The organization namespaces are not named: the ServiceAccount found
+	// them, and a caller learns only those it belongs to.
+	what := "an organization namespace you belong to (list_my_organizations)"
+	if s.cfg.Tenants == nil {
+		what = "none other"
+	}
+	return "", invalidf("namespace %q is not managed by agent-manager (managed: %s, and %s)", ns, strings.Join(s.cfg.ManagedNamespaces, ", "), what)
 }
 
 func (s *Service) dyn(ctx context.Context) (dynamic.Interface, kube.Client, error) {
@@ -547,7 +566,7 @@ func (s *Service) defaultAgent(ctx context.Context) string {
 	}
 	selector := metav1.ListOptions{LabelSelector: DefaultAgentLabel + "=true"}
 	platform := map[string]bool{}
-	for _, ns := range s.Managed() {
+	for _, ns := range s.Managed(ctx) {
 		for _, gvr := range []schema.GroupVersionResource{s.helmReleaseGVR(), s.agentGVR()} {
 			list, err := dyn.Resource(gvr).Namespace(ns).List(ctx, selector)
 			if err != nil {
@@ -729,67 +748,42 @@ func (s *Service) agentHelmReleases(ctx context.Context, st *site) (map[string]*
 // ---- model configs ----------------------------------------------------------
 
 // ListModelConfigs lists the kagent ModelConfigs of a namespace, on the
-// target cluster when one is named.
+// target cluster when one is named, with the namespace default marked.
 func (s *Service) ListModelConfigs(ctx context.Context, loc Location) ([]ModelConfig, error) {
 	st, err := s.site(ctx, loc)
 	if err != nil {
 		return nil, err
 	}
-	return s.listModelConfigs(ctx, st.agent, st.ns())
+	models, err := s.readModelConfigs(ctx, st)
+	if err != nil {
+		return nil, err
+	}
+	return models.configs, nil
 }
 
-func (s *Service) listModelConfigs(ctx context.Context, dyn dynamic.Interface, ns string) ([]ModelConfig, error) {
-	list, err := dyn.Resource(s.modelConfigGVR()).Namespace(ns).List(ctx, metav1.ListOptions{})
+func (s *Service) readModelConfigs(ctx context.Context, st *site) (namespaceModels, error) {
+	ns := st.ns()
+	list, err := st.agent.Resource(s.modelConfigGVR()).Namespace(ns).List(ctx, metav1.ListOptions{})
 	if err != nil {
-		return nil, wrapKube(err, "list modelconfigs in "+ns)
+		return namespaceModels{}, wrapKube(err, "list modelconfigs in "+ns)
 	}
-	out := make([]ModelConfig, 0, len(list.Items))
+	models := namespaceModels{namespace: ns, configs: make([]ModelConfig, 0, len(list.Items)), marked: markedModelConfigs(list.Items)}
 	for _, item := range list.Items {
 		mc := ModelConfig{Name: item.GetName(), Namespace: item.GetNamespace()}
 		mc.Provider, _, _ = unstructured.NestedString(item.Object, "spec", "provider")
 		mc.Model, _, _ = unstructured.NestedString(item.Object, "spec", "model")
 		conds := conditionsOfObject(&item)
 		mc.Accepted = conditionStatus(conds, conditionAccepted)
+		mc.ResolvedRefs = conditionStatus(conds, conditionResolvedRefs)
 		if c := findCondition(conds, conditionAccepted); c != nil {
 			mc.Message = c.Message
 		}
 		mc.ManagedBy = item.GetLabels()[ManagedByLabel]
-		out = append(out, mc)
+		mc.Default = len(models.marked) == 1 && item.GetName() == models.marked[0]
+		models.configs = append(models.configs, mc)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
-	return out, nil
-}
-
-// requireModelConfig fails with the valid names when name is not a ModelConfig
-// of the site's namespace. In a tenant namespace the platform's default
-// ModelConfig is accepted before its copy exists: the tenant reconciler
-// provides it with the first agent.
-func (s *Service) requireModelConfig(ctx context.Context, st *site, name string) error {
-	if strings.TrimSpace(name) == "" {
-		return invalidf("modelConfig is required")
-	}
-	ns := st.ns()
-	configs, err := s.listModelConfigs(ctx, st.agent, ns)
-	if err != nil {
-		return err
-	}
-	names := make([]string, 0, len(configs))
-	for _, mc := range configs {
-		if mc.Name == name {
-			return nil
-		}
-		names = append(names, mc.Name)
-	}
-	if !st.loc.IsSet() && s.isTenant(ns) && name == s.cfg.Tenants.ModelConfig() {
-		return nil
-	}
-	if !st.loc.IsSet() && s.isTenant(ns) {
-		names = append(names, s.cfg.Tenants.ModelConfig()+" (the platform default, provided with the first agent)")
-	}
-	if len(names) == 0 {
-		return invalidf("modelConfig %q does not exist in namespace %s (no ModelConfigs there; a platform admin provisions them)", name, ns)
-	}
-	return invalidf("modelConfig %q does not exist in namespace %s; valid: %s", name, ns, strings.Join(names, ", "))
+	sort.Slice(models.configs, func(i, j int) bool { return models.configs[i].Name < models.configs[j].Name })
+	return models, nil
 }
 
 // harnessFor resolves the Harness an agent runs on: name, else the platform
@@ -1086,11 +1080,17 @@ func (s *Service) ValidateCreate(ctx context.Context, spec Spec) (*ValidateResul
 	if err := s.requireTargetMuster(st); err != nil {
 		res.addError(err)
 	}
-	if err := s.requireModelConfig(ctx, st, spec.ModelConfig); err != nil {
+	if mc, fromDefault, err := s.resolveModelConfig(ctx, st, spec.ModelConfig); err != nil {
 		if !isDomainError(err) {
 			return nil, err
 		}
 		res.addError(err)
+	} else {
+		spec.ModelConfig = mc.Name
+		res.ModelConfig, res.ModelConfigFromDefault = mc.Name, fromDefault
+		if note := modelConfigNote(mc); note != "" {
+			res.Notes = append(res.Notes, note)
+		}
 	}
 	if err := s.requireEgressPolicies(ctx, st, spec.EgressPolicyRefs); err != nil {
 		if !isDomainError(err) {
@@ -1303,7 +1303,7 @@ func isDomainError(err error) bool {
 // on a dry run. In commit mode the two land as files of a pull request in the
 // repository that owns the namespace instead.
 func (s *Service) Create(ctx context.Context, spec Spec) (*CreateResult, error) {
-	ns, err := s.Namespace(spec.Namespace)
+	ns, err := s.Namespace(ctx, spec.Namespace)
 	if err != nil {
 		return nil, err
 	}
@@ -1334,9 +1334,11 @@ func (s *Service) Create(ctx context.Context, spec Spec) (*CreateResult, error) 
 	if err := s.requireFreeName(ctx, st, spec.Name); err != nil {
 		return nil, err
 	}
-	if err := s.requireModelConfig(ctx, st, spec.ModelConfig); err != nil {
+	mc, fromDefault, err := s.resolveModelConfig(ctx, st, spec.ModelConfig)
+	if err != nil {
 		return nil, err
 	}
+	spec.ModelConfig = mc.Name
 	if err := s.requireEgressPolicies(ctx, st, spec.EgressPolicyRefs); err != nil {
 		return nil, err
 	}
@@ -1381,7 +1383,7 @@ func (s *Service) Create(ctx context.Context, spec Spec) (*CreateResult, error) 
 		return nil, err
 	}
 
-	res := &CreateResult{RequestedBy: identity.Caller(ctx), WriteOutcome: WriteOutcome{Mode: mode, DryRun: spec.DryRun}}
+	res := &CreateResult{RequestedBy: identity.Caller(ctx), ModelConfig: mc.Name, ModelConfigFromDefault: fromDefault, WriteOutcome: WriteOutcome{Mode: mode, DryRun: spec.DryRun}}
 	res.Manifests = st.manifests(spec.Name, values)
 	if mode == ModeCommit {
 		return s.createCommit(ctx, st, spec, values, res)
@@ -1936,8 +1938,8 @@ func (s *Service) Delete(ctx context.Context, loc Location, name string, force b
 
 // sourceToRemove is the shared chart source a delete of hr takes with it —
 // the OCIRepository it renders from when no other release of its namespace
-// references it and the tenant reconciler does not keep it — or, empty, why
-// it stays.
+// references it and agent-platform-operator does not keep it — or, empty,
+// why it stays.
 func (s *Service) sourceToRemove(ctx context.Context, dyn dynamic.Interface, hr *unstructured.Unstructured) (name, kept string) {
 	ref := chartRefOf(hr)
 	if ref == nil || ref.Kind != kindOCIRepository {
@@ -1949,8 +1951,8 @@ func (s *Service) sourceToRemove(ctx context.Context, dyn dynamic.Interface, hr 
 		return "", "could not read the OCIRepository: " + err.Error()
 	}
 	if source != nil {
-		if _, ok := source.GetLabels()[tenants.ObjectLabel]; ok {
-			return "", "the tenant reconciler keeps it while the namespace is an organization's"
+		if _, ok := source.GetLabels()[OperatorObjectLabel]; ok {
+			return "", "agent-platform-operator keeps it while the namespace is an organization's"
 		}
 	}
 	others, err := s.otherReferences(ctx, dyn, sourceNs, ref.Name, hr.GetName())

@@ -108,6 +108,12 @@ const (
 	// OCIRepositories agent-manager created.
 	ManagedByLabel = "app.kubernetes.io/managed-by"
 	ManagedByValue = "agent-manager"
+	// OperatorObjectLabel marks what agent-platform-operator keeps in an
+	// organization namespace (the agent chart's OCIRepository and the curated
+	// copies among them): agent-manager never deletes or rewrites such an
+	// object. The operator declares it in its internal controller package,
+	// which is not importable.
+	OperatorObjectLabel = "agent-platform.giantswarm.io/organization-object"
 )
 
 // The kinds an agent renders to.
@@ -208,9 +214,9 @@ type Plugin struct {
 // Plugins is an agent's plugin list.
 type Plugins []Plugin
 
-// Spec is what a caller provides to create an agent. Everything but Name,
-// ModelConfig and Toolset is optional; omitted fields keep the chart's
-// defaults.
+// Spec is what a caller provides to create an agent. Everything but Name and
+// Toolset is optional; omitted fields keep the chart's defaults, and an
+// omitted ModelConfig is the namespace default.
 type Spec struct {
 	// Location is the agent's namespace (empty selects the default managed
 	// namespace) and, to run it on a workload cluster, the target cluster.
@@ -231,8 +237,10 @@ type Spec struct {
 	// SystemMessage is the system prompt (spec.template.systemPrompt); empty
 	// keeps the chart default. At most MaxSystemMessageLength characters.
 	SystemMessage string `json:"systemMessage,omitempty"`
-	// ModelConfig names an existing kagent ModelConfig in the namespace.
-	ModelConfig string `json:"modelConfig"`
+	// ModelConfig names an existing kagent ModelConfig in the namespace;
+	// empty selects the namespace default (the ModelConfig annotated
+	// apov1alpha1.DefaultModelConfigAnnotation).
+	ModelConfig string `json:"modelConfig,omitempty"`
 	// Harness names the Harness of the namespace that runs the agent (chart
 	// agent.harness, the Agent object's spec.harnessRef.name); empty selects
 	// the platform Harness.
@@ -564,10 +572,15 @@ type ModelConfig struct {
 	Namespace string `json:"namespace"`
 	Provider  string `json:"provider,omitempty"`
 	Model     string `json:"model,omitempty"`
-	// Accepted mirrors the kagent Accepted condition; nil while unreported.
-	Accepted  *bool  `json:"accepted"`
-	Message   string `json:"message,omitempty"`
-	ManagedBy string `json:"managedBy,omitempty"`
+	// Accepted and ResolvedRefs mirror the kagent conditions; nil while
+	// unreported. Message is the Accepted condition's.
+	Accepted     *bool  `json:"accepted"`
+	ResolvedRefs *bool  `json:"resolvedRefs"`
+	Message      string `json:"message,omitempty"`
+	ManagedBy    string `json:"managedBy,omitempty"`
+	// Default: the namespace default a create without a modelConfig takes,
+	// the one ModelConfig marked apov1alpha1.DefaultModelConfigAnnotation.
+	Default bool `json:"default"`
 }
 
 // EgressPolicy is a kagent EgressPolicy as list_egress_policies reports it:
@@ -602,8 +615,13 @@ type ValidateResult struct {
 	// Errors lists every schema violation and precondition failure.
 	Errors []string `json:"errors,omitempty"`
 	// Notes lists the checks the dry run could not make, such as the name
-	// check for a caller who may not read the namespace's releases.
+	// check for a caller who may not read the namespace's releases, and a
+	// ModelConfig that is not ResolvedRefs=True.
 	Notes []string `json:"notes,omitempty"`
+	// ModelConfig is the ModelConfig a create would write;
+	// ModelConfigFromDefault: the namespace default, the request naming none.
+	ModelConfig            string `json:"modelConfig,omitempty"`
+	ModelConfigFromDefault bool   `json:"modelConfigFromDefault,omitempty"`
 	// SchemaVersion / SchemaSource say which chart schema judged the values.
 	SchemaVersion string    `json:"schemaVersion"`
 	SchemaSource  string    `json:"schemaSource"`
@@ -621,6 +639,10 @@ type CreateResult struct {
 		HelmRelease   bool `json:"helmRelease"`
 	} `json:"created"`
 	Status *Status `json:"status,omitempty"`
+	// ModelConfig is the ModelConfig written into the agent;
+	// ModelConfigFromDefault: the namespace default, the request naming none.
+	ModelConfig            string `json:"modelConfig"`
+	ModelConfigFromDefault bool   `json:"modelConfigFromDefault,omitempty"`
 	// RequestedBy is the authenticated caller the write ran as (email, else
 	// subject); empty when the server runs without OAuth.
 	RequestedBy string `json:"requestedBy,omitempty"`

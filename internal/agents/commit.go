@@ -41,6 +41,7 @@ const CommitDirectory = "agent-manager"
 type GitHubRemote interface {
 	commit.Remote
 	commit.Reader
+	commit.Lister
 }
 
 // RemoteFor builds the GitHub remote from the person's App user token.
