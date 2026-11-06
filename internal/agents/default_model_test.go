@@ -52,14 +52,9 @@ func TestTheNamespaceDefaultModel(t *testing.T) {
 			refusal: "modelConfig: namespace kagent has no default model, claude, qwen are all marked as the default; pass modelConfig, or have an admin mark one as the default (annotation " + apov1alpha1.DefaultModelConfigAnnotation + "=true). ModelConfigs: claude, qwen",
 		},
 		{
-			name:   "the transition name, none marked",
-			models: []*unstructured.Unstructured{modelConfig("kagent", "default-model-config", "Anthropic", "claude-sonnet-4-6"), modelConfig("kagent", "qwen", "OpenAI", "qwen3")},
-			want:   "default-model-config",
-		},
-		{
-			name:   "the transition name beside a marked one",
-			models: []*unstructured.Unstructured{modelConfig("kagent", "default-model-config", "Anthropic", "claude-sonnet-4-6"), markedModel("kagent", "qwen")},
-			want:   "qwen",
+			name:    "default-model-config unmarked",
+			models:  []*unstructured.Unstructured{modelConfig("kagent", "default-model-config", "Anthropic", "claude-sonnet-4-6"), modelConfig("kagent", "qwen", "OpenAI", "qwen3")},
+			refusal: "modelConfig: namespace kagent has no default model; pass modelConfig, or have an admin mark one as the default (annotation " + apov1alpha1.DefaultModelConfigAnnotation + "=true). ModelConfigs: default-model-config, qwen",
 		},
 		{
 			name:    "no ModelConfigs",
@@ -180,20 +175,4 @@ func TestCreateInATenantWithoutModels(t *testing.T) {
 
 	_, err = f.svc.Create(t.Context(), Spec{Location: In("org-acme"), Name: "sre", ModelConfig: "default-model-config", Toolset: []string{"preset:none"}})
 	require.EqualError(t, err, `invalid request: modelConfig "default-model-config" does not exist in namespace org-acme (no ModelConfigs there; an admin of the organization adds one in the portal or with set_organization_model)`)
-}
-
-// In an organization namespace the mark alone decides, as for
-// agent-platform-operator and set_organization_model.
-func TestTheTransitionNameIsNoDefaultInAnOrganization(t *testing.T) {
-	f := modelFixture(t, modelConfig("org-acme", "default-model-config", "Anthropic", "claude-sonnet-4-6"))
-	withTenants(f, &fakeTenants{namespaces: []string{"org-acme"}})
-	ctx := t.Context()
-
-	list, err := f.svc.ListModelConfigs(ctx, In("org-acme"))
-	require.NoError(t, err)
-	require.Len(t, list, 1)
-	assert.False(t, list[0].Default)
-
-	_, err = f.svc.Create(ctx, Spec{Location: In("org-acme"), Name: "sre", Toolset: []string{"preset:none"}})
-	require.EqualError(t, err, "invalid request: modelConfig: namespace org-acme has no default model; pass modelConfig, or have an admin mark one as the default (annotation "+apov1alpha1.DefaultModelConfigAnnotation+"=true). ModelConfigs: default-model-config")
 }

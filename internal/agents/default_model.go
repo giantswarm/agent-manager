@@ -16,12 +16,6 @@ import (
 // that names no modelConfig writes the default's name into the agent, so an
 // agent never follows a later change of the default.
 
-// transitionDefaultModelConfig counts as marked while no ModelConfig of the
-// namespace carries apov1alpha1.DefaultModelConfigAnnotation, outside
-// organization namespaces: there the mark alone decides, as it does for
-// agent-platform-operator and set_organization_model.
-const transitionDefaultModelConfig = "default-model-config"
-
 // IsMarkedDefault reports whether a ModelConfig carries the default mark.
 func IsMarkedDefault(mc *unstructured.Unstructured) bool {
 	return mc.GetAnnotations()[apov1alpha1.DefaultModelConfigAnnotation] == "true"
@@ -29,29 +23,15 @@ func IsMarkedDefault(mc *unstructured.Unstructured) bool {
 
 // markedModelConfigs are the sorted names of the ModelConfigs marked as the
 // namespace default.
-func (s *Service) markedModelConfigs(ctx context.Context, st *site, items []unstructured.Unstructured) ([]string, error) {
+func markedModelConfigs(items []unstructured.Unstructured) []string {
 	var marked []string
-	hasTransition := false
 	for i := range items {
 		if IsMarkedDefault(&items[i]) {
 			marked = append(marked, items[i].GetName())
 		}
-		hasTransition = hasTransition || items[i].GetName() == transitionDefaultModelConfig
 	}
-	if len(marked) > 0 || !hasTransition {
-		slices.Sort(marked)
-		return marked, nil
-	}
-	if !st.loc.IsSet() {
-		tenant, err := s.isTenant(ctx, st.ns())
-		if err != nil {
-			return nil, err
-		}
-		if tenant {
-			return nil, nil
-		}
-	}
-	return []string{transitionDefaultModelConfig}, nil
+	slices.Sort(marked)
+	return marked
 }
 
 // namespaceModels are the ModelConfigs of a namespace and the ones marked as
