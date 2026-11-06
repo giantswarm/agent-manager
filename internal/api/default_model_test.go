@@ -22,6 +22,8 @@ func markedModelConfig(name string) *unstructured.Unstructured {
 
 func TestCreateWithoutAModelConfigWritesTheDefault(t *testing.T) {
 	svc, dyn := newService(t)
+	_, err := dyn.Resource(mcGVR).Namespace("kagent").Create(t.Context(), markedModelConfig("claude"), metav1.CreateOptions{})
+	require.NoError(t, err)
 	srv := NewMCPServer(svc, "test")
 	mux := http.NewServeMux()
 	NewREST(svc, nil).Register(mux)
@@ -30,19 +32,19 @@ func TestCreateWithoutAModelConfigWritesTheDefault(t *testing.T) {
 	require.False(t, isErr, text)
 	var created map[string]any
 	require.NoError(t, json.Unmarshal([]byte(text), &created))
-	assert.Equal(t, "default-model-config", created["modelConfig"])
+	assert.Equal(t, "claude", created["modelConfig"])
 	assert.Equal(t, true, created["modelConfigFromDefault"])
 
 	code, body := do(t, mux, http.MethodPost, Prefix+"/agents", map[string]any{"name": "ops", "toolset": []string{"preset:read-only"}})
 	require.Equal(t, http.StatusCreated, code, body)
-	assert.Equal(t, "default-model-config", body["modelConfig"])
+	assert.Equal(t, "claude", body["modelConfig"])
 	assert.Equal(t, true, body["modelConfigFromDefault"])
 
 	for _, name := range []string{"sre", "ops"} {
 		hr, err := dyn.Resource(hrGVR).Namespace("kagent").Get(t.Context(), name, metav1.GetOptions{})
 		require.NoError(t, err)
 		model, _, _ := unstructured.NestedString(hr.Object, "spec", "values", "modelConfig", "name")
-		assert.Equal(t, "default-model-config", model, name)
+		assert.Equal(t, "claude", model, name)
 	}
 
 	text, isErr = callTool(t, srv, ToolCreateAgent, map[string]any{"name": "named", "modelConfig": "default-model-config", "toolset": []string{"preset:read-only"}})

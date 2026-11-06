@@ -118,7 +118,7 @@ spec:
       harness: claude
       egress: [https://github.com:443, "https://*.githubusercontent.com"]
       egressPolicyRefs: [go-modules]
-    modelConfig: {name: default-model-config}
+    modelConfig: {name: anthropic-sonnet}
     skills:
       - {name: runbooks, path: runbooks, git: {url: https://github.com/giantswarm/agent-skills, commit: 0123456789abcdef0123456789abcdef01234567}}
       - {name: kubectl, oci: ghcr.io/giantswarm/skills/kubectl@sha256:5b0b…1270}
@@ -145,10 +145,8 @@ agent-manager only reads them, apart from `set_organization_model`.
 
 A namespace's default model is the one ModelConfig there annotated
 `agent-platform.giantswarm.io/is-default-model-config: "true"`, as with the
-default IngressClass: none annotated, or more than one, is no default. Until
-every installation marks its default, a ModelConfig named
-`default-model-config` counts as marked while no other carries the
-annotation. `list_model_configs` and `GET /api/v1/modelconfigs` report it as
+default IngressClass: none annotated, or more than one, is no default.
+`list_model_configs` and `GET /api/v1/modelconfigs` report it as
 `default: true`, next to each ModelConfig's `accepted` and `resolvedRefs`
 conditions.
 
