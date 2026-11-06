@@ -298,6 +298,18 @@ oauth:
     # organization namespaces.
     enabled: false
 
+githubTokenExchange:
+  # -- RFC 8693 token endpoint. Empty retains the existing GitHub pin mode.
+  endpoint: ""
+  # -- Confidential broker client ID, allowed to retrieve only the manager App grant.
+  clientID: ""
+  # -- Fixed broker target for the manager App user grant.
+  audience: ""
+  # -- Existing Secret in the release namespace, containing client-secret.
+  secretName: ""
+  # -- Optional existing Secret with ca.crt for the broker's private CA.
+  caSecretName: ""
+
 github:
   # -- Register with muster pinned to the GitHub App
   # `giantswarm-agent-manager` and offer commit mode (`mode: commit` on
@@ -311,8 +323,8 @@ github:
   # apply mode keeps acting on Kubernetes as the person. Needs
   # `oauth.enabled`, and the App installed with contents and pull-request
   # write on every repository a commit may target. Off: muster forwards the
-  # ID token as the bearer (`muster.mcpServer.auth.forwardToken`) and commit
-  # mode answers `unsupported`.
+  # ID token as the bearer (`muster.mcpServer.auth.forwardToken`); commit
+  # mode then requires githubTokenExchange.
   enabled: false
   # -- GitHub's REST API, for `GET /user` and the pull request.
   apiURL: https://api.github.com
@@ -512,15 +524,14 @@ tenants:
     # `commitMode.path` without `{parent}/{name}`.
     contentPrefix: agent-platform/organizations
 
-devPortal:
-  # -- The Dev Portal's base URL (`https://portal.example.com`). The
-  # organization tools answer a missing or replaced credential (a model's
-  # key, a connector's or an egress policy's credential) with the link to
-  # its credential form,
-  # `<url>/agent-platform/organizations/<parent>/<organization>/credentials/<secret>/<key>/<kind>/<name>`,
-  # which holds no value and no token. Empty: the Secret is named without
-  # a link.
-  url: ""
+credentials:
+  # -- HTTPS UI URL template with one {operation} placeholder. The UI owns
+  # its routes; agent-manager supplies only a non-authorizing operation ID.
+  uiURL: ""
+  # -- Dedicated namespace for nonsecret operation metadata. Empty derives
+  # a namespace from the release. Do not share it with application config.
+  operationsNamespace: ""
+
 
 # -- Annotations on the pod.
 podAnnotations: {}  # @schema additionalProperties: true

@@ -236,6 +236,14 @@ func (s *Service) gitOpsRefusal(ctx context.Context, dyn dynamic.Interface, hr *
 // that gives one.
 func (s *Service) gitHubFor(ctx context.Context) (GitHubRemote, *identity.GitHub, error) {
 	gh, ok := identity.GitHubFromContext(ctx)
+	if s.cfg.GitHubUser != nil {
+		var err error
+		gh, err = s.cfg.GitHubUser(ctx)
+		if err != nil {
+			return nil, nil, err
+		}
+		ok = gh != nil && gh.Token != ""
+	}
 	if !ok {
 		return nil, nil, authRequiredf("commit mode opens the pull request with your GitHub authorization, and this call carries none: connect agent-manager in muster (core_auth_login server=agent-manager), then call again")
 	}

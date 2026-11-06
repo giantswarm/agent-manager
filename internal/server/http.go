@@ -20,6 +20,7 @@ import (
 
 	"github.com/giantswarm/agent-manager/internal/agents"
 	"github.com/giantswarm/agent-manager/internal/api"
+	"github.com/giantswarm/agent-manager/internal/organizations"
 )
 
 // Config configures the listener.
@@ -33,6 +34,9 @@ type Config struct {
 	// and every call carries the caller's identity. Off: anonymous, acting as
 	// the ServiceAccount.
 	OAuth *OAuthConfig
+	// Organizations serves the REST API's credential route; nil: it
+	// answers unsupported.
+	Organizations *organizations.Service
 }
 
 // Server is the assembled HTTP server.
@@ -77,7 +81,7 @@ func New(cfg Config, svc *agents.Service, mcpSrv *mcpserver.MCPServer, log *slog
 	// The REST API on its own mux so one guard covers every route; the
 	// health endpoints above and the OAuth metadata stay open.
 	rest := http.NewServeMux()
-	api.NewREST(svc, log).Register(rest)
+	api.NewREST(svc, log, api.WithOrganizations(cfg.Organizations)).Register(rest)
 	mux.Handle(api.Prefix+"/", s.guard(rest))
 
 	if cfg.MCPEnabled && mcpSrv != nil {

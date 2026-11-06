@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 
 	oauth "github.com/giantswarm/mcp-oauth"
@@ -17,6 +18,7 @@ import (
 	"github.com/giantswarm/mcp-oauth/providers"
 	"github.com/giantswarm/mcp-oauth/providers/dex"
 	"github.com/giantswarm/mcp-oauth/providers/google"
+	"github.com/giantswarm/mcp-oauth/providers/oidc"
 	"github.com/giantswarm/mcp-oauth/security"
 	"github.com/giantswarm/mcp-oauth/storage/memory"
 
@@ -265,7 +267,10 @@ func (o *oauthRuntime) attachIdentity(next http.Handler) http.Handler {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
-		id := &identity.Identity{Subject: info.ID, Email: info.Email, Name: info.Name, Groups: info.Groups, Source: identity.SourceOAuth}
+		id := &identity.Identity{Issuer: o.cfg.DexIssuerURL, Subject: info.ID, Email: info.Email, Name: info.Name, Groups: info.Groups, Source: identity.SourceOAuth}
+		if o.cfg.provider() == ProviderGoogle {
+			id.Issuer = "https://accounts.google.com"
+		}
 		if info.IsSSO() {
 			id.Source = identity.SourceSSO
 		}
@@ -276,6 +281,16 @@ func (o *oauthRuntime) attachIdentity(next http.Handler) http.Handler {
 			return
 		}
 		ctx = identity.ContextWithToken(ctx, tok)
+		if claims, err := oidc.ParseUnverifiedClaims(tok); err == nil {
+			if actor, exists := claims["act"]; exists && actor != nil {
+				id.Delegated = true
+			}
+		}
+		if audiences, ok := unverifiedAudience(tok); ok {
+			slices.Sort(audiences)
+			encoded, _ := json.Marshal(audiences)
+			id.Client = string(encoded)
+		}
 		o.log.Debug("authenticated request", "caller", id.String(), "source", id.Source, "path", r.URL.Path)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})

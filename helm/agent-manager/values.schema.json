@@ -61,13 +61,17 @@
         "clusterID": {
             "type": "string"
         },
-        "devPortal": {
+        "credentials": {
             "type": "object",
             "additionalProperties": false,
             "properties": {
-                "url": {
+                "operationsNamespace": {
                     "type": "string",
-                    "description": "The Dev Portal's base URL (`https://portal.example.com`). The organization tools answer a missing or replaced credential (a model's key, a connector's or an egress policy's credential) with the link to its credential form, `<url>/agent-platform/organizations/<parent>/<organization>/credentials/<secret>/<key>/<kind>/<name>`, which holds no value and no token. Empty: the Secret is named without a link."
+                    "description": "Dedicated namespace for nonsecret operation metadata. Empty derives a namespace from the release. Do not share it with application config."
+                },
+                "uiURL": {
+                    "type": "string",
+                    "description": "HTTPS UI URL template with one {operation} placeholder. The UI owns its routes; agent-manager supplies only a non-authorizing operation ID."
                 }
             }
         },
@@ -185,7 +189,33 @@
                 },
                 "enabled": {
                     "type": "boolean",
-                    "description": "Register with muster pinned to the GitHub App `giantswarm-agent-manager` and offer commit mode (`mode: commit` on `create_agent`, `update_agent` and `delete_agent`: the manifests land as a pull request opened as the person in the repository that owns the namespace). The MCPServer's auth then pins the App as the authorization server: muster runs the App's consent once per person and puts their user token on every call, which this server verifies with `GET /user` and opens the pull request with, and sets `forwardIdentity: true`, so muster forwards the person's IdP ID token in `X-Muster-Id-Token` next to it and apply mode keeps acting on Kubernetes as the person. Needs `oauth.enabled`, and the App installed with contents and pull-request write on every repository a commit may target. Off: muster forwards the ID token as the bearer (`muster.mcpServer.auth.forwardToken`) and commit mode answers `unsupported`."
+                    "description": "Register with muster pinned to the GitHub App `giantswarm-agent-manager` and offer commit mode (`mode: commit` on `create_agent`, `update_agent` and `delete_agent`: the manifests land as a pull request opened as the person in the repository that owns the namespace). The MCPServer's auth then pins the App as the authorization server: muster runs the App's consent once per person and puts their user token on every call, which this server verifies with `GET /user` and opens the pull request with, and sets `forwardIdentity: true`, so muster forwards the person's IdP ID token in `X-Muster-Id-Token` next to it and apply mode keeps acting on Kubernetes as the person. Needs `oauth.enabled`, and the App installed with contents and pull-request write on every repository a commit may target. Off: muster forwards the ID token as the bearer (`muster.mcpServer.auth.forwardToken`); commit mode then requires githubTokenExchange."
+                }
+            }
+        },
+        "githubTokenExchange": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "audience": {
+                    "type": "string",
+                    "description": "Fixed broker target for the manager App user grant."
+                },
+                "caSecretName": {
+                    "type": "string",
+                    "description": "Optional existing Secret with ca.crt for the broker's private CA."
+                },
+                "clientID": {
+                    "type": "string",
+                    "description": "Confidential broker client ID, allowed to retrieve only the manager App grant."
+                },
+                "endpoint": {
+                    "type": "string",
+                    "description": "RFC 8693 token endpoint. Empty retains the existing GitHub pin mode."
+                },
+                "secretName": {
+                    "type": "string",
+                    "description": "Existing Secret in the release namespace, containing client-secret."
                 }
             }
         },

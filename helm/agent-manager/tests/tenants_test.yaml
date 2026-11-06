@@ -128,12 +128,23 @@ tests:
     asserts:
       - failedTemplate: {}
 
-  - it: passes the Dev Portal's URL
+  - it: passes the credential UI template and a dedicated metadata namespace
     template: templates/deployment.yaml
     set:
-      devPortal:
-        url: https://portal.example.com
+      credentials:
+        uiURL: https://portal.example.com/credentials?operation={operation}
+        operationsNamespace: credential-operations-test
     asserts:
       - contains:
           path: spec.template.spec.containers[0].args
-          content: --dev-portal-url=https://portal.example.com
+          content: --credential-ui-url=https://portal.example.com/credentials?operation={operation}
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --credential-operations-namespace=credential-operations-test
+
+  - it: passes no credential UI by default
+    template: templates/deployment.yaml
+    asserts:
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].args[*]
+          pattern: ^--credential-

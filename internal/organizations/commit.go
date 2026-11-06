@@ -69,6 +69,7 @@ type RemoteFor = agents.RemoteFor
 
 // CommitConfig is where commit mode writes an installation's organizations.
 type CommitConfig struct {
+	User func(context.Context) (*identity.GitHub, error)
 	// GitHub builds the caller's remote.
 	GitHub RemoteFor
 	// Objects is the installation's repository, its branch, and the
@@ -86,7 +87,7 @@ type CommitConfig struct {
 // installation's Kustomization never applies an organization's contents.
 func NewCommitConfig(gh RemoteFor, repository, branch, objectsPath, contentPrefix string) (*CommitConfig, error) {
 	if gh == nil {
-		return nil, errors.New("commit mode for organizations needs the GitHub App (--github-authorization-server)")
+		return nil, errors.New("commit mode for organizations needs GitHub App user authorization through a pinned registration or token exchange")
 	}
 	objects, err := provenance.Explicit(repository, branch, objectsPath)
 	if err != nil {
@@ -158,6 +159,14 @@ type orgCommit struct {
 
 func (s *Service) newCommit(ctx context.Context) (*orgCommit, error) {
 	gh, ok := identity.GitHubFromContext(ctx)
+	if s.cfg.Commit.User != nil {
+		var err error
+		gh, err = s.cfg.Commit.User(ctx)
+		if err != nil {
+			return nil, err
+		}
+		ok = gh != nil && gh.Token != ""
+	}
 	if !ok {
 		return nil, fmt.Errorf("%w: commit mode opens the pull request with your GitHub authorization, and this call carries none: connect agent-manager in muster (core_auth_login server=agent-manager), then call again", agents.ErrAuthRequired)
 	}
@@ -337,7 +346,7 @@ func branch(verb, parent, name string) string {
 func manifest(obj *unstructured.Unstructured, keepNamespace bool) []byte {
 	out := map[string]any{}
 	for k, v := range obj.Object {
-		if k != "status" && k != "metadata" {
+		if k != "status" && k != fieldMetadata {
 			out[k] = v
 		}
 	}
@@ -363,7 +372,7 @@ func manifest(obj *unstructured.Unstructured, keepNamespace bool) []byte {
 	if len(annotations) > 0 {
 		meta["annotations"] = annotations
 	}
-	out["metadata"] = meta
+	out[fieldMetadata] = meta
 	raw, err := yaml.Marshal(out)
 	if err != nil {
 		// A map of what the API server or a YAML file gave always marshals.

@@ -36,10 +36,18 @@ type kindInfo struct {
 	resource, kubeKind string
 }
 
+// The Kubernetes kinds of the objects the tools write in an organization
+// namespace.
+const (
+	kubeKindModelConfig     = "ModelConfig"
+	kubeKindRemoteMCPServer = "RemoteMCPServer"
+	kubeKindEgressPolicy    = "EgressPolicy"
+)
+
 var kinds = map[string]kindInfo{
-	KindModel:        {"modelconfigs", "ModelConfig"},
-	KindConnector:    {"remotemcpservers", "RemoteMCPServer"},
-	KindEgressPolicy: {"egresspolicies", "EgressPolicy"},
+	KindModel:        {"modelconfigs", kubeKindModelConfig},
+	KindConnector:    {"remotemcpservers", kubeKindRemoteMCPServer},
+	KindEgressPolicy: {"egresspolicies", kubeKindEgressPolicy},
 }
 
 // ResourceResult is the answer of a model, connector or egress policy write.
@@ -58,10 +66,13 @@ type ResourceResult struct {
 	Unmarked []string `json:"unmarked,omitempty"`
 	// Credentials are the credential Secrets the object names, by
 	// reference, with what to do about a missing one.
-	Credentials []Credential `json:"credentials,omitempty"`
-	Note        string       `json:"note,omitempty"`
-	DryRun      bool         `json:"dryRun,omitempty"`
-	RequestedBy string       `json:"requestedBy,omitempty"`
+	Credentials         []Credential `json:"credentials,omitempty"`
+	CredentialOperation string       `json:"credentialOperation,omitempty"`
+	ElicitationID       string       `json:"elicitationId,omitempty"`
+	Pending             bool         `json:"pending,omitempty"`
+	Note                string       `json:"note,omitempty"`
+	DryRun              bool         `json:"dryRun,omitempty"`
+	RequestedBy         string       `json:"requestedBy,omitempty"`
 	// Commit is the pull request of a write in mode commit.
 	Commit *CommitResult `json:"commit,omitempty"`
 }
@@ -87,8 +98,8 @@ func find(items []unstructured.Unstructured, name string) *unstructured.Unstruct
 func newObject(apiVersion, kind, ns, name string) *unstructured.Unstructured {
 	return &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": apiVersion, "kind": kind,
-		"metadata": map[string]any{"name": name, "namespace": ns, "labels": map[string]any{agents.ManagedByLabel: agents.ManagedByValue}},
-		"spec":     map[string]any{},
+		fieldMetadata: map[string]any{"name": name, "namespace": ns, "labels": map[string]any{agents.ManagedByLabel: agents.ManagedByValue}},
+		"spec":        map[string]any{},
 	}}
 }
 
@@ -206,9 +217,6 @@ func (s *Service) SetModel(ctx context.Context, req ModelRequest) (*ResourceResu
 	}
 	writes = append(writes, write{gvr: gvr, kind: "ModelConfig", op: op, obj: obj.Object, ns: ns, name: req.Name, what: "ModelConfig " + ns + "/" + req.Name, reason: way})
 	writes = append(writes, unmarks...)
-	if res.Commit, err = w.land(ctx, s, writes, req.DryRun, "model-"+req.Name, "chore(organizations): set model "+req.Name); err != nil {
-		return nil, err
-	}
 	switch {
 	case agents.IsMarkedDefault(obj):
 		res.DefaultModel = req.Name
@@ -218,7 +226,10 @@ func (s *Service) SetModel(ctx context.Context, req ModelRequest) (*ResourceResu
 		res.Note = fmt.Sprintf("the namespace has %d models marked as its default (%s), so it has none: set_organization_model with default true on one of them", len(marks), strings.Join(marks, ", "))
 	}
 	res.Credentials = []Credential{s.credential(ctx, c, org, "ModelConfig", req.Name, secret, key, req.ReplaceCredential)}
-	if !req.DryRun && res.Commit == nil {
+	if err = s.landResource(ctx, w, writes, res, req.ReplaceCredential, "model-"+req.Name, "chore(organizations): set model "+req.Name); err != nil {
+		return nil, err
+	}
+	if !req.DryRun && res.Commit == nil && res.CredentialOperation == "" {
 		s.log.Info("organization model written", identity.LogAttr(ctx), "namespace", ns, "name", req.Name, "created", res.Created, "default", agents.IsMarkedDefault(obj))
 	}
 	return res, nil
@@ -426,13 +437,13 @@ func (s *Service) SetConnector(ctx context.Context, req ConnectorRequest) (*Reso
 		op = opCreate
 	}
 	wr := write{gvr: gvr, kind: "RemoteMCPServer", op: op, obj: obj.Object, ns: ns, name: req.Name, what: "RemoteMCPServer " + ns + "/" + req.Name, reason: wayOrganizationAdmin(ns)}
-	if res.Commit, err = w.land(ctx, s, []write{wr}, req.DryRun, "connector-"+req.Name, "chore(organizations): set connector "+req.Name); err != nil {
-		return nil, err
-	}
 	for _, cc := range connectorCredentials(obj) {
 		res.Credentials = append(res.Credentials, s.credential(ctx, c, org, "RemoteMCPServer", req.Name, cc.Secret, cc.Key, req.ReplaceCredential))
 	}
-	if !req.DryRun && res.Commit == nil {
+	if err = s.landResource(ctx, w, []write{wr}, res, req.ReplaceCredential, "connector-"+req.Name, "chore(organizations): set connector "+req.Name); err != nil {
+		return nil, err
+	}
+	if !req.DryRun && res.Commit == nil && res.CredentialOperation == "" {
 		s.log.Info("organization connector written", identity.LogAttr(ctx), "namespace", ns, "name", req.Name, "created", res.Created)
 	}
 	return res, nil
@@ -551,9 +562,6 @@ func (s *Service) SetEgressPolicy(ctx context.Context, req EgressRequest) (*Reso
 		op = opCreate
 	}
 	wr := write{gvr: gvr, kind: "EgressPolicy", op: op, obj: obj.Object, ns: ns, name: req.Name, what: "EgressPolicy " + ns + "/" + req.Name, reason: wayOrganizationAdmin(ns)}
-	if res.Commit, err = w.land(ctx, s, []write{wr}, req.DryRun, "egress-"+req.Name, "chore(organizations): set egress policy "+req.Name); err != nil {
-		return nil, err
-	}
 	seen := map[string]bool{}
 	for _, d := range egressDestinations(obj) {
 		if d.CredentialSecret == "" || seen[d.CredentialSecret+"/"+d.CredentialKey] {
@@ -562,7 +570,10 @@ func (s *Service) SetEgressPolicy(ctx context.Context, req EgressRequest) (*Reso
 		seen[d.CredentialSecret+"/"+d.CredentialKey] = true
 		res.Credentials = append(res.Credentials, s.credential(ctx, c, org, "EgressPolicy", req.Name, d.CredentialSecret, d.CredentialKey, req.ReplaceCredential))
 	}
-	if !req.DryRun && res.Commit == nil {
+	if err = s.landResource(ctx, w, []write{wr}, res, req.ReplaceCredential, "egress-"+req.Name, "chore(organizations): set egress policy "+req.Name); err != nil {
+		return nil, err
+	}
+	if !req.DryRun && res.Commit == nil && res.CredentialOperation == "" {
 		s.log.Info("organization egress policy written", identity.LogAttr(ctx), "namespace", ns, "name", req.Name, "created", res.Created)
 	}
 	return res, nil

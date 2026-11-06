@@ -71,6 +71,9 @@ type orgFixture struct {
 	ready bool
 	ctx   context.Context
 	orgs  *organizations.Service
+	// cfg and provider build the tools again, with another logger.
+	cfg      organizations.Config
+	provider kube.Provider
 }
 
 const orgNS = "agents-payments-x7k2q"
@@ -90,6 +93,7 @@ func newOrgFixtureWith(t *testing.T, configure func(*organizations.Config), objs
 		egressGVR: "EgressPolicyList", orgAgentGV: "AgentList", hrGVR: "HelmReleaseList",
 	}, objs...)
 	f.dryRuns = kubetest.AnswerDryRuns(f.dyn)
+	answerCredentialResourceVersions(t, f.dyn)
 	// What the caller's RBAC refuses, dry run or not, the API server refuses.
 	for _, verb := range []string{"create", "update", "delete"} {
 		f.dyn.PrependReactor(verb, "*", func(a k8stesting.Action) (bool, runtime.Object, error) {
@@ -135,19 +139,21 @@ func newOrgFixtureWith(t *testing.T, configure func(*organizations.Config), objs
 		namespace("org-acme", map[string]string{"giantswarm.io/organization": "acme"}),
 		namespace("plain", nil),
 	)
-	cfg := organizations.Config{
-		Namespaces:   organizations.NewNamespaces(sa, "kagent"),
-		DevPortalURL: "https://portal.example.com/",
-		ReadyTimeout: time.Second, ReadyPoll: 10 * time.Millisecond,
+	cfg := organizations.Config{ // #nosec G101 -- synthetic UI URL and isolated fake store
+		Namespaces:           organizations.NewNamespaces(sa, "kagent"),
+		CredentialUIURL:      "https://portal.example.com/credentials?operation={operation}",
+		CredentialOperations: organizations.NewCredentialOperations(operationMaps(t)),
+		ReadyTimeout:         time.Second, ReadyPoll: 10 * time.Millisecond,
 	}
 	if configure != nil {
 		configure(&cfg)
 	}
-	orgs := organizations.New(callerOnly{c: kube.FromInterfaces(f.dyn, f.typed, f.typed.Discovery())}, cfg, nil)
+	f.cfg, f.provider = cfg, callerOnly{c: kube.FromInterfaces(f.dyn, f.typed, f.typed.Discovery())}
+	orgs := organizations.New(f.provider, cfg, nil)
 	f.orgs = orgs
 	svc, _ := newService(t)
-	f.srv = NewMCPServer(svc, "test", WithOrganizations(orgs))
-	f.ctx = identity.ContextWith(context.Background(), &identity.Identity{Subject: "a", Email: "alice@example.com"})
+	f.srv = NewMCPServer(svc, "test", WithOrganizations(orgs), WithLifecycle(t.Context()))
+	f.ctx = identity.ContextWith(t.Context(), &identity.Identity{Issuer: "https://identity.example.com", Client: "platform", Subject: "a", Email: "alice@example.com"})
 	return f
 }
 
@@ -393,6 +399,8 @@ func marked(u *unstructured.Unstructured) bool {
 // model until one is chosen.
 func TestTheDefaultModelMark(t *testing.T) {
 	f := newOrgFixture(t)
+	seedSecret(t, f, "tenant-credential-claude", "apiKey")
+	seedSecret(t, f, "tenant-credential-haiku", "apiKey")
 	add := func(name string, extra map[string]any) (string, bool) {
 		args := map[string]any{"namespace": orgNS, "name": name, "provider": "Anthropic", "model": "claude-sonnet-4-6"}
 		for k, v := range extra {
@@ -466,9 +474,8 @@ func TestCredentialsAreReferencesOnly(t *testing.T) {
 	require.False(t, isErr, text)
 	cred := decode(t, text)["credentials"].([]any)[0].(map[string]any)
 	assert.Equal(t, organizations.CredentialMissing, cred["state"])
-	link := "https://portal.example.com/agent-platform/organizations/org-acme/payments/credentials/tenant-credential-claude/apiKey/ModelConfig/claude"
-	assert.Equal(t, link, cred["formUrl"])
-	assert.Contains(t, cred["next"], link)
+	assert.Contains(t, cred["formUrl"], "https://portal.example.com/credentials?operation=")
+	assert.Contains(t, cred["next"], cred["formUrl"])
 
 	_, err := f.typed.CoreV1().Secrets(orgNS).Create(context.Background(), &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{Name: "tenant-credential-gh", Namespace: orgNS},
@@ -629,6 +636,7 @@ func TestAFailedDeleteTakesTheDeleteIntentOffAgain(t *testing.T) {
 // write after the first fails, a model still carries the mark.
 func TestMovingTheDefaultMarkNeverLeavesNone(t *testing.T) {
 	f := newOrgFixture(t, model("claude", true), model("gpt", false))
+	seedSecret(t, f, "tenant-credential-gpt", "apiKey")
 	writes := 0
 	f.dyn.PrependReactor("update", "modelconfigs", func(a k8stesting.Action) (bool, runtime.Object, error) {
 		if len(a.(k8stesting.UpdateActionImpl).UpdateOptions.DryRun) > 0 {
@@ -666,6 +674,10 @@ func TestConnectorURLsAndHeaders(t *testing.T) {
 		"spec":     map[string]any{"description": "m", "url": "https://mcp.example/mcp?access_token=q-live;extra#token=f-live"},
 	}}
 	f := newOrgFixture(t, conn, malformed)
+	seedSecret(t, f, "tenant-credential-jira", "token")
+	seedSecret(t, f, "tenant-credential-jira-v2", "token")
+	_, err := f.typed.CoreV1().Secrets(orgNS).Update(t.Context(), &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "tenant-credential-jira", Namespace: orgNS}, Data: map[string][]byte{"token": []byte(liveValue), "xsrf": []byte(liveValue)}}, metav1.UpdateOptions{})
+	require.NoError(t, err)
 
 	for _, url := range []string{
 		"https://bot:hunter2@mcp.example/mcp",
