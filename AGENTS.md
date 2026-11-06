@@ -13,3 +13,7 @@ placement* section, kept in its internal plans repository.
   dry-run of the rendered objects, so the API server's schema, CEL rules and admission policies
   give the answer.
 - A workaround for an upstream gap names the upstream issue or pull request that removes it.
+
+## Platform skills
+
+- The Agent Platform's skills in [giantswarm/agent-platform `skills/`](https://github.com/giantswarm/agent-platform/tree/main/skills) describe agent-manager's MCP tools. A change that alters what an agent or a person can do, see or configure through it comes with a pull request there updating the affected skills, linked from this one.

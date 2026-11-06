@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"maps"
 	"slices"
 	"sort"
 	"strings"
@@ -93,6 +94,22 @@ type Config struct {
 	// (chart.EmbeddedSchema().Tags). Nil: the chart takes no tags; agents
 	// are read without them and capabilities.tags is false.
 	Tags *tags.Rule
+	// SkillManager is skill-manager, whose catalogue list_skills proxies as
+	// the caller; the service's pinner is then skill-manager's too. Nil:
+	// skills are discovered in process (deprecated).
+	SkillManager SkillCatalog
+	// Installation is the installation's Dev Portal name, which get_info
+	// reports: a portal agent id is <installation>/<namespace>/<name>.
+	Installation string
+}
+
+// SkillCatalog is skill-manager's catalogue (GET /v1/skills).
+type SkillCatalog interface {
+	// URL is skill-manager's base URL, which get_info reports.
+	URL() string
+	// Skills lists the skills of every configured source, or of source
+	// alone, as the caller; refresh bypasses skill-manager's cache.
+	Skills(ctx context.Context, source string, refresh bool) (map[string]any, error)
 }
 
 // TenantSet finds the organization namespaces agent-platform-operator keeps,
@@ -236,8 +253,18 @@ type InfoResponse struct {
 		// clusters; empty: target clusters are refused.
 		TargetURL string `json:"targetUrl,omitempty"`
 	} `json:"muster"`
-	// SkillsRepositories are the configured skill repositories.
+	// Installation is the installation's Dev Portal name: a portal agent
+	// id is <installation>/<namespace>/<name>. Empty when unset.
+	Installation string `json:"installation"`
+	// DefaultAgent is the installation's default agent, namespace/name,
+	// which clients preselect; empty when none is labelled.
+	DefaultAgent string `json:"defaultAgent"`
+	// SkillsRepositories are the configured skill repositories; empty when
+	// skill-manager serves the skills.
 	SkillsRepositories []string `json:"skillsRepositories"`
+	// SkillManager is skill-manager's URL when it serves the skills: its
+	// tools list the sources and skills, and every pin goes through it.
+	SkillManager string `json:"skillManager,omitempty"`
 	// SkillsGitAuthSecretName is the installation's skills credential Secret
 	// (key token) an agent with a git skill fetches with unless it names its
 	// own; empty: anonymous fetches.
@@ -258,7 +285,7 @@ func (s *Service) Info(ctx context.Context) InfoResponse {
 	out.Capabilities = map[string]bool{
 		"list": true, "get": true, "create": true, "update": true, "delete": true,
 		"status": true, "validate": true, "modelConfigs": true,
-		"skills":         s.skills != nil,
+		"skills":         s.skills != nil || s.cfg.SkillManager != nil,
 		"writesAsCaller": s.kube.Identity() == kube.IdentityCaller,
 		// mode commit: the manifests land as a pull request, opened as the
 		// person, in the repository that owns the namespace.
@@ -303,9 +330,15 @@ func (s *Service) Info(ctx context.Context) InfoResponse {
 	out.Harness.Name = s.cfg.Compose.HarnessName
 	out.Muster.URL = s.cfg.Compose.MusterURL
 	out.Muster.TargetURL = s.cfg.Compose.TargetMusterURL
-	if s.skills != nil {
+	out.DefaultAgent = s.defaultAgent(ctx)
+	out.Installation = s.cfg.Installation
+	switch {
+	case s.cfg.SkillManager != nil:
+		out.SkillsRepositories = []string{}
+		out.SkillManager = s.cfg.SkillManager.URL()
+	case s.skills != nil:
 		out.SkillsRepositories = s.skills.Repositories()
-	} else {
+	default:
 		out.SkillsRepositories = []string{}
 	}
 	out.SkillsGitAuthSecretName = s.cfg.Compose.SkillsGitAuthSecretName
@@ -510,12 +543,67 @@ func (s *Service) List(ctx context.Context, loc Location, filter tags.Filter) ([
 			out = append(out, *a)
 		}
 	}
+	def := s.defaultAgentAt(ctx, st)
 	for i := range out {
 		s.markToolsetBound(&out[i])
 		s.effectiveDefaultToolchains(&out[i])
+		out[i].Default = def != "" && def == out[i].Namespace+"/"+out[i].Name
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, nil
+}
+
+// defaultAgentAt is defaultAgent on the installation's own cluster, empty
+// on a target cluster.
+func (s *Service) defaultAgentAt(ctx context.Context, st *site) string {
+	if st.loc.IsSet() {
+		return ""
+	}
+	return s.defaultAgent(ctx)
+}
+
+// defaultAgent is the installation's default agent, namespace/name: the
+// HelmReleases and Agents labelled DefaultAgentLabel in the managed
+// namespaces, as the caller reads them; of several, a platform-owned one,
+// then the first by namespace/name, with a warning. Empty when none.
+func (s *Service) defaultAgent(ctx context.Context) string {
+	dyn, _, err := s.dyn(ctx)
+	if err != nil {
+		return ""
+	}
+	selector := metav1.ListOptions{LabelSelector: DefaultAgentLabel + "=true"}
+	platform := map[string]bool{}
+	for _, ns := range s.Managed(ctx) {
+		for _, gvr := range []schema.GroupVersionResource{s.helmReleaseGVR(), s.agentGVR()} {
+			list, err := dyn.Resource(gvr).Namespace(ns).List(ctx, selector)
+			if err != nil {
+				s.log.Debug("default agent: list failed; leaving the namespace out", identity.LogAttr(ctx), "namespace", ns, "resource", gvr.Resource, "error", err)
+				continue
+			}
+			for i := range list.Items {
+				obj := &list.Items[i]
+				key := ns + "/" + obj.GetName()
+				platform[key] = platform[key] || PlatformOwned(obj)
+			}
+		}
+	}
+	if len(platform) == 0 {
+		return ""
+	}
+	keys := slices.Sorted(maps.Keys(platform))
+	slices.SortStableFunc(keys, func(a, b string) int {
+		switch {
+		case platform[a] == platform[b]:
+			return 0
+		case platform[a]:
+			return -1
+		}
+		return 1
+	})
+	if len(keys) > 1 {
+		s.log.Warn("several agents are labelled the default; reporting one", "label", DefaultAgentLabel, "default", keys[0], "labelled", keys)
+	}
+	return keys[0]
 }
 
 // Get returns one agent by name.
@@ -548,6 +636,9 @@ func (s *Service) get(ctx context.Context, st *site, name string) (*Agent, error
 	}
 	s.markToolsetBound(&a)
 	s.effectiveDefaultToolchains(&a)
+	if def := s.defaultAgentAt(ctx, st); def != "" {
+		a.Default = def == a.Namespace+"/"+a.Name
+	}
 	return &a, nil
 }
 
@@ -733,10 +824,14 @@ func (s *Service) harnessFor(ctx context.Context, dyn dynamic.Interface, ns, nam
 
 // ---- skills -------------------------------------------------------------------
 
-// ListSkills discovers skills in the configured (or the given) repository.
-// With a filter, every repository stays with only the skills that carry any
-// of its tags.
-func (s *Service) ListSkills(ctx context.Context, repository, ref string, refresh bool, filter tags.Filter) (*skills.Result, error) {
+// ListSkills discovers skills in the configured (or the given) repository,
+// or lists skill-manager's catalogue as the caller when it serves the skills
+// (deprecated: skill-manager's own tools list them). With a filter, every
+// repository stays with only the skills that carry any of its tags.
+func (s *Service) ListSkills(ctx context.Context, repository, ref string, refresh bool, filter tags.Filter) (any, error) {
+	if s.cfg.SkillManager != nil {
+		return s.listSkillManagerSkills(ctx, repository, ref, refresh, filter)
+	}
 	if s.skills == nil {
 		return nil, fmt.Errorf("%w: no skill repositories are configured", ErrUnsupported)
 	}
@@ -756,6 +851,45 @@ func (s *Service) ListSkills(ctx context.Context, repository, ref string, refres
 		out.Repositories = append(out.Repositories, repo)
 	}
 	return out, nil
+}
+
+// listSkillManagerSkills is skill-manager's GET /v1/skills, filtered.
+func (s *Service) listSkillManagerSkills(ctx context.Context, repository, ref string, refresh bool, filter tags.Filter) (map[string]any, error) {
+	if ref != "" {
+		return nil, invalidf("ref is not taken here: skill-manager (%s) reads each source at its configured ref", s.cfg.SkillManager.URL())
+	}
+	res, err := s.cfg.SkillManager.Skills(ctx, repository, refresh)
+	if err != nil {
+		return nil, skillManagerError(err)
+	}
+	if len(filter) == 0 {
+		return res, nil
+	}
+	repos, _ := res["repositories"].([]any)
+	for _, raw := range repos {
+		repo, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		list, _ := repo["skills"].([]any)
+		kept := []any{}
+		for _, item := range list {
+			sk, _ := item.(map[string]any)
+			var have []string
+			if raw, ok := sk["tags"].([]any); ok {
+				for _, t := range raw {
+					if t, ok := t.(string); ok {
+						have = append(have, t)
+					}
+				}
+			}
+			if filter.Matches(have) {
+				kept = append(kept, item)
+			}
+		}
+		repo["skills"] = kept
+	}
+	return res, nil
 }
 
 // skillsTagged keeps the skills that carry any tag of filter, in a new
@@ -1362,7 +1496,7 @@ func (s *Service) createCommit(ctx context.Context, st *site, spec Spec, values 
 // applies the ownership rules: a bare Agent object has nothing to write to; a
 // suspended release is refused unless force; a GitOps-owned one is refused
 // with gitops_owned, naming mode commit, unless allowGitOps (commit mode,
-// which changes it in git).
+// which changes it in git). A platform-owned one is refused in every mode.
 func (s *Service) writableHelmRelease(ctx context.Context, st *site, name string, force, allowGitOps bool) (*unstructured.Unstructured, *unstructured.Unstructured, error) {
 	obj, hr, err := s.agentObjects(ctx, st, name)
 	if errorsIs(err, ErrNotFound) {
@@ -1371,8 +1505,16 @@ func (s *Service) writableHelmRelease(ctx context.Context, st *site, name string
 	if err != nil {
 		return nil, nil, err
 	}
+	if hr == nil && PlatformOwned(obj) {
+		return nil, obj, platformRefusal(st, name)
+	}
 	if hr == nil {
 		return nil, obj, conflictf("Agent %s is a bare Agent with no HelmRelease behind it; agent-manager only writes HelmRelease values (recreate it with create_agent, or delete it with force)", st.describe(name))
+	}
+	if PlatformOwned(hr) {
+		// The release is returned with the refusal: a forced delete removes
+		// a bare Agent only, never one a release renders.
+		return hr, obj, platformRefusal(st, name)
 	}
 	if gitOpsOwnedHR(hr) && !allowGitOps {
 		return nil, obj, s.gitOpsRefusal(ctx, st.flux, hr)
@@ -1746,8 +1888,10 @@ func (s *Service) Delete(ctx context.Context, loc Location, name string, force b
 	res := &DeleteResult{Name: name, Namespace: ns, Target: st.loc.Target, RequestedBy: identity.Caller(ctx), WriteOutcome: WriteOutcome{Mode: mode, DryRun: w.DryRun}}
 	hr, obj, err := s.writableHelmRelease(ctx, st, name, force, mode == ModeCommit)
 	if err != nil {
-		if mode == ModeApply && hr == nil && obj != nil && force && errorsIs(err, ErrConflict) {
-			// A bare Agent, forced: delete the object itself.
+		if mode == ModeApply && hr == nil && obj != nil && force && errorsIs(err, ErrConflict) && !PlatformOwned(obj) {
+			// A bare Agent, forced: delete the object itself (also the
+			// leftover of a deleted release). One the platform ships —
+			// labelled on the Agent too — never goes this way.
 			if err := s.deleteRendered(ctx, st.agent, ns, name, res, false, w.DryRun); err != nil {
 				return nil, err
 			}
@@ -1926,6 +2070,18 @@ func ownerOf(obj *unstructured.Unstructured) (name, namespace string) {
 	return labels[HelmReleaseNameLabel], labels[HelmReleaseNamespaceLabel]
 }
 
+// platformRefusal answers a write to an agent the platform ships.
+func platformRefusal(st *site, name string) error {
+	return conflictf("agent %s ships with the Agent Platform and is read-only here: change it through the platform's configuration", st.describe(name))
+}
+
+// PlatformOwned reports an object the Agent Platform ships (a HelmRelease,
+// its Agent or its chart source): agent-manager reports it and never
+// writes it; it changes through the platform's configuration.
+func PlatformOwned(obj *unstructured.Unstructured) bool {
+	return obj != nil && obj.GetLabels()[PlatformManagedByLabel] == PlatformManagedByValue
+}
+
 func gitOpsOwnedHR(hr *unstructured.Unstructured) bool {
 	_, ok := hr.GetLabels()[KustomizationNameLabel]
 	return ok
@@ -2051,9 +2207,12 @@ func applyHelmRelease(a *Agent, hr *unstructured.Unstructured, rule *tags.Rule) 
 	if a.CreatedBy == "" {
 		a.CreatedBy = hr.GetAnnotations()[CreatedByAnnotation]
 	}
-	if ref.GitOpsOwned {
+	switch {
+	case PlatformOwned(hr):
+		a.Managed = ManagedPlatform
+	case ref.GitOpsOwned:
 		a.Managed = ManagedGitOps
-	} else {
+	default:
 		a.Managed = ManagedHelmRelease
 	}
 	values, _, _ := unstructured.NestedMap(hr.Object, "spec", "values")

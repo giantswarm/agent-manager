@@ -153,11 +153,19 @@ flux:
   # `auto` discovers it.
   ociRepositoryApiVersion: auto
 
+skillManager:
+  # -- skill-manager's base URL (`http://skill-manager.agent-platform.svc:8080`):
+  # skills and plugins are pinned through it, `list_skills` proxies its
+  # catalogue (deprecated), as the caller; `skills.repositories` is unused.
+  # Empty: in-process discovery and pinning (deprecated).
+  url: ""
+
 skills:
   # -- GitHub repositories whose SKILL.md files list_skills offers (the same
   # list the portal's create flow reads), each with the head commit an agent
   # pins. Empty turns the skills capability off; skills given by URL are still
-  # resolved through the GitHub API.
+  # resolved through the GitHub API. Unused when `skillManager.url` is set.
+  # Deprecated: skill-manager's sources replace it.
   repositories:
     - https://github.com/giantswarm/agent-skills
   github:
@@ -521,6 +529,11 @@ devPortal:
   # which holds no value and no token. Empty: the Secret is named without
   # a link.
   url: ""
+
+# -- The installation's name in the Dev Portal, reported by `get_info` as
+# `installation`: a portal agent id is `<installation>/<namespace>/<name>`.
+# Empty: not reported.
+installation: ""
 
 # -- Annotations on the pod.
 podAnnotations: {}  # @schema additionalProperties: true

@@ -187,7 +187,7 @@ func NewMCPServer(svc *agents.Service, version string, opts ...Option) *mcpserve
 	gitAuthReplaceProp := mcp.WithString(argGitAuthSecret, mcp.Description(gitAuthDesc+"; \"\" goes back to it"))
 	skillsProp := mcp.WithArray(argSkills, mcp.Description(skillDesc), mcp.Items(skillEntry))
 	skillsReplaceProp := mcp.WithArray(argSkills, mcp.Description("Replaces the whole skill list: "+skillShape+"."), mcp.Items(skillEntry))
-	refreshSkillsProp := mcp.WithBoolean(argRefreshSkills, mcp.Description("Re-pin every git skill and git plugin to its default-branch head and change nothing else on the release (default false)."))
+	refreshSkillsProp := mcp.WithBoolean(argRefreshSkills, mcp.Description("Re-pin every git skill and git plugin to its default-branch head (with skill-manager: its source's ref); nothing else changes (default false)."))
 	selectorShape := "preset:<name>, server:<name>, workflow:<name> or tool:<name> selectors, at most 32"
 	toolsetDesc := "Gateway tools the agent may use: " + selectorShape + "; preset:none means no tools."
 	presetsSentence := "Presets: " + strings.Join(agents.PresetSelectors(), ", ") + "."
@@ -253,7 +253,7 @@ func NewMCPServer(svc *agents.Service, version string, opts ...Option) *mcpserve
 	// for the tools that only read and write this installation's own resources.
 	s.AddTool(mcp.NewTool(ToolGetInfo,
 		tooldesc.Describe("Where you can create agents and what this installation offers: managed namespaces, chart, Harness, capabilities.",
-			"Call it first: capabilities says whether this installation offers mode commit, the session tools and workload clusters. Also the service version, the served API versions, the muster URL and Flux settings composed into every agent, and how writes are authenticated."),
+			"Call it first: capabilities says whether this installation offers mode commit, the session tools and workload clusters; defaultAgent (namespace/name) is the agent to preselect when starting a session; a portal agent id is <installation>/<namespace>/<name>. Also the service version, the served API versions, the muster URL and Flux settings composed into every agent, and how writes are authenticated."),
 		mcp.WithReadOnlyHintAnnotation(true),
 		mcp.WithDestructiveHintAnnotation(false),
 		mcp.WithIdempotentHintAnnotation(false),
@@ -262,7 +262,7 @@ func NewMCPServer(svc *agents.Service, version string, opts ...Option) *mcpserve
 
 	s.AddTool(mcp.NewTool(ToolListAgents,
 		tooldesc.Describe("List the agents of a namespace, one summary each: model, Harness, toolset, readiness and how it is managed.",
-			"managed: helmrelease is writable here, gitops changes only with mode commit, none is a bare Agent object. implicitFullAccess: true means the agent sees every gateway tool and still needs a toolset (update_agent). toolsetBound: true means the toolset is bound to each session at its start, for every process of its sandbox; otherwise the agent's runtime declares it. An agent's prompt, skills, plugins and values come from get_agent."),
+			"managed: helmrelease is writable here, gitops only with mode commit, platform ships with the Agent Platform, read-only; none is a bare Agent. default: true is the installation's default agent: preselect it when starting a session. implicitFullAccess: true: the agent sees every gateway tool and still needs a toolset (update_agent). toolsetBound: true: the toolset is bound to each session at its start; else the runtime declares it. Prompt, skills, plugins and values come from get_agent."),
 		nsProp,
 		orgProp,
 		clusterProp,
@@ -276,7 +276,7 @@ func NewMCPServer(svc *agents.Service, version string, opts ...Option) *mcpserve
 
 	s.AddTool(mcp.NewTool(ToolGetAgent,
 		tooldesc.Describe("Get one agent: its HelmRelease values, Harness, pinned skills and plugins, toolset and Agent status.",
-			""),
+			"default: true is the installation's default agent, to preselect when starting a session."),
 		mcp.WithString(argName, mcp.Required(), mcp.Description("Agent name")),
 		nsProp,
 		orgProp,
@@ -320,7 +320,7 @@ func NewMCPServer(svc *agents.Service, version string, opts ...Option) *mcpserve
 
 	s.AddTool(mcp.NewTool(ToolUpdateAgent,
 		tooldesc.Describe("Change an agent: only the fields passed change; a list, labels or annotations replaces the whole value.",
-			"Lists are skills, plugins, egress and toolset. \"\" clears a text field back to the chart default; gitAuthSecretName \"\" goes back to the installation's. "+presetsSentence+" refreshSkills re-pins every git skill and git plugin. harness re-runs the create-time checks on the new Harness. Returns the values before and after. A suspended release is refused unless force is true; a GitOps-owned one needs mode commit."),
+			"Lists are skills, plugins, egress and toolset. \"\" clears a text field back to the chart default; gitAuthSecretName \"\" goes back to the installation's. "+presetsSentence+" refreshSkills re-pins every git skill and git plugin. harness re-runs the create-time checks on the new Harness. Returns the values before and after. A suspended release needs force; a GitOps-owned one mode commit; a platform one is refused."),
 		mcp.WithString(argName, mcp.Required(), mcp.Description("Agent name")),
 		mcp.WithString(argDisplayName, mcp.Description("New friendly name; \"\" clears it")),
 		tagsReplaceProp,
@@ -353,7 +353,7 @@ func NewMCPServer(svc *agents.Service, version string, opts ...Option) *mcpserve
 
 	s.AddTool(mcp.NewTool(ToolDeleteAgent,
 		tooldesc.Describe("Delete an agent: its HelmRelease, which removes the Agent and its muster RemoteMCPServer.",
-			"The chart's shared OCIRepository goes too when nothing else in the namespace uses it; the answer says why it was kept. A bare Agent or a suspended release is refused unless force is true; a GitOps-owned one needs mode commit."),
+			"The chart's shared OCIRepository goes too when nothing else in the namespace uses it; the answer says why it was kept. A bare Agent or a suspended release is refused unless force is true; a GitOps-owned one needs mode commit; a platform one (managed: platform) is refused."),
 		mcp.WithString(argName, mcp.Required(), mcp.Description("Agent name")),
 		mcp.WithBoolean(argForce, mcp.Description("Also delete bare Agent objects and suspended releases (default false). A GitOps-owned release is never deleted live: use mode commit")),
 		nsProp,
@@ -438,10 +438,10 @@ func NewMCPServer(svc *agents.Service, version string, opts ...Option) *mcpserve
 	), t.listEgressPolicies)
 
 	s.AddTool(mcp.NewTool(ToolListSkills,
-		tooldesc.Describe("List the skills agents can mount, from the configured skill repositories, with each repository's head commit.",
-			"Per repository: the ref read, the commit it resolved to (what a skills entry pins) and each SKILL.md's name, description, path and tags (metadata.tags). Cached briefly; refresh re-reads GitHub."),
+		tooldesc.Describe("Deprecated, use skill-manager's list_skills: the skills agents can mount, per repository with its head commit.",
+			"Per repository: the ref read, the commit it resolved to (what a skills entry pins) and each SKILL.md's name, description, path and tags (metadata.tags). Cached briefly; refresh re-reads GitHub. With skill-manager (get_info skillManager) this is its list_skills, as you."),
 		mcp.WithString(argRepository, mcp.Description("Only this repository (https://github.com/<owner>/<repo>); default: every configured one")),
-		mcp.WithString(argRef, mcp.Description("Git ref to read; default: the default branch (the ref refreshSkills follows)")),
+		mcp.WithString(argRef, mcp.Description("Git ref to read; default: the default branch (the ref refreshSkills follows). Refused with skill-manager")),
 		mcp.WithBoolean(argRefresh, mcp.Description("Bypass the cache (default false)")),
 		tagsFilterProp,
 		mcp.WithReadOnlyHintAnnotation(true),

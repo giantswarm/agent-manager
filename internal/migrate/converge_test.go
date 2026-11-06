@@ -92,3 +92,14 @@ func TestConvergeSourcesRefusesWhatItDoesNotOwn(t *testing.T) {
 	}
 	assert.Contains(t, reps["kagent"].Reason, "migrate command")
 }
+
+// A source the Agent Platform ships moves with the platform, never here.
+func TestConvergeSourcesLeavesAPlatformOwnedSource(t *testing.T) {
+	c := newCluster(managedSource("kagent", ">=2.0.0 <3.0.0", map[string]string{agents.PlatformManagedByLabel: agents.PlatformManagedByValue}))
+
+	reps := converge(t, c, "2.3.0", "", "kagent")
+
+	assert.Equal(t, SourceNotMoved, reps["kagent"].Action)
+	assert.Contains(t, reps["kagent"].Reason, "Agent Platform")
+	assert.Equal(t, ">=2.0.0 <3.0.0", c.semver(t, "kagent", "agent"))
+}

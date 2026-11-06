@@ -422,6 +422,48 @@ func TestGitOpsOwnedReleaseInAnotherNamespace(t *testing.T) {
 	assert.True(t, st.HelmRelease.GitOpsOwned)
 }
 
+// TestPlatformOwnedAgentIsReadOnly is the Agent Manager the agent-platform
+// chart ships: its HelmRelease carries the platform's managed-by label, so it
+// is listed as managed by the platform and no write reaches it, forced or not.
+func TestPlatformOwnedAgentIsReadOnly(t *testing.T) {
+	f := seeded(t)
+	ctx := context.Background()
+	values := map[string]any{"agent": map[string]any{"name": "agent-manager-assistant"}, "modelConfig": map[string]any{"name": "default-model-config"}, ToolsetValuesKey: []any{"preset:agent-platform"}}
+	hr := helmRelease("kagent", "agent-manager-assistant", values, true, map[string]any{"agent-platform.giantswarm.io/managed-by": "agent-platform", KustomizationNameLabel: "flux-giantswarm"})
+	mustCreate(t, f, hrGVR, hr)
+	mustCreate(t, f, agentGVR, agentObject("kagent", "agent-manager-assistant", "agent-manager-assistant", "kagent", true, true))
+
+	got, err := f.svc.Get(ctx, In(""), "agent-manager-assistant")
+	require.NoError(t, err)
+	assert.Equal(t, "platform", got.Managed)
+
+	list, err := f.svc.List(ctx, In(""), nil)
+	require.NoError(t, err)
+	var listed *Agent
+	for i := range list {
+		if list[i].Name == "agent-manager-assistant" {
+			listed = &list[i]
+		}
+	}
+	require.NotNil(t, listed)
+	assert.Equal(t, "platform", listed.Managed)
+
+	const refusal = "ships with the Agent Platform"
+	_, err = f.svc.Update(ctx, Update{Name: "agent-manager-assistant", Description: str("x"), Force: true})
+	require.ErrorIs(t, err, ErrConflict)
+	assert.Contains(t, err.Error(), refusal)
+	_, err = f.svc.Update(ctx, Update{Name: "agent-manager-assistant", RefreshSkills: true})
+	require.ErrorIs(t, err, ErrConflict)
+	assert.Contains(t, err.Error(), refusal)
+	_, err = f.svc.ValidateUpdate(ctx, Update{Name: "agent-manager-assistant", Description: str("x")})
+	require.ErrorIs(t, err, ErrConflict)
+	_, err = f.svc.Delete(ctx, In(""), "agent-manager-assistant", true, WriteOptions{})
+	require.ErrorIs(t, err, ErrConflict)
+	assert.Contains(t, err.Error(), refusal)
+	_, err = f.svc.Get(ctx, In(""), "agent-manager-assistant")
+	require.NoError(t, err, "nothing was deleted")
+}
+
 func TestCreateValidatesPinsThenAppliesBothObjects(t *testing.T) {
 	f := seeded(t)
 	ctx := context.Background()
@@ -801,6 +843,27 @@ func TestUpdateMergesIntoValuesAndHonorsOwnership(t *testing.T) {
 	_, err = f.svc.Update(ctx, Update{Name: "bare", DisplayName: new("x")})
 	require.ErrorIs(t, err, ErrConflict)
 	assert.Contains(t, err.Error(), "bare Agent")
+}
+
+// A forced delete removes a bare Agent, never one the platform ships, even
+// when its release cannot be read (renamed or not yet applied).
+func TestForcedDeleteKeepsAPlatformOwnedAgent(t *testing.T) {
+	f := seeded(t)
+	ctx := t.Context()
+	platform := agentObject("kagent", "agent-manager-assistant", "renamed", "agent-platform", true, true)
+	labels := platform.GetLabels()
+	labels[PlatformManagedByLabel] = PlatformManagedByValue
+	platform.SetLabels(labels)
+	mustCreate(t, f, agentGVR, platform)
+
+	_, err := f.svc.Delete(ctx, In(""), "agent-manager-assistant", true, WriteOptions{})
+	require.ErrorIs(t, err, ErrConflict)
+	assert.Contains(t, err.Error(), "ships with the Agent Platform")
+	_, err = f.svc.Update(ctx, Update{Name: "agent-manager-assistant", Description: str("x")})
+	require.ErrorIs(t, err, ErrConflict)
+	assert.Contains(t, err.Error(), "ships with the Agent Platform")
+	_, err = f.dyn.Resource(agentGVR).Namespace("kagent").Get(ctx, "agent-manager-assistant", metav1.GetOptions{})
+	require.NoError(t, err, "the Agent is kept")
 }
 
 // A delete never takes the chart source agent-platform-operator keeps.

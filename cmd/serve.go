@@ -30,6 +30,7 @@ import (
 	"github.com/giantswarm/agent-manager/internal/oci"
 	"github.com/giantswarm/agent-manager/internal/organizations"
 	"github.com/giantswarm/agent-manager/internal/server"
+	"github.com/giantswarm/agent-manager/internal/skillmanager"
 	"github.com/giantswarm/agent-manager/internal/skills"
 	"github.com/giantswarm/agent-manager/internal/toolchainmanager"
 	"github.com/giantswarm/agent-manager/internal/workspaces"
@@ -77,11 +78,13 @@ type serveOptions struct {
 	skillsGitAuthPrev  string
 	skillsGitAuthMint  bool
 	skillsCacheTTL     time.Duration
+	skillManagerURL    string
 
 	kagentTarget string
 
 	multiTenant  bool
 	devPortalURL string
+	installation string
 	// orgsRepository, orgsBranch, orgsObjectsPath and orgsContentPrefix
 	// are where the organization tools' mode commit writes.
 	orgsRepository    string
@@ -158,6 +161,7 @@ environment variable named next to it; flags win over the environment.`,
 	f.StringVar(&o.skillsGitAuth, "skills-git-auth-secret-name", envOr("AGENT_MANAGER_SKILLS_GIT_AUTH_SECRET_NAME", ""), "Secret (key token) in the agent's namespace every agent with a git skill fetches its skills with, unless the agent names its own gitAuthSecretName; composed as the chart value skillsGitAuthSecretRef.name. Empty: such agents fetch anonymously (AGENT_MANAGER_SKILLS_GIT_AUTH_SECRET_NAME)")
 	f.StringVar(&o.skillsGitAuthPrev, "skills-git-auth-previous-secret-names", envOr("AGENT_MANAGER_SKILLS_GIT_AUTH_PREVIOUS_SECRET_NAMES", ""), "Comma-separated earlier names of the --skills-git-auth-secret-name Secret: an agent that names one is composed with the current name on its next update (agent-manager migrate moves the rest), and with --skills-git-auth-mint their Secrets are kept filled too until no agent names them (AGENT_MANAGER_SKILLS_GIT_AUTH_PREVIOUS_SECRET_NAMES)")
 	f.BoolVar(&o.skillsGitAuthMint, "skills-git-auth-mint", envBool("AGENT_MANAGER_SKILLS_GIT_AUTH_MINT", false), "Keep the Secret --skills-git-auth-secret-name names filled with the skills GitHub App's installation token in every managed namespace, refreshed before it expires; the Secret must exist (the chart renders it) and the ServiceAccount may update it. Needs the skills GitHub App (AGENT_MANAGER_SKILLS_GIT_AUTH_MINT)")
+	f.StringVar(&o.skillManagerURL, "skill-manager-url", envOr("AGENT_MANAGER_SKILL_MANAGER_URL", ""), "Base URL of skill-manager (http://skill-manager.agent-platform.svc:8080): skills and plugins are pinned through its POST /v1/resolve and list_skills proxies its GET /v1/skills, as the caller; --skills-repositories is then unused. Empty: skills are discovered and pinned in process, deprecated (AGENT_MANAGER_SKILL_MANAGER_URL)")
 	f.DurationVar(&o.skillsCacheTTL, "skills-cache-ttl", envDuration("AGENT_MANAGER_SKILLS_CACHE_TTL", 5*time.Minute), "How long a repository's discovered skills are reused (AGENT_MANAGER_SKILLS_CACHE_TTL)")
 	f.StringVar(&o.kagentTarget, "kagent-target", envOr("AGENT_MANAGER_KAGENT_TARGET", ""), "The kagent controller's gRPC target through agentgateway, which list_sessions, get_session, get_session_turn, start_session and delete_session call as the caller: grpc://host:port (h2c, the in-cluster agentgateway Service) or grpcs://host[:port] (TLS). Empty: the session tools answer unsupported. Needs --enable-oauth for a caller token (AGENT_MANAGER_KAGENT_TARGET)")
 	f.BoolVar(&o.multiTenant, "multi-tenant", envBool("AGENT_MANAGER_MULTI_TENANT", false), "Manage the organization namespaces beside the configured ones: those labelled "+apov1alpha1.OrganizationLabel+", which agent-platform-operator keeps (never --kagent-namespace), found by label with the ServiceAccount's read of namespaces; and serve the organization tools, which act as the caller. Needs --downstream-oauth (AGENT_MANAGER_MULTI_TENANT)")
@@ -165,6 +169,7 @@ environment variable named next to it; flags win over the environment.`,
 	f.StringVar(&o.orgsBranch, "organizations-branch", envOr("AGENT_MANAGER_ORGANIZATIONS_BRANCH", "main"), "The branch of --organizations-repository the pull requests go to (AGENT_MANAGER_ORGANIZATIONS_BRANCH)")
 	f.StringVar(&o.orgsObjectsPath, "organizations-objects-path", envOr("AGENT_MANAGER_ORGANIZATIONS_OBJECTS_PATH", ""), "The directory of --organizations-repository the installation's Kustomization applies the organization objects from, one directory per parent namespace; its kustomization.yaml lists them (AGENT_MANAGER_ORGANIZATIONS_OBJECTS_PATH)")
 	f.StringVar(&o.orgsContentPrefix, "organizations-content-prefix", envOr("AGENT_MANAGER_ORGANIZATIONS_CONTENT_PREFIX", organizations.DefaultContentPrefix), "The directory of --organizations-repository that holds the organizations' content paths, <prefix>/<parent>/<name>: agent-platform-operator's --organization-path without {parent}/{name} (AGENT_MANAGER_ORGANIZATIONS_CONTENT_PREFIX)")
+	f.StringVar(&o.installation, "installation", envOr("AGENT_MANAGER_INSTALLATION", ""), "The installation's name in the Dev Portal, which get_info reports: a portal agent id is <installation>/<namespace>/<name> (AGENT_MANAGER_INSTALLATION)")
 	f.StringVar(&o.devPortalURL, "dev-portal-url", envOr("AGENT_MANAGER_DEV_PORTAL_URL", ""), "The Dev Portal's base URL (https://portal.example.com): the organization tools answer a missing or replaced credential with its credential form's link; empty names the Secret without a link (AGENT_MANAGER_DEV_PORTAL_URL)")
 	f.BoolVar(&o.mcpEnabled, "mcp-enabled", envBool("AGENT_MANAGER_MCP_ENABLED", true), "Serve the MCP streamable-HTTP endpoint (AGENT_MANAGER_MCP_ENABLED)")
 	f.StringVar(&o.mcpPath, "mcp-path", envOr("AGENT_MANAGER_MCP_PATH", "/mcp"), "MCP endpoint path (AGENT_MANAGER_MCP_PATH)")
@@ -286,13 +291,26 @@ func runServe(ctx context.Context, o *serveOptions) error {
 	// takes no tags.
 	tagRule := chart.EmbeddedSchema().Tags
 
-	var discoverer *skills.Discoverer
-	if repos := splitList(o.skillsRepositories); len(repos) > 0 {
-		discoverer = skills.New(skills.Config{Repositories: repos, APIURL: o.skillsGitHubAPI, Tokens: skillsTokens, CacheTTL: o.skillsCacheTTL, Tags: tagRule}, log)
-	}
 	// Skills are pinned before they are written: a branch or tag to its head
-	// commit through the GitHub API, an image tag to its digest.
-	pinner := skills.NewResolver(o.skillsGitHubAPI, skillsTokens, nil, nil)
+	// commit, an image tag to its digest — through skill-manager when it is
+	// configured, else in process through the GitHub API (deprecated).
+	var (
+		discoverer   *skills.Discoverer
+		pinner       agents.SkillPinner
+		skillManager agents.SkillCatalog
+	)
+	if o.skillManagerURL != "" {
+		client, err := skillmanager.New(skillmanager.Config{URL: o.skillManagerURL})
+		if err != nil {
+			return fmt.Errorf("--skill-manager-url: %w", err)
+		}
+		pinner, skillManager = client, client
+	} else {
+		pinner = skills.NewResolver(o.skillsGitHubAPI, skillsTokens, nil, nil)
+		if repos := splitList(o.skillsRepositories); len(repos) > 0 {
+			discoverer = skills.New(skills.Config{Repositories: repos, APIURL: o.skillsGitHubAPI, Tokens: skillsTokens, CacheTTL: o.skillsCacheTTL, Tags: tagRule}, log)
+		}
+	}
 
 	// The one thing agent-manager does without a caller: the boot Secret of
 	// private git skills, written with the ServiceAccount's permission to
@@ -414,6 +432,8 @@ func runServe(ctx context.Context, o *serveOptions) error {
 		HarnessEgress:    harnessEgress,
 		Toolchains:       toolchains,
 		Tenants:          tenantSetOrNil(orgNamespaces),
+		SkillManager:     skillManager,
+		Installation:     o.installation,
 	}, log)
 
 	srvCfg := server.Config{Addr: o.listen, MCPEnabled: o.mcpEnabled, MCPPath: o.mcpPath}
@@ -447,7 +467,7 @@ func runServe(ctx context.Context, o *serveOptions) error {
 	log.Info("agent-manager starting", "version", build.Version, "commit", build.Commit, "listen", o.listen, "rest", api.Prefix, "mcp", o.mcpPath, "mcpEnabled", o.mcpEnabled,
 		"oauth", o.oauthEnabled, "downstreamOAuth", o.downstreamOAuth, "commit", info.Capabilities["commit"], "identity", info.Identity,
 		"namespaces", svc.Managed(ctx), "multiTenant", o.multiTenant, "chart", o.chartOCIURL, "chartSemver", o.chartSemver, "chartVersion", info.Chart.LatestVersion, "schemaSource", info.Chart.SchemaSource,
-		"kagentAPI", kagentVersion, "harness", info.Harness.Name, "musterURL", info.Muster.URL, "helmReleaseAPI", helmReleaseAPI, "ociRepositoryAPI", ociRepositoryAPI, "skillsRepositories", info.SkillsRepositories, "skillsGitHubApp", o.skillsAppID, "skillsGitAuthSecretName", o.skillsGitAuth, "kagentTarget", o.kagentTarget)
+		"kagentAPI", kagentVersion, "harness", info.Harness.Name, "musterURL", info.Muster.URL, "helmReleaseAPI", helmReleaseAPI, "ociRepositoryAPI", ociRepositoryAPI, "skillsRepositories", info.SkillsRepositories, "skillManager", info.SkillManager, "skillsGitHubApp", o.skillsAppID, "skillsGitAuthSecretName", o.skillsGitAuth, "kagentTarget", o.kagentTarget)
 
 	if bootSecret != nil {
 		go bootSecret.Run(ctx)

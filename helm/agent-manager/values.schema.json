@@ -317,6 +317,10 @@
             "type": "array",
             "description": "Image pull secrets."
         },
+        "installation": {
+            "type": "string",
+            "description": "The installation's name in the Dev Portal, reported by `get_info` as `installation`: a portal agent id is `<installation>/<namespace>/<name>`. Empty: not reported."
+        },
         "kagent": {
             "type": "object",
             "additionalProperties": false,
@@ -830,6 +834,16 @@
                 }
             }
         },
+        "skillManager": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "description": "skill-manager's base URL (`http://skill-manager.agent-platform.svc:8080`): skills and plugins are pinned through it, `list_skills` proxies its catalogue (deprecated), as the caller; `skills.repositories` is unused. Empty: in-process discovery and pinning (deprecated)."
+                }
+            }
+        },
         "skills": {
             "type": "object",
             "additionalProperties": false,
@@ -889,7 +903,7 @@
                 },
                 "repositories": {
                     "type": "array",
-                    "description": "GitHub repositories whose SKILL.md files list_skills offers (the same list the portal's create flow reads), each with the head commit an agent pins. Empty turns the skills capability off; skills given by URL are still resolved through the GitHub API.",
+                    "description": "GitHub repositories whose SKILL.md files list_skills offers (the same list the portal's create flow reads), each with the head commit an agent pins. Empty turns the skills capability off; skills given by URL are still resolved through the GitHub API. Unused when `skillManager.url` is set. Deprecated: skill-manager's sources replace it.",
                     "items": {
                         "type": "string"
                     }

@@ -247,6 +247,28 @@ port: {{ $port }}
 {{- end -}}
 
 {{/*
+skill-manager's address for the egress policy: namespace (empty: any) and
+port, from skillManager.url; empty when unset.
+*/}}
+{{- define "agent-manager.skillManagerEgress" -}}
+{{- with .Values.skillManager.url -}}
+{{- $url := urlParse . -}}
+{{- if not (has $url.scheme (list "http" "https")) -}}
+{{- fail (printf "skillManager.url %q must be http(s)://host[:port]" .) -}}
+{{- end -}}
+{{- $hostPort := splitList ":" $url.host -}}
+{{- $port := ternary (last $hostPort) (ternary "443" "80" (eq $url.scheme "https")) (gt (len $hostPort) 1) -}}
+{{- $labels := splitList "." (first $hostPort) -}}
+{{- $namespace := "" -}}
+{{- if and (ge (len $labels) 3) (eq (index $labels 2) "svc") -}}
+{{- $namespace = index $labels 1 -}}
+{{- end -}}
+namespace: {{ $namespace | quote }}
+port: {{ $port }}
+{{- end -}}
+{{- end -}}
+
+{{/*
 The installation's skills boot Secret: the minted one, else
 skills.gitAuthSecretName. The minted one is the installation's own,
 <fullname>-skills-token, never under the tenant-credential- prefix that marks a

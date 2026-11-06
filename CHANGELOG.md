@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- The installation's default agent: label `agent-platform.giantswarm.io/default: "true"` on its HelmRelease or Agent. `list_agents` and `get_agent` report it with `default: true`, `get_info` as `defaultAgent` (`<namespace>/<name>`, empty when none); clients preselect it. Of several labelled, a platform-owned one wins, then the first by namespace/name, with a warning logged (giantswarm/giantswarm#38970).
+- `installation` (`--installation`, `AGENT_MANAGER_INSTALLATION`): the installation's Dev Portal name, reported by `get_info` as `installation` (empty when unset); a portal agent id is `<installation>/<namespace>/<name>`.
+- `skillManager.url` (`--skill-manager-url`): skills and plugins are pinned through skill-manager's `POST /v1/resolve` as the caller, one call per list, which also checks readability and paths and reports each git plugin's format for the Harness guard — `create_agent`, `update_agent` (with `refreshSkills`), `validate_agent` and `migrate` (its service token, `--skill-manager-token`); an entry with no ref below a skill-manager source's path pins that source's ref. `list_skills` and `GET /skills` proxy its `GET /v1/skills` and refuse `ref`; `get_info` reports `skillManager`. skill-manager's 403 is `403`, 400 and 404 are `400`, 401 is `401`, 5xx `502` (giantswarm/giantswarm#38322).
+- Agents the Agent Platform ships (HelmRelease label `agent-platform.giantswarm.io/managed-by: agent-platform`) are `managed: platform` in `list_agents` and `get_agent`; `update_agent` (with `refreshSkills` too), `validate_agent` with `update` and `delete_agent` refuse them in every mode with `409 conflict`: they change through the platform's configuration. The label on the Agent alone suffices, and the `migrate` command and the start-up source convergence report such a release, and the source it uses, without writing them (giantswarm/giantswarm#38970).
+- With `skillManager.url`, two checks run where they did not: `refreshSkills` and the Harness plugin-format check go through skill-manager's read check as the caller, so a collaborator who cannot read an agent's private skill repository cannot refresh that agent; and every skill and plugin path must exist at its commit.
+
+### Deprecated
+
+- In-process skill discovery and pinning (`skills.repositories`, no `skillManager.url`), and `list_skills` / `GET /skills`: skill-manager's tools list the skills (giantswarm/giantswarm#38322).
+
+## [2.21.0] - 2026-11-06
+
 ### Changed
 
 - **Breaking:** a ModelConfig named `default-model-config` no longer counts as a namespace's default while none is annotated. Only the annotation `agent-platform.giantswarm.io/is-default-model-config: "true"` marks the default.
@@ -594,7 +608,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Chart: the MCPServer CR carries `agent-platform.giantswarm.io/tool-group: agent-platform` next to `muster.giantswarm.io/type` — the Agent Platform tier of MCP servers (the portal's MCP servers page, the `agent-platform` toolset preset). `muster.mcpServer.labels` still adds or overrides labels. (#23)
 
-[Unreleased]: https://github.com/giantswarm/agent-manager/compare/v2.20.0...HEAD
+[Unreleased]: https://github.com/giantswarm/agent-manager/compare/v2.21.0...HEAD
+[2.21.0]: https://github.com/giantswarm/agent-manager/compare/v2.20.0...v2.21.0
 [2.20.0]: https://github.com/giantswarm/agent-manager/compare/v2.20.0-rc.1...v2.20.0
 [2.20.0-rc.1]: https://github.com/giantswarm/agent-manager/compare/v2.19.0-rc.2...v2.20.0-rc.1
 [2.19.0-rc.2]: https://github.com/giantswarm/agent-manager/compare/v2.19.0-rc.1...v2.19.0-rc.2
