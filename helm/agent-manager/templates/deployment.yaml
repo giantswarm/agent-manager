@@ -84,8 +84,19 @@ spec:
             - {{ printf "--organizations-content-prefix=%s" $.Values.tenants.commit.contentPrefix | quote }}
             {{- end }}
             {{- end }}
-            {{- with .Values.devPortal.url }}
-            - {{ printf "--dev-portal-url=%s" . | quote }}
+            {{- with .Values.credentials.uiURL }}
+            - {{ printf "--credential-ui-url=%s" . | quote }}
+            - --credential-operations-namespace={{ include "agent-manager.credentialOperationsNamespace" $ }}
+            {{- end }}
+            {{- if .Values.githubTokenExchange.endpoint }}
+            - --github-token-exchange-endpoint={{ .Values.githubTokenExchange.endpoint }}
+            - --github-token-exchange-client-id={{ required "githubTokenExchange.clientID is required" .Values.githubTokenExchange.clientID }}
+            - --github-token-exchange-audience={{ required "githubTokenExchange.audience is required" .Values.githubTokenExchange.audience }}
+            - --github-token-exchange-client-secret-file=/etc/agent-manager/github-token-exchange/client-secret
+            - --github-api-url={{ .Values.github.apiURL }}
+            {{- if .Values.githubTokenExchange.caSecretName }}
+            - --github-token-exchange-ca-file=/etc/agent-manager/github-token-exchange-ca/ca.crt
+            {{- end }}
             {{- end }}
             {{- with .Values.skills.repositories }}
             - --skills-repositories={{ join "," . }}
@@ -326,6 +337,16 @@ spec:
               mountPath: /etc/agent-manager/toolchain-registry
               readOnly: true
             {{- end }}
+            {{- if .Values.githubTokenExchange.endpoint }}
+            - name: github-token-exchange
+              mountPath: /etc/agent-manager/github-token-exchange
+              readOnly: true
+            {{- end }}
+            {{- if .Values.githubTokenExchange.caSecretName }}
+            - name: github-token-exchange-ca
+              mountPath: /etc/agent-manager/github-token-exchange-ca
+              readOnly: true
+            {{- end }}
       volumes:
         - name: tmp
           emptyDir: {}
@@ -353,6 +374,23 @@ spec:
             items:
               - key: .dockerconfigjson
                 path: config.json
+        {{- end }}
+        {{- if .Values.githubTokenExchange.endpoint }}
+        - name: github-token-exchange
+          secret:
+            secretName: {{ required "githubTokenExchange.secretName is required" .Values.githubTokenExchange.secretName }}
+            defaultMode: 0440
+            items:
+              - key: client-secret
+                path: client-secret
+        {{- end }}
+        {{- if .Values.githubTokenExchange.caSecretName }}
+        - name: github-token-exchange-ca
+          secret:
+            secretName: {{ .Values.githubTokenExchange.caSecretName }}
+            items:
+              - key: ca.crt
+                path: ca.crt
         {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:

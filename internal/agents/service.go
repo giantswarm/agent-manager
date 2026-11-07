@@ -51,7 +51,8 @@ type Config struct {
 	// GitHub offers commit mode: the pull request is opened as the person
 	// with the GitHub token the App-pinned registration carries. Nil: commit
 	// mode is refused as unsupported.
-	GitHub RemoteFor
+	GitHub     RemoteFor
+	GitHubUser func(context.Context) (*identity.GitHub, error)
 	// SkillsBootSecret keeps the installation's skills credential Secret
 	// filled with the skills GitHub App's token; nil: the Secret is
 	// provisioned by someone else.

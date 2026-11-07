@@ -531,7 +531,7 @@ func NewMCPServer(svc *agents.Service, version string, opts ...Option) *mcpserve
 		mcp.WithOpenWorldHintAnnotation(false),
 	), t.toolchainUsers)
 
-	addOrganizationTools(s, o.orgs)
+	addOrganizationTools(s, o.orgs, o.lifecycle)
 	return s
 }
 

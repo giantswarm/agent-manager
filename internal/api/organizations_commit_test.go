@@ -137,66 +137,6 @@ func TestCreateOrganizationInCommitModeOpensOnePullRequest(t *testing.T) {
 	assert.Empty(t, hfake.PullRequests())
 }
 
-// A credential lands as its own encrypted file at a secret path, never in
-// plaintext, in the answer or in git; a path no creation rule covers is
-// refused; an existing file is replaced only on request.
-func TestCredentialsAreCommittedEncryptedOrRefused(t *testing.T) {
-	const value = "sk-ant-value-1234" // #nosec G101 -- a test value, no credential
-	secretFile := paymentsPath + "/tenant-credential-claude-secret.enc.yaml"
-	req := organizations.CredentialCommit{Namespace: orgNS, Secret: "tenant-credential-claude", Key: "apiKey", Value: []byte(value)} // #nosec G101 -- a test value
-
-	f, fake := commitFixture(t, nil)
-	res, err := f.orgs.CommitCredential(f.ctx, req)
-	require.NoError(t, err)
-	require.Len(t, fake.PullRequests(), 1)
-	assert.Equal(t, res.PullRequest, fake.PullRequests()[0].URL)
-	head := fake.Files(mcRepo, fake.PullRequests()[0].Head)
-	require.Contains(t, head, secretFile)
-	assert.Contains(t, string(head[secretFile]), "sops:", "encrypted for the .sops.yaml recipients")
-	for p, content := range head {
-		assert.NotContains(t, string(content), value, "plaintext in %s", p)
-	}
-	for _, file := range res.Files {
-		assert.NotContains(t, file.Content, value)
-	}
-
-	// Replacing needs the request; with it the file is re-encrypted.
-	require.NoError(t, fake.Merge(context.Background(), fake.PullRequests()[0].PullRequest))
-	_, err = f.orgs.CommitCredential(f.ctx, req)
-	require.ErrorIs(t, err, agents.ErrConflict)
-	req.Replace, req.Value = true, []byte("sk-ant-new-5678")
-	res, err = f.orgs.CommitCredential(f.ctx, req)
-	require.NoError(t, err)
-	require.Len(t, fake.PullRequests(), 2)
-	assert.Equal(t, "update", filesOf(res)[secretFile])
-	for _, content := range fake.Files(mcRepo, fake.PullRequests()[1].Head) {
-		assert.NotContains(t, string(content), "sk-ant-new-5678")
-	}
-
-	// A repository whose .sops.yaml covers no organization path takes none.
-	g, gfake := commitFixture(t, map[string][]byte{".sops.yaml": sopsCovering(t, `^clusters/.*`)})
-	_, err = g.orgs.CommitCredential(g.ctx, req) // #nosec G101 -- a test value
-	require.ErrorIs(t, err, agents.ErrInvalid)
-	assert.Contains(t, err.Error(), secretFile)
-	assert.NotContains(t, err.Error(), value)
-	assert.Empty(t, gfake.PullRequests())
-
-	// A caller who may not write the Secret opens nothing.
-	h, hfake := commitFixture(t, nil)
-	h.deny = func(_, verb, resource, _ string) bool { return resource == "secrets" }
-	_, err = h.orgs.CommitCredential(h.ctx, req) // #nosec G101 -- a test value
-	require.ErrorIs(t, err, agents.ErrForbidden)
-	assert.Empty(t, hfake.PullRequests())
-}
-
-func filesOf(c *organizations.CommitResult) map[string]string {
-	out := map[string]string{}
-	for _, f := range c.Files {
-		out[f.Path] = f.Action
-	}
-	return out
-}
-
 // gitOrganization is payments applied from git: its live object carries
 // Flux's labels, its file is under org-acme, and its content path holds the
 // first admins, a model with its credential and a nested directory.
@@ -335,6 +275,7 @@ func TestAMergedPullRequestThatKeptTheFileIsNotTheDelete(t *testing.T) {
 // object's file; apply mode refuses what git owns.
 func TestContentToolsCommitIntoTheContentPath(t *testing.T) {
 	f, fake := gitOrganization(t)
+	seedSecret(t, f, "tenant-credential-haiku", "apiKey")
 	text, isErr := f.call(t, ToolSetOrganizationModel, map[string]any{"namespace": orgNS, "name": "haiku", "provider": "Anthropic", "model": "claude-haiku", "default": true})
 	require.True(t, isErr)
 	assert.True(t, strings.HasPrefix(text, "gitops_owned:"), text)
@@ -390,6 +331,7 @@ func TestEveryContentToolCommits(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.tool, func(t *testing.T) {
 			f, fake := gitOrganization(t)
+			seedSecret(t, f, "tenant-credential-gh", "token")
 			args := map[string]any{"namespace": orgNS, "mode": "commit", "dryRun": true}
 			for k, v := range tc.args {
 				args[k] = v
@@ -426,27 +368,6 @@ func TestAPlainFileTheRepositoryWouldEncryptIsRefused(t *testing.T) {
 	require.True(t, isErr)
 	assert.True(t, strings.HasPrefix(text, "invalid"), text)
 	assert.Contains(t, text, "rolebinding-organization-admins.yaml")
-	assert.Empty(t, fake.PullRequests())
-}
-
-// A credential Secret whose live object holds other keys is not replaced by
-// a file of one key, which would drop them.
-func TestACredentialOfASharedSecretIsRefused(t *testing.T) {
-	live := &unstructured.Unstructured{Object: map[string]any{
-		"apiVersion": "v1", "kind": "Secret",
-		"metadata": map[string]any{"name": "tenant-credential-shared", "namespace": orgNS, "resourceVersion": "7"},
-		"data":     map[string]any{"token": "eA==", "other": "eQ=="},
-	}}
-	f, fake := commitFixture(t, nil, live)
-	f.dryRuns.Refuse = func(u *unstructured.Unstructured) error {
-		if u.GetKind() == "Secret" && u.GetResourceVersion() == "" {
-			return apierrors.NewAlreadyExists(schema.GroupResource{Resource: "secrets"}, u.GetName())
-		}
-		return nil
-	}
-	_, err := f.orgs.CommitCredential(f.ctx, organizations.CredentialCommit{Namespace: orgNS, Secret: "tenant-credential-shared", Key: "token", Value: []byte("v"), Replace: true}) // #nosec G101 -- a test value
-	require.ErrorIs(t, err, agents.ErrConflict)
-	assert.Contains(t, err.Error(), "other")
 	assert.Empty(t, fake.PullRequests())
 }
 

@@ -100,3 +100,23 @@ func (n *Namespaces) Holds(ctx context.Context, name string) (bool, error) {
 	_, ok, err := n.Get(ctx, name)
 	return ok, err
 }
+
+// Find is the organization namespace of the AgentPlatformOrganization
+// parent/organization: ok is false when there is none, or more than one
+// namespace carries the pair.
+func (n *Namespaces) Find(ctx context.Context, parent, organization string) (Namespace, bool, error) {
+	list, err := n.List(ctx)
+	if err != nil {
+		return Namespace{}, false, err
+	}
+	var found []Namespace
+	for _, ns := range list {
+		if ns.Parent == parent && ns.Organization == organization {
+			found = append(found, ns)
+		}
+	}
+	if len(found) != 1 {
+		return Namespace{}, false, nil
+	}
+	return found[0], true, nil
+}

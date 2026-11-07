@@ -2,6 +2,7 @@ package agents
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -295,3 +296,28 @@ func TestCommitDeleteOpensTheRemovingPullRequest(t *testing.T) {
 }
 
 func str(s string) *string { return &s }
+
+func TestCommitResolvesProviderAuthorizationWithoutAnMCPProviderBearer(t *testing.T) {
+	for _, authorized := range []bool{true, false} {
+		t.Run(fmt.Sprintf("authorized=%v", authorized), func(t *testing.T) {
+			fixture, forge, _ := gitOpsFixture(t, true)
+			fixture.svc.cfg.GitHubUser = func(context.Context) (*identity.GitHub, error) {
+				if !authorized {
+					return nil, fmt.Errorf("%w: provider authorization is required", ErrAuthRequired)
+				}
+				return &identity.GitHub{Login: "jane", Token: "ghu_person"}, nil // #nosec G101 -- fixture provider grant
+			}
+			result, err := fixture.svc.Create(t.Context(), Spec{Name: "sre", ModelConfig: "default-model-config", Toolset: []string{"preset:read-only"}, WriteOptions: WriteOptions{Mode: ModeCommit}})
+			if !authorized {
+				require.ErrorIs(t, err, ErrAuthRequired)
+				require.Empty(t, forge.PullRequests())
+				return
+			}
+			require.NoError(t, err)
+			require.Len(t, forge.PullRequests(), 1)
+			require.Equal(t, "jane", result.Commit.Author)
+			_, hasProviderBearer := identity.GitHubFromContext(t.Context())
+			require.False(t, hasProviderBearer)
+		})
+	}
+}

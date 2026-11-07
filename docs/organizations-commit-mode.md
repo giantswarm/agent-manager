@@ -8,6 +8,11 @@ installation's repository. This page states the repository layout the tools writ
 what the repository must have before an installation turns on
 `tenants.commit.repository`.
 
+Credential input uses a [prepared credential operation](organization-credentials.md).
+Its HTTPS save opens one pull request containing both the consumer and encrypted
+Secret. REST commits use the configured RFC 8693 manager App grant; the App-pinned
+MCP authorization mode alone cannot authorize an HTTPS credential save.
+
 ## The layout
 
 | What | Path | Applied by |

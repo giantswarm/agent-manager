@@ -461,7 +461,7 @@ func (s *Service) organizationObject(req CreateRequest) map[string]any {
 	}
 	return map[string]any{
 		"apiVersion": apov1alpha1.GroupVersion.String(), "kind": "AgentPlatformOrganization",
-		"metadata": meta, "spec": spec,
+		fieldMetadata: meta, "spec": spec,
 	}
 }
 
@@ -809,9 +809,9 @@ func roleBinding(ns, name, role string, subjects []Subject) map[string]any {
 	}
 	return map[string]any{
 		"apiVersion": "rbac.authorization.k8s.io/v1", "kind": "RoleBinding",
-		"metadata": map[string]any{"name": name, "namespace": ns, "labels": map[string]any{agents.ManagedByLabel: agents.ManagedByValue}},
-		"roleRef":  map[string]any{"apiGroup": "rbac.authorization.k8s.io", "kind": "ClusterRole", "name": role},
-		"subjects": subs,
+		fieldMetadata: map[string]any{"name": name, "namespace": ns, "labels": map[string]any{agents.ManagedByLabel: agents.ManagedByValue}},
+		"roleRef":     map[string]any{"apiGroup": "rbac.authorization.k8s.io", "kind": "ClusterRole", "name": role},
+		"subjects":    subs,
 	}
 }
 

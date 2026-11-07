@@ -1,8 +1,11 @@
 package api
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"sync"
 
 	apov1alpha1 "github.com/giantswarm/agent-platform-operator/api/v1alpha1"
 	"github.com/giantswarm/mcp-toolkit/tooldesc"
@@ -82,17 +85,25 @@ const (
 type Option func(*serverOptions)
 
 type serverOptions struct {
-	orgs *organizations.Service
+	orgs      *organizations.Service
+	lifecycle context.Context
 }
 
-// WithOrganizations serves the organization tools from orgs; without it they
-// answer unsupported.
+func WithLifecycle(ctx context.Context) Option {
+	return func(options *serverOptions) { options.lifecycle = ctx }
+}
+
+// WithOrganizations serves the organization tools and the credential route
+// from orgs; without it they answer unsupported.
 func WithOrganizations(orgs *organizations.Service) Option {
 	return func(o *serverOptions) { o.orgs = orgs }
 }
 
 type orgTools struct {
-	svc *organizations.Service
+	svc               *organizations.Service
+	server            *mcpserver.MCPServer
+	credentialWatches sync.Map
+	lifecycle         context.Context
 }
 
 var errOrganizationsUnsupported = fmt.Errorf("%w: this installation does not serve the organization tools (agent-manager's tenants.enabled is off)", agents.ErrUnsupported)
@@ -112,20 +123,30 @@ func (t *orgTools) run(fn func(context.Context, mcp.CallToolRequest) (any, error
 }
 
 func bindArgs(req mcp.CallToolRequest, into any) error {
-	if err := req.BindArguments(into); err != nil {
-		return fmt.Errorf("%w: %v", agents.ErrInvalid, err)
+	raw, err := json.Marshal(req.Params.Arguments)
+	if err != nil {
+		return fmt.Errorf("%w: arguments do not match the tool schema", agents.ErrInvalid)
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(into); err != nil {
+		return fmt.Errorf("%w: arguments do not match the tool schema", agents.ErrInvalid)
 	}
 	return nil
 }
 
-func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service) {
-	t := &orgTools{svc: orgs}
+func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service, lifecycle context.Context) {
+	if lifecycle == nil {
+		lifecycle = context.Background()
+	}
+	t := &orgTools{svc: orgs, server: s, lifecycle: lifecycle}
 	parentProp := mcp.WithString(argNamespace, mcp.Required(), mcp.Description("The parent namespace the organization lives in, e.g. org-acme"))
 	orgNameProp := mcp.WithString(argName, mcp.Required(), mcp.Description("The organization's name (at most 50 characters, no dot)"))
 	orgNSProp := mcp.WithString(argNamespace, mcp.Required(), mcp.Description("The organization namespace, e.g. agents-payments-x7k2q (list_my_organizations, get_organization)"))
 	dryRun := mcp.WithBoolean(argDryRun, mcp.Description("Check every write with the API server as you and write nothing (default false)"))
 	modeProp := mcp.WithString(argMode, mcp.Enum(agents.ModeApply, agents.ModeCommit), mcp.Description("apply (default): write live as you; refused with gitops_owned for what git applies. commit: dry-run as you, then open a pull request as you"))
-	replaceCred := mcp.WithBoolean(argReplaceCredential, mcp.Description("Answer with the Dev Portal's credential form to enter a new value (default false)"))
+	replaceCred := mcp.WithBoolean(argReplaceCredential, mcp.Description("Answer with a URL elicitation of the credential UI to enter a new value (default false)"))
+	credentialRequestID := mcp.WithString(argRequestID, mcp.Description("Idempotency key, at most 128 characters. Reuse on retries; use a fresh key for another save or a refreshed confirmation."))
 	stringList := map[string]any{"type": "string"}
 	credSecretDesc := "Secret in the organization namespace that holds the credential, by name (tenant-credential-...); never a value"
 
@@ -290,7 +311,7 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service) {
 
 	s.AddTool(mcp.NewTool(ToolSetOrganizationModel,
 		tooldesc.Describe("Create or change an organization's model (a ModelConfig) as you; its API key is a Secret named by reference.",
-			"The first model of an organization without a default becomes its default (annotation "+apov1alpha1.DefaultModelConfigAnnotation+"); default true moves the mark here. Never pass a key: when its Secret is missing, credentials[].next carries the Dev Portal's credential form link for the person. list_model_configs lists the models. Needs agent-platform:admin."),
+			"The first model of an organization without a default becomes its default (annotation "+apov1alpha1.DefaultModelConfigAnnotation+"); default true moves the mark here. Never pass a key: a missing one is a URL elicitation of the credential UI, link in credentials[].next. list_model_configs lists the models. Needs agent-platform:admin."),
 		orgNSProp,
 		mcp.WithString(argName, mcp.Required(), mcp.Description("ModelConfig name")),
 		mcp.WithString(argProvider, mcp.Description("Provider as kagent's ModelConfig takes it, e.g. Anthropic, OpenAI; required to create")),
@@ -298,12 +319,12 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service) {
 		mcp.WithString(argCredentialSecret, mcp.Description(credSecretDesc+"; default tenant-credential-<name>")),
 		mcp.WithString(argCredentialKey, mcp.Description("Key of that Secret; default apiKey")),
 		mcp.WithBoolean(argDefault, mcp.Description("Make this the organization's default model, moving the mark (default false)")),
-		replaceCred, dryRun, modeProp,
+		replaceCred, credentialRequestID, dryRun, modeProp,
 		mcp.WithReadOnlyHintAnnotation(false),
 		mcp.WithDestructiveHintAnnotation(true),
 		mcp.WithIdempotentHintAnnotation(true),
 		mcp.WithOpenWorldHintAnnotation(false),
-	), t.run(func(ctx context.Context, req mcp.CallToolRequest) (any, error) {
+	), t.runWrite(func(ctx context.Context, req mcp.CallToolRequest) (*organizations.ResourceResult, error) {
 		var in struct {
 			Namespace         string `json:"namespace"`
 			Name              string `json:"name"`
@@ -337,7 +358,7 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service) {
 
 	s.AddTool(mcp.NewTool(ToolSetOrganizationConnector,
 		tooldesc.Describe("Create or change an organization's connector (a RemoteMCPServer) as you; its credential is a Secret named by reference.",
-			"A credential field sets the Secret-backed header it names (default: the only one, else Authorization; Secret tenant-credential-<name>, key token, the whole value); other headers stay; noCredential removes them. A URL with userinfo, a fragment, a credential-like query parameter or a query that does not parse is refused. Never pass a value: a missing Secret is answered with the Dev Portal's form link in credentials[].next. Needs agent-platform:admin."),
+			"A credential field sets the Secret-backed header it names (default: the only one, else Authorization; Secret tenant-credential-<name>, key token, the whole value); other headers stay; noCredential removes them. A URL with userinfo, a fragment, a credential-like query parameter or a query that does not parse is refused. Never pass a value: a missing credential is a URL elicitation of the credential UI, link in credentials[].next. Needs agent-platform:admin."),
 		orgNSProp,
 		mcp.WithString(argName, mcp.Required(), mcp.Description("RemoteMCPServer name")),
 		mcp.WithString(argURL, mcp.Description("MCP endpoint URL, without a credential in it; required to create")),
@@ -346,12 +367,12 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service) {
 		mcp.WithString(argCredentialSecret, mcp.Description(credSecretDesc)),
 		mcp.WithString(argCredentialKey, mcp.Description("Key of that Secret; default token")),
 		mcp.WithBoolean(argNoCredential, mcp.Description("Remove the credential header (default false)")),
-		replaceCred, dryRun, modeProp,
+		replaceCred, credentialRequestID, dryRun, modeProp,
 		mcp.WithReadOnlyHintAnnotation(false),
 		mcp.WithDestructiveHintAnnotation(true),
 		mcp.WithIdempotentHintAnnotation(true),
 		mcp.WithOpenWorldHintAnnotation(false),
-	), t.run(func(ctx context.Context, req mcp.CallToolRequest) (any, error) {
+	), t.runWrite(func(ctx context.Context, req mcp.CallToolRequest) (*organizations.ResourceResult, error) {
 		var in struct {
 			Namespace         string `json:"namespace"`
 			Name              string `json:"name"`
@@ -373,7 +394,7 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service) {
 
 	s.AddTool(mcp.NewTool(ToolSetOrganizationEgress,
 		tooldesc.Describe("Create or replace an organization's egress policy as you: origins its agents may reach, credentials by Secret name.",
-			"destinations replaces the whole list. A credentialHeader makes the egress gateway add that header from the Secret (default tenant-credential-<policy>, key token). Never pass a value: a missing Secret is answered with the Dev Portal's credential form link in credentials[].next. list_egress_policies lists them. Needs agent-platform:admin."),
+			"destinations replaces the whole list. A credentialHeader makes the egress gateway add that header from the Secret (default tenant-credential-<policy>, key token). Never pass a value: a missing credential is a URL elicitation of the credential UI, link in credentials[].next. list_egress_policies lists them. Needs agent-platform:admin."),
 		orgNSProp,
 		mcp.WithString(argName, mcp.Required(), mcp.Description("EgressPolicy name")),
 		mcp.WithArray(argDestinations, mcp.Required(), mcp.Description("Origins, each {origin, credentialHeader, credentialPrefix, credentialSecret, credentialKey}"), mcp.Items(map[string]any{
@@ -387,12 +408,12 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service) {
 			},
 			"required": []string{"origin"},
 		})),
-		replaceCred, dryRun, modeProp,
+		replaceCred, credentialRequestID, dryRun, modeProp,
 		mcp.WithReadOnlyHintAnnotation(false),
 		mcp.WithDestructiveHintAnnotation(true),
 		mcp.WithIdempotentHintAnnotation(true),
 		mcp.WithOpenWorldHintAnnotation(false),
-	), t.run(func(ctx context.Context, req mcp.CallToolRequest) (any, error) {
+	), t.runWrite(func(ctx context.Context, req mcp.CallToolRequest) (*organizations.ResourceResult, error) {
 		var in struct {
 			Namespace         string                            `json:"namespace"`
 			Name              string                            `json:"name"`

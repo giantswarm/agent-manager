@@ -15,7 +15,8 @@
 //
 // No tool takes or returns a secret value: models, connectors and egress
 // policies name their credential Secret by reference, and a missing or
-// replaced credential is answered with the Dev Portal's credential form link.
+// replaced credential is answered with the credential UI link.
+// The authenticated HTTPS save is the only credential-value input.
 package organizations
 
 import (
@@ -23,13 +24,13 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"strings"
 	"time"
 
 	apov1alpha1 "github.com/giantswarm/agent-platform-operator/api/v1alpha1"
 	authorizationv1 "k8s.io/api/authorization/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 
@@ -40,6 +41,7 @@ import (
 // The roles the tools name: the ones agent-platform's connectivity chart
 // renders (giantswarm/agent-platform#1270).
 const (
+	fieldMetadata = "metadata"
 	// RoleOrganizationsAdmin creates, changes and deletes
 	// AgentPlatformOrganizations, and binds members in their namespaces.
 	RoleOrganizationsAdmin = "agent-platform:organizations-admin"
@@ -58,7 +60,7 @@ const (
 	PruneAnnotation = "kustomize.toolkit.fluxcd.io/prune"
 	PruneEnabled    = "enabled"
 	// CredentialPrefix starts the name of every credential Secret of an
-	// organization: what the Dev Portal's credential form writes.
+	// organization: what the credential UI writes.
 	CredentialPrefix = "tenant-credential-" // #nosec G101 -- a name prefix, not a credential
 )
 
@@ -69,11 +71,10 @@ var rbacGVR = schema.GroupVersionResource{Group: "rbac.authorization.k8s.io", Ve
 
 // Config is what the tools need besides the caller's client.
 type Config struct {
+	CredentialUIURL      string
+	CredentialOperations *CredentialOperations
 	// Namespaces finds the organization namespaces with the ServiceAccount.
 	Namespaces *Namespaces
-	// DevPortalURL is the Dev Portal's base URL, the origin of the credential
-	// form links. Empty: a missing credential is named without a link.
-	DevPortalURL string
 	// KagentAPIVersion is the api.kagent.dev version of the ModelConfigs,
 	// RemoteMCPServers, EgressPolicies and Agents.
 	KagentAPIVersion string
@@ -113,7 +114,6 @@ func New(k kube.Provider, cfg Config, log *slog.Logger) *Service {
 	if cfg.ReadyPoll <= 0 {
 		cfg.ReadyPoll = 2 * time.Second
 	}
-	cfg.DevPortalURL = strings.TrimRight(cfg.DevPortalURL, "/")
 	return &Service{kube: k, cfg: cfg, log: log}
 }
 
@@ -245,7 +245,7 @@ const (
 // in order: nothing is written when any dry run is refused.
 func apply(ctx context.Context, dyn dynamic.Interface, writes []write, dryRun bool) error {
 	for _, w := range writes {
-		if err := do(ctx, dyn, w, dryRunAll); err != nil {
+		if _, err := do(ctx, dyn, w, dryRunAll); err != nil {
 			return err
 		}
 	}
@@ -253,21 +253,22 @@ func apply(ctx context.Context, dyn dynamic.Interface, writes []write, dryRun bo
 		return nil
 	}
 	for _, w := range writes {
-		if err := do(ctx, dyn, w, nil); err != nil {
+		if _, err := do(ctx, dyn, w, nil); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func do(ctx context.Context, dyn dynamic.Interface, w write, dryRun []string) error {
+func do(ctx context.Context, dyn dynamic.Interface, w write, dryRun []string) (*unstructured.Unstructured, error) {
 	res := dyn.Resource(w.gvr).Namespace(w.ns)
 	var err error
+	var object *unstructured.Unstructured
 	switch w.op {
 	case opCreate:
-		_, err = res.Create(ctx, unstructuredOf(w.obj), metav1.CreateOptions{FieldManager: agents.FieldManager, DryRun: dryRun})
+		object, err = res.Create(ctx, unstructuredOf(w.obj), metav1.CreateOptions{FieldManager: agents.FieldManager, DryRun: dryRun})
 	case opUpdate:
-		_, err = res.Update(ctx, unstructuredOf(w.obj), metav1.UpdateOptions{FieldManager: agents.FieldManager, DryRun: dryRun})
+		object, err = res.Update(ctx, unstructuredOf(w.obj), metav1.UpdateOptions{FieldManager: agents.FieldManager, DryRun: dryRun})
 	case opDelete:
 		err = res.Delete(ctx, w.name, metav1.DeleteOptions{DryRun: dryRun})
 	}
@@ -275,5 +276,5 @@ func do(ctx context.Context, dyn dynamic.Interface, w write, dryRun []string) er
 	if dryRun != nil {
 		what = "dry run of " + what
 	}
-	return kubeErr(err, what, w.reason)
+	return object, kubeErr(err, what, w.reason)
 }
