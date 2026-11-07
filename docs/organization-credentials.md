@@ -113,6 +113,8 @@ versions return `412`; changed resources or Git inputs return `409`. Unknown
 credential state, shared Secrets and multi-key Secrets are refused. Backend
 refusals are sanitized before entering errors or logs. HTTP intermediaries and
 Kubernetes audit policy must also exclude request/response bodies for credentials.
+Several headers of one connector may reference the same Secret/key pair; its
+confirmation requests that value once.
 
 Apply mode writes Secrets before consumers; Kubernetes provides no transaction
 across those objects. Commit mode uses gitops-commit's SOPS layout and
@@ -120,8 +122,19 @@ across those objects. Commit mode uses gitops-commit's SOPS layout and
 encrypted Secrets. Encryption must cover `data` and `stringData`, with the
 Secret's kind and name inspectable without decryption. Consumer files contain
 one named Kubernetes object each; lists and multiple YAML documents are refused.
+Creating a consumer whose file already exists in Git is refused until Flux
+applies it, so a create cannot replace configuration awaiting reconciliation.
 The receipt's credential state `committed` means a PR exists, not that Flux has
 applied it. See [repository requirements](organizations-commit-mode.md).
+
+## Upgrading credential UI configuration
+
+Replace `--dev-portal-url` and chart `devPortal.url` with `--credential-ui-url`
+and `credentials.uiURL`. Supply an HTTPS URL template containing `{operation}`.
+Enable OAuth and downstream authorization and configure a dedicated metadata
+namespace with `--credential-operations-namespace`; the chart derives that
+namespace when `credentials.operationsNamespace` is empty. The client form
+must use the authenticated operation API and its `If-Match` confirmation.
 
 ## Recovery
 

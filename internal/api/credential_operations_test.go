@@ -25,6 +25,7 @@ import (
 	kubefake "k8s.io/client-go/kubernetes/fake"
 	typedcore "k8s.io/client-go/kubernetes/typed/core/v1"
 	k8stesting "k8s.io/client-go/testing"
+	"sigs.k8s.io/yaml"
 
 	"github.com/giantswarm/gitops-commit/commit"
 
@@ -274,6 +275,109 @@ func TestCredentialOperationCommitsConsumerAndEncryptedSecretTogether(t *testing
 	status, answer, _ = operationHTTP(t, fixture, http.MethodPost, result.CredentialOperation, confirmation.Version, valuesBody(t, result, "another-value"), nil)
 	require.Equal(t, http.StatusOK, status, answer)
 	require.Len(t, forge.PullRequests(), 1)
+}
+
+func TestCredentialPreparationRefusesAnUnappliedGitConsumer(t *testing.T) {
+	consumer := model("claude", true)
+	require.NoError(t, unstructured.SetNestedField(consumer.Object, "existing-git-model", "spec", "model"))
+	consumer.SetNamespace("")
+	manifest, err := yaml.Marshal(consumer.Object)
+	require.NoError(t, err)
+	file := paymentsPath + "/modelconfig-claude.yaml"
+	fixture, forge := commitFixture(t, map[string][]byte{
+		file:                                 manifest,
+		paymentsPath + "/kustomization.yaml": []byte("resources:\n  - modelconfig-claude.yaml\n"),
+	})
+	answer, failed := fixture.call(t, ToolSetOrganizationModel, map[string]any{
+		"namespace": orgNS, "name": "claude", "provider": "Anthropic", "model": "replacement-model", "mode": "commit",
+	})
+	require.True(t, failed, answer)
+	require.True(t, strings.HasPrefix(answer, "conflict:"), answer)
+	require.Contains(t, answer, "already and not applied yet")
+	require.Equal(t, manifest, forge.Files(mcRepo, "main")[file])
+	require.Empty(t, forge.PullRequests())
+}
+
+func TestCredentialCommitRefusesAConsumerAddedAfterConfirmation(t *testing.T) {
+	fixture, forge := commitFixture(t, nil)
+	result := prepareModelOperation(t, fixture, map[string]any{"mode": "commit"})
+	confirmation := confirmOperation(t, fixture, result.CredentialOperation)
+	consumer := model("claude", true)
+	require.NoError(t, unstructured.SetNestedField(consumer.Object, "intervening-git-model", "spec", "model"))
+	consumer.SetNamespace("")
+	manifest, err := yaml.Marshal(consumer.Object)
+	require.NoError(t, err)
+	file := paymentsPath + "/modelconfig-claude.yaml"
+	require.NoError(t, forge.Commit(t.Context(), mcRepo, "main", "add model", map[string][]byte{file: manifest}))
+	status, answer, _ := operationHTTP(t, fixture, http.MethodPost, result.CredentialOperation, confirmation.Version, valuesBody(t, result, "synthetic-value"), nil)
+	require.Equal(t, http.StatusConflict, status, answer)
+	require.Equal(t, manifest, forge.Files(mcRepo, "main")[file])
+	require.Empty(t, forge.PullRequests())
+}
+
+func TestConnectorCredentialOperationDeduplicatesSharedHeaderReferences(t *testing.T) {
+	for _, mode := range []string{"apply", "commit"} {
+		for _, replace := range []bool{false, true} {
+			t.Run(fmt.Sprintf("mode=%s/replace=%v", mode, replace), func(t *testing.T) {
+				consumer := connector("gh", "tenant-credential-gh", "token")
+				require.NoError(t, unstructured.SetNestedField(consumer.Object, "https://mcp.example.com/mcp", "spec", "url"))
+				headers, _, err := unstructured.NestedSlice(consumer.Object, "spec", "headersFrom")
+				require.NoError(t, err)
+				headers = append(headers, map[string]any{"name": "X-API-Key", "valueFrom": map[string]any{"type": "Secret", "name": "tenant-credential-gh", "key": "token"}})
+				require.NoError(t, unstructured.SetNestedSlice(consumer.Object, headers, "spec", "headersFrom"))
+				var fixture *orgFixture
+				var forge *commit.Fake
+				if mode == "commit" {
+					file := consumer.DeepCopy()
+					file.SetNamespace("")
+					manifest, err := yaml.Marshal(file.Object)
+					require.NoError(t, err)
+					consumer.SetLabels(fromGitLabels("payments"))
+					fixture, forge = commitFixture(t, map[string][]byte{paymentsPath + "/remotemcpserver-gh.yaml": manifest}, consumer)
+				} else {
+					fixture = newOrgFixture(t, consumer)
+				}
+				if replace {
+					seedSecret(t, fixture, "tenant-credential-gh", "token")
+				}
+				answer, failed := fixture.call(t, ToolSetOrganizationConnector, map[string]any{
+					"namespace": orgNS, "name": "gh", "replaceCredential": replace, "mode": mode,
+				})
+				require.False(t, failed, answer)
+				var result organizations.ResourceResult
+				require.NoError(t, json.Unmarshal([]byte(answer), &result))
+				require.True(t, result.Pending)
+				require.Len(t, result.Credentials, 1)
+				confirmation := confirmOperation(t, fixture, result.CredentialOperation)
+				status, answer, _ := operationHTTP(t, fixture, http.MethodPost, result.CredentialOperation, confirmation.Version, valuesBody(t, result, "synthetic-value"), nil)
+				require.Equal(t, http.StatusOK, status, answer)
+				var saved *unstructured.Unstructured
+				if mode == "commit" {
+					require.Len(t, forge.PullRequests(), 1)
+					saved = parseFile(t, forge.Files(mcRepo, forge.PullRequests()[0].Head)[paymentsPath+"/remotemcpserver-gh.yaml"])
+				} else {
+					saved = fixture.get(t, connGVR, orgNS, "gh")
+				}
+				savedHeaders, _, err := unstructured.NestedSlice(saved.Object, "spec", "headersFrom")
+				require.NoError(t, err)
+				require.Equal(t, headers, savedHeaders)
+			})
+		}
+	}
+}
+
+func TestConnectorCredentialOperationRefusesDifferentKeysInOneSecret(t *testing.T) {
+	consumer := connector("gh", "tenant-credential-gh", "token")
+	require.NoError(t, unstructured.SetNestedField(consumer.Object, "https://mcp.example.com/mcp", "spec", "url"))
+	headers, _, err := unstructured.NestedSlice(consumer.Object, "spec", "headersFrom")
+	require.NoError(t, err)
+	headers = append(headers, map[string]any{"name": "X-API-Key", "valueFrom": map[string]any{"type": "Secret", "name": "tenant-credential-gh", "key": "apiKey"}})
+	require.NoError(t, unstructured.SetNestedSlice(consumer.Object, headers, "spec", "headersFrom"))
+	fixture := newOrgFixture(t, consumer)
+	answer, failed := fixture.call(t, ToolSetOrganizationConnector, map[string]any{"namespace": orgNS, "name": "gh"})
+	require.True(t, failed, answer)
+	require.Contains(t, answer, "each credential Secret must contain one credential key")
+	require.Nil(t, fixture.get(t, secretGVR, orgNS, "tenant-credential-gh"))
 }
 
 func TestCredentialOperationConcurrentSavesShareOneWrite(t *testing.T) {

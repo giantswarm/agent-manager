@@ -437,7 +437,13 @@ func (s *Service) SetConnector(ctx context.Context, req ConnectorRequest) (*Reso
 		op = opCreate
 	}
 	wr := write{gvr: gvr, kind: "RemoteMCPServer", op: op, obj: obj.Object, ns: ns, name: req.Name, what: "RemoteMCPServer " + ns + "/" + req.Name, reason: wayOrganizationAdmin(ns)}
+	seenCredentials := map[string]bool{}
 	for _, cc := range connectorCredentials(obj) {
+		pair := cc.Secret + "/" + cc.Key
+		if seenCredentials[pair] {
+			continue
+		}
+		seenCredentials[pair] = true
 		res.Credentials = append(res.Credentials, s.credential(ctx, c, org, "RemoteMCPServer", req.Name, cc.Secret, cc.Key, req.ReplaceCredential))
 	}
 	if err = s.landResource(ctx, w, []write{wr}, res, req.ReplaceCredential, "connector-"+req.Name, "chore(organizations): set connector "+req.Name); err != nil {
