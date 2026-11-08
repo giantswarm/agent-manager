@@ -10,7 +10,7 @@ require (
 	github.com/giantswarm/agent-platform-operator v0.1.7
 	github.com/giantswarm/gitops-commit v0.12.0-rc.4
 	github.com/giantswarm/mcp-oauth v1.10.2
-	github.com/giantswarm/mcp-toolkit v0.5.1
+	github.com/giantswarm/mcp-toolkit v0.5.2
 	github.com/go-jose/go-jose/v4 v4.1.9
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/uuid v1.6.0
