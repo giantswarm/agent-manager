@@ -41,7 +41,7 @@ func (c *cluster) runnerV2(t *testing.T, opts Options, latest string) *Runner {
 	ch := fakeChart{latest: latest}
 	p := pinner{git: skills.NewResolver(fakeGitHub(t).URL, skills.StaticToken(""), nil, nil)}
 	svc := agents.New(kube.NewServiceAccountProvider(c.client), ch, nil, p, agents.Config{
-		DefaultNamespace: opts.Namespaces[0], ManagedNamespaces: opts.Namespaces, Compose: agents.ComposeConfig{HarnessName: "kagent"}, KagentAPIVersion: "v1alpha3",
+		DefaultNamespace: opts.Namespaces[0], ManagedNamespaces: opts.Namespaces, Compose: agents.ComposeConfig{HarnessName: kagentNS}, KagentAPIVersion: "v1alpha3",
 	}, nil)
 	opts.Version, opts.TargetSemver = "test", v2Target
 	r, err := New(c.client, ch, p, svc, opts, nil)
@@ -61,7 +61,7 @@ func agentObj(ns, name, hrName, hrNs string, ready bool) *unstructured.Unstructu
 	return &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": agents.KagentAPIGroup + "/v1alpha3", "kind": "Agent",
 		"metadata": map[string]any{"name": name, "namespace": ns, "generation": int64(1), "labels": map[string]any{agents.HelmReleaseNameLabel: hrName, agents.HelmReleaseNamespaceLabel: hrNs}},
-		"spec":     map[string]any{"harnessRef": map[string]any{"name": "kagent"}, "template": map[string]any{"description": name, "modelConfig": map[string]any{"name": "default-model-config"}}},
+		"spec":     map[string]any{"harnessRef": map[string]any{"name": kagentNS}, "template": map[string]any{"description": name, "modelConfig": map[string]any{"name": "default-model-config"}}},
 		"status": map[string]any{"observedGeneration": int64(1), "desiredRevision": "rev-1", "latestSuccessfulRevision": latest, "conditions": []any{
 			map[string]any{"type": "Accepted", "status": "True", "reason": "Accepted"},
 			map[string]any{"type": "ResolvedRefs", "status": "True", "reason": "ResolvedRefs"},
@@ -147,8 +147,8 @@ func subAgentRewritten() map[string]any {
 func TestV2MovesANamespaceOn1xAndLeavesOneOn2x(t *testing.T) {
 	ctx := t.Context()
 	c := newCluster(
-		ociRepository("kagent", v1Range), helmRelease("kagent", "sre", portalRewritten(), "1.5.3"),
-		agentTemplate("kagent", "sre", "sre", "kagent", true), agentTemplate("kagent", "by-hand", "", "", true),
+		ociRepository(kagentNS, v1Range), helmRelease(kagentNS, "sre", portalRewritten(), "1.5.3"),
+		agentTemplate(kagentNS, "sre", "sre", kagentNS, true), agentTemplate(kagentNS, "by-hand", "", "", true),
 		ociRepository("tenant", v2Target), helmRelease("tenant", "bot", narrowRewritten(), "2.0.0"), agentObj("tenant", "narrow", "bot", "tenant", true),
 	)
 
@@ -160,7 +160,7 @@ func TestV2MovesANamespaceOn1xAndLeavesOneOn2x(t *testing.T) {
 	require.Equal(t, ActionUnchanged, rel.Action, "1.x values without a sub-agent are 2.x values")
 	require.Equal(t, "already on the 2.x values", rel.Reason)
 	require.Equal(t, SourceMoved, bySource(kagent)["kagent/agent"].Action)
-	require.Equal(t, v2Target, c.semver(t, "kagent", "agent"))
+	require.Equal(t, v2Target, c.semver(t, kagentNS, "agent"))
 	require.Equal(t, PhaseWait, kagent.Phase)
 	require.Contains(t, strings.Join(kagent.Pending, "\n"), `release kagent/sre is deployed from chart "1.5.3"; waiting for Flux to upgrade it to 2.x`)
 	leftovers := byAgent(kagent)
@@ -177,9 +177,9 @@ func TestV2MovesANamespaceOn1xAndLeavesOneOn2x(t *testing.T) {
 
 	// Flux upgrades the release: Helm replaces the AgentTemplate with the
 	// Agent, which compiles first.
-	c.upgrade(t, "kagent", "sre", "2.0.0")
-	c.delete(t, tplGVR, "kagent", "sre")
-	c.create(t, agentGVR, agentObj("kagent", "sre", "sre", "kagent", false))
+	c.upgrade(t, kagentNS, "sre", "2.0.0")
+	c.delete(t, tplGVR, kagentNS, "sre")
+	c.create(t, agentGVR, agentObj(kagentNS, "sre", "sre", kagentNS, false))
 	res, err = c.runnerV2(t, twoNamespaces, v2Latest).Run(ctx)
 	require.NoError(t, err)
 	kagent = res.Reports[0]
@@ -187,8 +187,8 @@ func TestV2MovesANamespaceOn1xAndLeavesOneOn2x(t *testing.T) {
 	require.Contains(t, strings.Join(kagent.Pending, "\n"), "api.kagent.dev Agent kagent/sre is progressing")
 	require.Nil(t, kagent.Contract)
 
-	c.delete(t, agentGVR, "kagent", "sre")
-	c.create(t, agentGVR, agentObj("kagent", "sre", "sre", "kagent", true))
+	c.delete(t, agentGVR, kagentNS, "sre")
+	c.create(t, agentGVR, agentObj(kagentNS, "sre", "sre", kagentNS, true))
 	res, err = c.runnerV2(t, twoNamespaces, v2Latest).Run(ctx)
 	require.NoError(t, err)
 	kagent = res.Reports[0]
@@ -198,14 +198,14 @@ func TestV2MovesANamespaceOn1xAndLeavesOneOn2x(t *testing.T) {
 	for _, crdRep := range kagent.Contract.CRDs {
 		require.Equal(t, CRDAbsent, crdRep.Action, "an installation that went through 1.x has none of the 0.x CRDs left")
 	}
-	require.False(t, c.exists(tplGVR, "kagent", "by-hand"))
+	require.False(t, c.exists(tplGVR, kagentNS, "by-hand"))
 	require.Equal(t, agents.VerdictReady, byRelease(kagent)["kagent/sre"].Template.Verdict)
 
 	res, err = c.runnerV2(t, twoNamespaces, v2Latest).Run(ctx)
 	require.NoError(t, err)
 	require.Equal(t, PhaseComplete, res.Reports[0].Phase)
 	require.False(t, res.Reports[0].Changed, "a second run on a migrated namespace changes nothing")
-	require.Equal(t, PhaseComplete, c.reportConfigMap(t, "kagent")[ReportKeyPhase])
+	require.Equal(t, PhaseComplete, c.reportConfigMap(t, kagentNS)[ReportKeyPhase])
 }
 
 func TestV2GitOpsOwnedReleaseGetsTheDiff(t *testing.T) {
@@ -215,13 +215,13 @@ func TestV2GitOpsOwnedReleaseGetsTheDiff(t *testing.T) {
 		"labels":      map[string]any{"team": "sre", HarnessAdmissionLabel: "claude"},
 	}
 	hr := gitOpsLabeled(helmRelease("flux-giantswarm", "sre-agent", values, "1.5.3"))
-	require.NoError(t, unstructured.SetNestedField(hr.Object, "kagent", "spec", "targetNamespace"))
+	require.NoError(t, unstructured.SetNestedField(hr.Object, kagentNS, "spec", "targetNamespace"))
 	c := newCluster(
 		gitOpsLabeled(ociRepository("flux-giantswarm", v1Range)), hr,
-		agentTemplate("kagent", "sre-agent", "sre-agent", "flux-giantswarm", true),
+		agentTemplate(kagentNS, "sre-agent", "sre-agent", "flux-giantswarm", true),
 	)
 
-	res, err := c.runnerV2(t, Options{Namespaces: []string{"kagent"}}, v2Latest).Run(t.Context())
+	res, err := c.runnerV2(t, Options{Namespaces: []string{kagentNS}}, v2Latest).Run(t.Context())
 	require.NoError(t, err)
 	rep := res.Reports[0]
 	rel := byRelease(rep)["flux-giantswarm/sre-agent"]
@@ -245,17 +245,17 @@ func TestV2GitOpsOwnedReleaseGetsTheDiff(t *testing.T) {
 
 func TestV2SubAgentBindingsMoveToSubAgent(t *testing.T) {
 	c := newCluster(
-		ociRepository("kagent", v1Range),
-		helmRelease("kagent", "lead", subAgentValues(), "1.5.3"), helmRelease("kagent", "helper", narrowRewritten(), "1.5.3"),
-		apiTemplate("kagent", "reviewer"),
+		ociRepository(kagentNS, v1Range),
+		helmRelease(kagentNS, "lead", subAgentValues(), "1.5.3"), helmRelease(kagentNS, "helper", narrowRewritten(), "1.5.3"),
+		apiTemplate(kagentNS, "reviewer"),
 	)
 
-	res, err := c.runnerV2(t, Options{Namespaces: []string{"kagent"}}, v2Latest).Run(t.Context())
+	res, err := c.runnerV2(t, Options{Namespaces: []string{kagentNS}}, v2Latest).Run(t.Context())
 	require.NoError(t, err)
 	rep := res.Reports[0]
 	lead := byRelease(rep)["kagent/lead"]
 	require.Equal(t, ActionRewritten, lead.Action, lead.Reason)
-	require.Equal(t, subAgentRewritten(), c.values(t, "kagent", "lead"))
+	require.Equal(t, subAgentRewritten(), c.values(t, kagentNS, "lead"))
 	require.Equal(t, []string{"extraTools[1].agent -> extraTools[1].subAgent", "extraAgentSpec.tools[0].agent -> extraAgentSpec.tools[0].subAgent"}, lead.Changes.Renamed)
 	require.Equal(t, []string{"extraTools[1].agent.isolation"}, lead.Changes.Removed)
 	require.Len(t, lead.Warnings, 1, "reviewer resolves; helper is rendered as an Agent, not an AgentTemplate")
@@ -267,10 +267,10 @@ func TestV2SubAgentBindingsMoveToSubAgent(t *testing.T) {
 func TestV2SchemaFailureBlocksEveryWriteOfTheSource(t *testing.T) {
 	broken := map[string]any{"agent": map[string]any{"name": "Not_A_DNS_Name"}, "modelConfig": map[string]any{"name": "default-model-config"}}
 	c := newCluster(
-		ociRepository("kagent", v1Range),
-		helmRelease("kagent", "lead", subAgentValues(), "1.5.3"), helmRelease("kagent", "broken", broken, "1.5.3"),
+		ociRepository(kagentNS, v1Range),
+		helmRelease(kagentNS, "lead", subAgentValues(), "1.5.3"), helmRelease(kagentNS, "broken", broken, "1.5.3"),
 	)
-	one := Options{Namespaces: []string{"kagent"}}
+	one := Options{Namespaces: []string{kagentNS}}
 
 	for _, dryRun := range []bool{true, false} {
 		opts := one
@@ -289,16 +289,16 @@ func TestV2SchemaFailureBlocksEveryWriteOfTheSource(t *testing.T) {
 		require.Equal(t, SourceNotMoved, bySource(rep)["kagent/agent"].Action)
 		require.Equal(t, PhaseExpand, rep.Phase)
 	}
-	require.Equal(t, subAgentValues(), c.values(t, "kagent", "lead"))
-	require.Equal(t, broken, c.values(t, "kagent", "broken"))
-	require.Equal(t, v1Range, c.semver(t, "kagent", "agent"))
-	require.Empty(t, c.writes("kagent"))
+	require.Equal(t, subAgentValues(), c.values(t, kagentNS, "lead"))
+	require.Equal(t, broken, c.values(t, kagentNS, "broken"))
+	require.Equal(t, v1Range, c.semver(t, kagentNS, "agent"))
+	require.Empty(t, c.writes(kagentNS))
 }
 
 func TestV2DryRunBeforeTheKagentUpgrade(t *testing.T) {
 	c := newCluster(
-		ociRepository("kagent", v1Range),
-		helmRelease("kagent", "lead", subAgentValues(), "1.5.3"), agentTemplate("kagent", "lead", "lead", "kagent", true),
+		ociRepository(kagentNS, v1Range),
+		helmRelease(kagentNS, "lead", subAgentValues(), "1.5.3"), agentTemplate(kagentNS, "lead", "lead", kagentNS, true),
 	)
 	c.dyn.PrependReactor("list", "*", func(action k8stesting.Action) (bool, runtime.Object, error) {
 		if gvr := action.GetResource(); gvr.Group == agents.KagentAPIGroup {
@@ -307,7 +307,7 @@ func TestV2DryRunBeforeTheKagentUpgrade(t *testing.T) {
 		return false, nil, nil
 	})
 
-	res, err := c.runnerV2(t, Options{Namespaces: []string{"kagent"}, DryRun: true}, v2Latest).Run(t.Context())
+	res, err := c.runnerV2(t, Options{Namespaces: []string{kagentNS}, DryRun: true}, v2Latest).Run(t.Context())
 	require.NoError(t, err)
 	rep := res.Reports[0]
 	lead := byRelease(rep)["kagent/lead"]
@@ -320,19 +320,19 @@ func TestV2DryRunBeforeTheKagentUpgrade(t *testing.T) {
 	require.Equal(t, SourceMoved, bySource(rep)["kagent/agent"].Action)
 	require.Equal(t, PhaseWait, rep.Phase)
 	require.Equal(t, []string{"the cluster does not serve agents.api.kagent.dev yet: the kagent upgrade to the line chart 2.x renders for comes first"}, rep.Pending)
-	require.Empty(t, c.writes("kagent"))
-	require.Nil(t, c.reportConfigMap(t, "kagent"))
+	require.Empty(t, c.writes(kagentNS))
+	require.Nil(t, c.reportConfigMap(t, kagentNS))
 }
 
 func TestV2ReleaseOn0xIsRefused(t *testing.T) {
-	c := newCluster(ociRepository("kagent", legacyRange), helmRelease("kagent", "sre", portalValues(), "0.6.1"))
+	c := newCluster(ociRepository(kagentNS, legacyRange), helmRelease(kagentNS, "sre", portalValues(), "0.6.1"))
 
-	res, err := c.runnerV2(t, Options{Namespaces: []string{"kagent"}}, v2Latest).Run(t.Context())
+	res, err := c.runnerV2(t, Options{Namespaces: []string{kagentNS}}, v2Latest).Run(t.Context())
 	require.NoError(t, err)
 	rel := byRelease(res.Reports[0])["kagent/sre"]
 	require.Equal(t, ActionFailed, rel.Action)
 	require.Equal(t, "deployed from chart 0.6.1, older than the 1.x line this migration (1.x -> 2.x) starts from: migrate it to 1.x first", rel.Reason)
-	require.Equal(t, portalValues(), c.values(t, "kagent", "sre"))
+	require.Equal(t, portalValues(), c.values(t, kagentNS, "sre"))
 	require.Equal(t, SourceNotMoved, bySource(res.Reports[0])["kagent/agent"].Action)
 }
 
@@ -382,7 +382,7 @@ func TestRewriteValuesV2(t *testing.T) {
 			in:  base(map[string]any{"extraTools": []any{map[string]any{"agent": map[string]any{"name": "h", "description": "d", "templateRef": map[string]any{"name": "h"}, "isolation": "Dedicated"}}}}),
 			err: "extraTools[0].agent.isolation is Dedicated"},
 		{name: "the admission label on the default Harness goes",
-			in:   base(map[string]any{"labels": map[string]any{HarnessAdmissionLabel: "kagent"}}),
+			in:   base(map[string]any{"labels": map[string]any{HarnessAdmissionLabel: kagentNS}}),
 			want: base(nil), changes: &ValueChanges{Removed: []string{"labels." + HarnessAdmissionLabel}}},
 		{name: "the admission label naming another Harness becomes agent.harness",
 			in:      base(map[string]any{"labels": map[string]any{"team": "sre", HarnessAdmissionLabel: "claude"}}),
@@ -446,8 +446,8 @@ func on2x(ns string) []runtime.Object {
 
 func TestV2DirectJumpFrom0xDeletesTheEmpty0xCRDs(t *testing.T) {
 	ctx := t.Context()
-	c := newCluster(append(on2x("kagent"), legacyCRDs()...)...)
-	opts := Options{Namespaces: []string{"kagent"}}
+	c := newCluster(append(on2x(kagentNS), legacyCRDs()...)...)
+	opts := Options{Namespaces: []string{kagentNS}}
 
 	res, err := c.runnerV2(t, opts, v2Latest).Run(ctx)
 	require.NoError(t, err)
@@ -471,9 +471,9 @@ func TestV2DirectJumpFrom0xDeletesTheEmpty0xCRDs(t *testing.T) {
 
 func TestV2DirectJumpKeepsA0xCRDThatHoldsAnObject(t *testing.T) {
 	ctx := t.Context()
-	objs := append(on2x("kagent"), legacyCRDs()...)
+	objs := append(on2x(kagentNS), legacyCRDs()...)
 	c := newCluster(append(objs, legacyAgentObj("elsewhere", "stray", "", ""))...)
-	opts := Options{Namespaces: []string{"kagent"}}
+	opts := Options{Namespaces: []string{kagentNS}}
 
 	res, err := c.runnerV2(t, opts, v2Latest).Run(ctx)
 	require.NoError(t, err)
@@ -506,9 +506,9 @@ func TestV2DirectJumpKeepsA0xCRDThatHoldsAnObject(t *testing.T) {
 }
 
 func TestV2DirectJumpDryRunKeepsThe0xCRDs(t *testing.T) {
-	c := newCluster(append(on2x("kagent"), legacyCRDs()...)...)
+	c := newCluster(append(on2x(kagentNS), legacyCRDs()...)...)
 
-	res, err := c.runnerV2(t, Options{Namespaces: []string{"kagent"}, DryRun: true}, v2Latest).Run(t.Context())
+	res, err := c.runnerV2(t, Options{Namespaces: []string{kagentNS}, DryRun: true}, v2Latest).Run(t.Context())
 	require.NoError(t, err)
 	for _, crdRep := range res.Reports[0].Contract.CRDs {
 		require.Equal(t, CRDDeleted, crdRep.Action)
@@ -518,7 +518,7 @@ func TestV2DirectJumpDryRunKeepsThe0xCRDs(t *testing.T) {
 }
 
 func TestV2DirectJumpKeepsThe0xCRDsWhileANamespaceWaits(t *testing.T) {
-	objs := append(on2x("kagent"), legacyCRDs()...)
+	objs := append(on2x(kagentNS), legacyCRDs()...)
 	c := newCluster(append(objs, ociRepository("tenant", v2Target), helmRelease("tenant", "bot", narrowRewritten(), "2.0.0"), agentObj("tenant", "narrow", "bot", "tenant", false))...)
 
 	res, err := c.runnerV2(t, twoNamespaces, v2Latest).Run(t.Context())
@@ -532,12 +532,12 @@ func TestV2DirectJumpKeepsThe0xCRDsWhileANamespaceWaits(t *testing.T) {
 }
 
 func TestV2DirectJumpWithoutTheRightToRemoveCRDsCompletes(t *testing.T) {
-	c := newCluster(append(on2x("kagent"), legacyCRDs()...)...)
+	c := newCluster(append(on2x(kagentNS), legacyCRDs()...)...)
 	c.dyn.PrependReactor("get", "customresourcedefinitions", func(a k8stesting.Action) (bool, runtime.Object, error) {
 		return true, nil, apierrors.NewForbidden(schema.GroupResource{Group: "apiextensions.k8s.io", Resource: "customresourcedefinitions"}, a.(k8stesting.GetAction).GetName(), nil)
 	})
 
-	res, err := c.runnerV2(t, Options{Namespaces: []string{"kagent"}}, v2Latest).Run(t.Context())
+	res, err := c.runnerV2(t, Options{Namespaces: []string{kagentNS}}, v2Latest).Run(t.Context())
 	require.NoError(t, err, "a run whose identity holds no cluster-scoped right still succeeds")
 	rep := res.Reports[0]
 	require.Equal(t, PhaseComplete, rep.Phase, rep.Summary)
@@ -551,7 +551,7 @@ func TestV2DirectJumpWithoutTheRightToRemoveCRDsCompletes(t *testing.T) {
 }
 
 func TestV2DirectJumpKeepsA0xCRDWhoseObjectsCannotBeListed(t *testing.T) {
-	c := newCluster(append(on2x("kagent"), legacyCRDs()...)...)
+	c := newCluster(append(on2x(kagentNS), legacyCRDs()...)...)
 	c.dyn.PrependReactor("list", "agents", func(a k8stesting.Action) (bool, runtime.Object, error) {
 		if a.GetResource().Group != "kagent.dev" {
 			return false, nil, nil
@@ -559,7 +559,7 @@ func TestV2DirectJumpKeepsA0xCRDWhoseObjectsCannotBeListed(t *testing.T) {
 		return true, nil, apierrors.NewNotFound(a.GetResource().GroupResource(), "")
 	})
 
-	res, err := c.runnerV2(t, Options{Namespaces: []string{"kagent"}}, v2Latest).Run(t.Context())
+	res, err := c.runnerV2(t, Options{Namespaces: []string{kagentNS}}, v2Latest).Run(t.Context())
 	require.NoError(t, err, "a list NotFound (CRD not yet Established) is a retry, not an operator error")
 	rep := res.Reports[0]
 	require.Equal(t, PhaseContract, rep.Phase, rep.Summary)
