@@ -1023,9 +1023,12 @@ func (r *Runner) contractCRDs(ctx context.Context, dyn dynamic.Interface, states
 	for _, name := range r.hop.crds {
 		rep := CRDReport{Name: name}
 		obj, err := dyn.Resource(crdGVR).Get(ctx, name, metav1.GetOptions{})
-		held := ""
+		var (
+			held    string
+			listErr error
+		)
 		if err == nil && allPassed && r.hop.emptyCRDsOnly {
-			held, err = heldObjects(ctx, dyn, obj)
+			held, listErr = heldObjects(ctx, dyn, obj)
 		}
 		switch {
 		case apierrors.IsNotFound(err):
@@ -1042,6 +1045,18 @@ func (r *Runner) contractCRDs(ctx context.Context, dyn dynamic.Interface, states
 			}
 		case !allPassed:
 			rep.Action, rep.Reason = CRDKept, "a managed namespace has not passed the wait gate yet"
+		case apierrors.IsForbidden(listErr):
+			rep.Action, rep.Reason = CRDUnchecked, notPermitted
+			r.log.Warn("0.x CRD not checked: not permitted to list its objects", "crd", name, "error", listErr)
+		case listErr != nil:
+			// The CRD exists, so an unanswered list proves nothing about
+			// its objects: it stays.
+			rep.Action, rep.Reason = CRDKept, "its objects could not be listed, so it is kept: "+listErr.Error()
+			if !apierrors.IsNotFound(listErr) {
+				for _, st := range states {
+					st.fail(fmt.Errorf("list the objects of CustomResourceDefinition %s: %w", name, listErr))
+				}
+			}
 		case keep != "":
 			rep.Action, rep.Reason = CRDKept, keep
 		case held != "":
@@ -1084,7 +1099,9 @@ func (r *Runner) contractCRDs(ctx context.Context, dyn dynamic.Interface, states
 const notPermitted = "not permitted: removing the 0.x CRDs needs customresourcedefinitions get/delete and a cluster-wide list of their objects; it stays until an identity holding those runs migrate"
 
 // heldObjects names the objects a CRD still holds, read through its storage
-// version in every namespace, or "" when it holds none.
+// version in every namespace, or "" when it holds none. A failed list,
+// NotFound included (a CRD not yet Established), is an error: only an
+// answered list proves the CRD empty.
 func heldObjects(ctx context.Context, dyn dynamic.Interface, crd *unstructured.Unstructured) (string, error) {
 	group, _, _ := unstructured.NestedString(crd.Object, "spec", "group")
 	plural, _, _ := unstructured.NestedString(crd.Object, "spec", "names", "plural")
@@ -1105,9 +1122,6 @@ func heldObjects(ctx context.Context, dyn dynamic.Interface, crd *unstructured.U
 	gvr := schema.GroupVersionResource{Group: group, Version: version, Resource: plural}
 	const shown = 10
 	list, err := dyn.Resource(gvr).Namespace(metav1.NamespaceAll).List(ctx, metav1.ListOptions{Limit: shown})
-	if apierrors.IsNotFound(err) {
-		return "", nil
-	}
 	if err != nil {
 		return "", fmt.Errorf("list %s: %w", gvr.GroupResource(), err)
 	}

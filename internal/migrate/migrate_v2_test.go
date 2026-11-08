@@ -549,3 +549,27 @@ func TestV2DirectJumpWithoutTheRightToRemoveCRDsCompletes(t *testing.T) {
 		require.NoError(t, err, "%s stays", crdRep.Name)
 	}
 }
+
+func TestV2DirectJumpKeepsA0xCRDWhoseObjectsCannotBeListed(t *testing.T) {
+	c := newCluster(append(on2x("kagent"), legacyCRDs()...)...)
+	c.dyn.PrependReactor("list", "agents", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		if a.GetResource().Group != "kagent.dev" {
+			return false, nil, nil
+		}
+		return true, nil, apierrors.NewNotFound(a.GetResource().GroupResource(), "")
+	})
+
+	res, err := c.runnerV2(t, Options{Namespaces: []string{"kagent"}}, v2Latest).Run(t.Context())
+	require.NoError(t, err, "a list NotFound (CRD not yet Established) is a retry, not an operator error")
+	rep := res.Reports[0]
+	require.Equal(t, PhaseContract, rep.Phase, rep.Summary)
+	for _, crdRep := range rep.Contract.CRDs {
+		if crdRep.Name == "agents.kagent.dev" {
+			require.Equal(t, CRDKept, crdRep.Action)
+			require.Contains(t, crdRep.Reason, "its objects could not be listed, so it is kept")
+			require.True(t, c.exists(crdGVR, "", crdRep.Name))
+			continue
+		}
+		require.Equal(t, CRDDeleted, crdRep.Action, crdRep.Name)
+	}
+}
