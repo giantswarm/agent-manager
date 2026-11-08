@@ -32,8 +32,10 @@ type hop struct {
 	// resolves on the target line.
 	templates *schema.GroupVersionResource
 	// crds are the CRDs the contract phase deletes once every namespace
-	// passed; none when the platform owns the old CRDs' removal.
-	crds []string
+	// passed. With emptyCRDsOnly a CRD that still holds an object is kept
+	// and named; without it the objects of that kind go with the CRD.
+	crds          []string
+	emptyCRDsOnly bool
 }
 
 // legacyTemplateGVR is the AgentTemplate of the kagent.dev line, the object
@@ -61,6 +63,10 @@ func hopFor(to uint64, kagentAPIVersion string) (*hop, error) {
 			renderedKind: "api.kagent.dev Agent",
 			leftover:     legacyTemplateGVR, leftoverKind: "kagent.dev/v1alpha3 AgentTemplate",
 			templates: &templates,
+			// An installation that jumps from the 0.x line straight to 2.x
+			// never ran the 0.x -> 1.x contract: its 0.x CRDs go here, but
+			// only the empty ones, as other components may still use them.
+			crds: LegacyCRDs, emptyCRDsOnly: true,
 		}, nil
 	}
 	return nil, fmt.Errorf("no migration path to Generic chart %d.x: migrate moves releases from 0.x to 1.x and from 1.x to 2.x", to)

@@ -194,7 +194,10 @@ func TestV2MovesANamespaceOn1xAndLeavesOneOn2x(t *testing.T) {
 	kagent = res.Reports[0]
 	require.Equal(t, PhaseContract, kagent.Phase, kagent.Summary)
 	require.Equal(t, []string{"by-hand"}, kagent.Contract.AgentsDeleted)
-	require.Nil(t, kagent.Contract.CRDs, "the kagent.dev CRDs are the platform's to remove")
+	require.Len(t, kagent.Contract.CRDs, len(LegacyCRDs))
+	for _, crdRep := range kagent.Contract.CRDs {
+		require.Equal(t, CRDAbsent, crdRep.Action, "an installation that went through 1.x has none of the 0.x CRDs left")
+	}
 	require.False(t, c.exists(tplGVR, "kagent", "by-hand"))
 	require.Equal(t, agents.VerdictReady, byRelease(kagent)["kagent/sre"].Template.Verdict)
 
@@ -402,5 +405,147 @@ func TestRewriteValuesV2(t *testing.T) {
 			require.Equal(t, tc.want, got)
 			require.Equal(t, tc.changes, changes)
 		})
+	}
+}
+
+// legacyCRDGVR is the kagent.dev/v1alpha2 resource a 0.x CRD serves.
+func legacyCRDGVR(name string) schema.GroupVersionResource {
+	plural, group, _ := strings.Cut(name, ".")
+	return schema.GroupVersionResource{Group: group, Version: "v1alpha2", Resource: plural}
+}
+
+func init() {
+	for _, name := range LegacyCRDs {
+		if gvr := legacyCRDGVR(name); listKinds[gvr] == "" {
+			listKinds[gvr] = gvr.Resource + "List"
+		}
+	}
+}
+
+// legacyCRDs are the 0.x kagent.dev CRDs as the 0.x line installed them:
+// served and stored at v1alpha2.
+func legacyCRDs() []runtime.Object {
+	var out []runtime.Object
+	for _, name := range LegacyCRDs {
+		gvr := legacyCRDGVR(name)
+		obj := crd(name)
+		obj.Object["spec"] = map[string]any{
+			"group": gvr.Group, "names": map[string]any{"plural": gvr.Resource},
+			"versions": []any{map[string]any{"name": "v1", "served": false, "storage": false}, map[string]any{"name": gvr.Version, "served": true, "storage": true}},
+		}
+		out = append(out, obj)
+	}
+	return out
+}
+
+// on2x is a namespace whose one release is on chart 2.x with its Agent
+// Ready: the state of an installation right after the cut-over.
+func on2x(ns string) []runtime.Object {
+	return []runtime.Object{ociRepository(ns, v2Target), helmRelease(ns, "bot", narrowRewritten(), "2.0.0"), agentObj(ns, "narrow", "bot", ns, true)}
+}
+
+func TestV2DirectJumpFrom0xDeletesTheEmpty0xCRDs(t *testing.T) {
+	ctx := t.Context()
+	c := newCluster(append(on2x("kagent"), legacyCRDs()...)...)
+	opts := Options{Namespaces: []string{"kagent"}}
+
+	res, err := c.runnerV2(t, opts, v2Latest).Run(ctx)
+	require.NoError(t, err)
+	rep := res.Reports[0]
+	require.Equal(t, PhaseContract, rep.Phase, rep.Summary)
+	require.Contains(t, rep.Summary, "9 of 9 removed CRDs deleted")
+	require.True(t, rep.Changed)
+	require.Len(t, rep.Contract.CRDs, len(LegacyCRDs))
+	for i, crdRep := range rep.Contract.CRDs {
+		require.Equal(t, LegacyCRDs[i], crdRep.Name)
+		require.Equal(t, CRDDeleted, crdRep.Action)
+		require.Equal(t, "removed from the cluster; it held no object", crdRep.Reason)
+		require.False(t, c.exists(crdGVR, "", crdRep.Name))
+	}
+
+	res, err = c.runnerV2(t, opts, v2Latest).Run(ctx)
+	require.NoError(t, err)
+	require.Equal(t, PhaseComplete, res.Reports[0].Phase, res.Reports[0].Summary)
+	require.False(t, res.Reports[0].Changed)
+}
+
+func TestV2DirectJumpKeepsA0xCRDThatHoldsAnObject(t *testing.T) {
+	ctx := t.Context()
+	objs := append(on2x("kagent"), legacyCRDs()...)
+	c := newCluster(append(objs, legacyAgentObj("elsewhere", "stray", "", ""))...)
+	opts := Options{Namespaces: []string{"kagent"}}
+
+	res, err := c.runnerV2(t, opts, v2Latest).Run(ctx)
+	require.NoError(t, err)
+	rep := res.Reports[0]
+	require.Equal(t, PhaseContract, rep.Phase, rep.Summary)
+	for _, crdRep := range rep.Contract.CRDs {
+		if crdRep.Name == "agents.kagent.dev" {
+			require.Equal(t, CRDKept, crdRep.Action)
+			require.Contains(t, crdRep.Reason, "kagent.dev/v1alpha2 objects")
+			require.Contains(t, crdRep.Reason, "elsewhere/stray")
+			require.True(t, c.exists(crdGVR, "", crdRep.Name))
+			continue
+		}
+		require.Equal(t, CRDDeleted, crdRep.Action, crdRep.Name)
+		require.False(t, c.exists(crdGVR, "", crdRep.Name))
+	}
+	require.True(t, c.exists(legacyAgentGVR, "elsewhere", "stray"))
+
+	// It stays, and is named, until the object is gone.
+	res, err = c.runnerV2(t, opts, v2Latest).Run(ctx)
+	require.NoError(t, err)
+	require.Equal(t, PhaseContract, res.Reports[0].Phase)
+	require.Equal(t, CRDKept, res.Reports[0].Contract.CRDs[0].Action)
+
+	c.delete(t, legacyAgentGVR, "elsewhere", "stray")
+	res, err = c.runnerV2(t, opts, v2Latest).Run(ctx)
+	require.NoError(t, err)
+	require.Equal(t, CRDDeleted, res.Reports[0].Contract.CRDs[0].Action)
+	require.False(t, c.exists(crdGVR, "", "agents.kagent.dev"))
+}
+
+func TestV2DirectJumpDryRunKeepsThe0xCRDs(t *testing.T) {
+	c := newCluster(append(on2x("kagent"), legacyCRDs()...)...)
+
+	res, err := c.runnerV2(t, Options{Namespaces: []string{"kagent"}, DryRun: true}, v2Latest).Run(t.Context())
+	require.NoError(t, err)
+	for _, crdRep := range res.Reports[0].Contract.CRDs {
+		require.Equal(t, CRDDeleted, crdRep.Action)
+		require.Equal(t, "dry run: would be deleted", crdRep.Reason)
+		require.True(t, c.exists(crdGVR, "", crdRep.Name))
+	}
+}
+
+func TestV2DirectJumpKeepsThe0xCRDsWhileANamespaceWaits(t *testing.T) {
+	objs := append(on2x("kagent"), legacyCRDs()...)
+	c := newCluster(append(objs, ociRepository("tenant", v2Target), helmRelease("tenant", "bot", narrowRewritten(), "2.0.0"), agentObj("tenant", "narrow", "bot", "tenant", false))...)
+
+	res, err := c.runnerV2(t, twoNamespaces, v2Latest).Run(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, PhaseWait, res.Reports[1].Phase)
+	for _, crdRep := range res.Reports[0].Contract.CRDs {
+		require.Equal(t, CRDKept, crdRep.Action)
+		require.Equal(t, "a managed namespace has not passed the wait gate yet", crdRep.Reason)
+		require.True(t, c.exists(crdGVR, "", crdRep.Name))
+	}
+}
+
+func TestV2DirectJumpWithoutTheRightToRemoveCRDsCompletes(t *testing.T) {
+	c := newCluster(append(on2x("kagent"), legacyCRDs()...)...)
+	c.dyn.PrependReactor("get", "customresourcedefinitions", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewForbidden(schema.GroupResource{Group: "apiextensions.k8s.io", Resource: "customresourcedefinitions"}, a.(k8stesting.GetAction).GetName(), nil)
+	})
+
+	res, err := c.runnerV2(t, Options{Namespaces: []string{"kagent"}}, v2Latest).Run(t.Context())
+	require.NoError(t, err, "a run whose identity holds no cluster-scoped right still succeeds")
+	rep := res.Reports[0]
+	require.Equal(t, PhaseComplete, rep.Phase, rep.Summary)
+	require.Contains(t, rep.Summary, "the removed CRDs not checked (not permitted)")
+	for _, crdRep := range rep.Contract.CRDs {
+		require.Equal(t, CRDUnchecked, crdRep.Action)
+		require.Equal(t, notPermitted, crdRep.Reason)
+		_, err := c.dyn.Tracker().Get(crdGVR, "", crdRep.Name)
+		require.NoError(t, err, "%s stays", crdRep.Name)
 	}
 }

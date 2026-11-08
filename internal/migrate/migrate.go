@@ -11,7 +11,9 @@
 //   - 1.x -> 2.x: kagent.dev/v1alpha3 AgentTemplate to api.kagent.dev/v1alpha3
 //     Agent; sub-agent bindings (extraTools[], extraAgentSpec.tools[]) move
 //     from `agent` to `subAgent`, the 1.x Harness admission label becomes
-//     agent.harness. The old kagent.dev CRDs are the platform's to remove.
+//     agent.harness. The 0.x kagent.dev CRDs an installation that jumped
+//     from the 0.x line straight to 2.x still has are deleted last, each
+//     only while it holds no object.
 //
 // A release deployed from a chart older than the hop's source major is
 // reported, never rewritten. The command runs once per installation as a Job
@@ -31,7 +33,7 @@
 //     Ready and no object of the old line is still rendered by a release
 //     Flux has yet to upgrade; until then the report names what is pending.
 //   - contract: the leftover agent objects of the old line in the managed
-//     namespaces are deleted, then (0.x -> 1.x only) the removed CRDs.
+//     namespaces are deleted, then the hop's CRDs.
 //
 // Every run records a report per managed namespace (ConfigMap
 // agent-manager-migrate-report); --dry-run prints it and writes nothing.
@@ -67,6 +69,12 @@ import (
 // Helm never deletes (helm.sh/resource-policy: keep); the contract phase of
 // the 0.x -> 1.x hop does.
 var RemovedCRDs = []string{"agents.kagent.dev", "sandboxagents.kagent.dev", "agentharnesses.kagent.dev", "memories.kagent.dev", "toolservers.kagent.dev"}
+
+// LegacyCRDs are every kagent.dev CRD of the 0.x line the api.kagent.dev
+// line no longer serves: RemovedCRDs and the ones the 1.x line still
+// served. The contract phase of the 1.x -> 2.x hop deletes the empty ones,
+// which an installation that jumped from 0.x straight to 2.x keeps.
+var LegacyCRDs = append(slices.Clone(RemovedCRDs), "modelconfigs.kagent.dev", "remotemcpservers.kagent.dev", "modelproviderconfigs.kagent.dev", "mcpservers.kagent.dev")
 
 // The API of the objects the 0.x chart rendered.
 var (
@@ -1009,15 +1017,24 @@ func (r *Runner) contractCRDs(ctx context.Context, dyn dynamic.Interface, states
 	if len(r.hop.crds) == 0 {
 		return nil
 	}
-	if allPassed {
+	if allPassed && !r.hop.emptyCRDsOnly {
 		keep = r.foreignLeftovers(ctx, dyn)
 	}
 	for _, name := range r.hop.crds {
 		rep := CRDReport{Name: name}
-		_, err := dyn.Resource(crdGVR).Get(ctx, name, metav1.GetOptions{})
+		obj, err := dyn.Resource(crdGVR).Get(ctx, name, metav1.GetOptions{})
+		held := ""
+		if err == nil && allPassed && r.hop.emptyCRDsOnly {
+			held, err = heldObjects(ctx, dyn, obj)
+		}
 		switch {
 		case apierrors.IsNotFound(err):
 			rep.Action = CRDAbsent
+		case r.hop.emptyCRDsOnly && apierrors.IsForbidden(err):
+			// The run's identity may hold no cluster-scoped right: the 0.x
+			// CRDs then stay for an identity that may remove them.
+			rep.Action, rep.Reason = CRDUnchecked, notPermitted
+			r.log.Warn("0.x CRD not checked: not permitted", "crd", name, "error", err)
 		case err != nil:
 			rep.Action, rep.Reason = CRDKept, "could not be read: "+err.Error()
 			for _, st := range states {
@@ -1027,10 +1044,18 @@ func (r *Runner) contractCRDs(ctx context.Context, dyn dynamic.Interface, states
 			rep.Action, rep.Reason = CRDKept, "a managed namespace has not passed the wait gate yet"
 		case keep != "":
 			rep.Action, rep.Reason = CRDKept, keep
+		case held != "":
+			rep.Action, rep.Reason = CRDKept, held
 		case r.opts.DryRun:
 			rep.Action, rep.Reason = CRDDeleted, "dry run: would be deleted"
 		default:
-			if err := dyn.Resource(crdGVR).Delete(ctx, name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+			err := dyn.Resource(crdGVR).Delete(ctx, name, metav1.DeleteOptions{})
+			if r.hop.emptyCRDsOnly && apierrors.IsForbidden(err) {
+				rep.Action, rep.Reason = CRDUnchecked, notPermitted
+				r.log.Warn("0.x CRD not deleted: not permitted", "crd", name, "error", err)
+				break
+			}
+			if err != nil && !apierrors.IsNotFound(err) {
 				rep.Action, rep.Reason = CRDKept, "delete refused: "+err.Error()
 				for _, st := range states {
 					st.fail(fmt.Errorf("delete CustomResourceDefinition %s: %w", name, err))
@@ -1038,6 +1063,9 @@ func (r *Runner) contractCRDs(ctx context.Context, dyn dynamic.Interface, states
 				break
 			}
 			rep.Action, rep.Reason = CRDDeleted, "removed from the cluster; the objects of that kind went with it"
+			if r.hop.emptyCRDsOnly {
+				rep.Reason = "removed from the cluster; it held no object"
+			}
 			wrote = true
 			r.log.Info("CRD deleted", "crd", name)
 		}
@@ -1049,6 +1077,53 @@ func (r *Runner) contractCRDs(ctx context.Context, dyn dynamic.Interface, states
 		}
 	}
 	return out
+}
+
+// notPermitted is the reason of a CRD the run's identity may not read,
+// list the objects of, or delete.
+const notPermitted = "not permitted: removing the 0.x CRDs needs customresourcedefinitions get/delete and a cluster-wide list of their objects; it stays until an identity holding those runs migrate"
+
+// heldObjects names the objects a CRD still holds, read through its storage
+// version in every namespace, or "" when it holds none.
+func heldObjects(ctx context.Context, dyn dynamic.Interface, crd *unstructured.Unstructured) (string, error) {
+	group, _, _ := unstructured.NestedString(crd.Object, "spec", "group")
+	plural, _, _ := unstructured.NestedString(crd.Object, "spec", "names", "plural")
+	versions, _, _ := unstructured.NestedSlice(crd.Object, "spec", "versions")
+	version := ""
+	for _, v := range versions {
+		v, _ := v.(map[string]any)
+		name, _ := v["name"].(string)
+		served, _ := v["served"].(bool)
+		storage, _ := v["storage"].(bool)
+		if served && (version == "" || storage) {
+			version = name
+		}
+	}
+	if group == "" || plural == "" || version == "" {
+		return "no served version to check for objects; it is kept", nil
+	}
+	gvr := schema.GroupVersionResource{Group: group, Version: version, Resource: plural}
+	const shown = 10
+	list, err := dyn.Resource(gvr).Namespace(metav1.NamespaceAll).List(ctx, metav1.ListOptions{Limit: shown})
+	if apierrors.IsNotFound(err) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("list %s: %w", gvr.GroupResource(), err)
+	}
+	if len(list.Items) == 0 {
+		return "", nil
+	}
+	var names []string
+	for i := range list.Items {
+		o := &list.Items[i]
+		names = append(names, strings.TrimPrefix(o.GetNamespace()+"/"+o.GetName(), "/"))
+	}
+	sort.Strings(names)
+	if len(names) > shown || list.GetContinue() != "" {
+		names = append(names[:min(len(names), shown)], "…")
+	}
+	return fmt.Sprintf("still holds %s/%s objects, which the CRD's deletion would take along: %s — remove or migrate them first", group, version, join(names)), nil
 }
 
 // foreignLeftovers names the old line's agent objects outside the managed
@@ -1116,7 +1191,10 @@ func (st *nsState) phase(h *hop) (string, string) {
 		// Nothing of the old line is left: readiness gates nothing any more,
 		// what the wait phase found is informational.
 		summary := fmt.Sprintf("nothing left to migrate (%s): %d Generic-chart release(s) on %d.x values, no %s objects", h, len(st.releases), h.to, h.leftoverKind)
-		if len(h.crds) > 0 {
+		switch {
+		case crdsUnchecked(st.report.Contract):
+			summary += ", the removed CRDs not checked (not permitted)"
+		case len(h.crds) > 0:
 			summary += ", none of the removed CRDs"
 		}
 		if len(st.report.Pending) > 0 {
@@ -1141,6 +1219,10 @@ func (st *nsState) phase(h *hop) (string, string) {
 		summary += fmt.Sprintf(", %d of %d removed CRDs deleted", deleted, len(h.crds))
 	}
 	return PhaseContract, summary
+}
+
+func crdsUnchecked(c *ContractReport) bool {
+	return c != nil && slices.ContainsFunc(c.CRDs, func(crd CRDReport) bool { return crd.Action == CRDUnchecked })
 }
 
 func crdsDeletedThisRun(c *ContractReport) bool {
