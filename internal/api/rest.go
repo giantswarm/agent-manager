@@ -16,6 +16,7 @@ import (
 
 	spec "github.com/giantswarm/agent-manager/api"
 	"github.com/giantswarm/agent-manager/internal/agents"
+	"github.com/giantswarm/agent-manager/internal/organizations"
 	"github.com/giantswarm/agent-manager/internal/tags"
 )
 
@@ -26,16 +27,22 @@ const maxBodyBytes = 1 << 20
 
 // REST serves the JSON API.
 type REST struct {
-	svc *agents.Service
-	log *slog.Logger
+	svc  *agents.Service
+	orgs *organizations.Service
+	log  *slog.Logger
 }
 
-// NewREST builds the REST handler set.
-func NewREST(svc *agents.Service, log *slog.Logger) *REST {
+// NewREST builds the REST handler set; WithOrganizations serves the
+// credential route from orgs, which answers unsupported without it.
+func NewREST(svc *agents.Service, log *slog.Logger, opts ...Option) *REST {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &REST{svc: svc, log: log}
+	var o serverOptions
+	for _, opt := range opts {
+		opt(&o)
+	}
+	return &REST{svc: svc, orgs: o.orgs, log: log}
 }
 
 // Register mounts the routes on mux.
@@ -58,6 +65,10 @@ func (h *REST) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET "+Prefix+"/sessions/{id}/turns/{turn}", h.getSessionTurn)
 	mux.HandleFunc("DELETE "+Prefix+"/sessions/{id}", h.deleteSession)
 	mux.HandleFunc("GET "+Prefix+"/toolchains/{name}/users", h.toolchainUsers)
+	mux.HandleFunc("GET "+Prefix+"/organizations/{parent}/{organization}/credentials/{secret}", h.getCredential)
+	mux.HandleFunc("GET "+Prefix+"/credential-operations/{operation}", h.getCredentialOperation)
+	mux.HandleFunc("POST "+Prefix+"/credential-operations/{operation}", h.saveCredentialOperation)
+	mux.HandleFunc("DELETE "+Prefix+"/credential-operations/{operation}", h.cancelCredentialOperation)
 }
 
 type errorBody struct {
@@ -428,6 +439,7 @@ var errorCodes = []struct {
 	status   int
 	code     string
 }{
+	{organizations.ErrCredentialOperationChanged, http.StatusPreconditionFailed, "precondition_failed"},
 	{agents.ErrNotFound, http.StatusNotFound, "not_found"},
 	{agents.ErrInvalid, http.StatusBadRequest, "invalid_request"},
 	{agents.ErrGitOpsOwned, http.StatusConflict, "gitops_owned"},

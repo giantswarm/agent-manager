@@ -308,3 +308,11 @@ to the current name; while minting, each is rendered and kept filled as well.
 {{- end -}}
 {{- $names | toJson -}}
 {{- end }}
+
+{{- define "agent-manager.credentialOperationsNamespace" -}}
+{{- if .Values.credentials.operationsNamespace -}}
+{{- .Values.credentials.operationsNamespace -}}
+{{- else -}}
+{{- printf "%s-%s-credentials" (include "agent-manager.fullname" . | trunc 30 | trimSuffix "-") (printf "%s/%s" .Release.Namespace .Release.Name | sha256sum | trunc 8) -}}
+{{- end -}}
+{{- end -}}

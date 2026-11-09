@@ -1071,7 +1071,7 @@ From every binding of the role that holds them, dry run first; an emptied bindin
 ```text
 Create or change an organization's connector (a RemoteMCPServer) as you; its credential is a Secret named by reference.
 
-A credential field sets the Secret-backed header it names (default: the only one, else Authorization; Secret tenant-credential-<name>, key token, the whole value); other headers stay; noCredential removes them. A URL with userinfo, a fragment, a credential-like query parameter or a query that does not parse is refused. Never pass a value: a missing Secret is answered with the Dev Portal's form link in credentials[].next. Needs agent-platform:admin.
+A credential field sets the Secret-backed header it names (default: the only one, else Authorization; Secret tenant-credential-<name>, key token, the whole value); other headers stay; noCredential removes them. A URL with userinfo, a fragment, a credential-like query parameter or a query that does not parse is refused. Never pass a value: a missing credential is a URL elicitation of the credential UI, link in credentials[].next. Needs agent-platform:admin.
 ```
 
 ```json
@@ -1118,8 +1118,12 @@ A credential field sets the Secret-backed header it names (default: the only one
       "type": "boolean"
     },
     "replaceCredential": {
-      "description": "Answer with the Dev Portal's credential form to enter a new value (default false)",
+      "description": "Answer with a URL elicitation of the credential UI to enter a new value (default false)",
       "type": "boolean"
+    },
+    "requestId": {
+      "description": "Idempotency key, at most 128 characters. Reuse on retries; use a fresh key for another save or a refreshed confirmation.",
+      "type": "string"
     },
     "url": {
       "description": "MCP endpoint URL, without a credential in it; required to create",
@@ -1139,7 +1143,7 @@ A credential field sets the Secret-backed header it names (default: the only one
 ```text
 Create or replace an organization's egress policy as you: origins its agents may reach, credentials by Secret name.
 
-destinations replaces the whole list. A credentialHeader makes the egress gateway add that header from the Secret (default tenant-credential-<policy>, key token). Never pass a value: a missing Secret is answered with the Dev Portal's credential form link in credentials[].next. list_egress_policies lists them. Needs agent-platform:admin.
+destinations replaces the whole list. A credentialHeader makes the egress gateway add that header from the Secret (default tenant-credential-<policy>, key token). Never pass a value: a missing credential is a URL elicitation of the credential UI, link in credentials[].next. list_egress_policies lists them. Needs agent-platform:admin.
 ```
 
 ```json
@@ -1198,8 +1202,12 @@ destinations replaces the whole list. A credentialHeader makes the egress gatewa
       "type": "string"
     },
     "replaceCredential": {
-      "description": "Answer with the Dev Portal's credential form to enter a new value (default false)",
+      "description": "Answer with a URL elicitation of the credential UI to enter a new value (default false)",
       "type": "boolean"
+    },
+    "requestId": {
+      "description": "Idempotency key, at most 128 characters. Reuse on retries; use a fresh key for another save or a refreshed confirmation.",
+      "type": "string"
     }
   },
   "required": [
@@ -1216,7 +1224,7 @@ destinations replaces the whole list. A credentialHeader makes the egress gatewa
 ```text
 Create or change an organization's model (a ModelConfig) as you; its API key is a Secret named by reference.
 
-The first model of an organization without a default becomes its default (annotation agent-platform.giantswarm.io/is-default-model-config); default true moves the mark here. Never pass a key: when its Secret is missing, credentials[].next carries the Dev Portal's credential form link for the person. list_model_configs lists the models. Needs agent-platform:admin.
+The first model of an organization without a default becomes its default (annotation agent-platform.giantswarm.io/is-default-model-config); default true moves the mark here. Never pass a key: a missing one is a URL elicitation of the credential UI, link in credentials[].next. list_model_configs lists the models. Needs agent-platform:admin.
 ```
 
 ```json
@@ -1263,8 +1271,12 @@ The first model of an organization without a default becomes its default (annota
       "type": "string"
     },
     "replaceCredential": {
-      "description": "Answer with the Dev Portal's credential form to enter a new value (default false)",
+      "description": "Answer with a URL elicitation of the credential UI to enter a new value (default false)",
       "type": "boolean"
+    },
+    "requestId": {
+      "description": "Idempotency key, at most 128 characters. Reuse on retries; use a fresh key for another save or a refreshed confirmation.",
+      "type": "string"
     }
   },
   "required": [

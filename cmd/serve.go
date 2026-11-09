@@ -23,6 +23,7 @@ import (
 	"github.com/giantswarm/agent-manager/internal/agents"
 	"github.com/giantswarm/agent-manager/internal/api"
 	"github.com/giantswarm/agent-manager/internal/chart"
+	"github.com/giantswarm/agent-manager/internal/identity"
 	"github.com/giantswarm/agent-manager/internal/kagent"
 	"github.com/giantswarm/agent-manager/internal/kube"
 	"github.com/giantswarm/agent-manager/internal/migrate"
@@ -83,7 +84,6 @@ type serveOptions struct {
 	kagentTarget string
 
 	multiTenant  bool
-	devPortalURL string
 	installation string
 	// orgsRepository, orgsBranch, orgsObjectsPath and orgsContentPrefix
 	// are where the organization tools' mode commit writes.
@@ -111,6 +111,13 @@ type serveOptions struct {
 	downstreamOAuth               bool
 	githubAuthorizationServer     string
 	githubAPIURL                  string
+	githubExchangeEndpoint        string
+	githubExchangeClient          string
+	githubExchangeSecretFile      string
+	githubExchangeAudience        string
+	githubExchangeCAFile          string
+	credentialUIURL               string
+	credentialOperationsNamespace string
 }
 
 func newServeCmd() *cobra.Command {
@@ -170,7 +177,6 @@ environment variable named next to it; flags win over the environment.`,
 	f.StringVar(&o.orgsObjectsPath, "organizations-objects-path", envOr("AGENT_MANAGER_ORGANIZATIONS_OBJECTS_PATH", ""), "The directory of --organizations-repository the installation's Kustomization applies the organization objects from, one directory per parent namespace; its kustomization.yaml lists them (AGENT_MANAGER_ORGANIZATIONS_OBJECTS_PATH)")
 	f.StringVar(&o.orgsContentPrefix, "organizations-content-prefix", envOr("AGENT_MANAGER_ORGANIZATIONS_CONTENT_PREFIX", organizations.DefaultContentPrefix), "The directory of --organizations-repository that holds the organizations' content paths, <prefix>/<parent>/<name>: agent-platform-operator's --organization-path without {parent}/{name} (AGENT_MANAGER_ORGANIZATIONS_CONTENT_PREFIX)")
 	f.StringVar(&o.installation, "installation", envOr("AGENT_MANAGER_INSTALLATION", ""), "The installation's name in the Dev Portal, which get_info reports: a portal agent id is <installation>/<namespace>/<name> (AGENT_MANAGER_INSTALLATION)")
-	f.StringVar(&o.devPortalURL, "dev-portal-url", envOr("AGENT_MANAGER_DEV_PORTAL_URL", ""), "The Dev Portal's base URL (https://portal.example.com): the organization tools answer a missing or replaced credential with its credential form's link; empty names the Secret without a link (AGENT_MANAGER_DEV_PORTAL_URL)")
 	f.BoolVar(&o.mcpEnabled, "mcp-enabled", envBool("AGENT_MANAGER_MCP_ENABLED", true), "Serve the MCP streamable-HTTP endpoint (AGENT_MANAGER_MCP_ENABLED)")
 	f.StringVar(&o.mcpPath, "mcp-path", envOr("AGENT_MANAGER_MCP_PATH", "/mcp"), "MCP endpoint path (AGENT_MANAGER_MCP_PATH)")
 	f.BoolVar(&o.oauthEnabled, "enable-oauth", envBool("AGENT_MANAGER_OAUTH_ENABLED", false), "Require an OAuth 2.1 bearer token on the MCP endpoint and the REST API, validated against the platform IdP (mcp-oauth); the caller's identity travels with every request (AGENT_MANAGER_OAUTH_ENABLED)")
@@ -189,11 +195,21 @@ environment variable named next to it; flags win over the environment.`,
 	f.BoolVar(&o.downstreamOAuth, "downstream-oauth", envBool("AGENT_MANAGER_DOWNSTREAM_OAUTH", false), "Call the Kubernetes API as the caller, with the caller's IdP token, for everything a request does — the ServiceAccount holds no permissions (the chart renders none) and nothing runs without a caller. Needs --enable-oauth and an apiserver that trusts the IdP (AGENT_MANAGER_DOWNSTREAM_OAUTH)")
 	f.StringVar(&o.githubAuthorizationServer, "github-authorization-server", envOr("AGENT_MANAGER_GITHUB_AUTHORIZATION_SERVER", ""), "Issuer identity of the GitHub App muster pins this server's MCP registration to (https://github.com/apps/giantswarm-agent-manager): the bearer of every MCP call is then the person's App user token, verified with GET /user and used for commit mode's pull request, and the person's IdP ID token arrives in X-Muster-Id-Token (MCPServer auth.forwardIdentity). Empty: commit mode is not offered. Needs --enable-oauth (AGENT_MANAGER_GITHUB_AUTHORIZATION_SERVER)")
 	f.StringVar(&o.githubAPIURL, "github-api-url", envOr("AGENT_MANAGER_GITHUB_API_URL", server.DefaultGitHubAPIURL), "GitHub REST API base URL for GET /user and commit mode (AGENT_MANAGER_GITHUB_API_URL)")
+	f.StringVar(&o.githubExchangeEndpoint, "github-token-exchange-endpoint", envOr("AGENT_MANAGER_GITHUB_TOKEN_EXCHANGE_ENDPOINT", ""), "RFC 8693 endpoint for obtaining the manager App user grant (AGENT_MANAGER_GITHUB_TOKEN_EXCHANGE_ENDPOINT)")
+	f.StringVar(&o.githubExchangeClient, "github-token-exchange-client-id", envOr("AGENT_MANAGER_GITHUB_TOKEN_EXCHANGE_CLIENT_ID", ""), "Confidential token exchange client ID (AGENT_MANAGER_GITHUB_TOKEN_EXCHANGE_CLIENT_ID)")
+	f.StringVar(&o.githubExchangeSecretFile, "github-token-exchange-client-secret-file", envOr("AGENT_MANAGER_GITHUB_TOKEN_EXCHANGE_CLIENT_SECRET_FILE", ""), "Mounted confidential client secret file (AGENT_MANAGER_GITHUB_TOKEN_EXCHANGE_CLIENT_SECRET_FILE)")
+	f.StringVar(&o.githubExchangeAudience, "github-token-exchange-audience", envOr("AGENT_MANAGER_GITHUB_TOKEN_EXCHANGE_AUDIENCE", ""), "Fixed target of the manager App user grant (AGENT_MANAGER_GITHUB_TOKEN_EXCHANGE_AUDIENCE)")
+	f.StringVar(&o.githubExchangeCAFile, "github-token-exchange-ca-file", envOr("AGENT_MANAGER_GITHUB_TOKEN_EXCHANGE_CA_FILE", ""), "Additional CA bundle for token exchange (AGENT_MANAGER_GITHUB_TOKEN_EXCHANGE_CA_FILE)")
+	f.StringVar(&o.credentialUIURL, "credential-ui-url", envOr("AGENT_MANAGER_CREDENTIAL_UI_URL", ""), "HTTPS credential UI URL template containing {operation}; the URL grants no authority (AGENT_MANAGER_CREDENTIAL_UI_URL)")
+	f.StringVar(&o.credentialOperationsNamespace, "credential-operations-namespace", envOr("AGENT_MANAGER_CREDENTIAL_OPERATIONS_NAMESPACE", ""), "Dedicated namespace for nonsecret credential operation metadata (AGENT_MANAGER_CREDENTIAL_OPERATIONS_NAMESPACE)")
 	return cmd
 }
 
 func runServe(ctx context.Context, o *serveOptions) error {
 	log := slog.Default()
+	if err := validateCredentialOptions(o); err != nil {
+		return err
+	}
 	skillsTokens, err := skillsTokenSource(o)
 	if err != nil {
 		return err
@@ -344,23 +360,37 @@ func runServe(ctx context.Context, o *serveOptions) error {
 	// caller.
 	var orgNamespaces *organizations.Namespaces
 	var orgs *organizations.Service
+	var resolveGitHub func(context.Context) (*identity.GitHub, error)
+	if o.githubExchangeEndpoint != "" {
+		resolveGitHub, err = server.NewGitHubExchange(server.GitHubExchangeConfig{TokenEndpoint: o.githubExchangeEndpoint, ClientID: o.githubExchangeClient, ClientSecretFile: o.githubExchangeSecretFile, Audience: o.githubExchangeAudience, CAFile: o.githubExchangeCAFile, APIURL: o.githubAPIURL, SubjectIssuer: o.dexIssuerURL})
+		if err != nil {
+			return err
+		}
+	}
 	if o.multiTenant {
 		if !o.downstreamOAuth {
 			return fmt.Errorf("--multi-tenant needs --downstream-oauth: a request in an organization namespace, and every organization tool, runs as the caller")
 		}
 		var orgsCommit *organizations.CommitConfig
 		if o.orgsRepository != "" {
-			if orgsCommit, err = organizations.NewCommitConfig(gitHubRemote(o.githubAuthorizationServer, o.githubAPIURL), o.orgsRepository, o.orgsBranch, o.orgsObjectsPath, o.orgsContentPrefix); err != nil {
+			if orgsCommit, err = organizations.NewCommitConfig(gitHubRemote(o.githubAuthorizationServer != "" || resolveGitHub != nil, o.githubAPIURL), o.orgsRepository, o.orgsBranch, o.orgsObjectsPath, o.orgsContentPrefix); err != nil {
 				return fmt.Errorf("--organizations-repository: %w", err)
 			}
+			orgsCommit.User = resolveGitHub
+		}
+		var credentialOperations *organizations.CredentialOperations
+		if o.credentialUIURL != "" {
+			credentialOperations = organizations.NewCredentialOperations(clients.Typed().CoreV1().ConfigMaps(o.credentialOperationsNamespace))
+			go credentialOperations.Expire(ctx)
 		}
 		orgNamespaces = organizations.NewNamespaces(clients.Typed(), o.kagentNamespace)
 		orgs = organizations.New(provider, organizations.Config{
 			Namespaces:            orgNamespaces,
-			DevPortalURL:          o.devPortalURL,
 			KagentAPIVersion:      kagentVersion,
 			HelmReleaseAPIVersion: helmReleaseAPI,
 			Commit:                orgsCommit,
+			CredentialUIURL:       o.credentialUIURL,
+			CredentialOperations:  credentialOperations,
 		}, log)
 	} else if o.orgsRepository != "" {
 		return fmt.Errorf("--organizations-repository needs --multi-tenant: it is where the organization tools commit")
@@ -423,7 +453,8 @@ func runServe(ctx context.Context, o *serveOptions) error {
 		SkillsBootSecret: bootSecret,
 		KagentAPIVersion: kagentVersion,
 		Version:          build.Version,
-		GitHub:           gitHubRemote(o.githubAuthorizationServer, o.githubAPIURL),
+		GitHub:           gitHubRemote(o.githubAuthorizationServer != "" || resolveGitHub != nil, o.githubAPIURL),
+		GitHubUser:       resolveGitHub,
 		Sessions:         sessions,
 		Bindings:         bindings,
 		Workspaces:       workspaceManager,
@@ -457,7 +488,8 @@ func runServe(ctx context.Context, o *serveOptions) error {
 			srvCfg.OAuth.GitHub = &server.GitHubPin{AuthorizationServer: o.githubAuthorizationServer, APIURL: o.githubAPIURL}
 		}
 	}
-	srv, err := server.New(srvCfg, svc, api.NewMCPServer(svc, build.Version, api.WithOrganizations(orgs)), log)
+	srvCfg.Organizations = orgs
+	srv, err := server.New(srvCfg, svc, api.NewMCPServer(svc, build.Version, api.WithOrganizations(orgs), api.WithLifecycle(ctx)), log)
 	if err != nil {
 		return err
 	}
@@ -593,11 +625,8 @@ func envDuration(key string, def time.Duration) time.Duration {
 	return d
 }
 
-// gitHubRemote offers commit mode on an App-pinned registration: the pull
-// request is opened as the person, with the App user token muster puts on the
-// call. Nil without the pin: commit mode is unsupported.
-func gitHubRemote(authorizationServer, apiURL string) agents.RemoteFor {
-	if authorizationServer == "" {
+func gitHubRemote(enabled bool, apiURL string) agents.RemoteFor {
+	if !enabled {
 		return nil
 	}
 	return func(token string) (agents.GitHubRemote, error) {
@@ -606,6 +635,27 @@ func gitHubRemote(authorizationServer, apiURL string) agents.RemoteFor {
 		}
 		return commit.NewGitHub(token, commit.WithBaseURL(apiURL))
 	}
+}
+
+func validateCredentialOptions(options *serveOptions) error {
+	if options.credentialUIURL != "" {
+		if err := organizations.ValidateCredentialUIURL(options.credentialUIURL); err != nil {
+			return err
+		}
+		if !options.multiTenant || !options.oauthEnabled || !options.downstreamOAuth || options.credentialOperationsNamespace == "" {
+			return errors.New("--credential-ui-url requires multi-tenant, OAuth, downstream OAuth and a credential operation namespace")
+		}
+	}
+	if options.githubExchangeEndpoint != "" {
+		if !options.oauthEnabled || !options.downstreamOAuth || options.oauthProvider != server.ProviderDex || options.githubAuthorizationServer != "" {
+			return errors.New("GitHub token exchange requires Dex OAuth and downstream OAuth, and replaces the GitHub-pinned MCP registration")
+		}
+		return (server.GitHubExchangeConfig{TokenEndpoint: options.githubExchangeEndpoint, ClientID: options.githubExchangeClient, ClientSecretFile: options.githubExchangeSecretFile, Audience: options.githubExchangeAudience, CAFile: options.githubExchangeCAFile, APIURL: options.githubAPIURL, SubjectIssuer: options.dexIssuerURL}).Validate()
+	}
+	if options.githubExchangeClient != "" || options.githubExchangeSecretFile != "" || options.githubExchangeAudience != "" || options.githubExchangeCAFile != "" {
+		return errors.New("GitHub token exchange options require --github-token-exchange-endpoint")
+	}
+	return nil
 }
 
 // skillsTokenSource is what skills are read with: the skills GitHub App's

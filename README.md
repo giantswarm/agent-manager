@@ -61,6 +61,8 @@ MCP-server-writer half.
 | One session and its conversation, one turn per A2A task of its context, oldest first, within `maxBytes`: a summary per turn by default, a transcript or the raw tasks on request | `GET /api/v1/sessions/{id}[?detail=&lastTurns=&maxBytes=]` | `get_session` | no |
 | One turn of a session: its messages, paged within `maxBytes`, or one tool call whole | `GET /api/v1/sessions/{id}/turns/{turn}[?detail=&toolCall=&fromMessage=&maxBytes=]` | `get_session_turn` | no |
 | Delete one of the caller's sessions and its runtime state | `DELETE /api/v1/sessions/{id}` | `delete_session` | the kagent Session |
+| The objects of an organization namespace that read a credential Secret (ModelConfigs, RemoteMCPServers, EgressPolicies), the key each reads, a connector's URL and the origins an EgressPolicy sends it to; with `kind` and `name`, the `mode` a write for that object takes | `GET /api/v1/organizations/{parent}/{organization}/credentials/{secret}[?kind=&name=]` | — | no |
+| Confirm, save or cancel a user-bound credential operation (see [Credential operations](docs/organization-credentials.md)) | `GET`, `POST`, `DELETE /api/v1/credential-operations/{operation}` | — | Secret and consumers, or one pull request in commit mode |
 | Health | `GET /healthz`, `GET /readyz` | — | no |
 
 The three writes take `dryRun` and `mode` (`apply` | `commit`, see
@@ -575,8 +577,15 @@ for commit mode's pull request, and validates the ID token exactly as a
 forwarded bearer, so apply mode and every read still act on Kubernetes as the
 person. The REST API keeps taking the ID token as its bearer. No GitHub
 credential other than the App's OAuth client (read by muster) exists in the
-pod or the chart. Operator precondition: the App installed with contents and
+pod or the chart in this mode. Operator precondition: the App installed with contents and
 pull-request write on every repository a commit may target.
+
+Alternatively, `githubTokenExchange` configures a confidential RFC 8693 client
+that retrieves the person's manager App user grant on demand. This supports
+REST commit mode with the person's verified ID token and keeps MCP on its
+platform identity registration. It replaces `github.enabled`; it does not
+require an App-pinned MCP call. The trust policy and prerequisites are in
+[Credential operations](docs/organization-credentials.md#github-authorization).
 
 Without `--enable-oauth` the service checks no identity and acts as its
 ServiceAccount (the Role per managed namespace: HelmReleases and
@@ -642,9 +651,24 @@ of them, so RBAC, schemas and admission refuse before anything changes; a
 refusal names the role that is missing and who can grant it. No tool takes or
 returns a secret value: a model's key, a connector's and an egress policy's
 credential are Secrets named by reference (`tenant-credential-…`). When one is
-missing, or `replaceCredential` asks for a new value, the answer carries the
-Dev Portal's credential form link (`--dev-portal-url`, chart `devPortal.url`)
-as text; the URL elicitation is giantswarm/agent-manager#293.
+missing, or `replaceCredential` asks for a new value, `set_organization_model`,
+`set_organization_connector` and `set_organization_egress_policy` answer with
+an MCP URL elicitation of a client-owned credential UI. The server prepares
+the intended change without writing consumers, and supplies a user-bound
+operation ID through the configured `credentials.uiURL` template. A client
+without `elicitation.url` receives the link in `credentials[].next`. A dry run
+creates no operation. Without a configured UI, a change requiring credential
+input is refused before writing resources.
+
+The UI authenticates the person, fetches the operation's confirmation and
+ETag, and submits only the requested Secret/key values over HTTPS with
+`If-Match`. Apply mode writes the Secret and consumers as the person. Commit
+mode encrypts the Secret and opens one pull request with the consumer changes
+as the person. Retrying the original MCP call returns its receipt; accepting
+URL navigation alone never completes the operation. Values enter no MCP
+argument, result, operation record, log or trace. See
+[Credential operations](docs/organization-credentials.md) for the API,
+replacement rules, trust policy and recovery behavior.
 
 A muster toolset preset excludes them all with the rule
 `pattern: x_agent-manager_*organization*`: the curated
@@ -947,9 +971,13 @@ fields) are dropped from the HelmRelease, and everything else (`agent.*`,
    CRDs `agents`, `sandboxagents`, `agentharnesses`, `memories` and
    `toolservers` of `kagent.dev` follow, once every managed namespace has
    passed the gate and no v1alpha2 `Agent` exists outside the managed
-   namespaces. On 2.x no CRD is deleted: the `kagent.dev` CRDs are the
-   platform's to remove, and other components (model-manager's `ModelConfig`)
-   may still use them.
+   namespaces. On 2.x every 0.x `kagent.dev` CRD the api.kagent.dev line no
+   longer serves (those five and `modelconfigs`, `remotemcpservers`,
+   `modelproviderconfigs`, `mcpservers`) is deleted once every managed
+   namespace has passed the gate, which an installation that jumped from 0.x
+   straight to 2.x still has; a CRD that holds an object in any namespace is
+   kept and the report names its objects, as other components
+   (model-manager's `ModelConfig`) may still use it.
 
 ### The report
 
@@ -1003,8 +1031,8 @@ pending:                           # what gates the next phase
   - "release flux-giantswarm/sre-agent: its rewrite (the diff in this report) is not applied in the owning repository yet"
 contract:                          # once the gate passed
   agentsDeleted: [by-hand]
-  crds:                            # 0.x -> 1.x only
-    - {name: agents.kagent.dev, action: deleted}          # deleted | absent | kept
+  crds:                            # the hop's CRDs (1.x -> 2.x: the 0.x kagent.dev ones)
+    - {name: agents.kagent.dev, action: deleted}          # deleted | absent | kept | unchecked
 ```
 
 ### Exit codes and permissions
@@ -1023,6 +1051,9 @@ ServiceAccount) needs, in the managed namespaces: `helmreleases` and
 
 - 1.x → 2.x: `agents`, `agenttemplates`, `harnesses` and `remotemcpservers` of
   `api.kagent.dev` get/list; `agenttemplates` of `kagent.dev` list/delete.
+  To remove the 0.x CRDs: cluster-wide `customresourcedefinitions` get/delete
+  for the nine names above and list on their `kagent.dev` resources; without
+  them the run goes on and reports those CRDs `unchecked`.
 - 0.x → 1.x: `agenttemplates`, `harnesses` and `remotemcpservers` of
   `kagent.dev` get/list, `agents` (`kagent.dev/v1alpha2`) list/delete; and
   cluster-wide `customresourcedefinitions` get/delete for the five names

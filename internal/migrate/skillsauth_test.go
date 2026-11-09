@@ -51,24 +51,24 @@ func TestSkillsCredentialMovesToItsCurrentName(t *testing.T) {
 		return map[string]any{"agent": map[string]any{"name": name}, "modelConfig": map[string]any{"name": "default-model-config"}}
 	}
 	c := newCluster(
-		ociRepository("kagent", v2Target),
-		helmRelease("kagent", "moved", withSkillsCredential(agentValues("moved"), skillsCredentialPrev), "2.0.0"), agentObj("kagent", "moved", "moved", "kagent", true),
-		helmRelease("kagent", "own", withSkillsCredential(agentValues("own"), "team-token"), "2.0.0"), agentObj("kagent", "own", "own", "kagent", true),
-		helmRelease("kagent", "current", withSkillsCredential(agentValues("current"), skillsCredential), "2.0.0"), agentObj("kagent", "current", "current", "kagent", true),
+		ociRepository(kagentNS, v2Target),
+		helmRelease(kagentNS, "moved", withSkillsCredential(agentValues("moved"), skillsCredentialPrev), "2.0.0"), agentObj(kagentNS, "moved", "moved", kagentNS, true),
+		helmRelease(kagentNS, "own", withSkillsCredential(agentValues("own"), "team-token"), "2.0.0"), agentObj(kagentNS, "own", "own", kagentNS, true),
+		helmRelease(kagentNS, "current", withSkillsCredential(agentValues("current"), skillsCredential), "2.0.0"), agentObj(kagentNS, "current", "current", kagentNS, true),
 	)
-	c.credentialSecret(t, "kagent")
+	c.credentialSecret(t, kagentNS)
 
-	res, err := c.runnerV2(t, renameOptions("kagent"), v2Latest).Run(ctx)
+	res, err := c.runnerV2(t, renameOptions(kagentNS), v2Latest).Run(ctx)
 	require.NoError(t, err)
 	rels := byRelease(res.Reports[0])
 	require.Equal(t, ActionRewritten, rels["kagent/moved"].Action)
 	require.Equal(t, []string{agents.SkillsGitAuthValuesKey + ".name=" + skillsCredential}, rels["kagent/moved"].Changes.Set)
-	require.Equal(t, map[string]any{"name": skillsCredential}, c.values(t, "kagent", "moved")[agents.SkillsGitAuthValuesKey])
+	require.Equal(t, map[string]any{"name": skillsCredential}, c.values(t, kagentNS, "moved")[agents.SkillsGitAuthValuesKey])
 	require.Equal(t, ActionUnchanged, rels["kagent/own"].Action)
-	require.Equal(t, map[string]any{"name": "team-token"}, c.values(t, "kagent", "own")[agents.SkillsGitAuthValuesKey])
+	require.Equal(t, map[string]any{"name": "team-token"}, c.values(t, kagentNS, "own")[agents.SkillsGitAuthValuesKey])
 	require.Equal(t, ActionUnchanged, rels["kagent/current"].Action)
 
-	res, err = c.runnerV2(t, renameOptions("kagent"), v2Latest).Run(ctx)
+	res, err = c.runnerV2(t, renameOptions(kagentNS), v2Latest).Run(ctx)
 	require.NoError(t, err)
 	require.False(t, res.Reports[0].Changed, "a second run changes nothing")
 }
@@ -76,14 +76,14 @@ func TestSkillsCredentialMovesToItsCurrentName(t *testing.T) {
 // Without the installation's current name nothing is moved.
 func TestSkillsCredentialWithoutCurrentNameIsLeft(t *testing.T) {
 	values := withSkillsCredential(map[string]any{"agent": map[string]any{"name": "a"}, "modelConfig": map[string]any{"name": "default-model-config"}}, skillsCredentialPrev)
-	c := newCluster(ociRepository("kagent", v2Target), helmRelease("kagent", "a", values, "2.0.0"), agentObj("kagent", "a", "a", "kagent", true))
+	c := newCluster(ociRepository(kagentNS, v2Target), helmRelease(kagentNS, "a", values, "2.0.0"), agentObj(kagentNS, "a", "a", kagentNS, true))
 
-	opts := renameOptions("kagent")
+	opts := renameOptions(kagentNS)
 	opts.SkillsGitAuthSecretName = ""
 	res, err := c.runnerV2(t, opts, v2Latest).Run(t.Context())
 	require.NoError(t, err)
 	require.Equal(t, ActionUnchanged, byRelease(res.Reports[0])["kagent/a"].Action)
-	require.Empty(t, c.writes("kagent"))
+	require.Empty(t, c.writes(kagentNS))
 }
 
 // A GitOps-owned release naming the previous credential gets the diff and is
@@ -91,11 +91,11 @@ func TestSkillsCredentialWithoutCurrentNameIsLeft(t *testing.T) {
 func TestSkillsCredentialOfAGitOpsReleaseIsADiff(t *testing.T) {
 	values := withSkillsCredential(map[string]any{"agent": map[string]any{"name": "sre-agent"}, "modelConfig": map[string]any{"name": "default-model-config"}}, skillsCredentialPrev)
 	hr := gitOpsLabeled(helmRelease("flux-giantswarm", "sre-agent", values, "2.0.0"))
-	require.NoError(t, unstructured.SetNestedField(hr.Object, "kagent", "spec", "targetNamespace"))
-	c := newCluster(gitOpsLabeled(ociRepository("flux-giantswarm", v2Target)), hr, agentObj("kagent", "sre-agent", "sre-agent", "flux-giantswarm", true))
-	c.credentialSecret(t, "kagent")
+	require.NoError(t, unstructured.SetNestedField(hr.Object, kagentNS, "spec", "targetNamespace"))
+	c := newCluster(gitOpsLabeled(ociRepository("flux-giantswarm", v2Target)), hr, agentObj(kagentNS, "sre-agent", "sre-agent", "flux-giantswarm", true))
+	c.credentialSecret(t, kagentNS)
 
-	res, err := c.runnerV2(t, renameOptions("kagent"), v2Latest).Run(t.Context())
+	res, err := c.runnerV2(t, renameOptions(kagentNS), v2Latest).Run(t.Context())
 	require.NoError(t, err)
 	rel := byRelease(res.Reports[0])["flux-giantswarm/sre-agent"]
 	require.Equal(t, ActionDiff, rel.Action)
@@ -110,20 +110,20 @@ func TestSkillsCredentialOfAGitOpsReleaseIsADiff(t *testing.T) {
 func TestSkillsCredentialWaitsForTheCurrentSecret(t *testing.T) {
 	ctx := t.Context()
 	values := withSkillsCredential(map[string]any{"agent": map[string]any{"name": "a"}, "modelConfig": map[string]any{"name": "default-model-config"}}, skillsCredentialPrev)
-	c := newCluster(ociRepository("kagent", v2Target), helmRelease("kagent", "a", values, "2.0.0"), agentObj("kagent", "a", "a", "kagent", true))
+	c := newCluster(ociRepository(kagentNS, v2Target), helmRelease(kagentNS, "a", values, "2.0.0"), agentObj(kagentNS, "a", "a", kagentNS, true))
 
-	res, err := c.runnerV2(t, renameOptions("kagent"), v2Latest).Run(ctx)
+	res, err := c.runnerV2(t, renameOptions(kagentNS), v2Latest).Run(ctx)
 	require.NoError(t, err)
 	rel := byRelease(res.Reports[0])["kagent/a"]
 	require.Equal(t, ActionUnchanged, rel.Action)
 	require.Contains(t, strings.Join(rel.Warnings, "\n"), "namespace kagent has no Secret "+skillsCredential+" yet")
-	require.Empty(t, c.writes("kagent"))
+	require.Empty(t, c.writes(kagentNS))
 
-	c.credentialSecret(t, "kagent")
-	res, err = c.runnerV2(t, renameOptions("kagent"), v2Latest).Run(ctx)
+	c.credentialSecret(t, kagentNS)
+	res, err = c.runnerV2(t, renameOptions(kagentNS), v2Latest).Run(ctx)
 	require.NoError(t, err)
 	require.Equal(t, ActionRewritten, byRelease(res.Reports[0])["kagent/a"].Action)
-	require.Equal(t, map[string]any{"name": skillsCredential}, c.values(t, "kagent", "a")[agents.SkillsGitAuthValuesKey])
+	require.Equal(t, map[string]any{"name": skillsCredential}, c.values(t, kagentNS, "a")[agents.SkillsGitAuthValuesKey])
 }
 
 // A run waits for the Secret agent-manager's rollout creates while it runs,
@@ -133,18 +133,18 @@ func TestSkillsCredentialWaitsWithinTheRun(t *testing.T) {
 	credentialPoll = 10 * time.Millisecond
 	t.Cleanup(func() { credentialPoll = poll })
 	values := withSkillsCredential(map[string]any{"agent": map[string]any{"name": "a"}, "modelConfig": map[string]any{"name": "default-model-config"}}, skillsCredentialPrev)
-	c := newCluster(ociRepository("kagent", v2Target), helmRelease("kagent", "a", values, "2.0.0"), agentObj("kagent", "a", "a", "kagent", true))
+	c := newCluster(ociRepository(kagentNS, v2Target), helmRelease(kagentNS, "a", values, "2.0.0"), agentObj(kagentNS, "a", "a", kagentNS, true))
 	go func() {
 		time.Sleep(50 * time.Millisecond)
-		c.credentialSecret(t, "kagent")
+		c.credentialSecret(t, kagentNS)
 	}()
 
-	opts := renameOptions("kagent")
+	opts := renameOptions(kagentNS)
 	opts.SkillsGitAuthWait = 5 * time.Second
 	res, err := c.runnerV2(t, opts, v2Latest).Run(t.Context())
 	require.NoError(t, err)
 	require.Equal(t, ActionRewritten, byRelease(res.Reports[0])["kagent/a"].Action)
-	require.Equal(t, map[string]any{"name": skillsCredential}, c.values(t, "kagent", "a")[agents.SkillsGitAuthValuesKey])
+	require.Equal(t, map[string]any{"name": skillsCredential}, c.values(t, kagentNS, "a")[agents.SkillsGitAuthValuesKey])
 }
 
 // A Secret of the current name without its key (the chart's render, before
@@ -152,13 +152,13 @@ func TestSkillsCredentialWaitsWithinTheRun(t *testing.T) {
 func TestSkillsCredentialWaitsForTheToken(t *testing.T) {
 	ctx := t.Context()
 	values := withSkillsCredential(map[string]any{"agent": map[string]any{"name": "a"}, "modelConfig": map[string]any{"name": "default-model-config"}}, skillsCredentialPrev)
-	c := newCluster(ociRepository("kagent", v2Target), helmRelease("kagent", "a", values, "2.0.0"), agentObj("kagent", "a", "a", "kagent", true))
-	c.emptyCredentialSecret(t, "kagent")
+	c := newCluster(ociRepository(kagentNS, v2Target), helmRelease(kagentNS, "a", values, "2.0.0"), agentObj(kagentNS, "a", "a", kagentNS, true))
+	c.emptyCredentialSecret(t, kagentNS)
 
-	res, err := c.runnerV2(t, renameOptions("kagent"), v2Latest).Run(ctx)
+	res, err := c.runnerV2(t, renameOptions(kagentNS), v2Latest).Run(ctx)
 	require.NoError(t, err)
 	rel := byRelease(res.Reports[0])["kagent/a"]
 	require.Equal(t, ActionUnchanged, rel.Action)
 	require.Contains(t, strings.Join(rel.Warnings, "\n"), "has no key token yet")
-	require.Empty(t, c.writes("kagent"))
+	require.Empty(t, c.writes(kagentNS))
 }

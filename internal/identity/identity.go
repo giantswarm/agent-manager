@@ -30,6 +30,9 @@ const (
 
 // Identity is the authenticated caller.
 type Identity struct {
+	Issuer    string
+	Client    string
+	Delegated bool
 	// Subject is the IdP's stable user id (the `sub` claim).
 	Subject string
 	// Email is the caller's email when the IdP provided one.

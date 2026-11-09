@@ -79,6 +79,7 @@ tags:
   - name: egresspolicies
   - name: skills
   - name: sessions
+  - name: organizations
   - name: health
 paths:
   /healthz:
@@ -545,6 +546,147 @@ paths:
         "400": { $ref: "#/components/responses/Error" }
         "401": { $ref: "#/components/responses/Error" }
         "501": { $ref: "#/components/responses/Error" }
+  /api/v1/organizations/{parent}/{organization}/credentials/{secret}:
+    parameters:
+      - name: parent
+        in: path
+        required: true
+        description: The parent namespace of the AgentPlatformOrganization, e.g. org-acme
+        schema: { type: string }
+      - name: organization
+        in: path
+        required: true
+        description: The AgentPlatformOrganization's name
+        schema: { type: string }
+      - name: secret
+        in: path
+        required: true
+        description: The credential Secret in the organization namespace (tenant-credential-...)
+        schema: { type: string, pattern: "^tenant-credential-" }
+    get:
+      tags: [organizations]
+      summary: Name every object that reads a credential Secret
+      description: |
+        The ModelConfigs, RemoteMCPServers and EgressPolicies of the
+        organization namespace that name the Secret, read as the caller, with
+        the key each reads, a connector's URL and the origins an EgressPolicy
+        sends the value to: what the Dev Portal's credential form shows before
+        it accepts a value. A kind the caller may not list refuses the read.
+        With `kind` and `name` (the object the form was opened for), `mode`
+        says how a write for it lands. Never a value.
+      operationId: getCredentialReferences
+      parameters:
+        - name: kind
+          in: query
+          description: The object the form was opened for
+          schema: { type: string, enum: [ModelConfig, RemoteMCPServer, EgressPolicy] }
+        - name: name
+          in: query
+          description: The object the form was opened for
+          schema: { type: string }
+      responses:
+        "200":
+          description: the objects that read the Secret
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CredentialUse" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "501": { $ref: "#/components/responses/Error" }
+  /api/v1/credential-operations/{operation}:
+    parameters:
+      - name: operation
+        in: path
+        required: true
+        schema: { type: string, pattern: "^[a-f0-9]{48}$" }
+    get:
+      tags: [organizations]
+      summary: Read a bound credential confirmation or receipt
+      operationId: getCredentialOperation
+      responses:
+        "200":
+          description: Nonsecret intended change and credential consumers, bound to the authenticated person
+          headers:
+            ETag: { schema: { type: string }, description: Strong version required by If-Match on save and cancellation }
+            Cache-Control: { schema: { type: string }, description: no-store }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CredentialOperation" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+    post:
+      tags: [organizations]
+      summary: Save the confirmed credentials and consumer changes once
+      description: |
+        Authenticates the person independently of the operation ID and rechecks
+        permissions, consumers, revisions and encryption policy. Pending operations
+        require exactly their requested Secret/key pairs. Values never enter MCP,
+        operation storage, responses, logs or traces. Apply mode dry-runs all writes
+        before applying them as the person; partial failures are reported. Commit
+        mode obtains the manager App user grant over RFC 8693 and opens one pull
+        request containing the consumer changes and encrypted Secrets. Explicit
+        replacement re-encrypts an existing one-key Secret. Completed submissions
+        return their receipt without another write.
+      operationId: saveCredentialOperation
+      parameters:
+        - name: If-Match
+          in: header
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [values]
+              properties:
+                values:
+                  type: array
+                  description: Required pairs while pending; an empty list can retry a completed or uncertain commit without resubmitting values
+                  items:
+                    type: object
+                    additionalProperties: false
+                    required: [secret, key, value]
+                    properties:
+                      secret: { type: string }
+                      key: { type: string }
+                      value: { type: string, minLength: 1, writeOnly: true }
+      responses:
+        "200":
+          description: Completed resource change or its existing receipt
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CredentialResourceResult" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "412": { $ref: "#/components/responses/Error" }
+        "500": { $ref: "#/components/responses/Error" }
+    delete:
+      tags: [organizations]
+      summary: Cancel a pending credential operation
+      operationId: cancelCredentialOperation
+      parameters:
+        - name: If-Match
+          in: header
+          required: true
+          schema: { type: string }
+      responses:
+        "204": { description: Cancelled without a credential or consumer write }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "412": { $ref: "#/components/responses/Error" }
   /api/v1/sessions/{id}:
     parameters:
       - name: id
@@ -1394,3 +1536,93 @@ components:
       properties:
         session: { $ref: "#/components/schemas/Session" }
         turn: { $ref: "#/components/schemas/StreamResponse" }
+    CredentialReference:
+      type: object
+      required: [kind, name, key]
+      properties:
+        kind: { type: string, enum: [ModelConfig, RemoteMCPServer, EgressPolicy] }
+        name: { type: string }
+        key: { type: string, description: The key of the Secret the object reads }
+        url: { type: string, description: "RemoteMCPServer: where it sends the value; a credential in the URL shows as REDACTED" }
+        origins: { type: array, items: { type: string }, description: "EgressPolicy: the origins it sends the value to" }
+        fromGit: { type: boolean, description: A Flux Kustomization applies the object from git }
+    CredentialUse:
+      type: object
+      properties:
+        namespace: { type: string, description: The organization namespace }
+        parent: { type: string }
+        organization: { type: string }
+        secret: { type: string }
+        references: { type: array, items: { $ref: "#/components/schemas/CredentialReference" } }
+        mode: { type: string, enum: [apply, commit], description: "How a write for kind/name lands; absent without them" }
+    CredentialOperation:
+      type: object
+      properties:
+        id: { type: string }
+        version: { type: string }
+        elicitationId: { type: string }
+        expiresAt: { type: string, format: date-time }
+        state: { type: string, enum: [pending, saving, uncertain, complete, cancelled] }
+        mode: { type: string, enum: [apply, commit] }
+        organization:
+          type: object
+          properties:
+            namespace: { type: string }
+            parent: { type: string }
+            organization: { type: string }
+        changes:
+          type: array
+          items:
+            type: object
+            properties:
+              action: { type: string, enum: [create, update] }
+              object: { type: object, additionalProperties: true, description: Nonsecret intended consumer manifest }
+        gitTarget:
+          type: object
+          properties:
+            repository: { type: string }
+            base: { type: string }
+            directory: { type: string }
+        result: { $ref: "#/components/schemas/CredentialResourceResult" }
+        references: { type: array, items: { $ref: "#/components/schemas/CredentialReference" } }
+    CredentialResourceResult:
+      type: object
+      properties:
+        namespace: { type: string }
+        kind: { type: string }
+        name: { type: string }
+        created: { type: boolean, description: Whether the intended consumer is new }
+        defaultModel: { type: string }
+        unmarked: { type: array, items: { type: string } }
+        note: { type: string }
+        requestedBy: { type: string }
+        pending: { type: boolean, description: Credential input is required; no consumer or Secret was written }
+        credentialOperation: { type: string }
+        elicitationId: { type: string }
+        credentials:
+          type: array
+          items:
+            type: object
+            properties:
+              secret: { type: string }
+              key: { type: string }
+              state: { type: string, enum: [present, committed, missing, replace, unknown] }
+              formUrl: { type: string }
+              next: { type: string }
+        commit:
+          type: object
+          properties:
+            repository: { type: string }
+            base: { type: string }
+            branch: { type: string }
+            pullRequest: { type: string }
+            number: { type: integer }
+            author: { type: string }
+            review: { type: string }
+            files:
+              type: array
+              items:
+                type: object
+                properties:
+                  path: { type: string }
+                  action: { type: string }
