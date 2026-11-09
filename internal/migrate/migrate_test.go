@@ -1024,11 +1024,11 @@ func TestExpandRetriesAWriteThatRacesTheControllers(t *testing.T) {
 
 // A release the Agent Platform ships is reported, never written, even in a
 // managed namespace without a Kustomization; the source it shares is not
-// moved under it.
+// moved under it, and its writable siblings wait.
 func TestExpandNeverWritesAPlatformOwnedRelease(t *testing.T) {
 	platform := helmRelease("kagent", "agent-manager-assistant", portalValues(), "0.6.1")
 	platform.SetLabels(map[string]string{agents.PlatformManagedByLabel: agents.PlatformManagedByValue})
-	c := newCluster(ociRepository("kagent", legacyRange), platform, harness("kagent"))
+	c := newCluster(ociRepository("kagent", legacyRange), platform, helmRelease("kagent", "sre", portalValues(), "0.6.1"), harness("kagent"))
 
 	res, err := c.runner(t, Options{Namespaces: []string{"kagent"}}, "1.0.0", "secret").Run(context.Background())
 	require.NoError(t, err)
@@ -1042,4 +1042,9 @@ func TestExpandNeverWritesAPlatformOwnedRelease(t *testing.T) {
 	assert.Equal(t, OwnershipPlatform, src.Ownership)
 	assert.Equal(t, ActionDiff, src.Action)
 	assert.Equal(t, legacyRange, c.semver(t, "kagent", "agent"))
+	held := byRelease(rep)["kagent/sre"]
+	assert.Equal(t, ActionPending, held.Action, "a sibling on the source that does not move waits")
+	assert.Contains(t, held.Reason, "kagent/agent-manager-assistant (platform)")
+	assert.Equal(t, portalValues(), c.values(t, "kagent", "sre"), "1.x values under the 0.x chart would fail its render")
+	assert.Contains(t, rep.Pending, "release kagent/agent-manager-assistant: ships with the Agent Platform; its rewrite (the diff in this report) comes with the platform release")
 }

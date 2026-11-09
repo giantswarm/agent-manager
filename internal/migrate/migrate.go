@@ -673,15 +673,19 @@ func (r *Runner) subAgentWarnings(st *nsState, rel *release, values map[string]a
 }
 
 // holdSiblings keeps the releases of a source together: when one release of
-// a source is failed or pending, none of its writable siblings is written,
-// since the source cannot move and target values under the source's current
-// chart would fail their render.
+// a source is failed or pending, or ships with the Agent Platform (which
+// moves it, and the source, with the platform release), none of its
+// writable siblings is written, since the source cannot move and target
+// values under the source's current chart would fail their render.
 func holdSiblings(st *nsState) {
 	for _, src := range st.sources {
 		var blockers []string
 		for _, rel := range src.releases {
-			if a := rel.report.Action; a == ActionFailed || a == ActionPending {
+			switch a := rel.report.Action; {
+			case a == ActionFailed || a == ActionPending:
 				blockers = append(blockers, fmt.Sprintf("%s (%s)", rel.id(), a))
+			case rel.platform:
+				blockers = append(blockers, fmt.Sprintf("%s (%s)", rel.id(), OwnershipPlatform))
 			}
 		}
 		if len(blockers) == 0 {
@@ -861,6 +865,10 @@ func (r *Runner) wait(ctx context.Context, st *nsState) {
 		case ActionPending, ActionFailed:
 			pending = append(pending, fmt.Sprintf("release %s: %s", rel.id(), rel.report.Reason))
 		case ActionDiff:
+			if rel.platform {
+				pending = append(pending, fmt.Sprintf("release %s: ships with the Agent Platform; its rewrite (the diff in this report) comes with the platform release", rel.id()))
+				continue
+			}
 			pending = append(pending, fmt.Sprintf("release %s: its rewrite (the diff in this report) is not applied in the owning repository yet", rel.id()))
 		}
 	}
