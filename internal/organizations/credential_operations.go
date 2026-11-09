@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/yosida95/uritemplate/v3"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
@@ -40,15 +41,40 @@ func ContextWithCredentialRequest(ctx context.Context, tool, intent, client stri
 	return context.WithValue(ctx, credentialRequestKey{}, credentialRequest{tool, intent, client})
 }
 
+// credentialUIVars are the variables a credential UI URL template may use.
+var credentialUIVars = []string{"operation", "parent", "organization"}
+
+var errCredentialUIURL = errors.New("credential UI requires an HTTPS RFC 6570 URL template with one {operation} expression in its path or query, using only {operation}, {parent} and {organization}")
+
 // ValidateCredentialUIURL keeps the origin fixed while allowing domain identifiers in the path or query.
 func ValidateCredentialUIURL(template string) error {
-	const marker = "credential-operation-placeholder"
-	validationURL := strings.NewReplacer("{operation}", marker, "{parent}", marker, "{organization}", marker).Replace(template)
-	parsed, err := url.Parse(validationURL)
-	if err != nil || strings.ContainsAny(validationURL, "{}") || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || parsed.Fragment != "" || strings.Contains(parsed.Host, marker) || strings.Count(template, "{operation}") != 1 {
-		return errors.New("credential UI requires an HTTPS URL containing exactly one {operation} placeholder in its path or query")
+	const marker = "credentialoperationplaceholder"
+	tpl, err := uritemplate.New(template)
+	if err != nil || !slices.Contains(tpl.Varnames(), "operation") {
+		return errCredentialUIURL
+	}
+	for _, name := range tpl.Varnames() {
+		if !slices.Contains(credentialUIVars, name) {
+			return errCredentialUIURL
+		}
+	}
+	expanded, err := expandCredentialUIURL(tpl, marker+"o", marker+"p", marker+"n")
+	if err != nil {
+		return errCredentialUIURL
+	}
+	parsed, err := url.Parse(expanded)
+	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || parsed.Fragment != "" || strings.Contains(parsed.Host, marker) || strings.Count(expanded, marker+"o") != 1 {
+		return errCredentialUIURL
 	}
 	return nil
+}
+
+func expandCredentialUIURL(tpl *uritemplate.Template, operation, parent, organization string) (string, error) {
+	values := uritemplate.Values{}
+	values.Set("operation", uritemplate.String(operation))
+	values.Set("parent", uritemplate.String(parent))
+	values.Set("organization", uritemplate.String(organization))
+	return tpl.Expand(values)
 }
 
 type operationWrite struct {
@@ -309,7 +335,14 @@ func (s *Service) landResource(ctx context.Context, writer *contentWriter, write
 			return err
 		}
 	}
-	link := strings.NewReplacer("{operation}", url.PathEscape(id), "{parent}", url.PathEscape(writer.org.Parent), "{organization}", url.PathEscape(writer.org.Organization)).Replace(s.cfg.CredentialUIURL)
+	tpl, err := uritemplate.New(s.cfg.CredentialUIURL)
+	if err != nil {
+		return invalidf("%s", errCredentialUIURL)
+	}
+	link, err := expandCredentialUIURL(tpl, id, writer.org.Parent, writer.org.Organization)
+	if err != nil {
+		return invalidf("%s", errCredentialUIURL)
+	}
 	for index := range operation.Result.Credentials {
 		credential := &operation.Result.Credentials[index]
 		if credential.State == CredentialMissing || credential.State == CredentialReplace {

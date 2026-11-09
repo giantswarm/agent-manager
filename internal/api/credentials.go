@@ -66,12 +66,12 @@ func (t *orgTools) runWrite(fn func(context.Context, mcp.CallToolRequest) (*orga
 					if err != nil {
 						return errResult(err), nil
 					}
-					return mcp.NewToolResultText("Credential input was cancelled; no resource was written."), nil
+					return mcp.NewToolResultError("Credential input was cancelled; no resource was written."), nil
 				}
 			}
 		}
 		if res.DryRun || !clientSupportsURLElicitation(ctx) {
-			return jsonResult(res)
+			return credentialResult(res)
 		}
 		var elicitations []mcp.ElicitationParams
 		for _, c := range res.Credentials {
@@ -86,7 +86,7 @@ func (t *orgTools) runWrite(fn func(context.Context, mcp.CallToolRequest) (*orga
 			}
 		}
 		if len(elicitations) == 0 {
-			return jsonResult(res)
+			return credentialResult(res)
 		}
 		if mcp.IsModernProtocol(mcpserver.RequestProtocolVersion(ctx)) {
 			b := mcpserver.NewInputRequestBuilder("")
@@ -98,6 +98,25 @@ func (t *orgTools) runWrite(fn func(context.Context, mcp.CallToolRequest) (*orga
 		t.watchCredentialCompletion(ctx, res)
 		return nil, mcp.URLElicitationRequiredError{Elicitations: elicitations}
 	}
+}
+
+// credentialResult answers a credential write as the tools' outputSchema
+// declares: the result as structuredContent, its JSON as text, and a
+// resource_link to the credential UI for each credential waiting on a value,
+// the link a client without URL elicitation offers the person.
+func credentialResult(res *organizations.ResourceResult) (*mcp.CallToolResult, error) {
+	data, err := json.Marshal(res)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("encode result: %v", err)), nil
+	}
+	result := mcp.NewToolResultStructured(res, string(data))
+	for _, c := range res.Credentials {
+		if c.FormURL != "" {
+			result.Content = append(result.Content, mcp.NewResourceLink(c.FormURL, "credential-ui",
+				fmt.Sprintf("Enter the value of key %s of Secret %s in the credential UI.", c.Key, c.Secret), "text/html"))
+		}
+	}
+	return result, nil
 }
 
 // clientSupportsURLElicitation reports whether the client declared URL mode

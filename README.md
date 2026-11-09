@@ -638,8 +638,10 @@ missing, or `replaceCredential` asks for a new value, `set_organization_model`,
 `set_organization_connector` and `set_organization_egress_policy` answer with
 an MCP URL elicitation of a client-owned credential UI. The server prepares
 the intended change without writing consumers, and supplies a user-bound
-operation ID through the configured `credentials.uiURL` template. A client
-without `elicitation.url` receives the link in `credentials[].next`. A dry run
+operation ID through the configured `credentials.uiURL` RFC 6570 template. A client
+without `elicitation.url` receives the result as `structuredContent`, declared
+by the tools' `outputSchema`, with a `resource_link` to the credential UI and
+the link in `credentials[].next`. A dry run
 creates no operation. Without a configured UI, a change requiring credential
 input is refused before writing resources.
 

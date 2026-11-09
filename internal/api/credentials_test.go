@@ -272,3 +272,42 @@ func TestCredentialFallbackAndDryRun(t *testing.T) {
 	require.NotContains(t, text, "credentialOperation")
 	require.Nil(t, fixture.get(t, mcGVR, orgNS, "claude"))
 }
+
+func TestCredentialWithoutURLElicitationIsAStructuredResultWithAResourceLink(t *testing.T) {
+	fixture := newOrgFixture(t)
+	arguments := map[string]any{"namespace": orgNS, "name": "claude", "provider": "Anthropic", "model": "claude-sonnet-4-6"}
+	response := rawCall(t, fixture.ctx, fixture.srv, toolCall(ToolSetOrganizationModel, arguments, modernMeta(false)))
+	result := response["result"].(map[string]any)
+	require.NotEqual(t, true, result["isError"])
+
+	structured := result["structuredContent"].(map[string]any)
+	credential := structured["credentials"].([]any)[0].(map[string]any)
+	formURL := credential["formUrl"].(string)
+	require.Contains(t, formURL, "https://portal.example.com/credentials?operation=")
+	require.Contains(t, credential["next"], formURL)
+
+	content := result["content"].([]any)
+	var text map[string]any
+	require.NoError(t, json.Unmarshal([]byte(content[0].(map[string]any)["text"].(string)), &text))
+	require.Equal(t, structured, text)
+	require.Len(t, content, 2)
+	link := content[1].(map[string]any)
+	require.Equal(t, "resource_link", link["type"])
+	require.Equal(t, formURL, link["uri"])
+}
+
+func TestCredentialWriteToolsDeclareTheirOutputSchema(t *testing.T) {
+	fixture := newOrgFixture(t)
+	response := rawCall(t, fixture.ctx, fixture.srv, map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
+	declared := map[string]bool{}
+	for _, tool := range response["result"].(map[string]any)["tools"].([]any) {
+		tool := tool.(map[string]any)
+		if schema, ok := tool["outputSchema"].(map[string]any); ok {
+			_, hasCredentials := schema["properties"].(map[string]any)["credentials"]
+			declared[tool["name"].(string)] = hasCredentials
+		}
+	}
+	for _, name := range []string{ToolSetOrganizationModel, ToolSetOrganizationConnector, ToolSetOrganizationEgress} {
+		require.True(t, declared[name], name)
+	}
+}
