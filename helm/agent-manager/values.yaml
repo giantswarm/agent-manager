@@ -158,7 +158,7 @@ skillManager:
   # skills and plugins are pinned through it, `list_skills` proxies its
   # catalogue (deprecated), as the caller; `skills.repositories` is unused.
   # Empty: in-process discovery and pinning (deprecated).
-  url: ""
+  url: ""  # @schema pattern: ^(https?://[^\s/]+(/\S*)?)?$
 
 skills:
   # -- GitHub repositories whose SKILL.md files list_skills offers (the same

@@ -870,7 +870,8 @@
             "properties": {
                 "url": {
                     "type": "string",
-                    "description": "skill-manager's base URL (`http://skill-manager.agent-platform.svc:8080`): skills and plugins are pinned through it, `list_skills` proxies its catalogue (deprecated), as the caller; `skills.repositories` is unused. Empty: in-process discovery and pinning (deprecated)."
+                    "description": "skill-manager's base URL (`http://skill-manager.agent-platform.svc:8080`): skills and plugins are pinned through it, `list_skills` proxies its catalogue (deprecated), as the caller; `skills.repositories` is unused. Empty: in-process discovery and pinning (deprecated).",
+                    "pattern": "^(https?://[^\\s/]+(/\\S*)?)?$"
                 }
             }
         },

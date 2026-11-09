@@ -946,6 +946,9 @@ func checkSpec(spec Spec) []error {
 	if err := refuseDefaultWorkspaceAnnotation(spec.Annotations, ""); err != nil {
 		errs = append(errs, err)
 	}
+	if err := refusePlatformLabels(spec.Labels, nil); err != nil {
+		errs = append(errs, err)
+	}
 	if err := ValidateDefaultWorkspace(spec.DefaultWorkspace, spec.Namespace, spec.Target); err != nil {
 		errs = append(errs, err)
 	}
@@ -1657,6 +1660,10 @@ func (s *Service) mergedValues(ctx context.Context, st *site, upd Update, hr *un
 		after[ToolsetValuesKey] = toAnySlice(*upd.Toolset)
 	}
 	if upd.Labels != nil {
+		currentLabels, _ := before["labels"].(map[string]any)
+		if err := refusePlatformLabels(*upd.Labels, currentLabels); err != nil {
+			return after, before, err
+		}
 		if len(*upd.Labels) > 0 {
 			after["labels"] = toAnyMap(*upd.Labels)
 		} else {
@@ -2074,6 +2081,22 @@ func ownerOf(obj *unstructured.Unstructured) (name, namespace string) {
 // platformRefusal answers a write to an agent the platform ships.
 func platformRefusal(st *site, name string) error {
 	return conflictf("agent %s ships with the Agent Platform and is read-only here: change it through the platform's configuration", st.describe(name))
+}
+
+// refusePlatformLabels refuses requested labels that set or change the
+// platform's marks (PlatformManagedByLabel, DefaultAgentLabel) against
+// current: only the platform ships its agents and names the default.
+func refusePlatformLabels(requested map[string]string, current map[string]any) error {
+	for _, key := range []string{PlatformManagedByLabel, DefaultAgentLabel} {
+		v, ok := requested[key]
+		if !ok {
+			continue
+		}
+		if have, _ := current[key].(string); have != v {
+			return invalidf("label %s is set by the Agent Platform only", key)
+		}
+	}
+	return nil
 }
 
 // PlatformOwned reports an object the Agent Platform ships (a HelmRelease,

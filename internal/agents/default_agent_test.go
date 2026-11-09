@@ -87,3 +87,27 @@ func TestInfoReportsTheInstallation(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, string(raw), `"installation":"golem"`)
 }
+
+// The platform's marks are not labels a caller sets: create_agent and
+// update_agent refuse them, so no agent of a caller becomes the default or
+// platform-owned; an update that keeps a label as it is passes.
+func TestCallersCannotSetThePlatformLabels(t *testing.T) {
+	f := seeded(t)
+	readOnly := []string{"preset:read-only"}
+	for _, key := range []string{DefaultAgentLabel, PlatformManagedByLabel} {
+		_, err := f.svc.Create(t.Context(), Spec{Name: "sre", ModelConfig: "default-model-config", Toolset: readOnly, Labels: map[string]string{key: "true"}})
+		require.ErrorIs(t, err, ErrInvalid, key)
+		assert.Contains(t, err.Error(), key)
+		_, err = f.svc.Update(t.Context(), Update{Name: "verifier", Labels: &map[string]string{key: "true"}})
+		require.ErrorIs(t, err, ErrInvalid, key)
+	}
+	assert.Empty(t, f.svc.Info(t.Context()).DefaultAgent)
+
+	values := defaultValues("assistant")
+	values["labels"] = map[string]any{DefaultAgentLabel: "true"}
+	mustCreate(t, f, hrGVR, helmRelease("kagent", "assistant", values, true, nil))
+	_, err := f.svc.Update(t.Context(), Update{Name: "assistant", Labels: &map[string]string{DefaultAgentLabel: "true", "team": "sre"}})
+	require.NoError(t, err, "kept as it is")
+	_, err = f.svc.Update(t.Context(), Update{Name: "assistant", Labels: &map[string]string{"team": "sre"}})
+	require.NoError(t, err, "removed")
+}
