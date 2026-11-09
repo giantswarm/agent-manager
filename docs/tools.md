@@ -569,6 +569,8 @@ Another person's session is refused as not_found. While another operation on it 
 
 ```text
 Get one agent: its HelmRelease values, Harness, pinned skills and plugins, toolset and Agent status.
+
+If you may not read the agent's HelmRelease, you get the Agent alone with managed unknown, and releaseWithheld names the role that may read it.
 ```
 
 ```json
@@ -769,7 +771,7 @@ detail: transcript (default) clips tool arguments and gives tool results as stub
 ```text
 List the agents of a namespace, one summary each: model, Harness, toolset, readiness and how it is managed.
 
-managed: helmrelease is writable here, gitops changes only with mode commit, none is a bare Agent object. implicitFullAccess: true means the agent sees every gateway tool and still needs a toolset (update_agent). toolsetBound: true means the toolset is bound to each session at its start, for every process of its sandbox; otherwise the agent's runtime declares it. An agent's prompt, skills, plugins and values come from get_agent.
+managed: helmrelease is writable here, gitops changes only with mode commit, none is a bare Agent, unknown: Flux objects unreadable (releaseWithheld says why). implicitFullAccess: true means the agent sees every gateway tool and still needs a toolset (update_agent). toolsetBound: true means the toolset is bound to each session at its start, for every process of its sandbox; otherwise the agent's runtime declares it. An agent's prompt, skills, plugins and values come from get_agent.
 ```
 
 ```json

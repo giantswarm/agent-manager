@@ -122,7 +122,14 @@ const (
 	ManagedGitOps = "gitops"
 	// ManagedNone: a bare Agent object with no HelmRelease behind it.
 	ManagedNone = "none"
+	// ManagedUnknown: the caller may not read the HelmReleases, so whether
+	// one owns the agent is not known (Agent.ReleaseWithheld says why).
+	ManagedUnknown = "unknown"
 )
+
+// RoleEditor is the agent-platform role that may read and write a
+// namespace's agent HelmReleases and OCIRepositories.
+const RoleEditor = "agent-platform:editor"
 
 // GitSkill is a skill in a git repository. A write takes the repository and,
 // optionally, a Ref to resolve or a Commit to pin; what is written and read
@@ -475,6 +482,10 @@ type Agent struct {
 	// Values are the HelmRelease's inline values (the chart contract), when a
 	// HelmRelease owns the agent.
 	Values map[string]any `json:"values,omitempty"`
+	// ReleaseWithheld says why HelmRelease, Values and Managed are not
+	// reported: the caller may not read the Flux objects, and which role
+	// may. Empty when they are.
+	ReleaseWithheld string `json:"releaseWithheld,omitempty"`
 }
 
 // AgentSummary is an agent as list_agents reports it unless asked for
@@ -501,10 +512,11 @@ type AgentSummary struct {
 	Managed                   string   `json:"managed"`
 	// The owning HelmRelease's state, when it needs attention: suspended,
 	// being uninstalled, or not Ready (its reason and message).
-	Suspended      bool   `json:"suspended,omitempty"`
-	Deleting       bool   `json:"deleting,omitempty"`
-	ReleaseReason  string `json:"releaseReason,omitempty"`
-	ReleaseMessage string `json:"releaseMessage,omitempty"`
+	Suspended       bool   `json:"suspended,omitempty"`
+	Deleting        bool   `json:"deleting,omitempty"`
+	ReleaseReason   string `json:"releaseReason,omitempty"`
+	ReleaseMessage  string `json:"releaseMessage,omitempty"`
+	ReleaseWithheld string `json:"releaseWithheld,omitempty"`
 }
 
 // Summary is the agent as an AgentSummary.
@@ -528,6 +540,7 @@ func (a Agent) Summary() AgentSummary {
 		ToolsetBound:              a.ToolsetBound,
 		Ready:                     a.Ready,
 		Managed:                   a.Managed,
+		ReleaseWithheld:           a.ReleaseWithheld,
 	}
 	if hr := a.HelmRelease; hr != nil {
 		s.Suspended = hr.Suspended

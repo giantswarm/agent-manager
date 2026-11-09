@@ -48,7 +48,7 @@ const (
 	// RoleAdmin, RoleEditor and RoleUser are an organization's members, by
 	// RoleBinding in its namespace.
 	RoleAdmin  = "agent-platform:admin"
-	RoleEditor = "agent-platform:editor"
+	RoleEditor = agents.RoleEditor
 	RoleUser   = "agent-platform:user"
 	// FirstAdminsBinding is the RoleBinding to RoleAdmin a create writes with
 	// the organization; an admission policy keeps it from being deleted or

@@ -2,6 +2,7 @@ package agents
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
@@ -449,7 +450,9 @@ func wrapKube(err error, what string) error {
 // List returns the agents of a namespace: every Agent object (with its
 // RemoteMCPServer and its owning HelmRelease when Flux labels name one) plus
 // every HelmRelease of the agent chart that has not rendered one yet. With a
-// filter, only the agents that carry any of its tags.
+// filter, only the agents that carry any of its tags. A caller who may not
+// read the Flux objects gets the Agent objects alone, each with
+// ReleaseWithheld set.
 func (s *Service) List(ctx context.Context, loc Location, filter tags.Filter) ([]Agent, error) {
 	st, err := s.site(ctx, loc)
 	if err != nil {
@@ -468,7 +471,12 @@ func (s *Service) List(ctx context.Context, loc Location, filter tags.Filter) ([
 	for i := range servers.Items {
 		serverByName[servers.Items[i].GetName()] = &servers.Items[i]
 	}
+	withheld := ""
 	hrs, err := s.agentHelmReleases(ctx, st)
+	if errorsIs(err, ErrForbidden) {
+		withheld = releaseWithheld(st.fluxNS)
+		hrs, err = nil, nil
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -477,7 +485,9 @@ func (s *Service) List(ctx context.Context, loc Location, filter tags.Filter) ([
 		obj := &objects.Items[i]
 		a := agentFromObject(obj, serverByName[obj.GetName()], s.cfg.Tags)
 		a.Target = st.loc.Target
-		if hrName, hrNs := ownerOf(obj); hrName != "" {
+		if withheld != "" {
+			withholdRelease(&a, withheld)
+		} else if hrName, hrNs := ownerOf(obj); hrName != "" {
 			hr := hrs[hrName]
 			if hr == nil || hrNs != st.fluxNS {
 				hr, _ = s.getHelmRelease(ctx, st.flux, orDefault(hrNs, st.fluxNS), hrName)
@@ -519,17 +529,27 @@ func (s *Service) List(ctx context.Context, loc Location, filter tags.Filter) ([
 	return out, nil
 }
 
-// Get returns one agent by name.
+// Get returns one agent by name. A caller who may not read its HelmRelease
+// gets the Agent object alone, with ReleaseWithheld set.
 func (s *Service) Get(ctx context.Context, loc Location, name string) (*Agent, error) {
 	st, err := s.site(ctx, loc)
 	if err != nil {
 		return nil, err
 	}
-	return s.get(ctx, st, name)
+	return s.read(ctx, st, name, true)
 }
 
+// get reads an agent for a write, which needs its HelmRelease.
 func (s *Service) get(ctx context.Context, st *site, name string) (*Agent, error) {
+	return s.read(ctx, st, name, false)
+}
+
+func (s *Service) read(ctx context.Context, st *site, name string, releaseOptional bool) (*Agent, error) {
 	obj, hr, err := s.agentObjects(ctx, st, name)
+	withheld := ""
+	if unreadable := (*releaseUnreadableError)(nil); releaseOptional && errors.As(err, &unreadable) && unreadable.agent != nil {
+		obj, withheld, err = unreadable.agent, unreadable.withheld, nil
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -546,6 +566,9 @@ func (s *Service) get(ctx context.Context, st *site, name string) (*Agent, error
 	a.Target = st.loc.Target
 	if hr != nil {
 		applyHelmRelease(&a, hr, s.cfg.Tags)
+	}
+	if withheld != "" {
+		withholdRelease(&a, withheld)
 	}
 	s.markToolsetBound(&a)
 	s.effectiveDefaultToolchains(&a)
@@ -568,7 +591,8 @@ func (s *Service) markToolsetBound(a *Agent) {
 
 // agentObjects reads an agent's Agent object and its owning HelmRelease
 // (either may be nil, not both): the release its provenance labels name,
-// else the one named after the agent at the site.
+// else the one named after the agent at the site. A HelmRelease the caller
+// may not read is a *releaseUnreadableError carrying the Agent object.
 func (s *Service) agentObjects(ctx context.Context, st *site, name string) (obj, hr *unstructured.Unstructured, err error) {
 	if obj, err = s.getAgentObject(ctx, st.agent, st.ns(), name); err != nil {
 		return nil, nil, err
@@ -580,6 +604,9 @@ func (s *Service) agentObjects(ctx context.Context, st *site, name string) (obj,
 		}
 	}
 	if hr, err = s.getHelmRelease(ctx, st.flux, hrNs, hrName); err != nil {
+		if errorsIs(err, ErrForbidden) {
+			return nil, nil, &releaseUnreadableError{err: err, agent: obj, withheld: releaseWithheld(hrNs)}
+		}
 		return nil, nil, err
 	}
 	if obj == nil && hr == nil {
@@ -612,6 +639,31 @@ func (s *Service) getObject(ctx context.Context, dyn dynamic.Interface, gvr sche
 		return nil, wrapKube(err, fmt.Sprintf("get %s %s/%s", what, ns, name))
 	}
 	return obj, nil
+}
+
+// releaseUnreadableError is a Forbidden read of an agent's HelmRelease. It
+// unwraps to ErrForbidden and names the role that may read it.
+type releaseUnreadableError struct {
+	err      error
+	agent    *unstructured.Unstructured
+	withheld string
+}
+
+func (e *releaseUnreadableError) Error() string {
+	return fmt.Sprintf("%v (reading it needs the %s role)", e.err, RoleEditor)
+}
+
+func (e *releaseUnreadableError) Unwrap() error { return e.err }
+
+// releaseWithheld is Agent.ReleaseWithheld for a caller who may not read the
+// Flux objects in ns.
+func releaseWithheld(ns string) string {
+	return fmt.Sprintf("you may not read the Flux HelmReleases and OCIRepositories in %s, so the release state, its values and how the agent is managed are not shown; reading them needs the %s role", ns, RoleEditor)
+}
+
+func withholdRelease(a *Agent, withheld string) {
+	a.Managed = ManagedUnknown
+	a.ReleaseWithheld = withheld
 }
 
 // agentChartSources returns the names of the OCIRepositories in ns that point

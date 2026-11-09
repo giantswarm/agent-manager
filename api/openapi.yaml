@@ -1131,11 +1131,12 @@ components:
         toolset: { $ref: "#/components/schemas/Toolset" }
         implicitFullAccess: { type: boolean }
         ready: { type: [boolean, "null"] }
-        managed: { type: string, enum: [helmrelease, gitops, none] }
+        managed: { type: string, enum: [helmrelease, gitops, none, unknown] }
         suspended: { type: boolean, description: The HelmRelease is suspended (absent when not) }
         deleting: { type: boolean, description: helm-controller is uninstalling the release (absent when not) }
         releaseReason: { type: string, description: The HelmRelease's Ready reason, when it is not Ready }
         releaseMessage: { type: string, description: The HelmRelease's Ready message, when it is not Ready }
+        releaseWithheld: { type: string, description: "Set when the caller may not read the Flux HelmReleases and OCIRepositories: why the release fields are absent and managed is unknown, and the role that may read them (agent-platform:editor)" }
     Agent:
       type: object
       properties:
@@ -1161,9 +1162,10 @@ components:
         tools: { type: array, items: { $ref: "#/components/schemas/ToolBinding" } }
         ready: { type: [boolean, "null"], description: The Agent's verdict (Ready and the desired revision is the latest successful one); null while unreported }
         status: { $ref: "#/components/schemas/ObjectStatus" }
-        managed: { type: string, enum: [helmrelease, gitops, none] }
+        managed: { type: string, enum: [helmrelease, gitops, none, unknown] }
         helmRelease: { $ref: "#/components/schemas/HelmReleaseRef" }
         values: { type: object, description: The HelmRelease's inline values (the chart contract) }
+        releaseWithheld: { type: string, description: "Set when the caller may not read the Flux HelmReleases and OCIRepositories: why the release fields are absent and managed is unknown, and the role that may read them (agent-platform:editor)" }
     Manifests:
       type: object
       properties:
