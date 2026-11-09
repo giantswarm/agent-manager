@@ -27,6 +27,10 @@ type CredentialValue struct {
 	Value  string `json:"value"`
 }
 
+// credentialOperationAnnotation marks an object written directly to the API
+// server by one credential operation, so a retry after an uncertain write can
+// tell its own write from someone else's. Commit mode never sets it: Git
+// carries only the desired state, and recovery there checks the branch.
 const credentialOperationAnnotation = "agent-manager.giantswarm.io/credential-operation"
 
 var secretGVR = schema.GroupVersionResource{Version: "v1", Resource: "secrets"}
@@ -154,7 +158,6 @@ func (s *Service) saveCredentialOperation(ctx context.Context, id, version strin
 		delete(secret.Object, "stringData")
 		secret.Object["type"] = "Opaque"
 		secret.Object["data"] = map[string]any{credential.Key: base64.StdEncoding.EncodeToString([]byte(values[index].Value))}
-		setAnnotation(secret, credentialOperationAnnotation, operation.ElicitationID)
 		writes = append([]write{{gvr: secretGVR, kind: kindSecret, op: action, obj: secret.Object, ns: operation.Namespace.Name, name: credential.Secret, what: "credential Secret", reason: wayOrganizationAdmin(operation.Namespace.Name)}}, writes...)
 	}
 	if err := apply(ctx, caller.Dynamic(), writes, true); err != nil {
@@ -196,6 +199,9 @@ func operationVersionMatches(operation *credentialOperation, object *unstructure
 
 func (s *Service) applyCredentialOperation(ctx context.Context, caller kube.Client, operation *credentialOperation, writes []write) error {
 	for _, planned := range writes {
+		marked := unstructuredOf(planned.obj).DeepCopy()
+		setAnnotation(marked, credentialOperationAnnotation, operation.ElicitationID)
+		planned.obj = marked.Object
 		object, err := do(ctx, caller.Dynamic(), planned, nil)
 		if err != nil {
 			return err
@@ -228,9 +234,7 @@ func remainingOperationWrites(ctx context.Context, caller kube.Client, operation
 		if (planned.op == opCreate && !apierrors.IsNotFound(err)) || (planned.op != opCreate && (current == nil || current.GetResourceVersion() != expected.GetResourceVersion())) {
 			return nil, fmt.Errorf("%w: credential consumer changed; prepare it again", agents.ErrConflict)
 		}
-		object := expected.DeepCopy()
-		setAnnotation(object, credentialOperationAnnotation, operation.ElicitationID)
-		planned.obj = object.Object
+		planned.obj = expected.DeepCopy().Object
 		writes = append(writes, planned)
 	}
 	return writes, nil

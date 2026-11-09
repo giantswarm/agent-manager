@@ -141,7 +141,9 @@ must use the authenticated operation API and its `If-Match` confirmation.
 Resource-version comparisons serialize saves across replicas. Completed retries
 return the receipt without another write. After a known partial apply, refresh
 the confirmation and retry: markers and recorded API-server resource versions
-identify unchanged successful writes, preserving the first Secret value. An uncertain Git save
+identify unchanged successful writes, preserving the first Secret value. Only
+direct writes carry the `agent-manager.giantswarm.io/credential-operation`
+marker; committed files hold the desired state alone. An uncertain Git save
 verifies the same private branch against stored encrypted-file hashes and
 opens or reuses its PR. It never creates a second branch automatically.
 
