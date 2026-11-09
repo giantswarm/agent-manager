@@ -35,6 +35,8 @@ import (
 	"k8s.io/client-go/dynamic"
 
 	"github.com/giantswarm/agent-manager/internal/agents"
+	"github.com/giantswarm/agent-manager/internal/kagent"
+	apiv1alpha1 "github.com/giantswarm/agent-manager/internal/kagent/gen/kagent/api/v1alpha1"
 	"github.com/giantswarm/agent-manager/internal/kube"
 )
 
@@ -88,6 +90,16 @@ type Config struct {
 	ReadyPoll    time.Duration
 	// Commit is where mode commit writes; nil: only mode apply.
 	Commit *CommitConfig
+	// Sessions lists the sessions of the organization's Agents for the
+	// erase preview, as the caller; nil: the preview says they could not
+	// be listed.
+	Sessions SessionLister
+}
+
+// SessionLister lists an Agent's sessions in the agent runtime as the
+// caller (kagent.Client).
+type SessionLister interface {
+	ListSessions(ctx context.Context, token string, agent kagent.Ref, allCreators bool) ([]*apiv1alpha1.Session, error)
 }
 
 // Service is the organization tools.
