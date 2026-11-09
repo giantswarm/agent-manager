@@ -522,9 +522,9 @@ client, a portal session forwards the id_token of the portal's own client —
 and every forwarded token carries the audiences the MCPServer requires, the
 ones the kube-apiserver trusts. So the chart trusts both: `oauth.trustedAudiences`
 (default `[global.identity.clientId]`) plus `muster.mcpServer.auth.requiredAudiences`,
-always. A token for none of them is refused with `401`; the log line and the
-`WWW-Authenticate` description name its `aud` next to the trusted audiences
-(muster shows the description in its session hint). The caller
+always. A token for none of them is refused with `401`; the
+`Unknown JWT bearer refused` log line names its `token_audience` next to the
+`trusted_audiences`. The caller
 (`internal/identity`: subject, email, groups, source `sso|oauth`) is on every
 write's log line (`caller=`) and on every create/update/delete result as
 `requestedBy`.
