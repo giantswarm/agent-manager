@@ -1,5 +1,7 @@
 CVE-2026-84445 until=2026-10-29 # google.golang.org/grpc@v1.84.0
 CVE-2026-5160 until=2026-10-30 # github.com/yuin/goldmark@v1.4.13
-CVE-2026-107325 until=2026-11-09 # go.mongodb.org/mongo-driver@v1.17.10
+# sops -> huaweicloud-sdk-go-v3 -> mongo-driver v1; fixed only in v2, no v1 fix.
+# Remove when the dependency chain is fixed: https://github.com/giantswarm/agent-manager/issues/123
+CVE-2026-107325 until=2026-12-07 # go.mongodb.org/mongo-driver@v1.17.10
 CVE-2026-108859 until=2026-11-12 # github.com/mark3labs/mcp-go@v1.2.1
 CVE-2026-85747 until=2026-11-27 # github.com/distribution/distribution/v3@v3.1.1 since=2026-10-28
