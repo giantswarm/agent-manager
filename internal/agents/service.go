@@ -1509,16 +1509,13 @@ func (s *Service) writableHelmRelease(ctx context.Context, st *site, name string
 	if err != nil {
 		return nil, nil, err
 	}
-	if hr == nil && PlatformOwned(obj) {
-		return nil, obj, platformRefusal(st, name)
+	if PlatformOwned(hr) || PlatformOwned(obj) {
+		// The release is returned with the refusal: a forced delete removes
+		// a bare Agent only, never one the platform ships.
+		return hr, obj, platformRefusal(st, name)
 	}
 	if hr == nil {
 		return nil, obj, conflictf("Agent %s is a bare Agent with no HelmRelease behind it; agent-manager only writes HelmRelease values (recreate it with create_agent, or delete it with force)", st.describe(name))
-	}
-	if PlatformOwned(hr) {
-		// The release is returned with the refusal: a forced delete removes
-		// a bare Agent only, never one a release renders.
-		return hr, obj, platformRefusal(st, name)
 	}
 	if gitOpsOwnedHR(hr) && !allowGitOps {
 		return nil, obj, s.gitOpsRefusal(ctx, st.flux, hr)
@@ -2128,6 +2125,9 @@ func chartRefOf(hr *unstructured.Unstructured) *ChartRef {
 // into the view.
 func agentFromObject(obj, server *unstructured.Unstructured, rule *tags.Rule) Agent {
 	a := Agent{Name: obj.GetName(), Namespace: obj.GetNamespace(), Exists: true, Managed: ManagedNone}
+	if PlatformOwned(obj) {
+		a.Managed = ManagedPlatform
+	}
 	a.DisplayName = obj.GetAnnotations()[DisplayNameAnnotation]
 	a.Tags = rule.Parse(obj.GetAnnotations()[TagsAnnotation])
 	a.IconURL = obj.GetAnnotations()[IconURLAnnotation]
@@ -2232,7 +2232,9 @@ func applyHelmRelease(a *Agent, hr *unstructured.Unstructured, rule *tags.Rule) 
 		a.CreatedBy = hr.GetAnnotations()[CreatedByAnnotation]
 	}
 	switch {
-	case PlatformOwned(hr):
+	case PlatformOwned(hr) || a.Managed == ManagedPlatform:
+		// The label on the HelmRelease or on its Agent: both are refused
+		// alike (writableHelmRelease).
 		a.Managed = ManagedPlatform
 	case ref.GitOpsOwned:
 		a.Managed = ManagedGitOps

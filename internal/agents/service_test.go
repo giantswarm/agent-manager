@@ -864,6 +864,38 @@ func TestForcedDeleteKeepsAPlatformOwnedAgent(t *testing.T) {
 	assert.Contains(t, err.Error(), "ships with the Agent Platform")
 	_, err = f.dyn.Resource(agentGVR).Namespace("kagent").Get(ctx, "agent-manager-assistant", metav1.GetOptions{})
 	require.NoError(t, err, "the Agent is kept")
+	got, err := f.svc.Get(ctx, In(""), "agent-manager-assistant")
+	require.NoError(t, err)
+	assert.Equal(t, ManagedPlatform, got.Managed, "reported as it is refused, not as a bare Agent")
+}
+
+// The label on the Agent alone makes it platform-owned, also behind an
+// unlabelled HelmRelease: reported and refused alike.
+func TestTheAgentsPlatformLabelSuffices(t *testing.T) {
+	f := seeded(t)
+	ctx := t.Context()
+	values := map[string]any{"agent": map[string]any{"name": "assistant"}, "modelConfig": map[string]any{"name": "default-model-config"}, ToolsetValuesKey: []any{"preset:full"}}
+	mustCreate(t, f, hrGVR, helmRelease("kagent", "assistant", values, true, nil))
+	obj := agentObject("kagent", "assistant", "assistant", "kagent", true, true)
+	labels := obj.GetLabels()
+	labels[PlatformManagedByLabel] = PlatformManagedByValue
+	obj.SetLabels(labels)
+	mustCreate(t, f, agentGVR, obj)
+
+	got, err := f.svc.Get(ctx, In(""), "assistant")
+	require.NoError(t, err)
+	assert.Equal(t, ManagedPlatform, got.Managed)
+	list, err := f.svc.List(ctx, In(""), nil)
+	require.NoError(t, err)
+	for _, a := range list {
+		if a.Name == "assistant" {
+			assert.Equal(t, ManagedPlatform, a.Managed)
+		}
+	}
+	_, err = f.svc.Update(ctx, Update{Name: "assistant", Description: str("x")})
+	require.ErrorIs(t, err, ErrConflict)
+	_, err = f.svc.Delete(ctx, In(""), "assistant", true, WriteOptions{})
+	require.ErrorIs(t, err, ErrConflict)
 }
 
 // A delete never takes the chart source agent-platform-operator keeps.

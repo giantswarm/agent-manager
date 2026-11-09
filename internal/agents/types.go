@@ -132,7 +132,7 @@ const (
 	// ManagedNone: a bare Agent object with no HelmRelease behind it.
 	ManagedNone = "none"
 	// ManagedPlatform: the agent ships with the Agent Platform (its
-	// HelmRelease carries PlatformManagedByLabel); it is read-only here and
+	// HelmRelease or Agent carries PlatformManagedByLabel); it is read-only here and
 	// changes go through the platform's configuration.
 	ManagedPlatform = "platform"
 )
