@@ -299,7 +299,7 @@ oauth:
     enabled: false
 
 githubTokenExchange:
-  # -- RFC 8693 token endpoint. Empty retains the existing GitHub pin mode.
+  # -- RFC 8693 token endpoint. Set, commit mode opens pull requests with the person's App user token from muster's broker; requires `github.enabled: false`. Empty, commit mode needs `github.enabled`.
   endpoint: ""
   # -- Confidential broker client ID, allowed to retrieve only the manager App grant.
   clientID: ""

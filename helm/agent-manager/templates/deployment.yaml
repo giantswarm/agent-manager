@@ -89,6 +89,12 @@ spec:
             - --credential-operations-namespace={{ include "agent-manager.credentialOperationsNamespace" $ }}
             {{- end }}
             {{- if .Values.githubTokenExchange.endpoint }}
+            {{- if .Values.github.enabled }}
+            {{- fail "githubTokenExchange.endpoint replaces the GitHub-pinned MCP registration: set github.enabled to false in the same change" }}
+            {{- end }}
+            {{- if not (and .Values.oauth.enabled .Values.oauth.downstream.enabled (eq .Values.oauth.provider "dex")) }}
+            {{- fail "githubTokenExchange.endpoint needs oauth.enabled, oauth.downstream.enabled and oauth.provider dex: the person's Dex token is the exchange's subject token" }}
+            {{- end }}
             - --github-token-exchange-endpoint={{ .Values.githubTokenExchange.endpoint }}
             - --github-token-exchange-client-id={{ required "githubTokenExchange.clientID is required" .Values.githubTokenExchange.clientID }}
             - --github-token-exchange-audience={{ required "githubTokenExchange.audience is required" .Values.githubTokenExchange.audience }}

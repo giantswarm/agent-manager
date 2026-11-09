@@ -70,7 +70,9 @@ githubTokenExchange:
 The existing Secret contains `client-secret`. An optional CA Secret contains
 `ca.crt`. The endpoint and output audience are operator-controlled; requests
 cannot change them. This mode requires Dex OAuth and downstream authorization,
-and replaces the App-pinned MCP registration. It also supplies ordinary agent
+and replaces the App-pinned MCP registration: the chart refuses to render it
+together with `github.enabled`, or without `oauth.downstream.enabled` and the
+`dex` provider. It also supplies ordinary agent
 and organization commits with the person's grant.
 
 The authorization server must independently validate the subject ID token and
