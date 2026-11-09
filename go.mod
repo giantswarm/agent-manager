@@ -8,7 +8,7 @@ require (
 	github.com/Masterminds/semver/v3 v3.5.0
 	github.com/a2aproject/a2a-go/v2 v2.8.0
 	github.com/giantswarm/agent-platform-operator v0.1.8
-	github.com/giantswarm/gitops-commit v0.12.0-rc.4
+	github.com/giantswarm/gitops-commit v0.12.0-rc.6
 	github.com/giantswarm/mcp-oauth v1.10.2
 	github.com/giantswarm/mcp-toolkit v0.5.2
 	github.com/go-jose/go-jose/v4 v4.1.9
