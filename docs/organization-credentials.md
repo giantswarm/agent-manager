@@ -15,8 +15,10 @@ credentials:
   uiURL: https://portal.example.com/organizations/graveler/{parent}/{organization}/credentials?operation={operation}
 ```
 
-`{operation}` is required once in the path or query. `{parent}` and
-`{organization}` are optional; the scheme and host are fixed. Routes and the
+The template is an [RFC 6570](https://www.rfc-editor.org/rfc/rfc6570) URI
+template. One `{operation}` expression is required in the path or query
+(`{?operation}` works too). `{parent}` and `{organization}` are optional; the
+scheme and host are fixed, and no other variable is accepted. Routes and the
 installation name belong to the UI configuration. Agent-manager neither hosts a
 form nor constructs a Backstage route. The operation ID grants no authority.
 
@@ -130,7 +132,7 @@ applied it. See [repository requirements](organizations-commit-mode.md).
 ## Upgrading credential UI configuration
 
 Replace `--dev-portal-url` and chart `devPortal.url` with `--credential-ui-url`
-and `credentials.uiURL`. Supply an HTTPS URL template containing `{operation}`.
+and `credentials.uiURL`. Supply an HTTPS RFC 6570 URI template containing `{operation}`.
 Enable OAuth and downstream authorization and configure a dedicated metadata
 namespace with `--credential-operations-namespace`; the chart derives that
 namespace when `credentials.operationsNamespace` is empty. The client form
