@@ -9,7 +9,7 @@ require (
 	github.com/a2aproject/a2a-go/v2 v2.8.0
 	github.com/giantswarm/agent-platform-operator v0.1.8
 	github.com/giantswarm/gitops-commit v0.12.0-rc.6
-	github.com/giantswarm/mcp-oauth v1.10.2
+	github.com/giantswarm/mcp-oauth v1.13.2
 	github.com/giantswarm/mcp-toolkit v0.5.3
 	github.com/go-jose/go-jose/v4 v4.1.9
 	github.com/golang-jwt/jwt/v5 v5.3.1
@@ -51,6 +51,7 @@ require (
 	cloud.google.com/go/longrunning v1.2.0 // indirect
 	cloud.google.com/go/monitoring v1.30.0 // indirect
 	cloud.google.com/go/storage v1.63.1 // indirect
+	code.dny.dev/ssrf v0.3.0 // indirect
 	dario.cat/mergo v1.0.2 // indirect
 	filippo.io/edwards25519 v1.2.0 // indirect
 	filippo.io/hpke v0.4.0 // indirect
