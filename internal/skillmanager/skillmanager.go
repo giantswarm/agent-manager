@@ -15,8 +15,9 @@ import (
 	"net/url"
 	"path"
 	"strings"
-	"sync"
 	"time"
+
+	"k8s.io/utils/lru"
 
 	"github.com/giantswarm/agent-manager/internal/identity"
 	"github.com/giantswarm/agent-manager/internal/skills"
@@ -59,10 +60,6 @@ func (e *ResolveError) Error() string {
 
 func (e *ResolveError) Unwrap() error { return e.kind }
 
-// forwardedIdentityHeader is muster's forwarded ID token header
-// (server.ForwardedIdentityHeader), sent next to a GitHub bearer.
-const forwardedIdentityHeader = "X-Muster-Id-Token"
-
 // Config configures the client.
 type Config struct {
 	// URL is skill-manager's base URL (http://skill-manager.agent-platform.svc:8080).
@@ -80,8 +77,9 @@ type Client struct {
 	token string
 	http  *http.Client
 
-	mu      sync.Mutex
-	formats map[string]bool
+	// formats are the git plugins' formats resolve reported, by
+	// formatKey.
+	formats *lru.Cache
 }
 
 // New builds the client of skill-manager at cfg.URL.
@@ -94,7 +92,7 @@ func New(cfg Config) (*Client, error) {
 	if hc == nil {
 		hc = &http.Client{Timeout: 30 * time.Second}
 	}
-	return &Client{base: u, token: cfg.Token, http: hc, formats: map[string]bool{}}, nil
+	return &Client{base: u, token: cfg.Token, http: hc, formats: lru.New(maxFormats)}, nil
 }
 
 // URL is skill-manager's base URL.
@@ -162,16 +160,17 @@ func (c *Client) Resolve(ctx context.Context, skillItems, pluginItems []Item) ([
 			}
 		}
 	}
-	c.mu.Lock()
-	if len(c.formats) > 4096 {
-		c.formats = map[string]bool{}
-	}
-	for _, it := range out.Plugins {
-		if it.Git != nil && it.ClaudeFormat != nil {
-			c.formats[formatKey(it.Git.URL, it.Git.Commit, it.Path)] = *it.ClaudeFormat
+	for i, it := range out.Plugins {
+		if it.Git == nil || it.ClaudeFormat == nil {
+			continue
+		}
+		// Under the item as skill-manager answered it and as it was asked
+		// (the URL and path an agent's values keep).
+		c.formats.Add(formatKey(it.Git.URL, it.Git.Commit, it.Path), *it.ClaudeFormat)
+		if asked := pluginItems[i]; asked.Git != nil {
+			c.formats.Add(formatKey(asked.Git.URL, it.Git.Commit, asked.Path), *it.ClaudeFormat)
 		}
 	}
-	c.mu.Unlock()
 	return out.Skills, out.Plugins, nil
 }
 
@@ -208,12 +207,8 @@ func (c *Client) RequireReadable(context.Context, string, string) error { return
 // ClaudeFormatPlugin answers from the formats resolve reported, else
 // resolves the plugin at commit to learn it.
 func (c *Client) ClaudeFormatPlugin(ctx context.Context, repoURL, commit, at string) (bool, error) {
-	key := formatKey(repoURL, commit, at)
-	c.mu.Lock()
-	claude, ok := c.formats[key]
-	c.mu.Unlock()
-	if ok {
-		return claude, nil
+	if claude, ok := c.formats.Get(formatKey(repoURL, commit, at)); ok {
+		return claude.(bool), nil
 	}
 	_, got, err := c.Resolve(ctx, nil, []Item{{Path: at, Git: &Git{URL: repoURL, Commit: commit}}})
 	if err != nil {
@@ -225,8 +220,14 @@ func (c *Client) ClaudeFormatPlugin(ctx context.Context, repoURL, commit, at str
 	return *got[0].ClaudeFormat, nil
 }
 
+// maxFormats bounds the remembered plugin formats.
+const maxFormats = 4096
+
+// formatKey keys a plugin's format by its repository, commit and path, the
+// path cleaned as skill-manager cleans it ("./p/" is "p", "." is "").
 func formatKey(repoURL, commit, at string) string {
-	return repoURL + "@" + commit + ":" + strings.Trim(at, "/")
+	at = path.Clean("/" + strings.TrimSpace(at))[1:]
+	return strings.TrimSpace(repoURL) + "@" + commit + ":" + at
 }
 
 // Skills is GET /v1/skills: the catalogue of every configured source, or of
@@ -303,7 +304,7 @@ func (c *Client) authorize(ctx context.Context, req *http.Request) error {
 			return fmt.Errorf("%w: the call carries a GitHub token but no ID token, which skill-manager needs beside it (muster forwards it with auth.forwardIdentity: true)", ErrUnauthenticated)
 		}
 		req.Header.Set("Authorization", "Bearer "+gh.Token)
-		req.Header.Set(forwardedIdentityHeader, idToken)
+		req.Header.Set(identity.ForwardedIdentityHeader, idToken)
 		return nil
 	}
 	bearer := idToken

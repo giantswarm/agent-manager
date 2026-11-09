@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path"
 	"strings"
 	"sync"
 	"testing"
@@ -88,6 +89,10 @@ func (f *fakeSkillManager) resolve(w http.ResponseWriter, body resolveBody) {
 				refuse(w, http.StatusNotFound, list, i, "path missing not found")
 				return
 			default:
+				// skill-manager answers the path cleaned.
+				if it.Path = path.Clean(it.Path); it.Path == "." {
+					it.Path = ""
+				}
 				g := *it.Git
 				switch {
 				case g.Commit != "":
@@ -177,6 +182,29 @@ func TestResolvePinsSkillsAndPluginsInOneCall(t *testing.T) {
 	assert.False(t, claude)
 	_, body = f.last()
 	assert.Equal(t, []Item{{Path: "plugins/ops", Git: &Git{URL: repo, Commit: tagHead}}}, body.Plugins)
+}
+
+// A plugin's format is found by the path as it was asked and as
+// skill-manager cleaned it, without another call.
+func TestTheFormatIsFoundByTheAskedAndTheCleanedPath(t *testing.T) {
+	f := &fakeSkillManager{}
+	c := newClient(t, f, "")
+	ctx := identity.ContextWithToken(t.Context(), "id-token")
+
+	_, got, err := c.Resolve(ctx, nil, []Item{{Path: "./claude/review/", Git: &Git{URL: repo, Ref: "main"}}, {Git: &Git{URL: repo, Ref: "main"}}})
+	require.NoError(t, err)
+	assert.Equal(t, "claude/review", got[0].Path)
+	for _, at := range []string{"./claude/review/", "claude/review", "/claude/review"} {
+		claude, err := c.ClaudeFormatPlugin(ctx, repo, mainHead, at)
+		require.NoError(t, err)
+		assert.True(t, claude, at)
+	}
+	for _, at := range []string{"", ".", "/"} {
+		claude, err := c.ClaudeFormatPlugin(ctx, repo, mainHead, at)
+		require.NoError(t, err)
+		assert.False(t, claude, at)
+	}
+	assert.Equal(t, 1, f.calls())
 }
 
 // On the GitHub registration the bearer agent-manager received is the
