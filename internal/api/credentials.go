@@ -73,19 +73,19 @@ func (t *orgTools) runWrite(fn func(context.Context, mcp.CallToolRequest) (*orga
 					if err != nil {
 						return errResult(err), nil
 					}
-					return mcp.NewToolResultError(fmt.Sprintf("Credential input was %s; no resource was written.", outcome)), nil
+					return mcp.NewToolResultError(fmt.Sprintf("Credential input was %s; no resource was written. Do not retry unless the person asks to.", outcome)), nil
 				}
 			}
 		}
 		if res.DryRun || !clientSupportsURLElicitation(ctx) {
-			return credentialResult(res)
+			return credentialResult(ctx, res)
 		}
 		var elicitations []mcp.ElicitationParams
 		for _, c := range res.Credentials {
 			if c.NeedsInput() {
 				elicitations = append(elicitations, mcp.ElicitationParams{
 					Mode:          mcp.ElicitationModeURL,
-					Message:       fmt.Sprintf("Enter the value of key %s of Secret %s, which %s %s uses, in the credential UI.", c.Key, c.Secret, res.Kind, res.Name),
+					Message:       credentialInputMessage(res, c),
 					URL:           c.FormURL,
 					ElicitationID: res.ElicitationID,
 				})
@@ -93,7 +93,7 @@ func (t *orgTools) runWrite(fn func(context.Context, mcp.CallToolRequest) (*orga
 			}
 		}
 		if len(elicitations) == 0 {
-			return credentialResult(res)
+			return credentialResult(ctx, res)
 		}
 		if mcp.IsModernProtocol(mcpserver.RequestProtocolVersion(ctx)) {
 			b := mcpserver.NewInputRequestBuilder("")
@@ -114,21 +114,26 @@ func elicitationAction(response *mcp.ElicitationResult) mcp.ElicitationResponseA
 	return response.Action
 }
 
+func credentialInputMessage(res *organizations.ResourceResult, c organizations.Credential) string {
+	return fmt.Sprintf("Enter the value of key %s of Secret %s, which %s %s uses, in the credential UI.", c.Key, c.Secret, res.Kind, res.Name)
+}
+
 // credentialResult answers a credential write as the tools' outputSchema
-// declares: the result as structuredContent, its JSON as text, and a
-// resource_link to the credential UI for each credential waiting on a value,
-// the link a client without URL elicitation offers the person.
-func credentialResult(res *organizations.ResourceResult) (*mcp.CallToolResult, error) {
-	data, err := json.Marshal(res)
+// declares: the result as structuredContent and its JSON as text. From
+// protocol 2025-06-18, which defines resource_link, each credential waiting
+// on a value adds a link to the credential UI for a client without URL
+// elicitation to offer the person.
+func credentialResult(ctx context.Context, res *organizations.ResourceResult) (*mcp.CallToolResult, error) {
+	result, err := mcp.NewToolResultJSON(res)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("encode result: %v", err)), nil
 	}
-	result := mcp.NewToolResultStructured(res, string(data))
+	if mcpserver.RequestProtocolVersion(ctx) < mcp.ProtocolVersion20250618 {
+		return result, nil
+	}
 	for _, c := range res.Credentials {
 		if c.FormURL != "" {
-			link := mcp.NewResourceLink(c.FormURL, "credential-ui",
-				fmt.Sprintf("Enter the value of key %s of Secret %s in the credential UI.", c.Key, c.Secret), "text/html")
-			// The form is for the person; a client must not fetch it for the model.
+			link := mcp.NewResourceLink(c.FormURL, "credential-ui", credentialInputMessage(res, c), "text/html")
 			link.Annotations = &mcp.Annotations{Audience: []mcp.Role{mcp.RoleUser}}
 			result.Content = append(result.Content, link)
 		}

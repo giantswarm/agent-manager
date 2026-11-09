@@ -44,37 +44,42 @@ func ContextWithCredentialRequest(ctx context.Context, tool, intent, client stri
 // credentialUIVars are the variables a credential UI URL template may use.
 var credentialUIVars = []string{"operation", "parent", "organization"}
 
-var errCredentialUIURL = errors.New("credential UI requires an HTTPS RFC 6570 URL template with one {operation} expression in its path or query, using only {operation}, {parent} and {organization}")
+var errCredentialUIURL = errors.New("credential UI requires an HTTPS RFC 6570 URI template with one {operation} expression in its path or query, using only {operation}, {parent} and {organization}")
 
 // ValidateCredentialUIURL keeps the origin fixed while allowing domain identifiers in the path or query.
 func ValidateCredentialUIURL(template string) error {
+	_, err := parseCredentialUIURL(template)
+	return err
+}
+
+func parseCredentialUIURL(template string) (*uritemplate.Template, error) {
 	const marker = "credentialoperationplaceholder"
 	tpl, err := uritemplate.New(template)
 	if err != nil || !slices.Contains(tpl.Varnames(), "operation") {
-		return errCredentialUIURL
+		return nil, errCredentialUIURL
 	}
 	for _, name := range tpl.Varnames() {
 		if !slices.Contains(credentialUIVars, name) {
-			return errCredentialUIURL
+			return nil, errCredentialUIURL
 		}
 	}
 	expanded, err := expandCredentialUIURL(tpl, marker+"o", marker+"p", marker+"n")
 	if err != nil {
-		return errCredentialUIURL
+		return nil, errCredentialUIURL
 	}
 	parsed, err := url.Parse(expanded)
 	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || parsed.Fragment != "" || strings.Contains(parsed.Host, marker) || strings.Count(expanded, marker+"o") != 1 {
-		return errCredentialUIURL
+		return nil, errCredentialUIURL
 	}
-	return nil
+	return tpl, nil
 }
 
 func expandCredentialUIURL(tpl *uritemplate.Template, operation, parent, organization string) (string, error) {
-	values := uritemplate.Values{}
-	values.Set("operation", uritemplate.String(operation))
-	values.Set("parent", uritemplate.String(parent))
-	values.Set("organization", uritemplate.String(organization))
-	return tpl.Expand(values)
+	return tpl.Expand(uritemplate.Values{
+		"operation":    uritemplate.String(operation),
+		"parent":       uritemplate.String(parent),
+		"organization": uritemplate.String(organization),
+	})
 }
 
 type operationWrite struct {
@@ -278,7 +283,8 @@ func (s *Service) landResource(ctx context.Context, writer *contentWriter, write
 	if s.cfg.CredentialUIURL == "" {
 		return fmt.Errorf("%w: no credential UI URL is configured; no resource was written", agents.ErrUnsupported)
 	}
-	if err := ValidateCredentialUIURL(s.cfg.CredentialUIURL); err != nil {
+	uiURL, err := parseCredentialUIURL(s.cfg.CredentialUIURL)
+	if err != nil {
 		return invalidf("%s", err)
 	}
 	id, err := credentialOperationID(ctx)
@@ -335,11 +341,7 @@ func (s *Service) landResource(ctx context.Context, writer *contentWriter, write
 			return err
 		}
 	}
-	tpl, err := uritemplate.New(s.cfg.CredentialUIURL)
-	if err != nil {
-		return invalidf("%s", errCredentialUIURL)
-	}
-	link, err := expandCredentialUIURL(tpl, id, writer.org.Parent, writer.org.Organization)
+	link, err := expandCredentialUIURL(uiURL, id, writer.org.Parent, writer.org.Organization)
 	if err != nil {
 		return invalidf("%s", errCredentialUIURL)
 	}

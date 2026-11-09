@@ -640,8 +640,8 @@ an MCP URL elicitation of a client-owned credential UI. The server prepares
 the intended change without writing consumers, and supplies a user-bound
 operation ID through the configured `credentials.uiURL` RFC 6570 template. A client
 without `elicitation.url` receives the result as `structuredContent`, declared
-by the tools' `outputSchema`, with a `resource_link` to the credential UI and
-the link in `credentials[].next`. A dry run
+by the tools' `outputSchema`, with a `resource_link` to the credential UI from
+protocol 2025-06-18 and the link in `credentials[].next`. A dry run
 creates no operation. Without a configured UI, a change requiring credential
 input is refused before writing resources.
 

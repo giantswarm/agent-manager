@@ -116,7 +116,7 @@ func modernMeta(withURL bool) map[string]any {
 	}}
 }
 
-// legacySession is a client session of protocol 2025-11-25 that keeps the
+// legacySession is a client session of a protocol before 2026-07-28 that keeps the
 // capabilities it declared at initialize.
 type legacySession struct {
 	mu           sync.Mutex
@@ -146,9 +146,9 @@ func (s *legacySession) SetProtocolVersion(v string) {
 	s.version = v
 }
 
-// legacyContext initializes a 2025-11-25 session that declares, or not,
-// URL elicitation.
-func legacyContext(t *testing.T, f *orgFixture, withURL bool) context.Context {
+// legacyContext initializes a session of a protocol before 2026-07-28 that
+// declares, or not, URL elicitation.
+func legacyContext(t *testing.T, f *orgFixture, version string, withURL bool) context.Context {
 	t.Helper()
 	session := &legacySession{ch: make(chan mcp.JSONRPCNotification, 16)}
 	require.NoError(t, f.srv.RegisterSession(f.ctx, session))
@@ -159,7 +159,7 @@ func legacyContext(t *testing.T, f *orgFixture, withURL bool) context.Context {
 		capabilities["elicitation"] = map[string]any{"url": map[string]any{}}
 	}
 	res := rawCall(t, ctx, f.srv, map[string]any{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": map[string]any{
-		"protocolVersion": "2025-11-25", "capabilities": capabilities, "clientInfo": map[string]any{"name": "t", "version": "0"},
+		"protocolVersion": version, "capabilities": capabilities, "clientInfo": map[string]any{"name": "t", "version": "0"},
 	}})
 	require.Nil(t, res["error"], res)
 	return ctx
@@ -189,7 +189,7 @@ func TestAMissingCredentialIsAURLElicitation(t *testing.T) {
 			if modern {
 				extra = modernMeta(true)
 			} else {
-				ctx = legacyContext(t, fixture, true)
+				ctx = legacyContext(t, fixture, mcp.ProtocolVersion20251125, true)
 			}
 			response := rawCall(t, ctx, fixture.srv, toolCall(ToolSetOrganizationModel, arguments, extra))
 			var elicitation map[string]any
@@ -294,6 +294,16 @@ func TestCredentialWithoutURLElicitationIsAStructuredResultWithAResourceLink(t *
 		require.Equal(t, "resource_link", link["type"])
 		require.Equal(t, formURL, link["uri"])
 		require.Equal(t, map[string]any{"audience": []any{"user"}}, link["annotations"])
+	})
+
+	t.Run("before resource_link", func(t *testing.T) {
+		fixture := newOrgFixture(t)
+		ctx := legacyContext(t, fixture, mcp.ProtocolVersion20250326, false)
+		response := rawCall(t, ctx, fixture.srv, toolCall(ToolSetOrganizationModel, arguments, nil))
+		result := response["result"].(map[string]any)
+		require.NotEqual(t, true, result["isError"], result)
+		require.NotNil(t, result["structuredContent"])
+		require.Len(t, result["content"].([]any), 1)
 	})
 
 	t.Run("dry run", func(t *testing.T) {
