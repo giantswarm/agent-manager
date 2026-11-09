@@ -44,6 +44,46 @@ tests:
               - protocol: TCP
                 port: 8080
 
+  - it: takes <svc>.<namespace> as in-cluster
+    template: templates/networkpolicy.yaml
+    set:
+      networkPolicy:
+        enabled: true
+      skillManager:
+        url: http://skill-manager.agent-platform:8080
+    asserts:
+      - contains:
+          path: spec.egress
+          content:
+            to:
+              - namespaceSelector:
+                  matchLabels:
+                    kubernetes.io/metadata.name: agent-platform
+            ports:
+              - protocol: TCP
+                port: 8080
+
+  - it: takes a bare <svc> as the release's namespace
+    template: templates/networkpolicy.yaml
+    release:
+      namespace: agent-platform
+    set:
+      networkPolicy:
+        enabled: true
+      skillManager:
+        url: http://skill-manager:8080
+    asserts:
+      - contains:
+          path: spec.egress
+          content:
+            to:
+              - namespaceSelector:
+                  matchLabels:
+                    kubernetes.io/metadata.name: agent-platform
+            ports:
+              - protocol: TCP
+                port: 8080
+
   - it: refuses a URL that is not http(s)
     template: templates/networkpolicy.yaml
     set:

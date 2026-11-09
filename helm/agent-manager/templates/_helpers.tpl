@@ -164,6 +164,20 @@ the union adds nothing there.
 {{- end }}
 
 {{/*
+The namespace of an in-cluster Service host, for an egress rule: <svc> (the
+release's namespace), <svc>.<namespace> or <svc>.<namespace>.svc[...];
+empty for any other host (egress to every address).
+*/}}
+{{- define "agent-manager.hostNamespace" -}}
+{{- $labels := splitList "." .host -}}
+{{- if eq (len $labels) 1 -}}
+{{- .root.Release.Namespace -}}
+{{- else if or (eq (len $labels) 2) (eq (index $labels 2) "svc") -}}
+{{- index $labels 1 -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
 The OTLP collector the pod exports to, as YAML {namespace, port}: the
 namespace of an in-cluster Service host (<svc>.<ns>.svc[.cluster.local]),
 empty for any other host; the endpoint's port, else the protocol's default
@@ -178,11 +192,7 @@ empty for any other host; the endpoint's port, else the protocol's default
 {{- if not $port -}}
 {{- $port = ternary "4318" "4317" (hasPrefix "http/" ($.Values.observability.otel.protocol | default "grpc")) -}}
 {{- end -}}
-{{- $labels := splitList "." $host -}}
-{{- $namespace := "" -}}
-{{- if and (ge (len $labels) 3) (eq (index $labels 2) "svc") -}}
-{{- $namespace = index $labels 1 -}}
-{{- end -}}
+{{- $namespace := include "agent-manager.hostNamespace" (dict "host" $host "root" $) -}}
 namespace: {{ $namespace | quote }}
 port: {{ $port }}
 {{- end -}}
@@ -190,7 +200,7 @@ port: {{ $port }}
 
 {{/*
 The kagent controller target's egress, when the session tools are on:
-namespace (empty unless the host is <service>.<namespace>.svc...) and port.
+namespace (agent-manager.hostNamespace) and port.
 */}}
 {{- define "agent-manager.kagentEgress" -}}
 {{- if and .Values.oauth.enabled .Values.kagent.controllerTarget -}}
@@ -206,11 +216,7 @@ namespace (empty unless the host is <service>.<namespace>.svc...) and port.
 {{- end -}}
 {{- $port = "443" -}}
 {{- end -}}
-{{- $labels := splitList "." (first $hostPort) -}}
-{{- $namespace := "" -}}
-{{- if and (ge (len $labels) 3) (eq (index $labels 2) "svc") -}}
-{{- $namespace = index $labels 1 -}}
-{{- end -}}
+{{- $namespace := include "agent-manager.hostNamespace" (dict "host" (first $hostPort) "root" $) -}}
 namespace: {{ $namespace | quote }}
 port: {{ $port }}
 {{- end -}}
@@ -219,8 +225,8 @@ port: {{ $port }}
 {{/*
 muster as egress, its session bindings endpoint, else its MCP endpoint when
 start_session asks the toolchain-manager there: the Service's namespace for
-an in-cluster host (<name>.<namespace>.svc...), the port the URL names or its
-scheme's. Rendered with the session tools only (oauth and a controller
+an in-cluster host (agent-manager.hostNamespace), the port the URL names or
+its scheme's. Rendered with the session tools only (oauth and a controller
 target), as the flags are.
 */}}
 {{- define "agent-manager.musterBindingsEgress" -}}
@@ -236,19 +242,16 @@ target), as the flags are.
 {{- end -}}
 {{- $hostPort := splitList ":" $url.host -}}
 {{- $port := ternary (last $hostPort) (ternary "443" "80" (eq $url.scheme "https")) (gt (len $hostPort) 1) -}}
-{{- $labels := splitList "." (first $hostPort) -}}
-{{- $namespace := "" -}}
-{{- if and (ge (len $labels) 3) (eq (index $labels 2) "svc") -}}
-{{- $namespace = index $labels 1 -}}
-{{- end -}}
+{{- $namespace := include "agent-manager.hostNamespace" (dict "host" (first $hostPort) "root" $) -}}
 namespace: {{ $namespace | quote }}
 port: {{ $port }}
 {{- end -}}
 {{- end -}}
 
 {{/*
-skill-manager's address for the egress policy: namespace (empty: any) and
-port, from skillManager.url; empty when unset.
+skill-manager's address for the egress policy: namespace
+(agent-manager.hostNamespace) and port, from skillManager.url; empty when
+unset.
 */}}
 {{- define "agent-manager.skillManagerEgress" -}}
 {{- with .Values.skillManager.url -}}
@@ -258,11 +261,7 @@ port, from skillManager.url; empty when unset.
 {{- end -}}
 {{- $hostPort := splitList ":" $url.host -}}
 {{- $port := ternary (last $hostPort) (ternary "443" "80" (eq $url.scheme "https")) (gt (len $hostPort) 1) -}}
-{{- $labels := splitList "." (first $hostPort) -}}
-{{- $namespace := "" -}}
-{{- if and (ge (len $labels) 3) (eq (index $labels 2) "svc") -}}
-{{- $namespace = index $labels 1 -}}
-{{- end -}}
+{{- $namespace := include "agent-manager.hostNamespace" (dict "host" (first $hostPort) "root" $) -}}
 namespace: {{ $namespace | quote }}
 port: {{ $port }}
 {{- end -}}
