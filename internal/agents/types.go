@@ -87,6 +87,11 @@ const (
 	// on create, never changed, and read for display and filtering only,
 	// never for authorization.
 	CreatedByAnnotation = "agent-platform.giantswarm.io/created-by"
+	// CreatedByNameAnnotation is the creator's display name from the IdP,
+	// under the same rules as CreatedByAnnotation, which stays the
+	// identifier; absent when the IdP gave no name. Display only, never
+	// for authorization.
+	CreatedByNameAnnotation = "agent-platform.giantswarm.io/created-by-name"
 	// HelmReleaseNameLabel / HelmReleaseNamespaceLabel are the Flux provenance
 	// labels helm-controller stamps on every object a release renders.
 	HelmReleaseNameLabel      = "helm.toolkit.fluxcd.io/name"
@@ -421,6 +426,9 @@ type Agent struct {
 	// CreatedBy is the caller who created the agent (CreatedByAnnotation);
 	// empty for an agent created before it was recorded.
 	CreatedBy string `json:"createdBy,omitempty"`
+	// CreatedByName is the creator's display name
+	// (CreatedByNameAnnotation); display only, never for authorization.
+	CreatedByName string `json:"createdByName,omitempty"`
 	// DefaultWorkspace is the workspace a start_session that names none
 	// starts in (DefaultWorkspaceAnnotation); the owning HelmRelease's value,
 	// else the Agent object's.
@@ -489,6 +497,7 @@ type AgentSummary struct {
 	Tags                      []string `json:"tags,omitempty"`
 	Description               string   `json:"description,omitempty"`
 	CreatedBy                 string   `json:"createdBy,omitempty"`
+	CreatedByName             string   `json:"createdByName,omitempty"`
 	DefaultWorkspace          string   `json:"defaultWorkspace,omitempty"`
 	DefaultToolchains         []string `json:"defaultToolchains,omitempty"`
 	DefaultToolchainsImplicit bool     `json:"defaultToolchainsImplicit,omitempty"`
@@ -518,6 +527,7 @@ func (a Agent) Summary() AgentSummary {
 		Tags:                      a.Tags,
 		Description:               a.Description,
 		CreatedBy:                 a.CreatedBy,
+		CreatedByName:             a.CreatedByName,
 		DefaultWorkspace:          a.DefaultWorkspace,
 		DefaultToolchains:         a.DefaultToolchains,
 		DefaultToolchainsImplicit: a.DefaultToolchainsImplicit,
