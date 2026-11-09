@@ -33,6 +33,8 @@ import (
 	"github.com/giantswarm/agent-manager/internal/organizations"
 )
 
+const credentialOperationAnnotation = "agent-manager.giantswarm.io/credential-operation"
+
 func answerCredentialResourceVersions(t *testing.T, client *dynamicfake.FakeDynamicClient) {
 	t.Helper()
 	var lock sync.Mutex
@@ -181,9 +183,12 @@ func TestCredentialOperationCreatesAndRetriesWithoutAnotherWrite(t *testing.T) {
 	status, answer, _ := operationHTTP(t, fixture, http.MethodPost, result.CredentialOperation, confirmation.Version, body, nil)
 	require.Equal(t, http.StatusOK, status, answer)
 	require.NotContains(t, answer, "synthetic-credential")
-	require.NotNil(t, fixture.get(t, mcGVR, orgNS, "claude"))
+	consumer := fixture.get(t, mcGVR, orgNS, "claude")
+	require.NotNil(t, consumer)
 	secret := fixture.get(t, secretGVR, orgNS, "tenant-credential-claude")
 	require.NotNil(t, secret)
+	require.Equal(t, result.ElicitationID, consumer.GetAnnotations()[credentialOperationAnnotation])
+	require.Equal(t, result.ElicitationID, secret.GetAnnotations()[credentialOperationAnnotation])
 	before := len(fixture.dyn.Actions())
 	status, answer, _ = operationHTTP(t, fixture, http.MethodPost, result.CredentialOperation, confirmation.Version, body, nil)
 	require.Equal(t, http.StatusOK, status, answer)
@@ -269,6 +274,8 @@ func TestCredentialOperationCommitsConsumerAndEncryptedSecretTogether(t *testing
 	for _, raw := range files {
 		require.NotContains(t, string(raw), "synthetic-credential")
 		require.NotContains(t, string(raw), "c3ludGhldGljLWNyZWRlbnRpYWw=")
+		require.NotContains(t, string(raw), credentialOperationAnnotation)
+		require.NotContains(t, string(raw), result.ElicitationID)
 	}
 	require.Nil(t, fixture.get(t, mcGVR, orgNS, "claude"))
 	require.Nil(t, fixture.get(t, secretGVR, orgNS, "tenant-credential-claude"))
@@ -497,7 +504,7 @@ func testCredentialPartialApply(t *testing.T, interveningEdit bool) {
 	require.Equal(t, "uncertain", confirmation.State)
 	secret := fixture.get(t, secretGVR, orgNS, "tenant-credential-claude")
 	if interveningEdit {
-		secret.SetAnnotations(map[string]string{"agent-manager.giantswarm.io/credential-operation": result.ElicitationID, "other-writer": "changed"})
+		secret.SetAnnotations(map[string]string{credentialOperationAnnotation: result.ElicitationID, "other-writer": "changed"})
 		_, err := fixture.dyn.Resource(secretGVR).Namespace(orgNS).Update(t.Context(), secret, metav1.UpdateOptions{})
 		require.NoError(t, err)
 		status, answer, _ := operationHTTP(t, fixture, http.MethodPost, result.CredentialOperation, confirmation.Version, valuesBody(t, result, "replacement-synthetic-value"), nil)
