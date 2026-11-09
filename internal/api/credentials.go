@@ -17,6 +17,13 @@ import (
 
 const credentialInputPrefix = "credential_" // #nosec G101 -- an input request key prefix, not a credential
 
+// credentialInputOutcome words each elicitation answer that ends a credential
+// write without writing; both answer isError.
+var credentialInputOutcome = map[mcp.ElicitationResponseAction]string{
+	mcp.ElicitationResponseActionDecline: "declined",
+	mcp.ElicitationResponseActionCancel:  "cancelled",
+}
+
 // URL navigation does not confirm a save. Only the authenticated HTTPS save
 // completes an operation and makes its receipt available to an MCP retry.
 func (t *orgTools) runWrite(fn func(context.Context, mcp.CallToolRequest) (*organizations.ResourceResult, error)) mcpserver.ToolHandlerFunc {
@@ -58,7 +65,7 @@ func (t *orgTools) runWrite(fn func(context.Context, mcp.CallToolRequest) (*orga
 				if response.DecodeFor(mcp.MethodElicitationCreate) != nil {
 					return errResult(errCredentialBody), nil
 				}
-				if response.Elicitation != nil && (response.Elicitation.Action == "decline" || response.Elicitation.Action == "cancel") {
+				if outcome, ends := credentialInputOutcome[elicitationAction(response.Elicitation)]; ends {
 					operation, err := t.svc.ReadCredentialOperation(ctx, res.CredentialOperation)
 					if err == nil {
 						err = t.svc.CancelCredentialOperation(ctx, res.CredentialOperation, operation.Version)
@@ -66,7 +73,7 @@ func (t *orgTools) runWrite(fn func(context.Context, mcp.CallToolRequest) (*orga
 					if err != nil {
 						return errResult(err), nil
 					}
-					return mcp.NewToolResultError("Credential input was cancelled; no resource was written."), nil
+					return mcp.NewToolResultError(fmt.Sprintf("Credential input was %s; no resource was written.", outcome)), nil
 				}
 			}
 		}
@@ -100,6 +107,13 @@ func (t *orgTools) runWrite(fn func(context.Context, mcp.CallToolRequest) (*orga
 	}
 }
 
+func elicitationAction(response *mcp.ElicitationResult) mcp.ElicitationResponseAction {
+	if response == nil {
+		return ""
+	}
+	return response.Action
+}
+
 // credentialResult answers a credential write as the tools' outputSchema
 // declares: the result as structuredContent, its JSON as text, and a
 // resource_link to the credential UI for each credential waiting on a value,
@@ -112,8 +126,11 @@ func credentialResult(res *organizations.ResourceResult) (*mcp.CallToolResult, e
 	result := mcp.NewToolResultStructured(res, string(data))
 	for _, c := range res.Credentials {
 		if c.FormURL != "" {
-			result.Content = append(result.Content, mcp.NewResourceLink(c.FormURL, "credential-ui",
-				fmt.Sprintf("Enter the value of key %s of Secret %s in the credential UI.", c.Key, c.Secret), "text/html"))
+			link := mcp.NewResourceLink(c.FormURL, "credential-ui",
+				fmt.Sprintf("Enter the value of key %s of Secret %s in the credential UI.", c.Key, c.Secret), "text/html")
+			// The form is for the person; a client must not fetch it for the model.
+			link.Annotations = &mcp.Annotations{Audience: []mcp.Role{mcp.RoleUser}}
+			result.Content = append(result.Content, link)
 		}
 	}
 	return result, nil

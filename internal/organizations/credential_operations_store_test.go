@@ -1,8 +1,6 @@
 package organizations
 
 import (
-	"github.com/yosida95/uritemplate/v3"
-
 	"context"
 	"strings"
 	"testing"
@@ -10,6 +8,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"github.com/yosida95/uritemplate/v3"
 	kubefake "k8s.io/client-go/kubernetes/fake"
 
 	"github.com/giantswarm/agent-manager/internal/agents"
