@@ -100,9 +100,9 @@ const (
 	PlatformManagedByLabel = "agent-platform.giantswarm.io/managed-by"
 	PlatformManagedByValue = "agent-platform"
 	// DefaultAgentLabel ("true") on a HelmRelease or its Agent marks the
-	// installation's default agent, which clients preselect. One is
-	// reported: a platform-owned one first, then the first by
-	// namespace/name.
+	// installation's default agent, which clients preselect, reported as
+	// the Agent's namespace/name. One is reported: a platform-owned one
+	// first, then the first by namespace/name.
 	DefaultAgentLabel = "agent-platform.giantswarm.io/default"
 	// ManagedByLabel / ManagedByValue mark the HelmReleases and
 	// OCIRepositories agent-manager created.

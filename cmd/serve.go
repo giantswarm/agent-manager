@@ -465,6 +465,9 @@ func runServe(ctx context.Context, o *serveOptions) error {
 		Tenants:          tenantSetOrNil(orgNamespaces),
 		SkillManager:     skillManager,
 		Installation:     o.installation,
+		// Every listing reports the default agent: read it once per
+		// caller and quarter minute, not per call.
+		DefaultAgentTTL: 15 * time.Second,
 	}, log)
 
 	srvCfg := server.Config{Addr: o.listen, MCPEnabled: o.mcpEnabled, MCPPath: o.mcpPath}

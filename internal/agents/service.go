@@ -4,10 +4,10 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"maps"
 	"slices"
 	"sort"
 	"strings"
+	"time"
 
 	"golang.org/x/sync/errgroup"
 	authenticationv1 "k8s.io/api/authentication/v1"
@@ -102,6 +102,10 @@ type Config struct {
 	// Installation is the installation's Dev Portal name, which get_info
 	// reports: a portal agent id is <installation>/<namespace>/<name>.
 	Installation string
+	// DefaultAgentTTL is how long a caller's default agent is reused
+	// (get_info, list_agents and get_agent each report it); zero reads it
+	// on every call.
+	DefaultAgentTTL time.Duration
 }
 
 // SkillCatalog is skill-manager's catalogue (GET /v1/skills).
@@ -130,6 +134,8 @@ type Service struct {
 	pinner SkillPinner
 	cfg    Config
 	log    *slog.Logger
+
+	defaults defaultAgentCache
 }
 
 // KagentAPIGroup is the API group of the Agent, Harness, RemoteMCPServer and
@@ -552,59 +558,6 @@ func (s *Service) List(ctx context.Context, loc Location, filter tags.Filter) ([
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, nil
-}
-
-// defaultAgentAt is defaultAgent on the installation's own cluster, empty
-// on a target cluster.
-func (s *Service) defaultAgentAt(ctx context.Context, st *site) string {
-	if st.loc.IsSet() {
-		return ""
-	}
-	return s.defaultAgent(ctx)
-}
-
-// defaultAgent is the installation's default agent, namespace/name: the
-// HelmReleases and Agents labelled DefaultAgentLabel in the managed
-// namespaces, as the caller reads them; of several, a platform-owned one,
-// then the first by namespace/name, with a warning. Empty when none.
-func (s *Service) defaultAgent(ctx context.Context) string {
-	dyn, _, err := s.dyn(ctx)
-	if err != nil {
-		return ""
-	}
-	selector := metav1.ListOptions{LabelSelector: DefaultAgentLabel + "=true"}
-	platform := map[string]bool{}
-	for _, ns := range s.Managed(ctx) {
-		for _, gvr := range []schema.GroupVersionResource{s.helmReleaseGVR(), s.agentGVR()} {
-			list, err := dyn.Resource(gvr).Namespace(ns).List(ctx, selector)
-			if err != nil {
-				s.log.Debug("default agent: list failed; leaving the namespace out", identity.LogAttr(ctx), "namespace", ns, "resource", gvr.Resource, "error", err)
-				continue
-			}
-			for i := range list.Items {
-				obj := &list.Items[i]
-				key := ns + "/" + obj.GetName()
-				platform[key] = platform[key] || PlatformOwned(obj)
-			}
-		}
-	}
-	if len(platform) == 0 {
-		return ""
-	}
-	keys := slices.Sorted(maps.Keys(platform))
-	slices.SortStableFunc(keys, func(a, b string) int {
-		switch {
-		case platform[a] == platform[b]:
-			return 0
-		case platform[a]:
-			return -1
-		}
-		return 1
-	})
-	if len(keys) > 1 {
-		s.log.Warn("several agents are labelled the default; reporting one", "label", DefaultAgentLabel, "default", keys[0], "labelled", keys)
-	}
-	return keys[0]
 }
 
 // Get returns one agent by name.
