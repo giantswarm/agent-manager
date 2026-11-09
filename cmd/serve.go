@@ -321,6 +321,11 @@ func runServe(ctx context.Context, o *serveOptions) error {
 			return fmt.Errorf("--skill-manager-url: %w", err)
 		}
 		pinner, skillManager = client, client
+		if !o.oauthEnabled {
+			// No caller token to forward, and never the service token: as
+			// the service a caller would skip skill-manager's read check.
+			log.Warn("--skill-manager-url without --enable-oauth: skill-manager is called with no bearer, which only a skill-manager without OAuth accepts", "skillManager", o.skillManagerURL)
+		}
 	} else {
 		pinner = skills.NewResolver(o.skillsGitHubAPI, skillsTokens, nil, nil)
 		if repos := splitList(o.skillsRepositories); len(repos) > 0 {

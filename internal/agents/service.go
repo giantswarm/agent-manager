@@ -837,7 +837,7 @@ func (s *Service) listSkillManagerSkills(ctx context.Context, repository, ref st
 					}
 				}
 			}
-			if filter.Matches(have) {
+			if filter.Matches(tags.Normalize(have)) {
 				kept = append(kept, item)
 			}
 		}

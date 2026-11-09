@@ -96,7 +96,7 @@ func (f *fakeSkillManager) start(t *testing.T) *httptest.Server {
 			_ = json.NewEncoder(w).Encode(out)
 		case "/v1/skills":
 			_, _ = w.Write([]byte(`{"repositories":[{"repoUrl":"` + platformSkillsRepo + `","ref":"v1.2.0","commit":"` + tagHead + `","path":"skills","readOnly":true,"skills":[` +
-				`{"name":"kubectl","path":"skills/kubectl","tags":["kubernetes"]},{"name":"pagerduty","path":"skills/pagerduty","tags":["alerting"]}]}]}`))
+				`{"name":"kubectl","path":"skills/kubectl","tags":["kubernetes"]},{"name":"pagerduty","path":"skills/pagerduty","tags":[" Alerting"]}]}]}`))
 		default:
 			http.NotFound(w, r)
 		}
@@ -193,8 +193,9 @@ func TestSkillManagerRefusalsAreMapped(t *testing.T) {
 	}
 }
 
-// list_skills proxies skill-manager's catalogue, filtered by tags; get_info
-// names skill-manager instead of skill repositories.
+// list_skills proxies skill-manager's catalogue, filtered by tags normalised
+// as the in-process path does; get_info names skill-manager instead of skill
+// repositories.
 func TestListSkillsProxiesSkillManager(t *testing.T) {
 	sm := &fakeSkillManager{}
 	f := withSkillManager(t, sm)
