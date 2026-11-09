@@ -71,7 +71,7 @@
                 },
                 "uiURL": {
                     "type": "string",
-                    "description": "HTTPS UI URL template with one {operation} placeholder. The UI owns its routes; agent-manager supplies only a non-authorizing operation ID."
+                    "description": "HTTPS UI URL template with one {operation} placeholder. The UI owns its routes; agent-manager supplies only a non-authorizing operation ID. Set, the muster MCPServer carries `urlElicitation: Relay`."
                 }
             }
         },

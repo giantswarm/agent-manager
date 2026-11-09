@@ -49,6 +49,13 @@ clients retry the `input_required` result. Clients without URL elicitation recei
 the same authenticated UI link in `credentials[].next`. No credential value
 enters an MCP argument or result.
 
+Through muster, the elicitation reaches the client only from an MCPServer with
+`spec.urlElicitation: Relay` and only on the origin of muster's
+`aggregator.devPortalUrl`; muster drops any other and returns a tool error
+without the link. With `credentials.uiURL` set, this chart renders its MCPServer
+with `urlElicitation: Relay`. Set muster's `aggregator.devPortalUrl` to the
+origin of `credentials.uiURL`.
+
 ## GitHub authorization
 
 REST commit mode needs a GitHub App user grant in addition to the person's

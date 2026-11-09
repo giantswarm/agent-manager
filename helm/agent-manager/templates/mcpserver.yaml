@@ -10,7 +10,10 @@ oauth.trustedAudiences, and requests the requiredAudiences at login. Without
 OAuth muster connects anonymously. With github.enabled the auth pins the
 GitHub App giantswarm-agent-manager instead: the bearer is the person's App
 user token (commit mode's pull request) and forwardIdentity puts the ID token
-in X-Muster-Id-Token next to it.
+in X-Muster-Id-Token next to it. With credentials.uiURL set the CR carries
+urlElicitation: Relay, so muster passes the credential form's URL elicitation
+on to the client; muster relays it only to the origin of its
+aggregator.devPortalUrl.
 */}}
 apiVersion: muster.giantswarm.io/v1alpha1
 kind: MCPServer
@@ -37,6 +40,9 @@ spec:
   url: http://{{ include "agent-manager.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.service.port }}{{ .Values.mcp.path }}
   {{- with .Values.muster.mcpServer.description }}
   description: {{ . | quote }}
+  {{- end }}
+  {{- if .Values.credentials.uiURL }}
+  urlElicitation: Relay
   {{- end }}
   {{- if and .Values.oauth.enabled .Values.github.enabled }}
   {{- with .Values.github.authorizationServer }}

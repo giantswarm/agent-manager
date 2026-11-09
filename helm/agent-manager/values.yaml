@@ -527,6 +527,7 @@ tenants:
 credentials:
   # -- HTTPS UI URL template with one {operation} placeholder. The UI owns
   # its routes; agent-manager supplies only a non-authorizing operation ID.
+  # Set, the muster MCPServer carries `urlElicitation: Relay`.
   uiURL: ""
   # -- Dedicated namespace for nonsecret operation metadata. Empty derives
   # a namespace from the release. Do not share it with application config.

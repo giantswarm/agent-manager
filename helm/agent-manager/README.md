@@ -173,7 +173,7 @@ meta chart (`components.agent-manager.enabled`), which sets `kagent.namespace`,
 | tenants.commit.branch | string | `"main"` | The branch the pull requests go to. |
 | tenants.commit.objectsPath | string | `""` | The directory the installation's Kustomization applies the organization objects from: `<objectsPath>/<parent>/<name>.yaml`. |
 | tenants.commit.contentPrefix | string | `"agent-platform/organizations"` | The directory of the organizations' content paths, `<contentPrefix>/<parent>/<name>`: agent-platform-operator's `commitMode.path` without `{parent}/{name}`. |
-| credentials.uiURL | string | `""` | HTTPS UI URL template with one {operation} placeholder. The UI owns its routes; agent-manager supplies only a non-authorizing operation ID. |
+| credentials.uiURL | string | `""` | HTTPS UI URL template with one {operation} placeholder. The UI owns its routes; agent-manager supplies only a non-authorizing operation ID. Set, the muster MCPServer carries `urlElicitation: Relay`. |
 | credentials.operationsNamespace | string | `""` | Dedicated namespace for nonsecret operation metadata. Empty derives a namespace from the release. Do not share it with application config. |
 | podAnnotations | object | `{}` | Annotations on the pod. |
 | podLabels | object | `{}` | Labels on the pod. |
