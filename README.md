@@ -954,9 +954,13 @@ fields) are dropped from the HelmRelease, and everything else (`agent.*`,
    CRDs `agents`, `sandboxagents`, `agentharnesses`, `memories` and
    `toolservers` of `kagent.dev` follow, once every managed namespace has
    passed the gate and no v1alpha2 `Agent` exists outside the managed
-   namespaces. On 2.x no CRD is deleted: the `kagent.dev` CRDs are the
-   platform's to remove, and other components (model-manager's `ModelConfig`)
-   may still use them.
+   namespaces. On 2.x every 0.x `kagent.dev` CRD the api.kagent.dev line no
+   longer serves (those five and `modelconfigs`, `remotemcpservers`,
+   `modelproviderconfigs`, `mcpservers`) is deleted once every managed
+   namespace has passed the gate, which an installation that jumped from 0.x
+   straight to 2.x still has; a CRD that holds an object in any namespace is
+   kept and the report names its objects, as other components
+   (model-manager's `ModelConfig`) may still use it.
 
 ### The report
 
@@ -1010,8 +1014,8 @@ pending:                           # what gates the next phase
   - "release flux-giantswarm/sre-agent: its rewrite (the diff in this report) is not applied in the owning repository yet"
 contract:                          # once the gate passed
   agentsDeleted: [by-hand]
-  crds:                            # 0.x -> 1.x only
-    - {name: agents.kagent.dev, action: deleted}          # deleted | absent | kept
+  crds:                            # the hop's CRDs (1.x -> 2.x: the 0.x kagent.dev ones)
+    - {name: agents.kagent.dev, action: deleted}          # deleted | absent | kept | unchecked
 ```
 
 ### Exit codes and permissions
@@ -1030,6 +1034,9 @@ ServiceAccount) needs, in the managed namespaces: `helmreleases` and
 
 - 1.x → 2.x: `agents`, `agenttemplates`, `harnesses` and `remotemcpservers` of
   `api.kagent.dev` get/list; `agenttemplates` of `kagent.dev` list/delete.
+  To remove the 0.x CRDs: cluster-wide `customresourcedefinitions` get/delete
+  for the nine names above and list on their `kagent.dev` resources; without
+  them the run goes on and reports those CRDs `unchecked`.
 - 0.x → 1.x: `agenttemplates`, `harnesses` and `remotemcpservers` of
   `kagent.dev` get/list, `agents` (`kagent.dev/v1alpha2`) list/delete; and
   cluster-wide `customresourcedefinitions` get/delete for the five names

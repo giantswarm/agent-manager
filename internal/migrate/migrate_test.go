@@ -46,6 +46,10 @@ const (
 
 const kagentAPI = "kagent.dev/v1alpha3"
 
+// kagentNS is the kagent namespace, the platform Harness and the agent
+// namespace label the fixtures share.
+const kagentNS = "kagent"
+
 var (
 	hrGVR      = schema.GroupVersionResource{Group: "helm.toolkit.fluxcd.io", Version: "v2", Resource: "helmreleases"}
 	ociGVR     = schema.GroupVersionResource{Group: "source.toolkit.fluxcd.io", Version: "v1", Resource: "ocirepositories"}
@@ -155,7 +159,7 @@ func (c *cluster) runner(t *testing.T, opts Options, latest, token string) *Runn
 	ch := fakeChart{latest: latest}
 	p := pinner{git: skills.NewResolver(fakeGitHub(t).URL, skills.StaticToken(token), nil, nil)}
 	opts.Version = "test"
-	r, err := New(c.client, ch, p, TemplateStatus{Client: c.dyn, APIVersion: "v1alpha3", Harness: "kagent"}, opts, nil)
+	r, err := New(c.client, ch, p, TemplateStatus{Client: c.dyn, APIVersion: "v1alpha3", Harness: kagentNS}, opts, nil)
 	require.NoError(t, err)
 	return r
 }
@@ -255,12 +259,12 @@ func kagentRelease() []runtime.Object {
 	return []runtime.Object{
 		&unstructured.Unstructured{Object: map[string]any{
 			"apiVersion": "helm.toolkit.fluxcd.io/v2", "kind": "HelmRelease",
-			"metadata": map[string]any{"name": "kagent", "namespace": "agent-platform"},
-			"spec":     map[string]any{"interval": "10m", "chartRef": map[string]any{"kind": "OCIRepository", "name": "kagent", "namespace": "agent-platform"}, "targetNamespace": "kagent"},
+			"metadata": map[string]any{"name": kagentNS, "namespace": "agent-platform"},
+			"spec":     map[string]any{"interval": "10m", "chartRef": map[string]any{"kind": "OCIRepository", "name": kagentNS, "namespace": "agent-platform"}, "targetNamespace": kagentNS},
 		}},
 		&unstructured.Unstructured{Object: map[string]any{
 			"apiVersion": "source.toolkit.fluxcd.io/v1", "kind": "OCIRepository",
-			"metadata": map[string]any{"name": "kagent", "namespace": "agent-platform"},
+			"metadata": map[string]any{"name": kagentNS, "namespace": "agent-platform"},
 			"spec":     map[string]any{"interval": "10m", "url": "oci://ghcr.io/giantswarm/kagent/helm/kagent", "ref": map[string]any{"semver": ">=0.11.0-gs.1 <0.11.1-0"}},
 		}},
 	}
@@ -269,8 +273,8 @@ func kagentRelease() []runtime.Object {
 func harness(ns string) *unstructured.Unstructured {
 	return &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": kagentAPI, "kind": "Harness",
-		"metadata": map[string]any{"name": "kagent", "namespace": ns},
-		"spec":     map[string]any{"allowedAgentTemplates": map[string]any{"selector": map[string]any{"matchLabels": map[string]any{"agent-platform.giantswarm.io/harness": "kagent"}}}},
+		"metadata": map[string]any{"name": kagentNS, "namespace": ns},
+		"spec":     map[string]any{"allowedAgentTemplates": map[string]any{"selector": map[string]any{"matchLabels": map[string]any{"agent-platform.giantswarm.io/harness": kagentNS}}}},
 	}}
 }
 
@@ -292,13 +296,13 @@ func agentTemplate(ns, name, hrName, hrNs string, ready bool) *unstructured.Unst
 		readyCond = map[string]any{"type": "Ready", "status": "True", "reason": "Ready"}
 		latest = "rev-1"
 	}
-	entry := map[string]any{"harness": "kagent", "desiredRevision": "rev-1", "latestSuccessfulRevision": latest, "conditions": []any{
+	entry := map[string]any{"harness": kagentNS, "desiredRevision": "rev-1", "latestSuccessfulRevision": latest, "conditions": []any{
 		map[string]any{"type": "Accepted", "status": "True", "reason": "Accepted"},
 		map[string]any{"type": "ResolvedRefs", "status": "True", "reason": "ResolvedRefs"},
 		map[string]any{"type": "Compatible", "status": "True", "reason": "Compatible"},
 		readyCond,
 	}}
-	labels := map[string]any{"agent-platform.giantswarm.io/harness": "kagent"}
+	labels := map[string]any{"agent-platform.giantswarm.io/harness": kagentNS}
 	if hrName != "" {
 		labels[agents.HelmReleaseNameLabel] = hrName
 		labels[agents.HelmReleaseNamespaceLabel] = hrNs
@@ -403,15 +407,15 @@ func sreAgentRewritten() map[string]any {
 func fleet(t *testing.T) []runtime.Object {
 	t.Helper()
 	objs := []runtime.Object{
-		ociRepository("kagent", legacyRange),
-		helmRelease("kagent", "sre", portalValues(), "0.6.1"), load(t, "agent-v1alpha2-portal.yaml"),
-		helmRelease("kagent", "narrow", narrowValues(), "0.6.1"), legacyAgentObj("kagent", "narrow", "narrow", "kagent"),
+		ociRepository(kagentNS, legacyRange),
+		helmRelease(kagentNS, "sre", portalValues(), "0.6.1"), load(t, "agent-v1alpha2-portal.yaml"),
+		helmRelease(kagentNS, "narrow", narrowValues(), "0.6.1"), legacyAgentObj(kagentNS, "narrow", "narrow", kagentNS),
 		load(t, "helmrelease-gitops-sre-agent.yaml"), load(t, "ocirepository-gitops.yaml"), load(t, "agent-v1alpha2-gitops.yaml"),
 		load(t, "agent-v1alpha2-bundled.yaml"),
 		ociRepository("tenant", "x.x.x"),
 		helmRelease("tenant", "tenant-bot", map[string]any{"agent": map[string]any{"name": "tenant-bot", "runtime": "go"}, "modelConfig": map[string]any{"name": "default-model-config"}}, "0.6.0"),
 		legacyAgentObj("tenant", "tenant-bot", "tenant-bot", "tenant"),
-		harness("kagent"), harness("tenant"),
+		harness(kagentNS), harness("tenant"),
 	}
 	objs = append(objs, kagentRelease()...)
 	return append(objs, removedCRDs()...)
@@ -441,7 +445,7 @@ func byAgent(r *Report) map[string]AgentReport {
 	return out
 }
 
-var twoNamespaces = Options{Namespaces: []string{"kagent", "tenant"}}
+var twoNamespaces = Options{Namespaces: []string{kagentNS, "tenant"}}
 
 // ---- expand ---------------------------------------------------------------------
 
@@ -472,7 +476,7 @@ func TestExpandRewritesTheFourFleetShapes(t *testing.T) {
 		{Name: "agent-self-awareness", Source: skillsRepo + "@feature path=agent-self-awareness", Pinned: featureHead},
 		{Name: "kubectl", Source: kubectlTag, Pinned: kubectlPin},
 	}, sre.Changes.Skills)
-	written := c.values(t, "kagent", "sre")
+	written := c.values(t, kagentNS, "sre")
 	assert.Equal(t, portalRewritten(), written)
 	_, violations := agents.ValidateValues(ctx, fakeChart{}, written)
 	assert.Empty(t, violations, "the written values satisfy the 1.x schema")
@@ -482,14 +486,14 @@ func TestExpandRewritesTheFourFleetShapes(t *testing.T) {
 	assert.Equal(t, ActionRewritten, narrow.Action)
 	assert.Equal(t, []string{"agent.runtime", "muster.serverRef", "muster.allowedHeaders"}, narrow.Changes.Removed)
 	assert.Equal(t, []string{"muster.toolNames -> muster.tools"}, narrow.Changes.Renamed)
-	assert.Equal(t, narrowRewritten(), c.values(t, "kagent", "narrow"))
+	assert.Equal(t, narrowRewritten(), c.values(t, kagentNS, "narrow"))
 
 	// (3) GitOps-owned in another namespace, found through the Agent's
 	// provenance labels: never written, the diff equals the rewrite.
 	gitops := releases["flux-giantswarm/sre-agent"]
 	assert.Equal(t, ActionDiff, gitops.Action)
 	assert.Equal(t, OwnershipExternal, gitops.Ownership)
-	assert.Equal(t, "kagent", gitops.TargetNamespace)
+	assert.Equal(t, kagentNS, gitops.TargetNamespace)
 	assert.Equal(t, []string{"agent.runtime", "muster.serverRef"}, gitops.Changes.Removed)
 	assert.Equal(t, []string{"muster.toolNames -> muster.tools"}, gitops.Changes.Renamed)
 	assert.Equal(t, []string{"/spec/declarative/deployment/podSecurityContext", "/spec/declarative/deployment/securityContext"}, gitops.Changes.DriftIgnoreRemoved)
@@ -520,13 +524,13 @@ func TestExpandRewritesTheFourFleetShapes(t *testing.T) {
 	assert.Equal(t, AgentAwaitingUpgrade, legacy["sre"].Action, "the portal agent's Agent goes with its release's upgrade")
 	assert.Equal(t, AgentAwaitingUpgrade, legacy["sre-agent"].Action)
 	assert.Equal(t, "flux-giantswarm/sre-agent", legacy["sre-agent"].Owner)
-	assert.True(t, c.exists(legacyAgentGVR, "kagent", "k8s-agent"), "nothing is deleted before the contract phase")
+	assert.True(t, c.exists(legacyAgentGVR, kagentNS, "k8s-agent"), "nothing is deleted before the contract phase")
 
 	// The namespace's source moves last, once every release it serves is on
 	// 1.x values.
 	assert.Equal(t, SourceMoved, sources["kagent/agent"].Action)
 	assert.Equal(t, legacyRange, sources["kagent/agent"].From)
-	assert.Equal(t, target, c.semver(t, "kagent", "agent"))
+	assert.Equal(t, target, c.semver(t, kagentNS, "agent"))
 
 	// The GitOps-owned release keeps the namespace in the expand phase until
 	// its diff is merged; the report is in the namespace.
@@ -534,7 +538,7 @@ func TestExpandRewritesTheFourFleetShapes(t *testing.T) {
 	assert.True(t, kagent.Changed)
 	require.Len(t, kagent.Pending, 1)
 	assert.Contains(t, kagent.Pending[0], "release flux-giantswarm/sre-agent")
-	cm := c.reportConfigMap(t, "kagent")
+	cm := c.reportConfigMap(t, kagentNS)
 	require.NotNil(t, cm)
 	assert.Equal(t, PhaseExpand, cm[ReportKeyPhase])
 	assert.Contains(t, cm[ReportKeyReport], "name: sre-agent")
@@ -553,7 +557,7 @@ func TestExpandRewritesTheFourFleetShapes(t *testing.T) {
 	assert.Contains(t, tenant.Pending[1], "Agent tenant/tenant-bot is still rendered by release tenant/tenant-bot")
 
 	// A second run changes nothing and says so.
-	sreAfter, narrowAfter := c.get(t, hrGVR, "kagent", "sre"), c.get(t, hrGVR, "kagent", "narrow")
+	sreAfter, narrowAfter := c.get(t, hrGVR, kagentNS, "sre"), c.get(t, hrGVR, kagentNS, "narrow")
 	res, err = r.Run(ctx)
 	require.NoError(t, err)
 	again := res.Reports[0]
@@ -562,8 +566,8 @@ func TestExpandRewritesTheFourFleetShapes(t *testing.T) {
 	assert.Equal(t, ActionUnchanged, byRelease(again)["kagent/narrow"].Action)
 	assert.Equal(t, ActionUnchanged, bySource(again)["kagent/agent"].Action)
 	assert.Equal(t, gitops.Diff, byRelease(again)["flux-giantswarm/sre-agent"].Diff, "the diff stays until it is applied in git")
-	assert.Equal(t, sreAfter, c.get(t, hrGVR, "kagent", "sre"))
-	assert.Equal(t, narrowAfter, c.get(t, hrGVR, "kagent", "narrow"))
+	assert.Equal(t, sreAfter, c.get(t, hrGVR, kagentNS, "sre"))
+	assert.Equal(t, narrowAfter, c.get(t, hrGVR, kagentNS, "narrow"))
 	assert.False(t, res.Reports[1].Changed)
 }
 
@@ -571,8 +575,8 @@ func TestPrivateSkillRepositoryWithoutTokenIsPendingNotACrash(t *testing.T) {
 	ctx := context.Background()
 	private := map[string]any{"agent": map[string]any{"name": "private"}, "modelConfig": map[string]any{"name": "default-model-config"},
 		"skills": map[string]any{"gitRefs": []any{map[string]any{"url": privateRepo, "ref": "trunk", "path": "secret-runbooks"}}, "gitAuthSecretRef": map[string]any{"name": "kagent-skills-token"}}}
-	c := newCluster(ociRepository("kagent", legacyRange), helmRelease("kagent", "sre", portalValues(), "0.6.1"), helmRelease("kagent", "private", private, "0.6.1"), harness("kagent"))
-	one := Options{Namespaces: []string{"kagent"}}
+	c := newCluster(ociRepository(kagentNS, legacyRange), helmRelease(kagentNS, "sre", portalValues(), "0.6.1"), helmRelease(kagentNS, "private", private, "0.6.1"), harness(kagentNS))
+	one := Options{Namespaces: []string{kagentNS}}
 
 	res, err := c.runner(t, one, "1.0.0", "").Run(ctx)
 	require.NoError(t, err, "an unresolvable reference is reported, not an error")
@@ -581,15 +585,15 @@ func TestPrivateSkillRepositoryWithoutTokenIsPendingNotACrash(t *testing.T) {
 	assert.Equal(t, ActionPending, pend.Action)
 	assert.Contains(t, pend.Reason, "GITHUB_TOKEN")
 	assert.Contains(t, pend.Reason, privateRepo)
-	assert.Equal(t, private, c.values(t, "kagent", "private"), "left as it is")
+	assert.Equal(t, private, c.values(t, kagentNS, "private"), "left as it is")
 	held := byRelease(rep)["kagent/sre"]
 	assert.Equal(t, ActionPending, held.Action, "the public one waits for its sibling on the same source")
 	assert.Contains(t, held.Reason, "held: chart source kagent/agent also serves kagent/private (pending)")
-	assert.Equal(t, portalValues(), c.values(t, "kagent", "sre"), "1.x values under the 0.x chart would fail its render")
+	assert.Equal(t, portalValues(), c.values(t, kagentNS, "sre"), "1.x values under the 0.x chart would fail its render")
 	src := bySource(rep)["kagent/agent"]
 	assert.Equal(t, SourceNotMoved, src.Action)
 	assert.Contains(t, src.Reason, "kagent/private (pending)")
-	assert.Equal(t, legacyRange, c.semver(t, "kagent", "agent"), "a pending release leaves the range untouched")
+	assert.Equal(t, legacyRange, c.semver(t, kagentNS, "agent"), "a pending release leaves the range untouched")
 	assert.Equal(t, PhaseExpand, rep.Phase)
 
 	// With a token that reads the repository the ref resolves and the range
@@ -601,23 +605,23 @@ func TestPrivateSkillRepositoryWithoutTokenIsPendingNotACrash(t *testing.T) {
 	assert.Equal(t, ActionRewritten, done.Action)
 	assert.Equal(t, []SkillPin{{Name: "secret-runbooks", Source: privateRepo + "@trunk path=secret-runbooks", Pinned: trunkHead}}, done.Changes.Skills)
 	assert.Equal(t, ActionRewritten, byRelease(rep)["kagent/sre"].Action)
-	assert.Equal(t, portalRewritten(), c.values(t, "kagent", "sre"))
+	assert.Equal(t, portalRewritten(), c.values(t, kagentNS, "sre"))
 	assert.Equal(t, SourceMoved, bySource(rep)["kagent/agent"].Action)
-	assert.Equal(t, target, c.semver(t, "kagent", "agent"))
+	assert.Equal(t, target, c.semver(t, kagentNS, "agent"))
 }
 
 func TestNoTargetChartInTheRegistryWritesNothing(t *testing.T) {
-	c := newCluster(ociRepository("kagent", legacyRange), helmRelease("kagent", "sre", portalValues(), "0.6.1"), harness("kagent"))
-	res, err := c.runner(t, Options{Namespaces: []string{"kagent"}}, "", "secret").Run(context.Background())
+	c := newCluster(ociRepository(kagentNS, legacyRange), helmRelease(kagentNS, "sre", portalValues(), "0.6.1"), harness(kagentNS))
+	res, err := c.runner(t, Options{Namespaces: []string{kagentNS}}, "", "secret").Run(context.Background())
 	require.NoError(t, err)
 	rep := res.Reports[0]
 	sre := byRelease(rep)["kagent/sre"]
 	assert.Equal(t, ActionPending, sre.Action)
 	assert.Contains(t, sre.Reason, "no version of the chart in 1.x")
 	assert.NotNil(t, sre.Changes, "the report still says what the rewrite will do")
-	assert.Equal(t, portalValues(), c.values(t, "kagent", "sre"))
+	assert.Equal(t, portalValues(), c.values(t, kagentNS, "sre"))
 	assert.Equal(t, SourceNotMoved, bySource(rep)["kagent/agent"].Action)
-	assert.Equal(t, legacyRange, c.semver(t, "kagent", "agent"))
+	assert.Equal(t, legacyRange, c.semver(t, kagentNS, "agent"))
 	assert.False(t, rep.Changed)
 	assert.Empty(t, rep.Run.Chart.LatestVersion)
 }
@@ -636,12 +640,12 @@ func TestDryRunPrintsTheReportAndWritesNothing(t *testing.T) {
 	assert.Equal(t, ActionRewritten, sre.Action)
 	assert.Equal(t, "dry run: would be written", sre.Reason)
 	require.Len(t, sre.Changes.Skills, 3, "three skills would be pinned")
-	assert.Equal(t, portalValues(), c.values(t, "kagent", "sre"), "nothing is written")
+	assert.Equal(t, portalValues(), c.values(t, kagentNS, "sre"), "nothing is written")
 	assert.Equal(t, SourceMoved, bySource(rep)["kagent/agent"].Action)
 	assert.Equal(t, "dry run: would be moved", bySource(rep)["kagent/agent"].Reason)
-	assert.Equal(t, legacyRange, c.semver(t, "kagent", "agent"))
+	assert.Equal(t, legacyRange, c.semver(t, kagentNS, "agent"))
 	assert.Contains(t, byRelease(rep)["flux-giantswarm/sre-agent"].Diff, "+      tools:", "the diffs are in the report")
-	assert.Nil(t, c.reportConfigMap(t, "kagent"), "no report ConfigMap either")
+	assert.Nil(t, c.reportConfigMap(t, kagentNS), "no report ConfigMap either")
 	assert.Nil(t, c.reportConfigMap(t, "tenant"))
 	assert.Contains(t, rep.String(), "dry run: nothing was written")
 }
@@ -663,7 +667,7 @@ func (c *cluster) semverFilter(t *testing.T, ns, name string) (string, bool) {
 func TestTheSourceMovesToTheTargetFilter(t *testing.T) {
 	ctx := t.Context()
 	c := newCluster(migrated(t)...)
-	opts := Options{Namespaces: []string{"kagent"}, TargetSemverFilter: new(releaseTagFilter)}
+	opts := Options{Namespaces: []string{kagentNS}, TargetSemverFilter: new(releaseTagFilter)}
 
 	res, err := c.runner(t, opts, "1.0.0", "secret").Run(ctx)
 	require.NoError(t, err)
@@ -672,27 +676,27 @@ func TestTheSourceMovesToTheTargetFilter(t *testing.T) {
 	assert.Equal(t, SourceMoved, src.Action, src.Reason)
 	assert.Empty(t, src.FromSemverFilter)
 	assert.Equal(t, releaseTagFilter, src.ToSemverFilter)
-	got, _ := c.semverFilter(t, "kagent", "agent")
+	got, _ := c.semverFilter(t, kagentNS, "agent")
 	assert.Equal(t, releaseTagFilter, got)
-	assert.Equal(t, target, c.semver(t, "kagent", "agent"), "the range stays")
+	assert.Equal(t, target, c.semver(t, kagentNS, "agent"), "the range stays")
 
 	res, err = c.runner(t, opts, "1.0.0", "secret").Run(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, ActionUnchanged, bySource(res.Reports[0])["kagent/agent"].Action, "on the target range and filter")
 
-	res, err = c.runner(t, Options{Namespaces: []string{"kagent"}}, "1.0.0", "secret").Run(ctx)
+	res, err = c.runner(t, Options{Namespaces: []string{kagentNS}}, "1.0.0", "secret").Run(ctx)
 	require.NoError(t, err)
 	assert.Nil(t, res.Reports[0].Run.Chart.TargetSemverFilter)
 	src = bySource(res.Reports[0])["kagent/agent"]
 	assert.Equal(t, ActionUnchanged, src.Action, "no target filter keeps the source's")
 	assert.Equal(t, releaseTagFilter, src.ToSemverFilter)
-	got, _ = c.semverFilter(t, "kagent", "agent")
+	got, _ = c.semverFilter(t, kagentNS, "agent")
 	assert.Equal(t, releaseTagFilter, got)
 
-	res, err = c.runner(t, Options{Namespaces: []string{"kagent"}, TargetSemverFilter: new("")}, "1.0.0", "secret").Run(ctx)
+	res, err = c.runner(t, Options{Namespaces: []string{kagentNS}, TargetSemverFilter: new("")}, "1.0.0", "secret").Run(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, SourceMoved, bySource(res.Reports[0])["kagent/agent"].Action)
-	_, found := c.semverFilter(t, "kagent", "agent")
+	_, found := c.semverFilter(t, kagentNS, "agent")
 	assert.False(t, found, "an empty target filter removes the source's")
 }
 
@@ -702,13 +706,13 @@ func TestReleaseUpgradedHonoursTheTargetFilter(t *testing.T) {
 	c := newCluster(migrated(t)...)
 	deployed := func(version string) *release { return &release{report: &ReleaseReport{ChartVersion: version}} }
 
-	r := c.runner(t, Options{Namespaces: []string{"kagent"}, TargetSemver: ">=1.5.0-0 <2.0.0-0", TargetSemverFilter: new(releaseTagFilter)}, "1.5.0", "secret")
+	r := c.runner(t, Options{Namespaces: []string{kagentNS}, TargetSemver: ">=1.5.0-0 <2.0.0-0", TargetSemverFilter: new(releaseTagFilter)}, "1.5.0", "secret")
 	assert.True(t, r.releaseUpgraded(deployed("1.5.0")))
 	assert.True(t, r.releaseUpgraded(deployed("1.5.1-rc.2@sha256:abc")))
 	assert.False(t, r.releaseUpgraded(deployed("1.5.2-r3d2c6cdct20260925080552h5b17654")))
 	assert.False(t, r.releaseUpgraded(deployed("1.4.9")))
 
-	r = c.runner(t, Options{Namespaces: []string{"kagent"}, TargetSemver: ">=1.5.0-0 <2.0.0-0"}, "1.5.0", "secret")
+	r = c.runner(t, Options{Namespaces: []string{kagentNS}, TargetSemver: ">=1.5.0-0 <2.0.0-0"}, "1.5.0", "secret")
 	assert.True(t, r.releaseUpgraded(deployed("1.5.2-r3d2c6cdct20260925080552h5b17654")), "without a filter the range decides")
 }
 
@@ -720,11 +724,11 @@ func TestReleaseUpgradedHonoursTheTargetFilter(t *testing.T) {
 func migrated(t *testing.T) []runtime.Object {
 	t.Helper()
 	objs := []runtime.Object{
-		ociRepository("kagent", target),
-		helmRelease("kagent", "sre", portalRewritten(), "1.0.0"), agentTemplate("kagent", "sre", "sre", "kagent", true),
-		helmRelease("kagent", "narrow", narrowRewritten(), "0.6.1"), legacyAgentObj("kagent", "narrow", "narrow", "kagent"),
+		ociRepository(kagentNS, target),
+		helmRelease(kagentNS, "sre", portalRewritten(), "1.0.0"), agentTemplate(kagentNS, "sre", "sre", kagentNS, true),
+		helmRelease(kagentNS, "narrow", narrowRewritten(), "0.6.1"), legacyAgentObj(kagentNS, "narrow", "narrow", kagentNS),
 		load(t, "agent-v1alpha2-bundled.yaml"),
-		harness("kagent"),
+		harness(kagentNS),
 	}
 	objs = append(objs, kagentRelease()...)
 	return append(objs, removedCRDs()...)
@@ -733,7 +737,7 @@ func migrated(t *testing.T) []runtime.Object {
 func TestWaitGatesTheContractAndContractRemovesTheOldWorld(t *testing.T) {
 	ctx := context.Background()
 	c := newCluster(migrated(t)...)
-	r := c.runner(t, Options{Namespaces: []string{"kagent"}}, "1.0.0", "secret")
+	r := c.runner(t, Options{Namespaces: []string{kagentNS}}, "1.0.0", "secret")
 
 	// Flux has not upgraded narrow: wait, nothing deleted.
 	res, err := r.Run(ctx)
@@ -745,19 +749,19 @@ func TestWaitGatesTheContractAndContractRemovesTheOldWorld(t *testing.T) {
 	assert.Contains(t, rep.Pending[0], `release kagent/narrow is deployed from chart "0.6.1"`)
 	assert.Contains(t, rep.Pending[1], "Agent kagent/narrow is still rendered by release kagent/narrow")
 	assert.Nil(t, rep.Contract)
-	assert.True(t, c.exists(legacyAgentGVR, "kagent", "k8s-agent"))
+	assert.True(t, c.exists(legacyAgentGVR, kagentNS, "k8s-agent"))
 	assert.True(t, c.exists(crdGVR, "", "agents.kagent.dev"))
 	assert.Equal(t, agents.VerdictReady, byRelease(rep)["kagent/sre"].Template.Verdict)
-	assert.Equal(t, PhaseWait, c.reportConfigMap(t, "kagent")[ReportKeyPhase])
+	assert.Equal(t, PhaseWait, c.reportConfigMap(t, kagentNS)[ReportKeyPhase])
 
 	// Flux upgrades narrow and Helm replaces its Agent with a template that
 	// is still compiling; a bare template of the namespace compiles too.
-	narrow := c.get(t, hrGVR, "kagent", "narrow")
+	narrow := c.get(t, hrGVR, kagentNS, "narrow")
 	require.NoError(t, unstructured.SetNestedSlice(narrow.Object, []any{map[string]any{"version": int64(4), "chartVersion": "1.0.0", "status": "deployed"}}, "status", "history"))
 	c.update(t, hrGVR, narrow)
-	c.delete(t, legacyAgentGVR, "kagent", "narrow")
-	c.create(t, tplGVR, agentTemplate("kagent", "narrow", "narrow", "kagent", false))
-	c.create(t, tplGVR, agentTemplate("kagent", "bare", "", "", false))
+	c.delete(t, legacyAgentGVR, kagentNS, "narrow")
+	c.create(t, tplGVR, agentTemplate(kagentNS, "narrow", "narrow", kagentNS, false))
+	c.create(t, tplGVR, agentTemplate(kagentNS, "bare", "", "", false))
 	res, err = r.Run(ctx)
 	require.NoError(t, err)
 	rep = res.Reports[0]
@@ -766,11 +770,11 @@ func TestWaitGatesTheContractAndContractRemovesTheOldWorld(t *testing.T) {
 	assert.Contains(t, rep.Pending[0], "AgentTemplate kagent/bare is progressing")
 	assert.Contains(t, rep.Pending[1], "AgentTemplate kagent/narrow is progressing")
 	assert.Equal(t, agents.VerdictProgressing, byRelease(rep)["kagent/narrow"].Template.Verdict)
-	assert.True(t, c.exists(legacyAgentGVR, "kagent", "k8s-agent"), "the gate holds the contract")
+	assert.True(t, c.exists(legacyAgentGVR, kagentNS, "k8s-agent"), "the gate holds the contract")
 
 	// Everything Ready: the leftover Agent and the five CRDs go.
 	for _, name := range []string{"narrow", "bare"} {
-		tpl := c.get(t, tplGVR, "kagent", name)
+		tpl := c.get(t, tplGVR, kagentNS, name)
 		entries, _, _ := unstructured.NestedSlice(tpl.Object, "status", "harnesses")
 		entry := entries[0].(map[string]any)
 		entry["latestSuccessfulRevision"] = "rev-1"
@@ -793,9 +797,9 @@ func TestWaitGatesTheContractAndContractRemovesTheOldWorld(t *testing.T) {
 		assert.Equal(t, CRDDeleted, crdRep.Action)
 		assert.False(t, c.exists(crdGVR, "", crdRep.Name))
 	}
-	assert.False(t, c.exists(legacyAgentGVR, "kagent", "k8s-agent"))
+	assert.False(t, c.exists(legacyAgentGVR, kagentNS, "k8s-agent"))
 	assert.Contains(t, rep.Summary, "1 kagent.dev/v1alpha2 Agent object(s) deleted")
-	assert.Equal(t, PhaseContract, c.reportConfigMap(t, "kagent")[ReportKeyPhase])
+	assert.Equal(t, PhaseContract, c.reportConfigMap(t, kagentNS)[ReportKeyPhase])
 
 	// Afterwards there is nothing left, and a run says so without changing
 	// anything (the v1alpha2 CRD is gone, so its list answers not found).
@@ -814,10 +818,10 @@ func TestWaitGatesTheContractAndContractRemovesTheOldWorld(t *testing.T) {
 func TestContractDryRunDeletesNothing(t *testing.T) {
 	ctx := context.Background()
 	c := newCluster(
-		ociRepository("kagent", target), helmRelease("kagent", "sre", portalRewritten(), "1.0.0"), agentTemplate("kagent", "sre", "sre", "kagent", true),
-		load(t, "agent-v1alpha2-bundled.yaml"), harness("kagent"), crd("agents.kagent.dev"),
+		ociRepository(kagentNS, target), helmRelease(kagentNS, "sre", portalRewritten(), "1.0.0"), agentTemplate(kagentNS, "sre", "sre", kagentNS, true),
+		load(t, "agent-v1alpha2-bundled.yaml"), harness(kagentNS), crd("agents.kagent.dev"),
 	)
-	res, err := c.runner(t, Options{Namespaces: []string{"kagent"}, DryRun: true}, "1.0.0", "").Run(ctx)
+	res, err := c.runner(t, Options{Namespaces: []string{kagentNS}, DryRun: true}, "1.0.0", "").Run(ctx)
 	require.NoError(t, err)
 	rep := res.Reports[0]
 	assert.Equal(t, PhaseContract, rep.Phase)
@@ -827,14 +831,14 @@ func TestContractDryRunDeletesNothing(t *testing.T) {
 	assert.Equal(t, CRDDeleted, rep.Contract.CRDs[0].Action)
 	assert.Contains(t, rep.Contract.CRDs[0].Reason, "dry run")
 	assert.Equal(t, CRDAbsent, rep.Contract.CRDs[1].Action)
-	assert.True(t, c.exists(legacyAgentGVR, "kagent", "k8s-agent"))
+	assert.True(t, c.exists(legacyAgentGVR, kagentNS, "k8s-agent"))
 	assert.True(t, c.exists(crdGVR, "", "agents.kagent.dev"))
-	assert.Nil(t, c.reportConfigMap(t, "kagent"))
+	assert.Nil(t, c.reportConfigMap(t, kagentNS))
 }
 
 func TestCRDsStayWhileAgentsExistOutsideTheManagedNamespaces(t *testing.T) {
-	c := newCluster(harness("kagent"), legacyAgentObj("elsewhere", "stray", "stray", "elsewhere"), crd("agents.kagent.dev"))
-	res, err := c.runner(t, Options{Namespaces: []string{"kagent"}}, "1.0.0", "").Run(context.Background())
+	c := newCluster(harness(kagentNS), legacyAgentObj("elsewhere", "stray", "stray", "elsewhere"), crd("agents.kagent.dev"))
+	res, err := c.runner(t, Options{Namespaces: []string{kagentNS}}, "1.0.0", "").Run(context.Background())
 	require.NoError(t, err)
 	rep := res.Reports[0]
 	assert.Equal(t, PhaseContract, rep.Phase)
@@ -847,9 +851,9 @@ func TestCRDsStayWhileAgentsExistOutsideTheManagedNamespaces(t *testing.T) {
 // lab, a fresh installation): no 0.x release, no v1alpha2 CRD — complete,
 // whatever the templates there are doing.
 func TestNothingToMigrateIsComplete(t *testing.T) {
-	fresh := map[string]any{"agent": map[string]any{"name": "fresh", "harness": "kagent"}, "modelConfig": map[string]any{"name": "default-model-config"}, "toolset": []any{"preset:none"}}
-	c := newCluster(harness("kagent"), agentTemplate("kagent", "probe", "", "", false), ociRepository("kagent", target), helmRelease("kagent", "fresh", fresh, "1.0.0"), agentTemplate("kagent", "fresh", "fresh", "kagent", true))
-	res, err := c.runner(t, Options{Namespaces: []string{"kagent"}}, "1.0.0", "").Run(context.Background())
+	fresh := map[string]any{"agent": map[string]any{"name": "fresh", "harness": kagentNS}, "modelConfig": map[string]any{"name": "default-model-config"}, "toolset": []any{"preset:none"}}
+	c := newCluster(harness(kagentNS), agentTemplate(kagentNS, "probe", "", "", false), ociRepository(kagentNS, target), helmRelease(kagentNS, "fresh", fresh, "1.0.0"), agentTemplate(kagentNS, "fresh", "fresh", kagentNS, true))
+	res, err := c.runner(t, Options{Namespaces: []string{kagentNS}}, "1.0.0", "").Run(context.Background())
 	require.NoError(t, err)
 	rep := res.Reports[0]
 	assert.Equal(t, PhaseComplete, rep.Phase)
@@ -861,7 +865,7 @@ func TestNothingToMigrateIsComplete(t *testing.T) {
 	assert.Empty(t, rep.Pending, "readiness gates nothing when there is nothing to contract")
 	require.Len(t, rep.Warnings, 1)
 	assert.Contains(t, rep.Warnings[0], "AgentTemplate kagent/probe is progressing")
-	assert.Equal(t, PhaseComplete, c.reportConfigMap(t, "kagent")[ReportKeyPhase])
+	assert.Equal(t, PhaseComplete, c.reportConfigMap(t, kagentNS)[ReportKeyPhase])
 }
 
 // ---- the rewrite alone --------------------------------------------------------------
@@ -884,7 +888,7 @@ func TestRewriteValues(t *testing.T) {
 			changes: ValueChanges{Set: []string{"agent.harness=claude"}},
 		},
 		"the default Harness adds nothing": {
-			values: map[string]any{"agent": map[string]any{"name": "a"}}, harness: "kagent",
+			values: map[string]any{"agent": map[string]any{"name": "a"}}, harness: kagentNS,
 			want: map[string]any{"agent": map[string]any{"name": "a"}},
 		},
 		"an empty 0.x skills object goes": {
@@ -998,10 +1002,10 @@ func TestExpandRetriesAWriteThatRacesTheControllers(t *testing.T) {
 	releases, sources := byRelease(kagent), bySource(kagent)
 	assert.Equal(t, ActionRewritten, releases["kagent/sre"].Action)
 	assert.Equal(t, ActionRewritten, releases["kagent/narrow"].Action)
-	assert.Equal(t, portalRewritten(), c.values(t, "kagent", "sre"))
-	assert.Equal(t, narrowRewritten(), c.values(t, "kagent", "narrow"))
+	assert.Equal(t, portalRewritten(), c.values(t, kagentNS, "sre"))
+	assert.Equal(t, narrowRewritten(), c.values(t, kagentNS, "narrow"))
 	assert.Equal(t, SourceMoved, sources["kagent/agent"].Action)
-	assert.Equal(t, target, c.semver(t, "kagent", "agent"))
+	assert.Equal(t, target, c.semver(t, kagentNS, "agent"))
 	assert.Equal(t, 2, writes["helmreleases kagent/sre"])
 	assert.Equal(t, 2, writes["helmreleases kagent/narrow"])
 	assert.Equal(t, 2, writes["ocirepositories kagent/agent"])

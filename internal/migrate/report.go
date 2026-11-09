@@ -47,7 +47,7 @@ const (
 	// target line's resource not served yet).
 	PhaseWait = "wait"
 	// PhaseContract: the gate passed; the old line's leftover agent objects
-	// of the namespace were deleted (0.x -> 1.x: the CRDs too when every
+	// of the namespace were deleted (the hop's CRDs too when every
 	// namespace passed).
 	PhaseContract = "contract"
 	// PhaseComplete: nothing of the old line is left that this command
@@ -91,6 +91,9 @@ const (
 	CRDDeleted = "deleted"
 	CRDAbsent  = "absent"
 	CRDKept    = "kept"
+	// CRDUnchecked: the run's identity may not read or delete it; whether
+	// it exists is unknown, so it never holds the phase.
+	CRDUnchecked = "unchecked"
 )
 
 // Report is one namespace's migration state.
@@ -213,9 +216,10 @@ type ContractReport struct {
 	// AgentsDeleted are the old line's agent objects removed from the
 	// namespace.
 	AgentsDeleted []string `json:"agentsDeleted"`
-	// CRDs is the fate of the five CRDs the 0.x -> 1.x hop removes
-	// (cluster-scoped, so the same in every namespace's report); absent on
-	// 1.x -> 2.x, where the platform removes the kagent.dev CRDs.
+	// CRDs is the fate of the CRDs the hop removes (cluster-scoped, so the
+	// same in every namespace's report): on 0.x -> 1.x the five the 1.x
+	// line no longer ships, on 1.x -> 2.x every 0.x kagent.dev CRD, each
+	// only while it holds no object.
 	CRDs []CRDReport `json:"crds,omitempty"`
 }
 
