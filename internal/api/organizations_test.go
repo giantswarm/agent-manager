@@ -905,7 +905,7 @@ func TestCreateOrganizationRefusesBeforeTheWriteWhenTheParentRightIsNotMirrored(
 // read goes on, and the access review in the organization namespace after
 // Ready answers pending when the right has not reached it; a caller with only
 // half the right cluster-wide, and no parent binding, is refused.
-func TestCreateOrganizationChecksTheCallerItCannotReadAsBefore(t *testing.T) {
+func TestCreateOrganizationGoesOnUnreadCallersAndRefusesHalfARight(t *testing.T) {
 	forbidden := func(a k8stesting.Action) (bool, runtime.Object, error) {
 		return true, nil, apierrors.NewForbidden(a.GetResource().GroupResource(), "", errors.New("RBAC: access denied"))
 	}
