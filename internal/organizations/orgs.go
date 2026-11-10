@@ -414,10 +414,7 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (*CreateResult,
 	// the write, but the operator may not have mirrored it yet, or the
 	// caller's bindings could not be read: ask again where the binding goes,
 	// so the answer names who can finish it instead of a Forbidden write.
-	if err := requireAccess(ctx, c, wayFirstAdmins(org),
-		access{namespace: org.Status.Namespace, verb: "create", group: rbacGVR.Group, resource: rbacGVR.Resource},
-		access{namespace: org.Status.Namespace, verb: "bind", group: rbacGVR.Group, resource: "clusterroles", name: RoleAdmin},
-	); err != nil {
+	if err := requireAccess(ctx, c, wayFirstAdmins(org), firstAdminsAccess(org.Status.Namespace)...); err != nil {
 		res.Pending = fmt.Sprintf("the organization %s exists and is Ready, but its first admins are not bound: %v", what, err)
 		return res, nil
 	}

@@ -617,8 +617,10 @@ The organization tools (every name holds `organization`):
   in the new namespace, and writes the first admins as the RoleBinding
   `organization-admins`. An organization that is not Ready in time, or whose
   namespace the caller's right has not reached yet (`pending`), keeps its
-  first admins for a second call with the same arguments. A delete answers what it erases until the caller passes
-  `confirm: <parent>/<name>`, then marks the object
+  first admins for a second call with the same arguments. A caller who is a
+  ServiceAccount or another `system:` name is never mirrored: only a right
+  cluster-wide reaches the namespace for it. A delete answers what it erases
+  until the caller passes `confirm: <parent>/<name>`, then marks the object
   `kustomize.toolkit.fluxcd.io/prune: enabled` (the delete intent the
   admission policy requires) and deletes it; the operator erases it. An
   organization Flux applies from git is refused live (commit mode is

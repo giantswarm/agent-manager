@@ -142,12 +142,12 @@ func wayOrganizationsAdmin(parent string) string {
 }
 
 // wayFirstAdmins names who can bind the first admins of org when the
-// creator may not yet: create_organization refuses before the write a
-// creator whose bindings in the parent the operator does not mirror, so what
-// is left is a mirror the operator has not written yet, or a creator it could
-// not check.
+// creator may not: create_organization refuses before the write a creator
+// whose bindings in the parent the operator does not mirror, so what is left
+// is a mirror the operator has not written yet, or a creator it could not
+// check.
 func wayFirstAdmins(org *apov1alpha1.AgentPlatformOrganization) string {
-	return fmt.Sprintf("your right to create it in %s does not reach its namespace %s (yet: %s); call create_organization again with the same arguments once it does, or someone with %s bound in %s or cluster-wide, or a cluster-admin, calls it to bind them", org.Namespace, org.Status.Namespace, mirrorRule, RoleOrganizationsAdmin, org.Namespace)
+	return fmt.Sprintf("your right to create it in %s does not reach its namespace %s; if agent-platform-operator mirrors your binding there, call create_organization again with the same arguments once it has; else someone with %s bound in %s or cluster-wide, or a cluster-admin, calls it to bind them", org.Namespace, org.Status.Namespace, RoleOrganizationsAdmin, org.Namespace)
 }
 
 // wayOrganizationAdmin names who can make the caller an admin of the

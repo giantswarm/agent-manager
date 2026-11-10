@@ -130,16 +130,21 @@ func notMirrored(rb *rbacv1.RoleBinding) string {
 
 // refuseUnmirrored is the refusal of a caller whose right in parent will not
 // reach the organization namespace: the bindings that name the caller, the
-// rule and the two ways out.
+// rule and the ways out. A ServiceAccount or another system: name is never
+// mirrored, so only a right cluster-wide reaches the namespace for it.
 func refuseUnmirrored(parent, username string, naming []string) string {
 	from := fmt.Sprintf("No RoleBinding in %s that agent-platform-operator mirrors names you", parent)
 	if len(naming) > 0 {
 		from = fmt.Sprintf("The RoleBindings in %s that name you are not mirrored: %s", parent, strings.Join(naming, ", "))
 	}
+	head := fmt.Sprintf("your right to create an organization in %s will not reach its namespace, so its first admins could not be bound; nothing was written. %s. %s (a right cluster-wide reaches it too).", parent, from, mirrorRule)
+	if strings.HasPrefix(username, "system:") {
+		return fmt.Sprintf("%s You (User %q) are a system: name, which is never mirrored: a cluster-admin creates the organization, or binds the right to you cluster-wide", head, username)
+	}
 	who := "you"
 	if username != "" {
 		who = fmt.Sprintf("you (User %q)", username)
 	}
-	return fmt.Sprintf("your right to create an organization in %s will not reach its namespace, so its first admins could not be bound; nothing was written. %s. %s (a right cluster-wide reaches it too). Either a RoleBinding in %s binds %s to %s, written by an admin of the Giant Swarm Organization that owns %s, or a cluster-admin creates the organization",
-		parent, from, mirrorRule, parent, adminmirror.OrganizationsAdminClusterRole, who, parent)
+	return fmt.Sprintf("%s Either a RoleBinding in %s binds %s to %s, written by an admin of the Giant Swarm Organization that owns %s, or a cluster-admin creates the organization",
+		head, parent, adminmirror.OrganizationsAdminClusterRole, who, parent)
 }
