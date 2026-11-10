@@ -33,13 +33,16 @@ const (
 	// on CreateSessionRequest, checked here so a bad value reads in our words.
 	maxRequestIDLength   = 128
 	maxSessionNameLength = 200
+	// MaxPageTokenLength bounds a list_sessions pageToken, a token kagent
+	// issued and agent-manager passes back unread.
+	MaxPageTokenLength = 512
 )
 
 // SessionClient is what the session operations need from the kagent
 // controller: SessionService and the A2A service, called through agentgateway
 // with the caller's token (kagent.Client).
 type SessionClient interface {
-	ListSessions(ctx context.Context, token string, agent kagent.Ref, allCreators bool) ([]*apiv1alpha1.Session, error)
+	ListSessions(ctx context.Context, token string, agent kagent.Ref, allCreators bool, pageToken string) (*kagent.SessionPage, error)
 	GetSession(ctx context.Context, token, sessionID string) (*apiv1alpha1.Session, error)
 	ListSessionTasks(ctx context.Context, token string, agent kagent.Ref, contextID string, opts kagent.TaskListOptions) (*kagent.TaskList, error)
 	GetSessionTask(ctx context.Context, token string, agent kagent.Ref, taskID string) (*a2apb.Task, error)
@@ -58,10 +61,13 @@ type SessionBinder interface {
 
 // SessionList is the answer of list_sessions: the Agent's sessions as kagent
 // reports them (proto3 JSON of kagent.api.v1alpha1.Session, state as
-// RUNTIME_STATE_*).
+// RUNTIME_STATE_*), at most kagent.MaxListedSessions per answer. A
+// NextPageToken says more follow: list again with it as pageToken.
 type SessionList struct {
-	Agent    AgentRef          `json:"agent"`
-	Sessions []json.RawMessage `json:"sessions"`
+	Agent         AgentRef          `json:"agent"`
+	Sessions      []json.RawMessage `json:"sessions"`
+	NextPageToken string            `json:"nextPageToken,omitempty"`
+	Hint          string            `json:"hint,omitempty"`
 }
 
 // SessionQuery is the input of get_session.
@@ -221,18 +227,25 @@ var protoJSON = protojson.MarshalOptions{}
 func (s *Service) SessionsAvailable() bool { return s.cfg.Sessions != nil }
 
 // ListSessions is the caller's sessions of one Agent (every person's with
-// allCreators, when the controller grants the caller that).
-func (s *Service) ListSessions(ctx context.Context, namespace, name string, allCreators bool) (*SessionList, error) {
+// allCreators, when the controller grants the caller that), from pageToken
+// (empty: the start).
+func (s *Service) ListSessions(ctx context.Context, namespace, name string, allCreators bool, pageToken string) (*SessionList, error) {
+	if len(pageToken) > MaxPageTokenLength {
+		return nil, invalidf("pageToken is longer than %d characters", MaxPageTokenLength)
+	}
 	ref, token, err := s.sessionCall(ctx, namespace, name)
 	if err != nil {
 		return nil, err
 	}
-	sessions, err := s.cfg.Sessions.ListSessions(ctx, token, ref, allCreators)
+	page, err := s.cfg.Sessions.ListSessions(ctx, token, ref, allCreators, pageToken)
 	if err != nil {
 		return nil, kagentError(err, fmt.Sprintf("sessions of agent %s", ref.Tenant()))
 	}
-	out := &SessionList{Agent: AgentRef{Namespace: ref.Namespace, Name: ref.Name}, Sessions: []json.RawMessage{}}
-	for _, session := range sessions {
+	out := &SessionList{Agent: AgentRef{Namespace: ref.Namespace, Name: ref.Name}, Sessions: []json.RawMessage{}, NextPageToken: page.NextPageToken}
+	if page.NextPageToken != "" {
+		out.Hint = fmt.Sprintf("more sessions follow (at most %d are answered at a time): list again with pageToken", kagent.MaxListedSessions)
+	}
+	for _, session := range page.Sessions {
 		raw, err := marshalProto(session)
 		if err != nil {
 			return nil, err

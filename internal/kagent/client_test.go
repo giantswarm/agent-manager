@@ -1,6 +1,7 @@
 package kagent_test
 
 import (
+	"context"
 	"fmt"
 	"testing"
 	"time"
@@ -8,6 +9,7 @@ import (
 	a2apb "github.com/a2aproject/a2a-go/v2/a2apb/v1"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
@@ -71,10 +73,11 @@ func TestListSessionsWalksPagesForOneAgent(t *testing.T) {
 	ctrl.AddSession("kagent", "other")
 	c := kagent.NewClient(conn)
 
-	sessions, err := c.ListSessions(t.Context(), token, sre, true)
+	page, err := c.ListSessions(t.Context(), token, sre, true, "")
 	require.NoError(t, err)
-	assert.Len(t, sessions, 150)
-	for _, s := range sessions {
+	assert.Len(t, page.Sessions, 150)
+	assert.Empty(t, page.NextPageToken, "the listing is complete")
+	for _, s := range page.Sessions {
 		assert.Equal(t, "sre", s.GetAgent().GetName())
 	}
 
@@ -87,6 +90,56 @@ func TestListSessionsWalksPagesForOneAgent(t *testing.T) {
 	assert.True(t, first.GetAllCreators())
 	assert.EqualValues(t, 100, first.GetPage().GetLimit())
 	assert.Equal(t, "100", calls[1].Request.(*apiv1alpha1.ListSessionsRequest).GetPage().GetPageToken())
+}
+
+func TestListSessionsAnswersAtMostItsBound(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		seed int
+		more bool
+	}{
+		{name: "exactly the bound", seed: kagent.MaxListedSessions},
+		{name: "past the bound", seed: kagent.MaxListedSessions + 1, more: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl, conn := kagenttest.New(t)
+			for range tc.seed {
+				ctrl.AddSession("kagent", "sre")
+			}
+			c := kagent.NewClient(conn)
+
+			page, err := c.ListSessions(t.Context(), token, sre, true, "")
+			require.NoError(t, err)
+			assert.Len(t, page.Sessions, kagent.MaxListedSessions)
+			if !tc.more {
+				assert.Empty(t, page.NextPageToken)
+				return
+			}
+			require.NotEmpty(t, page.NextPageToken, "sessions are left")
+
+			rest, err := c.ListSessions(t.Context(), token, sre, true, page.NextPageToken)
+			require.NoError(t, err)
+			require.Len(t, rest.Sessions, 1)
+			assert.Empty(t, rest.NextPageToken)
+			assert.NotContains(t, page.Sessions, rest.Sessions[0])
+		})
+	}
+}
+
+// stuckPages answers every ListSessions with one session and the same next
+// page token.
+type stuckPages struct{ grpc.ClientConnInterface }
+
+func (stuckPages) Invoke(_ context.Context, _ string, _, reply any, _ ...grpc.CallOption) error {
+	resp := reply.(*apiv1alpha1.ListSessionsResponse)
+	resp.Sessions = []*apiv1alpha1.Session{{Id: "s"}}
+	resp.Page = &apiv1alpha1.PageResponse{NextPageToken: "stuck"}
+	return nil
+}
+
+func TestListSessionsRefusesAPageTokenThatDoesNotAdvance(t *testing.T) {
+	_, err := kagent.NewClient(stuckPages{}).ListSessions(t.Context(), token, sre, true, "")
+	require.ErrorContains(t, err, "answered the page token it was sent")
 }
 
 func TestListSessionTasksAddressesTheAgentAndContext(t *testing.T) {
@@ -241,7 +294,7 @@ func TestDeleteSessionAsTheCaller(t *testing.T) {
 func TestNoTokenNoCall(t *testing.T) {
 	ctrl, conn := kagenttest.New(t)
 	c := kagent.NewClient(conn)
-	_, err := c.ListSessions(t.Context(), "", sre, false)
+	_, err := c.ListSessions(t.Context(), "", sre, false, "")
 	require.ErrorIs(t, err, kagent.ErrNoToken)
 	_, err = c.GetSession(t.Context(), "", "id")
 	require.ErrorIs(t, err, kagent.ErrNoToken)

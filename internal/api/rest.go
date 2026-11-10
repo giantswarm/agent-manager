@@ -248,7 +248,7 @@ func (h *REST) listSkills(w http.ResponseWriter, r *http.Request) {
 func tagsQuery(q url.Values) tags.Filter { return tags.NewFilter(q["tags"]) }
 
 func (h *REST) listSessions(w http.ResponseWriter, r *http.Request) {
-	res, err := h.svc.ListSessions(r.Context(), r.PathValue("namespace"), r.PathValue("name"), strings.EqualFold(r.URL.Query().Get("allCreators"), "true"))
+	res, err := h.svc.ListSessions(r.Context(), r.PathValue("namespace"), r.PathValue("name"), strings.EqualFold(r.URL.Query().Get("allCreators"), "true"), r.URL.Query().Get("pageToken"))
 	if err != nil {
 		h.writeError(w, err)
 		return
@@ -440,6 +440,7 @@ var errorCodes = []struct {
 	code     string
 }{
 	{organizations.ErrCredentialOperationChanged, http.StatusPreconditionFailed, "precondition_failed"},
+	{errIfMatchRequired, http.StatusPreconditionRequired, "precondition_required"},
 	{agents.ErrNotFound, http.StatusNotFound, "not_found"},
 	{agents.ErrInvalid, http.StatusBadRequest, "invalid_request"},
 	{agents.ErrGitOpsOwned, http.StatusConflict, "gitops_owned"},

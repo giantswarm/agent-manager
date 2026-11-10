@@ -2,13 +2,10 @@ package organizations
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"slices"
 	"strings"
 
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/giantswarm/agent-manager/internal/agents"
@@ -129,26 +126,16 @@ func referencesOf(kind string, u *unstructured.Unstructured, secret string) []Cr
 	return out
 }
 
-func liveSecret(ctx context.Context, c kube.Client, ns, secret string) (*unstructured.Unstructured, error) {
-	obj, err := c.Dynamic().Resource(secretGVR).Namespace(ns).Get(ctx, secret, metav1.GetOptions{})
-	if apierrors.IsNotFound(err) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, kubeErr(err, "get Secret "+ns+"/"+secret, wayOrganizationAdmin(ns))
-	}
-	return obj, nil
-}
-
 // writeMode is the mode of a credential write: the one asked for, else
-// commit where git applies the object or the Secret, or where the object is
-// not live (a commit-mode write not merged yet) and commit mode is
-// configured, else apply.
-func (s *Service) writeMode(requested string, object, secret *unstructured.Unstructured) (string, error) {
+// commit where git applies the object, or where the object is not live (a
+// commit-mode write not merged yet) and commit mode is configured, else
+// apply. A credential Secret lives in its consumer's content path, so the
+// consumer decides; the Secret itself is never read.
+func (s *Service) writeMode(requested string, object *unstructured.Unstructured) (string, error) {
 	if requested != "" {
 		return s.mode(requested)
 	}
-	if s.cfg.Commit != nil && (object == nil || fromGit(object) || (secret != nil && fromGit(secret))) {
+	if s.cfg.Commit != nil && (object == nil || fromGit(object)) {
 		return agents.ModeCommit, nil
 	}
 	return agents.ModeApply, nil
@@ -187,11 +174,7 @@ func (s *Service) CredentialReferences(ctx context.Context, parent, organization
 		if !slices.Contains(credentialKinds, kind) {
 			return nil, invalidf("kind %q: %s", kind, strings.Join(credentialKinds, ", "))
 		}
-		sec, err := liveSecret(ctx, c, org.Name, secret)
-		if err != nil && !errors.Is(err, agents.ErrForbidden) {
-			return nil, err
-		}
-		if out.Mode, err = s.writeMode("", live[kind+"/"+name], sec); err != nil {
+		if out.Mode, err = s.writeMode("", live[kind+"/"+name]); err != nil {
 			return nil, err
 		}
 	}

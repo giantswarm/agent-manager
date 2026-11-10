@@ -4,18 +4,24 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	apov1alpha1 "github.com/giantswarm/agent-platform-operator/api/v1alpha1"
+	"github.com/giantswarm/agent-platform-operator/pkg/adminmirror"
 	mcpserver "github.com/mark3labs/mcp-go/server"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	authenticationv1 "k8s.io/api/authentication/v1"
 	authorizationv1 "k8s.io/api/authorization/v1"
 	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -69,8 +75,11 @@ type orgFixture struct {
 	// ready makes the operator report an organization Ready with its
 	// namespace as soon as it is created.
 	ready bool
-	ctx   context.Context
-	orgs  *organizations.Service
+	// user is who the API server authenticates the caller as (a
+	// SelfSubjectReview).
+	user authenticationv1.UserInfo
+	ctx  context.Context
+	orgs *organizations.Service
 	// cfg and provider build the tools again, with another logger.
 	cfg      organizations.Config
 	provider kube.Provider
@@ -83,11 +92,20 @@ func newOrgFixture(t *testing.T, objs ...runtime.Object) *orgFixture {
 	return newOrgFixtureWith(t, nil, objs...)
 }
 
+// secretReads are the verbs that return a Secret's data: an organization
+// admin holds none of them.
+var secretReads = []string{"get", "list", "watch", "patch"}
+
+func refuseSecretRead(a k8stesting.Action) (bool, runtime.Object, error) {
+	return true, nil, apierrors.NewForbidden(a.GetResource().GroupResource(), "", fmt.Errorf("RBAC: an organization admin may not %s Secrets", a.GetVerb()))
+}
+
 // newOrgFixtureWith is newOrgFixture with the tools' configuration changed
 // by configure.
 func newOrgFixtureWith(t *testing.T, configure func(*organizations.Config), objs ...runtime.Object) *orgFixture {
 	t.Helper()
-	f := &orgFixture{ready: true, deny: func(string, string, string, string) bool { return false }}
+	f := &orgFixture{ready: true, deny: func(string, string, string, string) bool { return false },
+		user: authenticationv1.UserInfo{Username: "alice@example.com"}}
 	f.dyn = dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{
 		orgGVR: "AgentPlatformOrganizationList", rbGVR: "RoleBindingList", mcGVR: "ModelConfigList", connGVR: "RemoteMCPServerList",
 		egressGVR: "EgressPolicyList", orgAgentGV: "AgentList", hrGVR: "HelmReleaseList",
@@ -125,11 +143,21 @@ func newOrgFixtureWith(t *testing.T, configure func(*organizations.Config), objs
 		return false, nil, nil
 	})
 	f.typed = kubefake.NewClientset()
+	// Credentials are write-only: no read of a Secret, typed or dynamic, is
+	// answered, as for an organization admin, who holds no get, list, watch
+	// or patch on Secrets.
+	for _, verb := range secretReads {
+		f.dyn.PrependReactor(verb, "secrets", refuseSecretRead)
+		f.typed.PrependReactor(verb, "secrets", refuseSecretRead)
+	}
 	f.typed.PrependReactor("create", "selfsubjectaccessreviews", func(a k8stesting.Action) (bool, runtime.Object, error) {
 		review := a.(k8stesting.CreateAction).GetObject().(*authorizationv1.SelfSubjectAccessReview)
 		ra := review.Spec.ResourceAttributes
 		review.Status.Allowed = !f.deny(ra.Namespace, ra.Verb, ra.Resource, ra.Name)
 		return true, review, nil
+	})
+	f.typed.PrependReactor("create", "selfsubjectreviews", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, &authenticationv1.SelfSubjectReview{Status: authenticationv1.SelfSubjectReviewStatus{UserInfo: f.user}}, nil
 	})
 	sa := kubefake.NewClientset(
 		namespace(orgNS, map[string]string{apov1alpha1.OrganizationLabel: "payments", apov1alpha1.ParentLabel: "org-acme"}),
@@ -140,7 +168,7 @@ func newOrgFixtureWith(t *testing.T, configure func(*organizations.Config), objs
 		namespace("plain", nil),
 	)
 	cfg := organizations.Config{ // #nosec G101 -- synthetic UI URL and isolated fake store
-		Namespaces:           organizations.NewNamespaces(sa, "kagent"),
+		Namespaces:           organizations.NewNamespaces(sa, f.dyn, "kagent"),
 		CredentialUIURL:      "https://portal.example.com/credentials?operation={operation}",
 		CredentialOperations: organizations.NewCredentialOperations(operationMaps(t)),
 		ReadyTimeout:         time.Second, ReadyPoll: 10 * time.Millisecond,
@@ -166,14 +194,18 @@ func (f *orgFixture) call(t *testing.T, tool string, args map[string]any) (strin
 	return callToolCtx(t, f.ctx, f.srv, tool, args)
 }
 
+// get reads the fake API server's stored object, past the reactors that
+// answer the caller: what a test asserts, not what the tools may read.
 func (f *orgFixture) get(t *testing.T, gvr schema.GroupVersionResource, ns, name string) *unstructured.Unstructured {
 	t.Helper()
-	obj, err := f.dyn.Resource(gvr).Namespace(ns).Get(context.Background(), name, metav1.GetOptions{})
+	obj, err := f.dyn.Tracker().Get(gvr, ns, name)
 	if apierrors.IsNotFound(err) {
 		return nil
 	}
 	require.NoError(t, err)
-	return obj
+	u, ok := obj.(*unstructured.Unstructured)
+	require.True(t, ok, "%T", obj)
+	return u
 }
 
 func decode(t *testing.T, text string) map[string]any {
@@ -477,14 +509,10 @@ func TestCredentialsAreReferencesOnly(t *testing.T) {
 	assert.Contains(t, cred["formUrl"], "https://portal.example.com/credentials?operation=")
 	assert.Contains(t, cred["next"], cred["formUrl"])
 
-	_, err := f.typed.CoreV1().Secrets(orgNS).Create(context.Background(), &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: "tenant-credential-gh", Namespace: orgNS},
-		Data:       map[string][]byte{"token": []byte("ghp-live-value")},
-	}, metav1.CreateOptions{})
-	require.NoError(t, err)
+	seedSecret(t, f, "tenant-credential-gh", "token")
 	text, isErr = f.call(t, ToolSetOrganizationConnector, map[string]any{"namespace": orgNS, "name": "gh", "url": "https://mcp.github.example/mcp", "credentialHeader": "Authorization"})
 	require.False(t, isErr, text)
-	assert.NotContains(t, text, "ghp-live-value")
+	assert.NotContains(t, text, liveValue)
 	cred = decode(t, text)["credentials"].([]any)[0].(map[string]any)
 	assert.Equal(t, organizations.CredentialPresent, cred["state"])
 	assert.NotContains(t, cred, "next")
@@ -494,25 +522,49 @@ func TestCredentialsAreReferencesOnly(t *testing.T) {
 	text, isErr = f.call(t, ToolSetOrganizationEgress, map[string]any{"namespace": orgNS, "name": "github",
 		"destinations": []any{map[string]any{"origin": "https://api.github.com", "credentialHeader": "Authorization", "credentialPrefix": "Bearer ", "credentialSecret": "tenant-credential-gh"}}}) // #nosec G101 -- a Secret's name, not a credential
 	require.False(t, isErr, text)
-	assert.NotContains(t, text, "ghp-live-value")
+	assert.NotContains(t, text, liveValue)
 }
 
-// The picker lists the organizations whose Agents the caller may list,
-// asked as the caller: never an org-<name> labelled giantswarm.io/organization
-// alone, nor a plain namespace, even where the caller may list Agents.
-func TestThePickerListsOnlyTheCallersOrganizations(t *testing.T) {
-	f := newOrgFixture(t)
-	f.deny = func(ns, verb, resource, _ string) bool {
-		// The caller may list Agents in org-acme and plain too: only the
-		// organization label keeps them out.
-		return verb == "list" && resource == "agents" && ns == "agents-billing-a1b2c"
+// list_organizations lists what the caller manages or belongs to, each
+// review asked as the caller; a member who does not manage one sees its
+// status only.
+func TestListOrganizationsByTheCallersAccess(t *testing.T) {
+	lost := organization("org-acme", "payments", nil)
+	lost.Object["status"].(map[string]any)["conditions"] = append(lost.Object["status"].(map[string]any)["conditions"].([]any),
+		map[string]any{"type": "Orphaned", "status": "True", "reason": "MissingFromGit", "message": "gone from git", "lastTransitionTime": "2026-11-04T00:00:00Z"})
+	billing := organization("org-acme", "billing", nil)
+	_ = unstructured.SetNestedField(billing.Object, "agents-billing-a1b2c", "status", "namespace")
+	other := organization("org-other", "treasury", nil)
+	_ = unstructured.SetNestedField(other.Object, "agents-treasury-z9y8x", "status", "namespace")
+	f := newOrgFixture(t, lost, billing, other)
+	// A member of payments only; the manager of billing only; treasury
+	// neither.
+	f.deny = func(ns, verb, resource, name string) bool {
+		switch {
+		case verb == "list" && resource == "agents":
+			return ns != orgNS
+		case verb == "update" && resource == "agentplatformorganizations":
+			return ns != "org-acme" || name != "billing"
+		}
+		return false
 	}
-	text, isErr := f.call(t, ToolListMyOrganizations, nil)
+	text, isErr := f.call(t, ToolListOrganizations, nil)
 	require.False(t, isErr, text)
-	assert.Equal(t, []any{map[string]any{"namespace": orgNS, "organization": "payments", "parent": "org-acme"}}, decode(t, text)["organizations"])
+	listed := decode(t, text)["organizations"].([]any)
+	require.Len(t, listed, 2, text)
 
-	f.deny = func(string, string, string, string) bool { return true }
-	text, isErr = f.call(t, ToolListMyOrganizations, nil)
+	billingListed := listed[0].(map[string]any)
+	assert.Equal(t, "billing", billingListed["name"])
+	assert.Equal(t, map[string]any{"manage": true, "member": false}, billingListed["permissions"])
+	assert.Equal(t, "s3://bucket/uid", billingListed["organization"].(map[string]any)["snapshotPrefix"], "a manager reads the summary")
+
+	member := listed[1].(map[string]any)
+	assert.Equal(t, map[string]any{"name": "payments", "parent": "org-acme", "namespace": orgNS,
+		"orphaned":    map[string]any{"status": "True", "reason": "MissingFromGit", "message": "gone from git"},
+		"permissions": map[string]any{"manage": false, "member": true}}, member, "a member reads the status only")
+	assert.NotContains(t, text, "treasury", "an organization the caller neither manages nor belongs to is not listed")
+
+	text, isErr = f.call(t, ToolListOrganizations, map[string]any{"namespace": "org-other"})
 	require.False(t, isErr, text)
 	res := decode(t, text)
 	assert.Empty(t, res["organizations"])
@@ -522,7 +574,7 @@ func TestThePickerListsOnlyTheCallersOrganizations(t *testing.T) {
 	f.typed.PrependReactor("create", "selfsubjectaccessreviews", func(k8stesting.Action) (bool, runtime.Object, error) {
 		return true, nil, apierrors.NewUnauthorized("token expired")
 	})
-	text, isErr = f.call(t, ToolListMyOrganizations, nil)
+	text, isErr = f.call(t, ToolListOrganizations, nil)
 	require.True(t, isErr)
 	assert.True(t, strings.HasPrefix(text, "unauthenticated:"), text)
 	assert.NotContains(t, text, "agents-", "a refused token learns no organization namespace")
@@ -573,10 +625,10 @@ func TestOrganizationMembers(t *testing.T) {
 	assert.NotContains(t, text, "tenant", "an org-* namespace is no tenant of any kind")
 }
 
-// A creator whose rights in the parent do not reach the new namespace (a
-// Giant Swarm Organization admin's cluster-admin there, which the operator
-// does not mirror) gets the organization without a Forbidden write, and an
-// answer naming who can bind the first admins; their call finishes it.
+// A creator whose rights have not reached the new namespace by Ready (the
+// operator has not mirrored them yet) gets the organization without a
+// Forbidden write, and an answer naming who can bind the first admins; a
+// second call finishes it.
 func TestCreateOrganizationNamesWhoBindsTheFirstAdminsWhenTheCreatorCannot(t *testing.T) {
 	f := newOrgFixture(t)
 	f.deny = func(ns, verb, resource, _ string) bool {
@@ -676,8 +728,6 @@ func TestConnectorURLsAndHeaders(t *testing.T) {
 	f := newOrgFixture(t, conn, malformed)
 	seedSecret(t, f, "tenant-credential-jira", "token")
 	seedSecret(t, f, "tenant-credential-jira-v2", "token")
-	_, err := f.typed.CoreV1().Secrets(orgNS).Update(t.Context(), &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "tenant-credential-jira", Namespace: orgNS}, Data: map[string][]byte{"token": []byte(liveValue), "xsrf": []byte(liveValue)}}, metav1.UpdateOptions{})
-	require.NoError(t, err)
 
 	for _, url := range []string{
 		"https://bot:hunter2@mcp.example/mcp",
@@ -712,8 +762,8 @@ func TestConnectorURLsAndHeaders(t *testing.T) {
 	}, headers)
 }
 
-// list_organizations lists a parent's organizations, or every parent's, as
-// the caller; a refusal names the role.
+// list_organizations lists a parent's organizations, or every parent's; a
+// ServiceAccount that may not list them answers unsupported.
 func TestListOrganizations(t *testing.T) {
 	other := organization("org-other", "billing", nil)
 	f := newOrgFixture(t, organization("org-acme", "payments", nil), other)
@@ -736,8 +786,7 @@ func TestListOrganizations(t *testing.T) {
 	})
 	text, isErr = f.call(t, ToolListOrganizations, map[string]any{"namespace": "org-acme"})
 	require.True(t, isErr)
-	assert.True(t, strings.HasPrefix(text, "forbidden:"), text)
-	assert.Contains(t, text, organizations.RoleOrganizationsAdmin)
+	assert.True(t, strings.HasPrefix(text, "unsupported:"), text)
 }
 
 // get_organization answers what a delete erases as far as the caller can
@@ -820,4 +869,121 @@ func TestDeleteOrganizationObject(t *testing.T) {
 	require.True(t, isErr)
 	assert.True(t, strings.HasPrefix(text, "conflict:"), text)
 	assert.NotNil(t, f.get(t, connGVR, orgNS, "muster"))
+}
+
+// parentBinding writes rb into the parent org-acme, as its admins did before
+// the create.
+func (f *orgFixture) parentBinding(t *testing.T, rb rbacv1.RoleBinding) {
+	t.Helper()
+	rb.Namespace = "org-acme"
+	obj, err := runtime.DefaultUnstructuredConverter.ToUnstructured(&rb)
+	require.NoError(t, err)
+	u := &unstructured.Unstructured{Object: obj}
+	u.SetAPIVersion("rbac.authorization.k8s.io/v1")
+	u.SetKind("RoleBinding")
+	_, err = f.dyn.Resource(rbGVR).Namespace("org-acme").Create(t.Context(), u, metav1.CreateOptions{})
+	require.NoError(t, err)
+}
+
+// callerNamed is who the API server authenticates as the subject s of a
+// RoleBinding.
+func callerNamed(s rbacv1.Subject) authenticationv1.UserInfo {
+	switch s.Kind {
+	case rbacv1.GroupKind:
+		return authenticationv1.UserInfo{Username: "carol@example.com", Groups: []string{s.Name}}
+	case rbacv1.ServiceAccountKind:
+		return authenticationv1.UserInfo{Username: "system:serviceaccount:" + s.Namespace + ":" + s.Name}
+	}
+	return authenticationv1.UserInfo{Username: s.Name}
+}
+
+// A caller without a right cluster-wide whose right in the parent comes from
+// a binding agent-platform-operator does not mirror for them is refused
+// before anything is written, dry run or not; one the operator mirrors goes
+// on and binds the first admins. The bindings and their mirrored subjects are
+// the operator's own table, so the two cannot drift: a binding counts when
+// Case.Mirrors (a binding being deleted does not), and then its mirror binds
+// Case.Mirrored.
+func TestCreateOrganizationRefusesBeforeTheWriteWhenTheParentRightIsNotMirrored(t *testing.T) {
+	for _, c := range adminmirror.Cases() {
+		for _, subject := range c.Binding.Subjects {
+			mirrored := c.Mirrors && slices.ContainsFunc(c.Mirrored, func(m rbacv1.Subject) bool { return m.Kind == subject.Kind && m.Name == subject.Name })
+			for _, dryRun := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s/%s %s/dryRun=%t", c.Binding.Name, subject.Kind, path.Join(subject.Namespace, subject.Name), dryRun), func(t *testing.T) {
+					f := newOrgFixture(t)
+					f.deny = func(ns, _, _, _ string) bool { return ns == "" }
+					f.user = callerNamed(subject)
+					f.parentBinding(t, c.Binding)
+					text, isErr := f.call(t, ToolCreateOrganization, map[string]any{"namespace": "org-acme", "name": "payments", "adminGroups": []any{"payments-leads"}, "dryRun": dryRun})
+
+					if mirrored {
+						require.False(t, isErr, text)
+						assert.Equal(t, true, decode(t, text)["created"], text)
+						assert.Equal(t, !dryRun, f.get(t, rbGVR, orgNS, organizations.FirstAdminsBinding) != nil, "the first admins are bound unless it is a dry run")
+						return
+					}
+					require.True(t, isErr, text)
+					assert.True(t, strings.HasPrefix(text, "forbidden:"), text)
+					assert.Contains(t, text, c.Binding.Name+" (", "the refusal names the binding")
+					if c.IsMirroredAdmin && !c.Mirrors {
+						assert.Contains(t, text, "; it is being deleted, so the operator will not mirror it)", "the refusal says the binding is being deleted")
+					}
+					if strings.HasPrefix(f.user.Username, "system:") {
+						assert.Contains(t, text, "a cluster-admin creates the organization, or binds the right to you cluster-wide", "a system: name is never mirrored")
+					} else {
+						assert.Contains(t, text, "binds "+organizations.RoleOrganizationsAdmin+" to you", "the first way out")
+						assert.Contains(t, text, "or a cluster-admin creates the organization", "the second way out")
+					}
+					assert.Nil(t, f.get(t, orgGVR, "org-acme", "payments"))
+					assert.Empty(t, f.dryRuns.Received(), "not even a dry run is sent")
+				})
+			}
+		}
+	}
+}
+
+// The check beyond the operator's table: a caller whose bindings cannot be
+// read goes on, and the access review in the organization namespace after
+// Ready answers pending when the right has not reached it; a caller with only
+// half the right cluster-wide, and no parent binding, is refused.
+func TestCreateOrganizationGoesOnUnreadCallersAndRefusesHalfARight(t *testing.T) {
+	forbidden := func(a k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewForbidden(a.GetResource().GroupResource(), "", errors.New("RBAC: access denied"))
+	}
+	for _, tc := range []struct {
+		name    string
+		deny    func(ns, verb, resource, name string) bool
+		prepare func(f *orgFixture)
+		refused string
+	}{{
+		name:    "may not list the parent's RoleBindings",
+		deny:    func(ns, _, _, _ string) bool { return ns == "" || ns == orgNS },
+		prepare: func(f *orgFixture) { f.dyn.PrependReactor("list", "rolebindings", forbidden) },
+	}, {
+		name:    "may not ask who it is",
+		deny:    func(ns, _, _, _ string) bool { return ns == "" || ns == orgNS },
+		prepare: func(f *orgFixture) { f.typed.PrependReactor("create", "selfsubjectreviews", forbidden) },
+	}, {
+		name:    "may create RoleBindings cluster-wide but not bind the role",
+		deny:    func(ns, verb, _, _ string) bool { return ns == "" && verb == "bind" },
+		prepare: func(*orgFixture) {},
+		refused: "No RoleBinding in org-acme that agent-platform-operator mirrors names you",
+	}} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newOrgFixture(t)
+			f.deny = tc.deny
+			tc.prepare(f)
+			text, isErr := f.call(t, ToolCreateOrganization, map[string]any{"namespace": "org-acme", "name": "payments", "adminGroups": []any{"payments-leads"}})
+			if tc.refused != "" {
+				require.True(t, isErr, text)
+				assert.True(t, strings.HasPrefix(text, "forbidden:"), text)
+				assert.Contains(t, text, tc.refused)
+				assert.Nil(t, f.get(t, orgGVR, "org-acme", "payments"))
+				return
+			}
+			require.False(t, isErr, text)
+			assert.Contains(t, decode(t, text)["pending"], "first admins are not bound")
+			assert.NotNil(t, f.get(t, orgGVR, "org-acme", "payments"))
+		})
+	}
 }

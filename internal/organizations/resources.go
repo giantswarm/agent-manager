@@ -225,7 +225,15 @@ func (s *Service) SetModel(ctx context.Context, req ModelRequest) (*ResourceResu
 	case len(marks) > 1:
 		res.Note = fmt.Sprintf("the namespace has %d models marked as its default (%s), so it has none: set_organization_model with default true on one of them", len(marks), strings.Join(marks, ", "))
 	}
-	res.Credentials = []Credential{s.credential(ctx, c, org, "ModelConfig", req.Name, secret, key, req.ReplaceCredential)}
+	cred, err := s.credential(ctx, c, org, "ModelConfig", req.Name, secret, key, req.ReplaceCredential)
+	if err != nil {
+		return nil, err
+	}
+	if cred.State == CredentialPresent && modelKeyNotFound(find(items, req.Name), secret, key) {
+		cred.State = CredentialMissing
+		cred.Next = s.next(cred, "ModelConfig", req.Name)
+	}
+	res.Credentials = []Credential{cred}
 	if err = s.landResource(ctx, w, writes, res, req.ReplaceCredential, "model-"+req.Name, "chore(organizations): set model "+req.Name); err != nil {
 		return nil, err
 	}
@@ -444,7 +452,11 @@ func (s *Service) SetConnector(ctx context.Context, req ConnectorRequest) (*Reso
 			continue
 		}
 		seenCredentials[pair] = true
-		res.Credentials = append(res.Credentials, s.credential(ctx, c, org, "RemoteMCPServer", req.Name, cc.Secret, cc.Key, req.ReplaceCredential))
+		cred, err := s.credential(ctx, c, org, "RemoteMCPServer", req.Name, cc.Secret, cc.Key, req.ReplaceCredential)
+		if err != nil {
+			return nil, err
+		}
+		res.Credentials = append(res.Credentials, cred)
 	}
 	if err = s.landResource(ctx, w, []write{wr}, res, req.ReplaceCredential, "connector-"+req.Name, "chore(organizations): set connector "+req.Name); err != nil {
 		return nil, err
@@ -574,7 +586,11 @@ func (s *Service) SetEgressPolicy(ctx context.Context, req EgressRequest) (*Reso
 			continue
 		}
 		seen[d.CredentialSecret+"/"+d.CredentialKey] = true
-		res.Credentials = append(res.Credentials, s.credential(ctx, c, org, "EgressPolicy", req.Name, d.CredentialSecret, d.CredentialKey, req.ReplaceCredential))
+		cred, err := s.credential(ctx, c, org, "EgressPolicy", req.Name, d.CredentialSecret, d.CredentialKey, req.ReplaceCredential)
+		if err != nil {
+			return nil, err
+		}
+		res.Credentials = append(res.Credentials, cred)
 	}
 	if err = s.landResource(ctx, w, []write{wr}, res, req.ReplaceCredential, "egress-"+req.Name, "chore(organizations): set egress policy "+req.Name); err != nil {
 		return nil, err

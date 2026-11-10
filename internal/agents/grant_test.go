@@ -193,7 +193,7 @@ func TestStartSessionReturnsTheAdmissionsRefusal(t *testing.T) {
 	require.ErrorIs(t, err, ErrForbidden)
 	assert.Contains(t, err.Error(), "admission grant names another volume")
 	assert.NotContains(t, err.Error(), grant)
-	list, err := svc.ListSessions(ctx, "", "sre", false)
+	list, err := svc.ListSessions(ctx, "", "sre", false, "")
 	require.NoError(t, err)
 	assert.Empty(t, list.Sessions, "a refused admission created no session")
 }
@@ -209,7 +209,7 @@ func TestStartSessionWithAGrantTwiceIsOneSession(t *testing.T) {
 	again, err := svc.StartSession(ctx, in)
 	require.NoError(t, err)
 	assert.JSONEq(t, string(first.Session), string(again.Session), "the same request id answers the same session")
-	list, err := svc.ListSessions(ctx, "", "sre", false)
+	list, err := svc.ListSessions(ctx, "", "sre", false, "")
 	require.NoError(t, err)
 	assert.Len(t, list.Sessions, 1)
 	reqs := createRequests(ctrl)

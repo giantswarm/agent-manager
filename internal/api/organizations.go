@@ -25,7 +25,6 @@ const (
 	ToolCreateOrganization        = "create_organization"
 	ToolUpdateOrganization        = "update_organization"
 	ToolDeleteOrganization        = "delete_organization"
-	ToolListMyOrganizations       = "list_my_organizations"
 	ToolListOrganizationMembers   = "list_organization_members"
 	ToolAddOrganizationMember     = "add_organization_member"
 	ToolRemoveOrganizationMember  = "remove_organization_member"
@@ -46,7 +45,7 @@ const (
 func OrganizationToolNames() []string {
 	return []string{
 		ToolListOrganizations, ToolGetOrganization, ToolCreateOrganization, ToolUpdateOrganization, ToolDeleteOrganization,
-		ToolListMyOrganizations, ToolListOrganizationMembers, ToolAddOrganizationMember, ToolRemoveOrganizationMember,
+		ToolListOrganizationMembers, ToolAddOrganizationMember, ToolRemoveOrganizationMember,
 		ToolSetOrganizationModel, ToolListOrganizationConnector, ToolSetOrganizationConnector, ToolSetOrganizationEgress,
 		ToolDeleteOrganizationObject,
 	}
@@ -142,7 +141,7 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service, l
 	t := &orgTools{svc: orgs, server: s, lifecycle: lifecycle}
 	parentProp := mcp.WithString(argNamespace, mcp.Required(), mcp.Description("The parent namespace the organization lives in, e.g. org-acme"))
 	orgNameProp := mcp.WithString(argName, mcp.Required(), mcp.Description("The organization's name (at most 50 characters, no dot)"))
-	orgNSProp := mcp.WithString(argNamespace, mcp.Required(), mcp.Description("The organization namespace, e.g. agents-payments-x7k2q (list_my_organizations, get_organization)"))
+	orgNSProp := mcp.WithString(argNamespace, mcp.Required(), mcp.Description("The organization namespace, e.g. agents-payments-x7k2q (list_organizations, get_organization)"))
 	dryRun := mcp.WithBoolean(argDryRun, mcp.Description("Check every write with the API server as you and write nothing (default false)"))
 	modeProp := mcp.WithString(argMode, mcp.Enum(agents.ModeApply, agents.ModeCommit), mcp.Description("apply (default): write live as you; refused with gitops_owned for what git applies. commit: dry-run as you, then open a pull request as you"))
 	replaceCred := mcp.WithBoolean(argReplaceCredential, mcp.Description("Answer with a URL elicitation of the credential UI to enter a new value (default false)"))
@@ -151,21 +150,20 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service, l
 	credSecretDesc := "Secret in the organization namespace that holds the credential, by name (tenant-credential-...); never a value"
 
 	s.AddTool(mcp.NewTool(ToolListOrganizations,
-		tooldesc.Describe("List the Agent Platform organizations (AgentPlatformOrganizations) of a parent namespace, or of all, as you.",
-			"Each with its organization namespace, harnesses, worker replicas and the operator's Ready, DefaultModelConfigured and Orphaned conditions. Needs agent-platform:organizations-admin; omit namespace only when it is bound to you cluster-wide."),
+		tooldesc.Describe("List the organizations you manage or belong to, of one parent namespace or of all.",
+			"Each with its organization namespace, Orphaned condition, deleting, and permissions (manage, member), asked with your own token; a New agent goes where member is true. Where you manage it, organization is its summary: harnesses, workers, Ready, DefaultModelConfigured, the last revision Flux applied (lastAppliedRevision) and in mode commit its commit and the organization's file (lastAppliedRevisionUrl, lastAppliedFile, lastAppliedFileUrl). none says who can add you when there is none."),
 		mcp.WithString(argNamespace, mcp.Description("Parent namespace; omit for all")),
 		mcp.WithReadOnlyHintAnnotation(true),
 		mcp.WithDestructiveHintAnnotation(false),
 		mcp.WithIdempotentHintAnnotation(false),
 		mcp.WithOpenWorldHintAnnotation(false),
 	), t.run(func(ctx context.Context, req mcp.CallToolRequest) (any, error) {
-		list, err := t.svc.List(ctx, req.GetString(argNamespace, ""))
-		return map[string]any{"organizations": list}, err
+		return t.svc.List(ctx, req.GetString(argNamespace, ""))
 	}))
 
 	s.AddTool(mcp.NewTool(ToolGetOrganization,
 		tooldesc.Describe("Read one organization and what deleting it would erase.",
-			"erases lists, as you can read them in the organization namespace, its agents, HelmReleases, models, connectors, egress policies, credential Secrets (names only), member bindings and snapshot prefix; what you may not read is named in unreadable."),
+			"erases lists, as you can read them in the organization namespace, its agents, HelmReleases, models, connectors, egress policies, credential Secrets (names only), member bindings and snapshot prefix; what you may not read is named in unreadable. sessions counts, per agent and across every person, the running and stopped sessions the erase deletes; when they cannot be listed it is null and sessionsUnavailable says why."),
 		parentProp, orgNameProp,
 		mcp.WithReadOnlyHintAnnotation(true),
 		mcp.WithDestructiveHintAnnotation(false),
@@ -177,7 +175,7 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service, l
 
 	s.AddTool(mcp.NewTool(ToolCreateOrganization,
 		tooldesc.Describe("Create an organization as you, then bind its first admins in its namespace.",
-			"Asks first whether you may bind them and dry-runs the object, so a refusal comes before anything exists. Waits for the operator's Ready (it creates the namespace), then writes the RoleBinding organization-admins to agent-platform:admin as you. Not Ready in time: call again with the same arguments. mode commit opens one pull request with the object and organization-admins instead. Offer an identity provider group as admin before a person. Needs agent-platform:organizations-admin in the parent namespace."),
+			"Before any write, dry run too, refuses when you may not bind them or your right will not reach the new namespace (it does cluster-wide, or by a parent RoleBinding naming you that the operator mirrors: organizations-admin, or rbac-operator's cluster-admin). Waits for Ready, then writes organization-admins to agent-platform:admin as you. pending: call again with the same arguments. mode commit opens one pull request instead. Prefer a group as admin. Needs agent-platform:organizations-admin in the parent namespace."),
 		parentProp, orgNameProp,
 		mcp.WithString(argDisplayName, mcp.Description("Name people see")),
 		mcp.WithArray(argAdminGroups, mcp.Description("First admins: identity provider groups, as the API server sees them (preferred)"), mcp.Items(stringList)),
@@ -252,17 +250,6 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service, l
 			Confirm: req.GetString(argConfirm, ""), DryRun: req.GetBool(argDryRun, false), Mode: req.GetString(argMode, "")})
 	}))
 
-	s.AddTool(mcp.NewTool(ToolListMyOrganizations,
-		tooldesc.Describe("List the organizations you belong to: the namespaces a New agent can go into.",
-			"An organization namespace is listed when you may list its Agents, which every organization role grants, asked with your own token. none says who can add you when there is none."),
-		mcp.WithReadOnlyHintAnnotation(true),
-		mcp.WithDestructiveHintAnnotation(false),
-		mcp.WithIdempotentHintAnnotation(false),
-		mcp.WithOpenWorldHintAnnotation(false),
-	), t.run(func(ctx context.Context, _ mcp.CallToolRequest) (any, error) {
-		return t.svc.ListMine(ctx)
-	}))
-
 	s.AddTool(mcp.NewTool(ToolListOrganizationMembers,
 		tooldesc.Describe("List an organization's members: the groups and people bound to agent-platform:admin, editor or user, groups first.",
 			"Read as you; every member may read them."),
@@ -320,6 +307,7 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service, l
 		mcp.WithString(argCredentialKey, mcp.Description("Key of that Secret; default apiKey")),
 		mcp.WithBoolean(argDefault, mcp.Description("Make this the organization's default model, moving the mark (default false)")),
 		replaceCred, credentialRequestID, dryRun, modeProp,
+		mcp.WithOutputSchema[organizations.ResourceResult](),
 		mcp.WithReadOnlyHintAnnotation(false),
 		mcp.WithDestructiveHintAnnotation(true),
 		mcp.WithIdempotentHintAnnotation(true),
@@ -368,6 +356,7 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service, l
 		mcp.WithString(argCredentialKey, mcp.Description("Key of that Secret; default token")),
 		mcp.WithBoolean(argNoCredential, mcp.Description("Remove the credential header (default false)")),
 		replaceCred, credentialRequestID, dryRun, modeProp,
+		mcp.WithOutputSchema[organizations.ResourceResult](),
 		mcp.WithReadOnlyHintAnnotation(false),
 		mcp.WithDestructiveHintAnnotation(true),
 		mcp.WithIdempotentHintAnnotation(true),
@@ -409,6 +398,7 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service, l
 			"required": []string{"origin"},
 		})),
 		replaceCred, credentialRequestID, dryRun, modeProp,
+		mcp.WithOutputSchema[organizations.ResourceResult](),
 		mcp.WithReadOnlyHintAnnotation(false),
 		mcp.WithDestructiveHintAnnotation(true),
 		mcp.WithIdempotentHintAnnotation(true),

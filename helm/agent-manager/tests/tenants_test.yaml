@@ -59,7 +59,7 @@ tests:
       - failedTemplate:
           errorPattern: flux.helmReleaseServiceAccount is required with tenants.enabled
 
-  - it: gives the ServiceAccount a read of namespaces and nothing more
+  - it: gives the ServiceAccount a read of namespaces and organizations and nothing more
     template: templates/tenants-rbac.yaml
     documentIndex: 0
     asserts:
@@ -70,6 +70,9 @@ tests:
           value:
             - apiGroups: [""]
               resources: ["namespaces"]
+              verbs: ["get", "list"]
+            - apiGroups: ["agent-platform.giantswarm.io"]
+              resources: ["agentplatformorganizations"]
               verbs: ["get", "list"]
 
   - it: binds the namespace read to the ServiceAccount

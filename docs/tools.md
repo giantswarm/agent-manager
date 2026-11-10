@@ -20,7 +20,6 @@ Generated from the registered tools (`make tools-doc`); through muster every too
 | `list_agents` | read-only |
 | `list_egress_policies` | read-only |
 | `list_model_configs` | read-only |
-| `list_my_organizations` | read-only |
 | `list_organization_connectors` | read-only |
 | `list_organization_members` | read-only |
 | `list_organizations` | read-only |
@@ -64,7 +63,7 @@ Writes the RoleBinding organization-<role>s (admins: organization-admins), dry r
       "type": "string"
     },
     "namespace": {
-      "description": "The organization namespace, e.g. agents-payments-x7k2q (list_my_organizations, get_organization)",
+      "description": "The organization namespace, e.g. agents-payments-x7k2q (list_organizations, get_organization)",
       "type": "string"
     },
     "role": {
@@ -322,7 +321,7 @@ name is the DNS-1123 name the person chose, never derived from displayName. mode
 ```text
 Create an organization as you, then bind its first admins in its namespace.
 
-Asks first whether you may bind them and dry-runs the object, so a refusal comes before anything exists. Waits for the operator's Ready (it creates the namespace), then writes the RoleBinding organization-admins to agent-platform:admin as you. Not Ready in time: call again with the same arguments. mode commit opens one pull request with the object and organization-admins instead. Offer an identity provider group as admin before a person. Needs agent-platform:organizations-admin in the parent namespace.
+Before any write, dry run too, refuses when you may not bind them or your right will not reach the new namespace (it does cluster-wide, or by a parent RoleBinding naming you that the operator mirrors: organizations-admin, or rbac-operator's cluster-admin). Waits for Ready, then writes organization-admins to agent-platform:admin as you. pending: call again with the same arguments. mode commit opens one pull request instead. Prefer a group as admin. Needs agent-platform:organizations-admin in the parent namespace.
 ```
 
 ```json
@@ -529,7 +528,7 @@ Dry run first. Its credential Secret stays. Deleting the default model leaves th
       "type": "string"
     },
     "namespace": {
-      "description": "The organization namespace, e.g. agents-payments-x7k2q (list_my_organizations, get_organization)",
+      "description": "The organization namespace, e.g. agents-payments-x7k2q (list_organizations, get_organization)",
       "type": "string"
     }
   },
@@ -654,7 +653,7 @@ Call it first: capabilities says whether this installation offers mode commit, t
 ```text
 Read one organization and what deleting it would erase.
 
-erases lists, as you can read them in the organization namespace, its agents, HelmReleases, models, connectors, egress policies, credential Secrets (names only), member bindings and snapshot prefix; what you may not read is named in unreadable.
+erases lists, as you can read them in the organization namespace, its agents, HelmReleases, models, connectors, egress policies, credential Secrets (names only), member bindings and snapshot prefix; what you may not read is named in unreadable. sessions counts, per agent and across every person, the running and stopped sessions the erase deletes; when they cannot be listed it is null and sessionsUnavailable says why.
 ```
 
 ```json
@@ -862,22 +861,6 @@ Each with provider, model, its Accepted and ResolvedRefs conditions, who manages
 }
 ```
 
-## `list_my_organizations`
-
-```text
-List the organizations you belong to: the namespaces a New agent can go into.
-
-An organization namespace is listed when you may list its Agents, which every organization role grants, asked with your own token. none says who can add you when there is none.
-```
-
-```json
-{
-  "properties": {},
-  "required": [],
-  "type": "object"
-}
-```
-
 ## `list_organization_connectors`
 
 ```text
@@ -890,7 +873,7 @@ Read as you. A credential in a URL written elsewhere is shown as REDACTED. curat
 {
   "properties": {
     "namespace": {
-      "description": "The organization namespace, e.g. agents-payments-x7k2q (list_my_organizations, get_organization)",
+      "description": "The organization namespace, e.g. agents-payments-x7k2q (list_organizations, get_organization)",
       "type": "string"
     }
   },
@@ -913,7 +896,7 @@ Read as you; every member may read them.
 {
   "properties": {
     "namespace": {
-      "description": "The organization namespace, e.g. agents-payments-x7k2q (list_my_organizations, get_organization)",
+      "description": "The organization namespace, e.g. agents-payments-x7k2q (list_organizations, get_organization)",
       "type": "string"
     }
   },
@@ -927,9 +910,9 @@ Read as you; every member may read them.
 ## `list_organizations`
 
 ```text
-List the Agent Platform organizations (AgentPlatformOrganizations) of a parent namespace, or of all, as you.
+List the organizations you manage or belong to, of one parent namespace or of all.
 
-Each with its organization namespace, harnesses, worker replicas and the operator's Ready, DefaultModelConfigured and Orphaned conditions. Needs agent-platform:organizations-admin; omit namespace only when it is bound to you cluster-wide.
+Each with its organization namespace, Orphaned condition, deleting, and permissions (manage, member), asked with your own token; a New agent goes where member is true. Where you manage it, organization is its summary: harnesses, workers, Ready, DefaultModelConfigured, the last revision Flux applied (lastAppliedRevision) and in mode commit its commit and the organization's file (lastAppliedRevisionUrl, lastAppliedFile, lastAppliedFileUrl). none says who can add you when there is none.
 ```
 
 ```json
@@ -950,7 +933,7 @@ Each with its organization namespace, harnesses, worker replicas and the operato
 ```text
 List your conversations with one agent: id, name, state, failure and timestamps.
 
-Read through agentgateway as you. allCreators includes every person's sessions, when the controller authorizes you for it.
+Read through agentgateway as you. allCreators includes every person's sessions, when the controller authorizes you for it. At most 2000 sessions are answered at a time; nextPageToken says more follow: list again with it as pageToken.
 ```
 
 ```json
@@ -966,6 +949,11 @@ Read through agentgateway as you. allCreators includes every person's sessions, 
     },
     "namespace": {
       "description": "Namespace of the agent; default: the installation's kagent namespace (get_info lists the managed ones).",
+      "type": "string"
+    },
+    "pageToken": {
+      "description": "nextPageToken of the previous answer, with the same name, namespace and allCreators; empty lists from the start",
+      "maxLength": 512,
       "type": "string"
     }
   },
@@ -1040,7 +1028,7 @@ From every binding of the role that holds them, dry run first; an emptied bindin
       "type": "string"
     },
     "namespace": {
-      "description": "The organization namespace, e.g. agents-payments-x7k2q (list_my_organizations, get_organization)",
+      "description": "The organization namespace, e.g. agents-payments-x7k2q (list_organizations, get_organization)",
       "type": "string"
     },
     "role": {
@@ -1108,7 +1096,7 @@ A credential field sets the Secret-backed header it names (default: the only one
       "type": "string"
     },
     "namespace": {
-      "description": "The organization namespace, e.g. agents-payments-x7k2q (list_my_organizations, get_organization)",
+      "description": "The organization namespace, e.g. agents-payments-x7k2q (list_organizations, get_organization)",
       "type": "string"
     },
     "noCredential": {
@@ -1196,7 +1184,7 @@ destinations replaces the whole list. A credentialHeader makes the egress gatewa
       "type": "string"
     },
     "namespace": {
-      "description": "The organization namespace, e.g. agents-payments-x7k2q (list_my_organizations, get_organization)",
+      "description": "The organization namespace, e.g. agents-payments-x7k2q (list_organizations, get_organization)",
       "type": "string"
     },
     "replaceCredential": {
@@ -1261,7 +1249,7 @@ The first model of an organization without a default becomes its default (annota
       "type": "string"
     },
     "namespace": {
-      "description": "The organization namespace, e.g. agents-payments-x7k2q (list_my_organizations, get_organization)",
+      "description": "The organization namespace, e.g. agents-payments-x7k2q (list_organizations, get_organization)",
       "type": "string"
     },
     "provider": {

@@ -336,6 +336,16 @@ func runServe(ctx context.Context, o *serveOptions) error {
 		OCIRepositoryInterval: o.ociRepositoryInterval, OCIRepositoryAPIVersion: ociRepositoryAPI}
 	migrate.ConvergeSources(ctx, clients.Dynamic(), agents.ManagedNamespaces(o.kagentNamespace, splitList(o.managedNamespaces)), sourceCompose, log)
 
+	var sessions agents.SessionClient
+	if o.kagentTarget != "" {
+		client, err := kagent.Dial(o.kagentTarget)
+		if err != nil {
+			return fmt.Errorf("--kagent-target: %w", err)
+		}
+		defer func() { _ = client.Close() }()
+		sessions = client
+	}
+
 	// The organization namespaces, found by label with the ServiceAccount's
 	// read of namespaces: the one thing besides discovery the ServiceAccount
 	// reads for a request. What the caller may do there is asked as the
@@ -365,7 +375,7 @@ func runServe(ctx context.Context, o *serveOptions) error {
 			credentialOperations = organizations.NewCredentialOperations(clients.Typed().CoreV1().ConfigMaps(o.credentialOperationsNamespace))
 			go credentialOperations.Expire(ctx)
 		}
-		orgNamespaces = organizations.NewNamespaces(clients.Typed(), o.kagentNamespace)
+		orgNamespaces = organizations.NewNamespaces(clients.Typed(), clients.Dynamic(), o.kagentNamespace)
 		orgs = organizations.New(provider, organizations.Config{
 			Namespaces:            orgNamespaces,
 			KagentAPIVersion:      kagentVersion,
@@ -373,20 +383,12 @@ func runServe(ctx context.Context, o *serveOptions) error {
 			Commit:                orgsCommit,
 			CredentialUIURL:       o.credentialUIURL,
 			CredentialOperations:  credentialOperations,
+			Sessions:              sessions,
 		}, log)
 	} else if o.orgsRepository != "" {
 		return fmt.Errorf("--organizations-repository needs --multi-tenant: it is where the organization tools commit")
 	}
 
-	var sessions agents.SessionClient
-	if o.kagentTarget != "" {
-		client, err := kagent.Dial(o.kagentTarget)
-		if err != nil {
-			return fmt.Errorf("--kagent-target: %w", err)
-		}
-		defer func() { _ = client.Close() }()
-		sessions = client
-	}
 	var bindings agents.SessionBinder
 	if o.musterBindingsURL != "" {
 		client, err := muster.New(o.musterBindingsURL, nil)

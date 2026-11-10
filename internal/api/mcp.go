@@ -19,6 +19,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/giantswarm/agent-manager/internal/agents"
+	"github.com/giantswarm/agent-manager/internal/kagent"
 	"github.com/giantswarm/agent-manager/internal/tags"
 )
 
@@ -91,6 +92,7 @@ const (
 	argBranch         = "branch"
 	argPath           = "path"
 	argAllCreators    = "allCreators"
+	argPageToken      = "pageToken"
 	argSessionID      = "sessionId"
 	argMessage        = "message"
 	argRequestID      = "requestId"
@@ -161,7 +163,7 @@ func NewMCPServer(svc *agents.Service, version string, opts ...Option) *mcpserve
 		mcpotel.WithServerTracingPropagator(otel.Tracer(tracerName), propagation.NewCompositeTextMapPropagator()),
 		brand.WithGiantSwarmIcon(),
 		mcpserver.WithToolCapabilities(false),
-		mcpserver.WithInstructions("Manage the agents of the Agent Platform. An agent is a Flux HelmRelease of the Generic agent chart, which renders a kagent Agent, its Harness reference and the agent's muster RemoteMCPServer carrying its toolset. Call get_info first, and list_model_configs and list_skills before create_agent. Names are DNS-1123 labels the person chooses and confirms. Every agent needs a toolset. create_agent, update_agent and delete_agent take dryRun and mode: apply writes live as you, commit opens a pull request as you in the repository that owns the namespace. organization and cluster (both or neither) place an agent on a workload cluster and address it in every later call of a tool that takes them. Talk to an agent with start_session and get_session. Organizations: list_my_organizations lists the organization namespaces you can create agents in; the *_organization* tools manage organizations, their members, models, connectors and egress policies as you, and never take a secret value."),
+		mcpserver.WithInstructions("Manage the agents of the Agent Platform. An agent is a Flux HelmRelease of the Generic agent chart, which renders a kagent Agent, its Harness reference and the agent's muster RemoteMCPServer carrying its toolset. Call get_info first, and list_model_configs and list_skills before create_agent. Names are DNS-1123 labels the person chooses and confirms. Every agent needs a toolset. create_agent, update_agent and delete_agent take dryRun and mode: apply writes live as you, commit opens a pull request as you in the repository that owns the namespace. organization and cluster (both or neither) place an agent on a workload cluster and address it in every later call of a tool that takes them. Talk to an agent with start_session and get_session. Organizations: list_organizations lists the organizations you manage or belong to; the *_organization* tools manage organizations, their members, models, connectors and egress policies as you, and never take a secret value."),
 	)
 	t := &tools{svc: svc}
 
@@ -454,10 +456,11 @@ func NewMCPServer(svc *agents.Service, version string, opts ...Option) *mcpserve
 
 	s.AddTool(mcp.NewTool(ToolListSessions,
 		tooldesc.Describe("List your conversations with one agent: id, name, state, failure and timestamps.",
-			"Read through agentgateway as you. allCreators includes every person's sessions, when the controller authorizes you for it."),
+			fmt.Sprintf("Read through agentgateway as you. allCreators includes every person's sessions, when the controller authorizes you for it. At most %d sessions are answered at a time; nextPageToken says more follow: list again with it as pageToken.", kagent.MaxListedSessions)),
 		mcp.WithString(argName, mcp.Required(), mcp.Description("Agent name")),
 		nsProp,
 		mcp.WithBoolean(argAllCreators, mcp.Description("Include every person's sessions of the agent, when the controller authorizes the caller for it (default false)")),
+		mcp.WithString(argPageToken, mcp.MaxLength(agents.MaxPageTokenLength), mcp.Description("nextPageToken of the previous answer, with the same name, namespace and allCreators; empty lists from the start")),
 		mcp.WithReadOnlyHintAnnotation(true),
 		mcp.WithDestructiveHintAnnotation(false),
 		mcp.WithIdempotentHintAnnotation(false),
@@ -721,7 +724,7 @@ func (t *tools) listSessions(ctx context.Context, req mcp.CallToolRequest) (*mcp
 	if err != nil {
 		return errResult(fmt.Errorf("%w: %v", agents.ErrInvalid, err)), nil
 	}
-	res, err := t.svc.ListSessions(ctx, req.GetString(argNamespace, ""), name, req.GetBool(argAllCreators, false))
+	res, err := t.svc.ListSessions(ctx, req.GetString(argNamespace, ""), name, req.GetBool(argAllCreators, false), req.GetString(argPageToken, ""))
 	if err != nil {
 		return errResult(err), nil
 	}

@@ -56,7 +56,7 @@ MCP-server-writer half.
 | kagent ModelConfigs of a namespace, with the namespace default (`default`) and their `accepted` and `resolvedRefs` conditions | `GET /api/v1/modelconfigs?namespace=` | `list_model_configs` | no |
 | kagent EgressPolicies of a namespace, read as the caller: each origin and its credential header's name, never the Secret | `GET /api/v1/egresspolicies?namespace=` | `list_egress_policies` | no |
 | Skills (`SKILL.md`) of the configured GitHub repositories, grouped by repository with its head commit, tags from `metadata.tags`; `tags` keeps those with any of them | `GET /api/v1/skills[?repository=&ref=&refresh=&tags=]` | `list_skills` | no |
-| Sessions of an agent, as the caller (`SessionService/ListSessions`; `allCreators` when the controller grants it) | `GET /api/v1/agents/{ns}/{name}/sessions[?allCreators=true]` | `list_sessions` | no |
+| Sessions of an agent, as the caller (`SessionService/ListSessions`; `allCreators` when the controller grants it) | `GET /api/v1/agents/{ns}/{name}/sessions[?allCreators=true][&pageToken=…]` | `list_sessions` | no |
 | Start a session: create it (in a workspace with `workspaceGrant`), send the first message when one is given and answer once the turn is accepted; without `message` only create it | `POST /api/v1/agents/{ns}/{name}/sessions` | `start_session` | a kagent Session |
 | One session and its conversation, one turn per A2A task of its context, oldest first, within `maxBytes`: a summary per turn by default, a transcript or the raw tasks on request | `GET /api/v1/sessions/{id}[?detail=&lastTurns=&maxBytes=]` | `get_session` | no |
 | One turn of a session: its messages, paged within `maxBytes`, or one tool call whole | `GET /api/v1/sessions/{id}/turns/{turn}[?detail=&toolCall=&fromMessage=&maxBytes=]` | `get_session_turn` | no |
@@ -522,9 +522,9 @@ client, a portal session forwards the id_token of the portal's own client —
 and every forwarded token carries the audiences the MCPServer requires, the
 ones the kube-apiserver trusts. So the chart trusts both: `oauth.trustedAudiences`
 (default `[global.identity.clientId]`) plus `muster.mcpServer.auth.requiredAudiences`,
-always. A token for none of them is refused with `401`; the log line and the
-`WWW-Authenticate` description name its `aud` next to the trusted audiences
-(muster shows the description in its session hint). The caller
+always. A token for none of them is refused with `401`; the
+`Unknown JWT bearer refused` log line names its `token_audience` next to the
+`trusted_audiences`. The caller
 (`internal/identity`: subject, email, groups, source `sso|oauth`) is on every
 write's log line (`caller=`) and on every create/update/delete result as
 `requestedBy`.
@@ -599,17 +599,30 @@ Everything else runs as the caller, which needs `--downstream-oauth`.
 
 The organization tools (every name holds `organization`):
 
-- for an `agent-platform:organizations-admin`: `list_organizations`,
+- for an `agent-platform:organizations-admin`:
   `get_organization` (with what a delete erases), `create_organization`,
   `update_organization` and `delete_organization`. A create asks first, with
   SelfSubjectAccessReviews as the caller, whether the caller may create the
-  object and bind `agent-platform:admin` in the parent (the operator mirrors
-  the parent's organizations-admin bindings into the new namespace), dry-runs
-  the object, writes it, waits for the operator's `Ready`, then writes the
-  first admins as the RoleBinding `organization-admins`. An organization that
-  is not Ready in time keeps its first admins for a second call with the same
-  arguments. A delete answers what it erases until the caller passes
-  `confirm: <parent>/<name>`, then marks the object
+  object and bind `agent-platform:admin` in the parent, then whether that
+  right will reach the new namespace: it does when the caller may bind there
+  cluster-wide, or when a RoleBinding in the parent that the operator mirrors
+  now (`adminmirror.Mirrors` of agent-platform-operator: one to
+  `agent-platform:organizations-admin`, or rbac-operator's to `cluster-admin`,
+  and not being deleted, since the operator writes no mirror of a deleting
+  binding) names the caller as one of its mirrored Users or Groups
+  (`adminmirror.MirroredSubjects`). Otherwise it
+  refuses before any write, dry run included, naming the caller's bindings
+  and the two ways out (an `agent-platform:organizations-admin` RoleBinding
+  for the caller in the parent, or a cluster-admin creating it). A caller who
+  may not list the parent's RoleBindings is not checked there. Then it
+  dry-runs the object, writes it, waits for the operator's `Ready`, asks again
+  in the new namespace, and writes the first admins as the RoleBinding
+  `organization-admins`. An organization that is not Ready in time, or whose
+  namespace the caller's right has not reached yet (`pending`), keeps its
+  first admins for a second call with the same arguments. A caller who is a
+  ServiceAccount or another `system:` name is never mirrored: only a right
+  cluster-wide reaches the namespace for it. A delete answers what it erases
+  until the caller passes `confirm: <parent>/<name>`, then marks the object
   `kustomize.toolkit.fluxcd.io/prune: enabled` (the delete intent the
   admission policy requires) and deletes it; the operator erases it. An
   organization Flux applies from git is refused live (commit mode is
@@ -625,9 +638,15 @@ The organization tools (every name holds `organization`):
   new model until one is chosen); `list_organization_connectors` and
   `set_organization_connector` (RemoteMCPServers);
   `set_organization_egress_policy`; and `delete_organization_object`.
-- for everyone: `list_my_organizations`, the New agent picker's list: the
-  organization namespaces in which the caller may list Agents, asked with a
-  SelfSubjectAccessReview as the caller.
+- for everyone: `list_organizations`, the organizations the caller manages
+  or belongs to. agent-manager's ServiceAccount lists the
+  AgentPlatformOrganizations; two SelfSubjectAccessReviews as the caller
+  decide each one's `permissions`: `manage` (update it in its parent) and
+  `member` (list the Agents of its namespace, which every organization role
+  grants). An organization with neither is not listed; one the caller only
+  belongs to carries its status alone (namespace, `orphaned`, `deleting`), and
+  one the caller manages also its summary (`organization`). The New agent
+  picker keeps those with `member`.
 
 Every write is dry-run as the caller first, all of a call's writes before any
 of them, so RBAC, schemas and admission refuse before anything changes; a
@@ -638,8 +657,10 @@ missing, or `replaceCredential` asks for a new value, `set_organization_model`,
 `set_organization_connector` and `set_organization_egress_policy` answer with
 an MCP URL elicitation of a client-owned credential UI. The server prepares
 the intended change without writing consumers, and supplies a user-bound
-operation ID through the configured `credentials.uiURL` template. A client
-without `elicitation.url` receives the link in `credentials[].next`. A dry run
+operation ID through the configured `credentials.uiURL` RFC 6570 template. A client
+without `elicitation.url` receives the result as `structuredContent`, declared
+by the tools' `outputSchema`, with a `resource_link` to the credential UI from
+protocol 2025-06-18 and the link in `credentials[].next`. A dry run
 creates no operation. Without a configured UI, a change requiring credential
 input is refused before writing resources.
 
@@ -779,7 +800,9 @@ and without the caller's token a session operation is `401 unauthenticated`.
   whole and the larger is clipped (`argsText`, `responseText`).
 - Both read conversations of up to 10000 turns; a longer one is `409
   conflict`, as its newest turns could not be named.
-- `list_sessions` is `SessionService/ListSessions` for one Agent.
+- `list_sessions` is `SessionService/ListSessions` for one Agent, at most
+  2000 sessions per answer. `nextPageToken` in the answer says more follow:
+  list again with it as `pageToken`.
 - `delete_session` is `SessionService/DeleteSession`: the controller ends the
   session's runtime, removes its state and answers it in
   `RUNTIME_STATE_DELETED`; it is gone from `list_sessions` and `get_session`

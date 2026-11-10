@@ -3,11 +3,13 @@ What tenants.enabled needs besides the caller's own RBAC.
 
 agent-manager manages the organization namespaces beside the configured ones
 and serves the organization tools, all as the caller. Its ServiceAccount only
-finds the organization namespaces: RBAC cannot narrow a list by label, so it
-may get and list every namespace, read-only, and keeps those labelled
-agent-platform.giantswarm.io/organization. It writes nothing, binds nothing
-and reads no Secret: agent-platform-operator keeps the organization
-namespaces. The ClusterRole agent-platform-tenant-flux the agents' HelmReleases
+finds the organization namespaces and the AgentPlatformOrganizations: RBAC
+cannot narrow a list by label or by the caller, so it may get and list every
+namespace and every AgentPlatformOrganization, read-only, and keeps the
+namespaces labelled agent-platform.giantswarm.io/organization.
+list_organizations then answers only what SelfSubjectAccessReviews as the
+caller allow. It writes nothing, binds nothing and reads no Secret:
+agent-platform-operator keeps the organization namespaces. The ClusterRole agent-platform-tenant-flux the agents' HelmReleases
 run as there is the Agent Platform chart's.
 */}}
 {{- if .Values.tenants.enabled }}
@@ -17,7 +19,8 @@ run as there is the Agent Platform chart's.
 {{- $_ := required "flux.helmReleaseServiceAccount is required with tenants.enabled: the agents' HelmReleases in an organization namespace run as it (admission refuses one without)" .Values.flux.helmReleaseServiceAccount }}
 {{- $sa := include "agent-manager.serviceAccountName" . }}
 ---
-# The organization namespaces, found by label: read-only.
+# The organization namespaces, found by label, and the organizations:
+# read-only.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -27,6 +30,9 @@ metadata:
 rules:
   - apiGroups: [""]
     resources: ["namespaces"]
+    verbs: ["get", "list"]
+  - apiGroups: ["agent-platform.giantswarm.io"]
+    resources: ["agentplatformorganizations"]
     verbs: ["get", "list"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1

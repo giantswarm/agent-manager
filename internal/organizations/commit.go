@@ -192,12 +192,16 @@ func commitError(err error) error {
 }
 
 // objectDir is the directory of a parent's organization objects.
-func (c *orgCommit) objectDir(parent string) layout.Directory {
-	return layout.Directory{Location: c.cfg.Objects, Name: parent}
-}
+func (c *orgCommit) objectDir(parent string) layout.Directory { return c.cfg.objectDir(parent) }
 
 // objectFile is the file of the organization parent/name.
-func (c *orgCommit) objectFile(parent, name string) string {
+func (c *orgCommit) objectFile(parent, name string) string { return c.cfg.objectFile(parent, name) }
+
+func (c *CommitConfig) objectDir(parent string) layout.Directory {
+	return layout.Directory{Location: c.Objects, Name: parent}
+}
+
+func (c *CommitConfig) objectFile(parent, name string) string {
 	return path.Join(c.objectDir(parent).Path(), name+".yaml")
 }
 
@@ -585,4 +589,35 @@ func (w *contentWriter) land(ctx context.Context, s *Service, writes []write, dr
 	}
 	body := fmt.Sprintf("%s in organization %s/%s (namespace %s), in its content path %s.", title, w.org.Parent, w.org.Organization, w.org.Name, w.dir.Path())
 	return w.commit.open(ctx, []fileChange{ch}, branch(verb, w.org.Parent, w.org.Organization), title, body, dryRun)
+}
+
+// commitURL is the GitHub page of the commit a Flux GitRepository revision
+// names (<branch>@sha1:<hash>, or sha1:<hash> without a branch), or empty for
+// any other revision.
+func commitURL(repository provenance.Repository, revision string) string {
+	hash, ok := revisionCommit(revision)
+	if !ok {
+		return ""
+	}
+	return "https://github.com/" + repository.String() + "/commit/" + hash
+}
+
+// fileURL is the GitHub page of file, a repository-relative path, as it was
+// at the commit revision names, or empty when revision names no commit.
+func fileURL(repository provenance.Repository, revision, file string) string {
+	hash, ok := revisionCommit(revision)
+	if !ok {
+		return ""
+	}
+	return "https://github.com/" + repository.String() + "/blob/" + hash + "/" + file
+}
+
+// revisionCommit is the commit hash of a Flux GitRepository revision.
+func revisionCommit(revision string) (string, bool) {
+	digest := revision[strings.LastIndex(revision, "@")+1:]
+	hash, ok := strings.CutPrefix(digest, "sha1:")
+	if !ok || len(hash) != 40 || strings.Trim(hash, "0123456789abcdef") != "" {
+		return "", false
+	}
+	return hash, true
 }
