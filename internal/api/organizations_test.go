@@ -889,6 +889,9 @@ func TestCreateOrganizationRefusesBeforeTheWriteWhenTheParentRightIsNotMirrored(
 					require.True(t, isErr, text)
 					assert.True(t, strings.HasPrefix(text, "forbidden:"), text)
 					assert.Contains(t, text, c.Binding.Name+" (", "the refusal names the binding")
+					if c.IsMirroredAdmin && !c.Mirrors {
+						assert.Contains(t, text, "; it is being deleted, so the operator will not mirror it)", "the refusal says the binding is being deleted")
+					}
 					if strings.HasPrefix(f.user.Username, "system:") {
 						assert.Contains(t, text, "a cluster-admin creates the organization, or binds the right to you cluster-wide", "a system: name is never mirrored")
 					} else {
@@ -900,44 +903,6 @@ func TestCreateOrganizationRefusesBeforeTheWriteWhenTheParentRightIsNotMirrored(
 				})
 			}
 		}
-	}
-}
-
-// A parent binding the operator mirrors stops counting once it is being
-// deleted: a finalizer keeps its right in RBAC, but the operator writes no
-// mirror of it, so the organization would end pending. Without the deletion
-// timestamp the same binding lets the create go on.
-func TestCreateOrganizationRefusesWhenTheMirroredBindingIsBeingDeleted(t *testing.T) {
-	for _, deleting := range []bool{false, true} {
-		t.Run(fmt.Sprintf("deleting=%t", deleting), func(t *testing.T) {
-			f := newOrgFixture(t)
-			f.deny = func(ns, _, _, _ string) bool { return ns == "" }
-			f.user = authenticationv1.UserInfo{Username: "bob@example.com"}
-			rb := rbacv1.RoleBinding{
-				ObjectMeta: metav1.ObjectMeta{Name: "acme-admins", Labels: map[string]string{adminmirror.RBACOperatorLabel: adminmirror.RBACOperatorValue}},
-				RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: adminmirror.ClusterAdminClusterRole},
-				Subjects:   []rbacv1.Subject{{Kind: rbacv1.UserKind, APIGroup: rbacv1.GroupName, Name: "bob@example.com"}},
-			}
-			if deleting {
-				now := metav1.Now()
-				rb.DeletionTimestamp = &now
-				rb.Finalizers = []string{"example.com/hold"}
-			}
-			f.parentBinding(t, rb)
-			text, isErr := f.call(t, ToolCreateOrganization, map[string]any{"namespace": "org-acme", "name": "payments", "adminGroups": []any{"payments-leads"}})
-			if !deleting {
-				require.False(t, isErr, text)
-				assert.NotNil(t, f.get(t, rbGVR, orgNS, organizations.FirstAdminsBinding))
-				return
-			}
-			require.True(t, isErr, text)
-			assert.True(t, strings.HasPrefix(text, "forbidden:"), text)
-			assert.Contains(t, text, "acme-admins (ClusterRole cluster-admin; it is being deleted, so the operator will not mirror it)")
-			assert.Contains(t, text, "binds "+organizations.RoleOrganizationsAdmin+" to you", "the first way out")
-			assert.Contains(t, text, "or a cluster-admin creates the organization", "the second way out")
-			assert.Nil(t, f.get(t, orgGVR, "org-acme", "payments"))
-			assert.Empty(t, f.dryRuns.Received(), "not even a dry run is sent")
-		})
 	}
 }
 
