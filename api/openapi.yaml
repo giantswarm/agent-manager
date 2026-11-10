@@ -1543,6 +1543,7 @@ components:
         kind: { type: string, enum: [ModelConfig, RemoteMCPServer, EgressPolicy] }
         name: { type: string }
         key: { type: string, description: The key of the Secret the object reads }
+        provider: { type: string, description: "ModelConfig: the provider it sends the value to" }
         url: { type: string, description: "RemoteMCPServer: where it sends the value; a credential in the URL shows as REDACTED" }
         origins: { type: array, items: { type: string }, description: "EgressPolicy: the origins it sends the value to" }
         fromGit: { type: boolean, description: A Flux Kustomization applies the object from git }
@@ -1584,13 +1585,13 @@ components:
             base: { type: string }
             directory: { type: string }
         result: { $ref: "#/components/schemas/CredentialResourceResult" }
-        references: { type: array, items: { $ref: "#/components/schemas/CredentialReference" } }
+        references: { type: array, items: { $ref: "#/components/schemas/CredentialReference" }, description: "Every object of the namespace that names a requested Secret, read live, each planned consumer in place of its live object" }
     CredentialResourceResult:
       type: object
       properties:
         namespace: { type: string }
-        kind: { type: string }
-        name: { type: string }
+        kind: { type: string, enum: [model, connector, egressPolicy, credential], description: "credential: replace_organization_credential, which writes the Secret only" }
+        name: { type: string, description: "The consumer's name; the Secret's for kind credential" }
         created: { type: boolean, description: Whether the intended consumer is new }
         defaultModel: { type: string }
         unmarked: { type: array, items: { type: string } }

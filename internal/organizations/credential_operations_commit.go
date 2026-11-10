@@ -102,8 +102,11 @@ func (c *orgCommit) credentialSnapshot(ctx context.Context, operation *credentia
 			}
 			for _, credential := range operation.Credentials {
 				for _, reference := range referencesOf(consumer.GetKind(), consumer, credential.Secret) {
-					if reference.Kind != kinds[operation.Result.Kind].kubeKind || reference.Name != operation.Result.Name {
+					if !writesFor(operation.Result, reference) {
 						return nil, fmt.Errorf("%w: another Git consumer references the credential Secret", agents.ErrConflict)
+					}
+					if operation.Result.Kind == KindCredential && reference.Key != credential.Key {
+						return nil, otherKey(reference, credential.Secret, credential.Key)
 					}
 				}
 			}

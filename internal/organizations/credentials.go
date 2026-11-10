@@ -82,7 +82,7 @@ func (s *Service) credential(ctx context.Context, c kube.Client, org Namespace, 
 		cred.State = CredentialPresent
 	}
 	if cred.State != CredentialPresent {
-		cred.Next = s.next(cred, kind, name)
+		cred.Next = s.next(cred, kind+" "+name)
 	}
 	return cred, nil
 }
@@ -157,8 +157,14 @@ func (c Credential) NeedsInput() bool {
 	return c.FormURL != "" && (c.State == CredentialMissing || c.State == CredentialReplace)
 }
 
-func (s *Service) next(c Credential, kind, name string) string {
-	what := fmt.Sprintf("the value of key %s of Secret %s, which %s %s uses", c.Key, c.Secret, kind, name)
+// next words what to do about c for the objects users ("ModelConfig claude")
+// that read it.
+func (s *Service) next(c Credential, users ...string) string {
+	verb := "uses"
+	if len(users) != 1 {
+		verb = "use"
+	}
+	what := fmt.Sprintf("the value of key %s of Secret %s, which %s %s", c.Key, c.Secret, strings.Join(users, ", "), verb)
 	lead := "A person enters " + what
 	if c.State == CredentialMissing {
 		lead = "The credential is missing: a person enters " + what

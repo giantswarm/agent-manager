@@ -22,6 +22,8 @@ type CredentialReference struct {
 	Name string `json:"name"`
 	// Key is the key of the Secret the object reads.
 	Key string `json:"key"`
+	// Provider is the provider a ModelConfig sends the value to.
+	Provider string `json:"provider,omitempty"`
 	// URL is where a RemoteMCPServer sends the value, a credential in the
 	// URL shown as REDACTED.
 	URL string `json:"url,omitempty"`
@@ -95,6 +97,7 @@ func referencesOf(kind string, u *unstructured.Unstructured, secret string) []Cr
 		if name == secret {
 			ref := base
 			ref.Key = key
+			ref.Provider, _, _ = unstructured.NestedString(u.Object, "spec", "provider")
 			out = append(out, ref)
 		}
 	case kubeKindRemoteMCPServer:
@@ -124,6 +127,13 @@ func referencesOf(kind string, u *unstructured.Unstructured, secret string) []Cr
 		}
 	}
 	return out
+}
+
+// writesFor says whether the operation of result may write the credential
+// Secret reference reads: a credential result writes it for every object that
+// reads it, any other result only for its own object.
+func writesFor(result ResourceResult, reference CredentialReference) bool {
+	return result.Kind == KindCredential || (reference.Kind == kinds[result.Kind].kubeKind && reference.Name == result.Name)
 }
 
 // writeMode is the mode of a credential write: the one asked for, else

@@ -6,6 +6,15 @@ organization tools accept no credential values. Missing credentials and explicit
 Ordinary edits with existing credentials do not prepare an operation or change
 the Secret.
 
+`replace_organization_credential` takes the organization namespace, the Secret
+and the key, and prepares an operation that writes that Secret and no consumer:
+a rotation resends no model, connector or egress policy. At least one
+ModelConfig, RemoteMCPServer or EgressPolicy of the namespace must read that key
+of the Secret, else it answers `not_found`. An object reading another key of the
+same Secret is refused with `409` naming that key: the Secret is written whole,
+holding the one key, so the other key would be lost. Its result has `kind`
+`credential` and `name` the Secret.
+
 ## Client-owned UI
 
 Configure an HTTPS URL template, for example:
@@ -35,6 +44,10 @@ authentication profile and Kubernetes downstream authorization.
    person independently and calls `GET /api/v1/credential-operations/{operation}`.
    It displays the organization, intended consumer change, requested Secret/key
    pairs, references and, in commit mode, repository, base and directory.
+   `references` lists every object of the namespace that names a requested
+   Secret, read as the person when the confirmation is read, each planned
+   consumer in place of its live object: the key it reads, a ModelConfig's
+   `provider`, a RemoteMCPServer's URL and an EgressPolicy's origins.
 3. Submit `POST` to that same path with `Content-Type: application/json`, the
    confirmation's strong `ETag` in `If-Match`, and
    `{"values":[{"secret":"tenant-credential-example","key":"apiKey","value":"<entered value>"}]}`.
@@ -112,7 +125,10 @@ current organization permissions. Saves recheck consumers, Git destination,
 file hashes and encryption policy, then server-side dry-run all intended writes
 as the person. Stale operation versions return `412`, a save or cancellation
 without `If-Match` returns `428`, and changed resources or Git inputs return
-`409`. Shared Secrets are refused. Backend refusals are sanitized before
+`409`. A consumer tool refuses a Secret another object names;
+`replace_organization_credential` lists every consumer and replaces a shared
+Secret for all of them, and refuses at preparation and at save an object that
+reads another key of it. Backend refusals are sanitized before
 entering errors or logs.
 
 Credentials are write-only. Neither the person nor agent-manager reads a
@@ -150,6 +166,9 @@ across those objects. Commit mode uses gitops-commit's SOPS layout and
 encrypted Secrets. Encryption must cover `data` and `stringData`, with the
 Secret's kind and name inspectable without decryption. Consumer files contain
 one named Kubernetes object each; lists and multiple YAML documents are refused.
+`replace_organization_credential` in commit mode commits the encrypted Secret
+alone, whatever Git consumers name it; an encrypted Secret file holding another
+key is refused. In apply mode it refuses a Secret whose consumer Flux applies.
 Creating a consumer whose file already exists in Git is refused until Flux
 applies it, so a create cannot replace configuration awaiting reconciliation.
 The receipt's credential state `committed` means a PR exists, not that Flux has

@@ -111,8 +111,11 @@ func (s *Service) saveCredentialOperation(ctx context.Context, id, version strin
 			return nil, err
 		}
 		for _, reference := range references {
-			if reference.Kind != kinds[operation.Result.Kind].kubeKind || reference.Name != operation.Result.Name {
+			if !writesFor(operation.Result, reference) {
 				return nil, fmt.Errorf("%w: another object references this Secret", agents.ErrConflict)
+			}
+			if operation.Result.Kind == KindCredential && reference.Key != credential.Key {
+				return nil, otherKey(reference, credential.Secret, credential.Key)
 			}
 			if operation.Mode == agents.ModeApply && reference.FromGit {
 				return nil, fmt.Errorf("%w: a credential whose consumer Flux applies must be changed in Git", agents.ErrGitOpsOwned)

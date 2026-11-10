@@ -204,13 +204,13 @@ func (s *Service) ReadCredentialOperation(ctx context.Context, id string) (*Cred
 	if err != nil {
 		return nil, err
 	}
-	var references []CredentialReference
 	changes := make([]CredentialChange, 0, len(operation.Writes))
 	for _, planned := range operation.Writes {
 		changes = append(changes, CredentialChange{Action: planned.Action, Object: unstructuredOf(planned.Object).DeepCopy().Object})
-		for _, credential := range operation.Credentials {
-			references = append(references, referencesOf(planned.Kind, unstructuredOf(planned.Object), credential.Secret)...)
-		}
+	}
+	references, err := s.operationReferences(ctx, operation)
+	if err != nil {
+		return nil, err
 	}
 	return &CredentialOperation{ID: operation.ID, Version: operation.Version, ElicitationID: operation.ElicitationID, ExpiresAt: operation.ExpiresAt, State: operation.State, Mode: operation.Mode, Result: operation.Result, References: references, GitTarget: operation.GitTarget, Organization: operation.Namespace, Changes: changes}, nil
 }
@@ -308,7 +308,7 @@ func (s *Service) landResource(ctx context.Context, writer *contentWriter, write
 			return err
 		}
 		for _, reference := range references {
-			if reference.Kind != kinds[result.Kind].kubeKind || reference.Name != result.Name {
+			if !writesFor(*result, reference) {
 				return fmt.Errorf("%w: another consumer references the credential Secret", agents.ErrConflict)
 			}
 		}

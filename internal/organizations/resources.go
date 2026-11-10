@@ -24,6 +24,9 @@ const (
 	KindModel        = "model"
 	KindConnector    = "connector"
 	KindEgressPolicy = "egressPolicy"
+	// KindCredential is the kind of a ResourceResult that names a credential
+	// Secret, written for every object that reads it and without any of them.
+	KindCredential = "credential"
 )
 
 // The default keys of a credential Secret.
@@ -231,7 +234,7 @@ func (s *Service) SetModel(ctx context.Context, req ModelRequest) (*ResourceResu
 	}
 	if cred.State == CredentialPresent && modelKeyNotFound(find(items, req.Name), secret, key) {
 		cred.State = CredentialMissing
-		cred.Next = s.next(cred, "ModelConfig", req.Name)
+		cred.Next = s.next(cred, "ModelConfig "+req.Name)
 	}
 	res.Credentials = []Credential{cred}
 	if err = s.landResource(ctx, w, writes, res, req.ReplaceCredential, "model-"+req.Name, "chore(organizations): set model "+req.Name); err != nil {
