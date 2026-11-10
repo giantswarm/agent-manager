@@ -175,6 +175,7 @@ meta chart (`components.agent-manager.enabled`), which sets `kagent.namespace`,
 | tenants.commit.contentPrefix | string | `"agent-platform/organizations"` | The directory of the organizations' content paths, `<contentPrefix>/<parent>/<name>`: agent-platform-operator's `commitMode.path` without `{parent}/{name}`. |
 | credentials.uiURL | string | `""` | HTTPS RFC 6570 URI template with one {operation} expression. The UI owns its routes; agent-manager supplies only a non-authorizing operation ID. |
 | credentials.operationsNamespace | string | `""` | Dedicated namespace for nonsecret operation metadata. Empty derives a namespace from the release. Do not share it with application config. |
+| devPortal.url | string | `""` | Deprecated and ignored. Accepted for compatibility with platform releases that still forward the Dev Portal URL; credential operations use the REST API. |
 | podAnnotations | object | `{}` | Annotations on the pod. |
 | podLabels | object | `{}` | Labels on the pod. |
 | podSecurityContext | object | `{"fsGroup":1000,"runAsGroup":1000,"runAsNonRoot":true,"runAsUser":1000,"seccompProfile":{"type":"RuntimeDefault"}}` | Pod security context. |

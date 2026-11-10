@@ -534,6 +534,11 @@ credentials:
   operationsNamespace: ""
 
 
+devPortal:
+  # -- Deprecated and ignored. Accepted for compatibility with platform releases
+  # that still forward the Dev Portal URL; credential operations use the REST API.
+  url: ""
+
 # -- Annotations on the pod.
 podAnnotations: {}  # @schema additionalProperties: true
 # -- Labels on the pod.

@@ -75,6 +75,16 @@
                 }
             }
         },
+        "devPortal": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "description": "Deprecated and ignored. Accepted for compatibility with platform releases that still forward the Dev Portal URL; credential operations use the REST API."
+                }
+            }
+        },
         "externalDNSIP": {
             "type": "string"
         },
