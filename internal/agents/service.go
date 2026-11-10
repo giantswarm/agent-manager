@@ -474,7 +474,7 @@ func (s *Service) List(ctx context.Context, loc Location, filter tags.Filter) ([
 	withheld := ""
 	hrs, err := s.agentHelmReleases(ctx, st)
 	if errorsIs(err, ErrForbidden) {
-		withheld = releaseWithheld(st.fluxNS)
+		withheld = releaseWithheld(st.fluxNS, true)
 		hrs, err = nil, nil
 	}
 	if err != nil {
@@ -605,7 +605,7 @@ func (s *Service) agentObjects(ctx context.Context, st *site, name string) (obj,
 	}
 	if hr, err = s.getHelmRelease(ctx, st.flux, hrNs, hrName); err != nil {
 		if errorsIs(err, ErrForbidden) {
-			return nil, nil, &releaseUnreadableError{err: err, agent: obj, withheld: releaseWithheld(hrNs)}
+			return nil, nil, &releaseUnreadableError{err: err, agent: obj, ns: hrNs, editorReads: hrNs == st.fluxNS}
 		}
 		return nil, nil, err
 	}
@@ -620,8 +620,9 @@ func (s *Service) agentObjects(ctx context.Context, st *site, name string) (obj,
 // why (Agent.ReleaseWithheld).
 func (s *Service) readAgentObjects(ctx context.Context, st *site, name string) (obj, hr *unstructured.Unstructured, withheld string, err error) {
 	obj, hr, err = s.agentObjects(ctx, st, name)
-	if unreadable := (*releaseUnreadableError)(nil); errors.As(err, &unreadable) && unreadable.agent != nil {
-		return unreadable.agent, nil, unreadable.withheld, nil
+	var unreadable *releaseUnreadableError
+	if errors.As(err, &unreadable) && unreadable.agent != nil {
+		return unreadable.agent, nil, releaseWithheld(unreadable.ns, unreadable.editorReads), nil
 	}
 	return obj, hr, "", err
 }
@@ -652,24 +653,35 @@ func (s *Service) getObject(ctx context.Context, dyn dynamic.Interface, gvr sche
 	return obj, nil
 }
 
-// releaseUnreadableError is a Forbidden read of an agent's HelmRelease. It
-// unwraps to ErrForbidden and names the role that may read it.
+// releaseUnreadableError is a Forbidden read of an agent's HelmRelease in
+// ns. It unwraps to ErrForbidden. editorReads is true when ns is the site's
+// Flux namespace, where RoleEditor is bound and grants the read; a release
+// elsewhere, such as the fleet's in flux-giantswarm, is outside the
+// agent-platform roles.
 type releaseUnreadableError struct {
-	err      error
-	agent    *unstructured.Unstructured
-	withheld string
+	err         error
+	agent       *unstructured.Unstructured
+	ns          string
+	editorReads bool
 }
 
 func (e *releaseUnreadableError) Error() string {
+	if !e.editorReads {
+		return e.err.Error()
+	}
 	return fmt.Sprintf("%v (reading it needs the %s role)", e.err, RoleEditor)
 }
 
 func (e *releaseUnreadableError) Unwrap() error { return e.err }
 
 // releaseWithheld is Agent.ReleaseWithheld for a caller who may not read the
-// Flux objects in ns.
-func releaseWithheld(ns string) string {
-	return fmt.Sprintf("you may not read the Flux HelmReleases and OCIRepositories in %s, so the release state, its values and how the agent is managed are not shown; reading them needs the %s role", ns, RoleEditor)
+// Flux objects in ns; it names RoleEditor only when editorReads.
+func releaseWithheld(ns string, editorReads bool) string {
+	msg := fmt.Sprintf("you may not read the Flux HelmReleases and OCIRepositories in %s, so the release state, its values and how the agent is managed are not shown", ns)
+	if editorReads {
+		msg += fmt.Sprintf("; reading them needs the %s role", RoleEditor)
+	}
+	return msg
 }
 
 func withholdRelease(a *Agent, withheld string) {

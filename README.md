@@ -437,10 +437,11 @@ unknown` and one sentence:
 - `none` — a bare Agent with no HelmRelease behind it: nothing to write to;
   `delete_agent` removes it only with `force`.
 - `unknown` — the caller may not read the Flux HelmReleases and
-  OCIRepositories (only `agent-platform:editor` may): `list_agents`,
-  `get_agent` and `get_agent_status` answer from the Agent alone, and
-  `releaseWithheld` says so. Agents whose HelmRelease has not rendered an
-  Agent yet are not listed.
+  OCIRepositories (in the agent's namespace only `agent-platform:editor`
+  may; a release in another namespace, such as `flux-giantswarm`, is outside
+  the agent-platform roles): `list_agents`, `get_agent` and
+  `get_agent_status` answer from the Agent alone, and `releaseWithheld` says
+  so. Agents whose HelmRelease has not rendered an Agent yet are not listed.
 
 A suspended HelmRelease is refused the same way: Flux drops its finalizer
 without uninstalling, so deleting it would leave the rendered objects behind

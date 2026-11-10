@@ -117,3 +117,22 @@ func TestStatus_AbsentAgentWithoutHelmReleaseReadAccessIsForbidden(t *testing.T)
 	_, err := f.svc.Status(t.Context(), In(""), "pending")
 	require.ErrorIs(t, err, ErrForbidden)
 }
+
+func TestGet_WithoutReadAccessToAReleaseInAnotherNamespaceNamesNoRole(t *testing.T) {
+	f := seeded(t)
+	values := map[string]any{"agent": map[string]any{"name": "sre-agent"}, "modelConfig": map[string]any{"name": "default-model-config"}}
+	mustCreate(t, f, hrGVR, helmRelease("flux-giantswarm", "sre-agent", values, true, map[string]any{KustomizationNameLabel: "flux-giantswarm"}))
+	mustCreate(t, f, agentGVR, agentObject("kagent", "sre-agent", "sre-agent", "flux-giantswarm", true, true))
+	refuse(f, "get", hrGVR)
+
+	got, err := f.svc.Get(t.Context(), In(""), "sre-agent")
+	require.NoError(t, err)
+	assert.Equal(t, ManagedUnknown, got.Managed)
+	assert.Contains(t, got.ReleaseWithheld, "flux-giantswarm")
+	assert.NotContains(t, got.ReleaseWithheld, RoleEditor)
+
+	desc := "x"
+	_, err = f.svc.Update(t.Context(), Update{Name: "sre-agent", Description: &desc})
+	require.ErrorIs(t, err, ErrForbidden)
+	assert.NotContains(t, err.Error(), RoleEditor)
+}
