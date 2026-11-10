@@ -586,3 +586,15 @@ func (w *contentWriter) land(ctx context.Context, s *Service, writes []write, dr
 	body := fmt.Sprintf("%s in organization %s/%s (namespace %s), in its content path %s.", title, w.org.Parent, w.org.Organization, w.org.Name, w.dir.Path())
 	return w.commit.open(ctx, []fileChange{ch}, branch(verb, w.org.Parent, w.org.Organization), title, body, dryRun)
 }
+
+// commitURL is the GitHub page of the commit a Flux GitRepository revision
+// names (<branch>@sha1:<hash>, or sha1:<hash> without a branch), or empty for
+// any other revision.
+func commitURL(repository provenance.Repository, revision string) string {
+	digest := revision[strings.LastIndex(revision, "@")+1:]
+	hash, ok := strings.CutPrefix(digest, "sha1:")
+	if !ok || len(hash) != 40 || strings.Trim(hash, "0123456789abcdef") != "" {
+		return ""
+	}
+	return "https://github.com/" + repository.String() + "/commit/" + hash
+}

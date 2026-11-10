@@ -929,7 +929,7 @@ Read as you; every member may read them.
 ```text
 List the Agent Platform organizations (AgentPlatformOrganizations) of a parent namespace, or of all, as you.
 
-Each with its organization namespace, harnesses, worker replicas and the operator's Ready, DefaultModelConfigured and Orphaned conditions. Needs agent-platform:organizations-admin; omit namespace only when it is bound to you cluster-wide.
+Each with its organization namespace, harnesses, worker replicas, the operator's Ready, DefaultModelConfigured and Orphaned conditions, and the last revision Flux applied it from (lastAppliedRevision, with its GitHub commit as lastAppliedRevisionUrl in mode commit), which stays while it is Orphaned. Needs agent-platform:organizations-admin; omit namespace only when it is bound to you cluster-wide.
 ```
 
 ```json
