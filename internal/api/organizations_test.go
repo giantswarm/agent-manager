@@ -168,7 +168,7 @@ func newOrgFixtureWith(t *testing.T, configure func(*organizations.Config), objs
 		namespace("plain", nil),
 	)
 	cfg := organizations.Config{ // #nosec G101 -- synthetic UI URL and isolated fake store
-		Namespaces:           organizations.NewNamespaces(sa, "kagent"),
+		Namespaces:           organizations.NewNamespaces(sa, f.dyn, "kagent"),
 		CredentialUIURL:      "https://portal.example.com/credentials?operation={operation}",
 		CredentialOperations: organizations.NewCredentialOperations(operationMaps(t)),
 		ReadyTimeout:         time.Second, ReadyPoll: 10 * time.Millisecond,
@@ -525,22 +525,46 @@ func TestCredentialsAreReferencesOnly(t *testing.T) {
 	assert.NotContains(t, text, liveValue)
 }
 
-// The picker lists the organizations whose Agents the caller may list,
-// asked as the caller: never an org-<name> labelled giantswarm.io/organization
-// alone, nor a plain namespace, even where the caller may list Agents.
-func TestThePickerListsOnlyTheCallersOrganizations(t *testing.T) {
-	f := newOrgFixture(t)
-	f.deny = func(ns, verb, resource, _ string) bool {
-		// The caller may list Agents in org-acme and plain too: only the
-		// organization label keeps them out.
-		return verb == "list" && resource == "agents" && ns == "agents-billing-a1b2c"
+// list_organizations lists what the caller manages or belongs to, each
+// review asked as the caller; a member who does not manage one sees its
+// status only.
+func TestListOrganizationsByTheCallersAccess(t *testing.T) {
+	lost := organization("org-acme", "payments", nil)
+	lost.Object["status"].(map[string]any)["conditions"] = append(lost.Object["status"].(map[string]any)["conditions"].([]any),
+		map[string]any{"type": "Orphaned", "status": "True", "reason": "MissingFromGit", "message": "gone from git", "lastTransitionTime": "2026-11-04T00:00:00Z"})
+	billing := organization("org-acme", "billing", nil)
+	_ = unstructured.SetNestedField(billing.Object, "agents-billing-a1b2c", "status", "namespace")
+	other := organization("org-other", "treasury", nil)
+	_ = unstructured.SetNestedField(other.Object, "agents-treasury-z9y8x", "status", "namespace")
+	f := newOrgFixture(t, lost, billing, other)
+	// A member of payments only; the manager of billing only; treasury
+	// neither.
+	f.deny = func(ns, verb, resource, name string) bool {
+		switch {
+		case verb == "list" && resource == "agents":
+			return ns != orgNS
+		case verb == "update" && resource == "agentplatformorganizations":
+			return ns != "org-acme" || name != "billing"
+		}
+		return false
 	}
-	text, isErr := f.call(t, ToolListMyOrganizations, nil)
+	text, isErr := f.call(t, ToolListOrganizations, nil)
 	require.False(t, isErr, text)
-	assert.Equal(t, []any{map[string]any{"namespace": orgNS, "organization": "payments", "parent": "org-acme"}}, decode(t, text)["organizations"])
+	listed := decode(t, text)["organizations"].([]any)
+	require.Len(t, listed, 2, text)
 
-	f.deny = func(string, string, string, string) bool { return true }
-	text, isErr = f.call(t, ToolListMyOrganizations, nil)
+	billingListed := listed[0].(map[string]any)
+	assert.Equal(t, "billing", billingListed["name"])
+	assert.Equal(t, map[string]any{"manage": true, "member": false}, billingListed["permissions"])
+	assert.Equal(t, "s3://bucket/uid", billingListed["organization"].(map[string]any)["snapshotPrefix"], "a manager reads the summary")
+
+	member := listed[1].(map[string]any)
+	assert.Equal(t, map[string]any{"name": "payments", "parent": "org-acme", "namespace": orgNS,
+		"orphaned":    map[string]any{"status": "True", "reason": "MissingFromGit", "message": "gone from git"},
+		"permissions": map[string]any{"manage": false, "member": true}}, member, "a member reads the status only")
+	assert.NotContains(t, text, "treasury", "an organization the caller neither manages nor belongs to is not listed")
+
+	text, isErr = f.call(t, ToolListOrganizations, map[string]any{"namespace": "org-other"})
 	require.False(t, isErr, text)
 	res := decode(t, text)
 	assert.Empty(t, res["organizations"])
@@ -550,7 +574,7 @@ func TestThePickerListsOnlyTheCallersOrganizations(t *testing.T) {
 	f.typed.PrependReactor("create", "selfsubjectaccessreviews", func(k8stesting.Action) (bool, runtime.Object, error) {
 		return true, nil, apierrors.NewUnauthorized("token expired")
 	})
-	text, isErr = f.call(t, ToolListMyOrganizations, nil)
+	text, isErr = f.call(t, ToolListOrganizations, nil)
 	require.True(t, isErr)
 	assert.True(t, strings.HasPrefix(text, "unauthenticated:"), text)
 	assert.NotContains(t, text, "agents-", "a refused token learns no organization namespace")
@@ -738,8 +762,8 @@ func TestConnectorURLsAndHeaders(t *testing.T) {
 	}, headers)
 }
 
-// list_organizations lists a parent's organizations, or every parent's, as
-// the caller; a refusal names the role.
+// list_organizations lists a parent's organizations, or every parent's; a
+// ServiceAccount that may not list them answers unsupported.
 func TestListOrganizations(t *testing.T) {
 	other := organization("org-other", "billing", nil)
 	f := newOrgFixture(t, organization("org-acme", "payments", nil), other)
@@ -762,8 +786,7 @@ func TestListOrganizations(t *testing.T) {
 	})
 	text, isErr = f.call(t, ToolListOrganizations, map[string]any{"namespace": "org-acme"})
 	require.True(t, isErr)
-	assert.True(t, strings.HasPrefix(text, "forbidden:"), text)
-	assert.Contains(t, text, organizations.RoleOrganizationsAdmin)
+	assert.True(t, strings.HasPrefix(text, "unsupported:"), text)
 }
 
 // get_organization answers what a delete erases as far as the caller can

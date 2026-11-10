@@ -402,7 +402,7 @@ func (s *Service) Namespace(ctx context.Context, ns string) (string, error) {
 	}
 	// The organization namespaces are not named: the ServiceAccount found
 	// them, and a caller learns only those it belongs to.
-	what := "an organization namespace you belong to (list_my_organizations)"
+	what := "an organization namespace you belong to (list_organizations)"
 	if s.cfg.Tenants == nil {
 		what = "none other"
 	}

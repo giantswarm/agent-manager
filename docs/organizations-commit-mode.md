@@ -109,7 +109,9 @@ The erase is refused:
   is merged (a merged pull request that did not remove the file is not the delete);
 - when the file is gone from git without a merged delete pull request (Missing from
   git): restore the file instead. `lastAppliedRevisionUrl` on the organization links the
-  last commit that held it (the operator's `status.lastAppliedRevision`);
+  last commit that held it (the operator's `status.lastAppliedRevision`), and
+  `lastAppliedFileUrl` the file itself at that commit (`lastAppliedFile`, the path mode
+  commit keeps it at);
 - when the merged delete pull request did not remove the file itself: it was edited
   before its merge, and another merge removed the file (Missing from git), or it moved
   the file to another path (a rename on GitHub), which may still define the

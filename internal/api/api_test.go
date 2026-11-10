@@ -372,7 +372,6 @@ var wantHints = map[string]hints{
 	// replace what was there; a delete erases.
 	ToolListOrganizations:         annotations(readOnly, additive, notIdempotent, closedWorld),
 	ToolGetOrganization:           annotations(readOnly, additive, notIdempotent, closedWorld),
-	ToolListMyOrganizations:       annotations(readOnly, additive, notIdempotent, closedWorld),
 	ToolListOrganizationMembers:   annotations(readOnly, additive, notIdempotent, closedWorld),
 	ToolListOrganizationConnector: annotations(readOnly, additive, notIdempotent, closedWorld),
 	ToolCreateOrganization:        annotations(writes, additive, notIdempotent, closedWorld),

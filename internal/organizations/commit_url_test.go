@@ -42,7 +42,24 @@ func TestSummaryLastAppliedRevision(t *testing.T) {
 	assert.Equal(t, "main@sha1:"+hash, got.LastAppliedRevision)
 	assert.Empty(t, got.LastAppliedRevisionURL, "without mode commit the repository is unknown")
 
-	commit := &CommitConfig{Objects: provenance.Location{Repository: provenance.Repository{Owner: "giantswarm", Name: "gazelle-configs"}, Branch: "main"}}
+	assert.Empty(t, got.LastAppliedFile)
+	assert.Empty(t, got.LastAppliedFileURL)
+
+	commit := &CommitConfig{Objects: provenance.Location{Repository: provenance.Repository{Owner: "giantswarm", Name: "gazelle-configs"}, Branch: "main", Directory: "management-clusters/gazelle/organizations"}}
 	got = (&Service{cfg: Config{Commit: commit}}).summary(org)
 	assert.Equal(t, "https://github.com/giantswarm/gazelle-configs/commit/"+hash, got.LastAppliedRevisionURL)
+	assert.Equal(t, commit.objectFile("org-acme", "treasury"), got.LastAppliedFile)
+	assert.Equal(t, "https://github.com/giantswarm/gazelle-configs/blob/"+hash+"/"+got.LastAppliedFile, got.LastAppliedFileURL)
+
+	org.Status.LastAppliedRevision = "latest@sha256:" + hash + hash[:24]
+	got = (&Service{cfg: Config{Commit: commit}}).summary(org)
+	assert.Empty(t, got.LastAppliedFile, "without a commit there is no file to point at")
+	assert.Empty(t, got.LastAppliedFileURL)
+}
+
+func TestFileURL(t *testing.T) {
+	repository := provenance.Repository{Owner: "giantswarm", Name: "gazelle-configs"}
+	assert.Equal(t, "https://github.com/giantswarm/gazelle-configs/blob/"+hash+"/orgs/org-acme/treasury.yaml",
+		fileURL(repository, "main@sha1:"+hash, "orgs/org-acme/treasury.yaml"))
+	assert.Empty(t, fileURL(repository, "main@sha1:"+hash[:12], "orgs/org-acme/treasury.yaml"))
 }

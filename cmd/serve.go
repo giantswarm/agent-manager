@@ -375,7 +375,7 @@ func runServe(ctx context.Context, o *serveOptions) error {
 			credentialOperations = organizations.NewCredentialOperations(clients.Typed().CoreV1().ConfigMaps(o.credentialOperationsNamespace))
 			go credentialOperations.Expire(ctx)
 		}
-		orgNamespaces = organizations.NewNamespaces(clients.Typed(), o.kagentNamespace)
+		orgNamespaces = organizations.NewNamespaces(clients.Typed(), clients.Dynamic(), o.kagentNamespace)
 		orgs = organizations.New(provider, organizations.Config{
 			Namespaces:            orgNamespaces,
 			KagentAPIVersion:      kagentVersion,

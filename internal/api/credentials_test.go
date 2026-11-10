@@ -55,7 +55,6 @@ func TestNoOrganizationToolAnswerCarriesASecretValue(t *testing.T) {
 		ToolCreateOrganization:        {"namespace": "org-acme", "name": "billing", "adminGroups": []any{"billing-leads"}, "dryRun": true},
 		ToolUpdateOrganization:        {"namespace": "org-acme", "name": "payments", "displayName": "Payments"},
 		ToolDeleteOrganization:        {"namespace": "org-acme", "name": "payments"},
-		ToolListMyOrganizations:       {},
 		ToolListOrganizationMembers:   {"namespace": orgNS},
 		ToolAddOrganizationMember:     {"namespace": orgNS, "group": "payments-devs", "role": "editor"},
 		ToolRemoveOrganizationMember:  {"namespace": orgNS, "group": "payments-devs"},
