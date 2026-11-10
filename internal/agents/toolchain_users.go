@@ -134,9 +134,6 @@ func (s *Service) ToolchainUsers(ctx context.Context, name, version string) (*To
 				out.Unreadable = append(out.Unreadable, fmt.Sprintf("sessions of agent %s: more than %d; only the first %d by session id were searched", agent.Tenant(), kagent.MaxListedSessions, kagent.MaxListedSessions))
 			}
 			for _, session := range page.Sessions {
-				if session.GetState() == apiv1alpha1.RuntimeState_RUNTIME_STATE_DELETED {
-					continue
-				}
 				if i := slices.IndexFunc(session.GetToolImages(), holds); i >= 0 {
 					out.Sessions = append(out.Sessions, ToolchainSession{
 						ID: session.GetId(), Namespace: ns, Agent: agent.Name,
