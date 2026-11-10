@@ -535,7 +535,7 @@ tenants:
     contentPrefix: agent-platform/organizations
 
 credentials:
-  # -- HTTPS UI URL template with one {operation} placeholder. The UI owns
+  # -- HTTPS RFC 6570 URI template with one {operation} expression. The UI owns
   # its routes; agent-manager supplies only a non-authorizing operation ID.
   uiURL: ""
   # -- Dedicated namespace for nonsecret operation metadata. Empty derives

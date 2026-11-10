@@ -568,3 +568,19 @@ func TestCredentialReplacementKeepsOrdinaryEditsSeparate(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, base64.StdEncoding.EncodeToString([]byte("replacement-value")), data)
 }
+
+func TestCredentialOperationRequiresIfMatch(t *testing.T) {
+	for _, method := range []string{http.MethodPost, http.MethodDelete} {
+		t.Run(method, func(t *testing.T) {
+			fixture := newOrgFixture(t)
+			result := prepareModelOperation(t, fixture, nil)
+			confirmOperation(t, fixture, result.CredentialOperation)
+			status, answer, headers := operationHTTP(t, fixture, method, result.CredentialOperation, "", valuesBody(t, result, "sensitive-fixture"), nil)
+			require.Equal(t, http.StatusPreconditionRequired, status, answer)
+			require.Contains(t, answer, `"precondition_required"`)
+			require.Equal(t, "no-store", headers.Get("Cache-Control"))
+			require.NotContains(t, answer, "sensitive-fixture")
+			require.Nil(t, fixture.get(t, secretGVR, orgNS, "tenant-credential-claude"))
+		})
+	}
+}

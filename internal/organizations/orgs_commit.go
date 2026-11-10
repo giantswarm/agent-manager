@@ -99,7 +99,7 @@ func (s *Service) createCommit(ctx context.Context, c kube.Client, req CreateReq
 	if err != nil {
 		return nil, err
 	}
-	res.Organization = summary(planned)
+	res.Organization = s.summary(planned)
 	res.FirstAdmins = &Binding{Name: FirstAdminsBinding, Role: RoleAdmin, Subjects: subjects}
 	res.Commit.LiveSteps = []string{fmt.Sprintf("after the merge Flux applies the object; agent-platform-operator creates the organization namespace and the organization's Kustomization, which applies %s from %s", FirstAdminsBinding, content.Path())}
 	if req.DryRun {
@@ -139,7 +139,7 @@ func (s *Service) updateCommit(ctx context.Context, c kube.Client, u *unstructur
 	if file == nil {
 		return nil, fmt.Errorf("%w: AgentPlatformOrganization %s/%s is applied from git, but not from %s in %s: change it in the file that defines it", agents.ErrConflict, req.Parent, req.Name, p, cm.cfg.Objects.Repository)
 	}
-	res := &UpdateResult{Before: summary(org), DryRun: req.DryRun, RequestedBy: identity.Caller(ctx)}
+	res := &UpdateResult{Before: s.summary(org), DryRun: req.DryRun, RequestedBy: identity.Caller(ctx)}
 	if res.Changed, err = changeOrganization(file, req); err != nil {
 		return nil, err
 	}
@@ -163,7 +163,7 @@ func (s *Service) updateCommit(ctx context.Context, c kube.Client, u *unstructur
 	if err != nil {
 		return nil, err
 	}
-	res.After = summary(after)
+	res.After = s.summary(after)
 	if len(res.Changed) == 0 {
 		return res, nil
 	}
@@ -184,10 +184,10 @@ func (s *Service) updateCommit(ctx context.Context, c kube.Client, u *unstructur
 // file is in git, it opens the pull request that removes the file and the
 // whole content path, and marks the live object with the pull request
 // (DeletePullRequestAnnotation): answered is true. Once that pull request is
-// merged and the file is gone from the base branch, the organization is
-// pending erase and Delete goes on to the live erase (answered false). A
-// live delete is refused while the file is in git: Flux would re-create
-// the object.
+// merged, the merge removed the file and the file is gone from the base
+// branch, the organization is pending erase and Delete goes on to the live
+// erase (answered false). A live delete is refused while the file is in
+// git: Flux would re-create the object.
 func (s *Service) deleteCommit(ctx context.Context, c kube.Client, u *unstructured.Unstructured, org *apov1alpha1.AgentPlatformOrganization, req DeleteRequest, res *DeleteResult) (answered bool, err error) {
 	cm, err := s.newCommit(ctx)
 	if err != nil {
@@ -200,15 +200,16 @@ func (s *Service) deleteCommit(ctx context.Context, c kube.Client, u *unstructur
 	what := fmt.Sprintf("AgentPlatformOrganization %s/%s", req.Parent, req.Name)
 	head := branch("delete", req.Parent, req.Name)
 	prURL := org.Annotations[DeletePullRequestAnnotation]
-	// merged tells only that the pull request the object names merged, not
-	// that it removed the file: gitops-commit's Remote exposes neither a
-	// merged pull request's files nor its head, so the file's absence from
-	// the base is checked instead. Checking the pull request's own change
-	// waits on a gitops-commit read of a merged pull request's files
-	// (giantswarm/gitops-commit#61).
-	var merged bool
+	// merged tells only that the pull request the object names merged;
+	// whether that merge removed the file is asked of its files once the
+	// file is gone from the base.
+	var (
+		pr     commit.PullRequest
+		merged bool
+	)
 	if prURL != "" {
-		if pr, ok := cm.pullRequest(prURL); ok {
+		var ok bool
+		if pr, ok = cm.pullRequest(prURL); ok {
 			st, err := cm.remote.Status(ctx, pr)
 			if err != nil {
 				return false, commitError(err)
@@ -252,11 +253,41 @@ func (s *Service) deleteCommit(ctx context.Context, c kube.Client, u *unstructur
 	case !merged:
 		return false, fmt.Errorf("%w: %s is gone from git (%s), but its delete pull request %s is not merged: it is Missing from git, not pending erase, and is not erased; restore its file", agents.ErrConflict, what, p, prURL)
 	}
+	if err := s.removedBy(ctx, cm, pr, what, p); err != nil {
+		return false, err
+	}
 	if req.Confirm != req.Parent+"/"+req.Name {
 		res.Next = fmt.Sprintf("pending erase: the delete pull request %s is merged and the file is gone from git. Nothing was deleted: show the person what is erased and, once they typed it, call delete_organization again with mode commit and confirm %q (Erase now)", prURL, req.Parent+"/"+req.Name)
 		return true, nil
 	}
 	return false, nil
+}
+
+// removedBy refuses the erase unless the merged pull request pr removed the
+// organization's file p itself: another merge may have removed it, or the
+// pull request may have been edited before its merge. A move of the file
+// that GitHub reports as a rename is refused although commit.Removes counts
+// it: the moved file may still define the organization in git. A move
+// whose content changed so much that GitHub reports a removal and an
+// addition is not detected. The object's file alone decides: the content
+// path is applied by the organization's own Kustomization, which the erase
+// removes, and a create refuses a content path an earlier organization
+// left. A listing that fails erases nothing.
+func (s *Service) removedBy(ctx context.Context, cm *orgCommit, pr commit.PullRequest, what, p string) error {
+	changes, err := cm.remote.MergedFiles(ctx, pr)
+	if err != nil {
+		return fmt.Errorf("%w (nothing was erased: the files of the delete pull request %s could not be listed, so whether it removed %s is unknown; call delete_organization again with mode commit and confirm to retry, and if the listing keeps failing, restore %s and open a new delete with mode commit and no confirm)", commitError(err), pr.URL, p, p)
+	}
+	const next = "then call delete_organization again with mode commit and no confirm to open a new delete pull request"
+	for _, c := range changes {
+		if c.Kind == commit.FileRenamed && c.PreviousPath == p {
+			return fmt.Errorf("%w: %s: its merged delete pull request %s moved its file to %s instead of removing it, so the organization may still be in git; it is not pending erase and is not erased; move the file back to %s, %s", agents.ErrConflict, what, pr.URL, c.Path, p, next)
+		}
+	}
+	if !commit.Removes(changes, p) {
+		return fmt.Errorf("%w: %s is gone from git (%s), but its merged delete pull request %s did not remove it: it is Missing from git, not pending erase, and is not erased; restore its file, %s", agents.ErrConflict, what, p, pr.URL, next)
+	}
+	return nil
 }
 
 // openDelete opens the pull request that removes the organization's file

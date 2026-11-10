@@ -322,7 +322,7 @@ name is the DNS-1123 name the person chose, never derived from displayName. mode
 ```text
 Create an organization as you, then bind its first admins in its namespace.
 
-Asks first whether you may bind them and dry-runs the object, so a refusal comes before anything exists. Waits for the operator's Ready (it creates the namespace), then writes the RoleBinding organization-admins to agent-platform:admin as you. Not Ready in time: call again with the same arguments. mode commit opens one pull request with the object and organization-admins instead. Offer an identity provider group as admin before a person. Needs agent-platform:organizations-admin in the parent namespace.
+Before any write, dry run too, refuses when you may not bind them or your right will not reach the new namespace (it does cluster-wide, or by a parent RoleBinding naming you that the operator mirrors: organizations-admin, or rbac-operator's cluster-admin). Waits for Ready, then writes organization-admins to agent-platform:admin as you. pending: call again with the same arguments. mode commit opens one pull request instead. Prefer a group as admin. Needs agent-platform:organizations-admin in the parent namespace.
 ```
 
 ```json
@@ -656,7 +656,7 @@ Call it first: capabilities says whether this installation offers mode commit, t
 ```text
 Read one organization and what deleting it would erase.
 
-erases lists, as you can read them in the organization namespace, its agents, HelmReleases, models, connectors, egress policies, credential Secrets (names only), member bindings and snapshot prefix; what you may not read is named in unreadable.
+erases lists, as you can read them in the organization namespace, its agents, HelmReleases, models, connectors, egress policies, credential Secrets (names only), member bindings and snapshot prefix; what you may not read is named in unreadable. sessions counts, per agent and across every person, the running and stopped sessions the erase deletes; when they cannot be listed it is null and sessionsUnavailable says why.
 ```
 
 ```json
@@ -931,7 +931,7 @@ Read as you; every member may read them.
 ```text
 List the Agent Platform organizations (AgentPlatformOrganizations) of a parent namespace, or of all, as you.
 
-Each with its organization namespace, harnesses, worker replicas and the operator's Ready, DefaultModelConfigured and Orphaned conditions. Needs agent-platform:organizations-admin; omit namespace only when it is bound to you cluster-wide.
+Each with its organization namespace, harnesses, worker replicas, the operator's Ready, DefaultModelConfigured and Orphaned conditions, and the last revision Flux applied it from (lastAppliedRevision, with its GitHub commit as lastAppliedRevisionUrl in mode commit), which stays while it is Orphaned. Needs agent-platform:organizations-admin; omit namespace only when it is bound to you cluster-wide.
 ```
 
 ```json

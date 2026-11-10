@@ -903,8 +903,10 @@ func checkSpec(spec Spec) []error {
 	if err := ValidateSystemMessage(spec.SystemMessage); err != nil {
 		errs = append(errs, err)
 	}
-	if _, ok := spec.Annotations[CreatedByAnnotation]; ok {
-		errs = append(errs, invalidf("annotation %s is set by agent-manager to the caller who creates the agent", CreatedByAnnotation))
+	for _, k := range creatorAnnotations {
+		if _, ok := spec.Annotations[k]; ok {
+			errs = append(errs, invalidf("annotation %s is set by agent-manager to the caller who creates the agent", k))
+		}
 	}
 	if err := refuseDefaultWorkspaceAnnotation(spec.Annotations, ""); err != nil {
 		errs = append(errs, err)
@@ -1103,7 +1105,7 @@ func (s *Service) ValidateCreate(ctx context.Context, spec Spec) (*ValidateResul
 		spec.Skills, spec.Plugins = sk, pl
 	}
 	values := BuildValues(spec, st.compose)
-	setCreator(values, identity.Caller(ctx))
+	setCreator(values, identity.Caller(ctx), identity.CallerName(ctx))
 	if !isCodingRuntime(runtime) {
 		dropEgressNote(values)
 	}
@@ -1326,7 +1328,7 @@ func (s *Service) Create(ctx context.Context, spec Spec) (*CreateResult, error) 
 		return nil, err
 	}
 	values := BuildValues(spec, st.compose)
-	setCreator(values, identity.Caller(ctx))
+	setCreator(values, identity.Caller(ctx), identity.CallerName(ctx))
 	if !isCodingRuntime(runtime) {
 		dropEgressNote(values)
 	}
@@ -2106,6 +2108,7 @@ func agentFromObject(obj, server *unstructured.Unstructured, rule *tags.Rule) Ag
 	a.Tags = rule.Parse(obj.GetAnnotations()[TagsAnnotation])
 	a.IconURL = obj.GetAnnotations()[IconURLAnnotation]
 	a.CreatedBy = obj.GetAnnotations()[CreatedByAnnotation]
+	a.CreatedByName = obj.GetAnnotations()[CreatedByNameAnnotation]
 	a.DefaultWorkspace = obj.GetAnnotations()[DefaultWorkspaceAnnotation]
 	a.DefaultToolchains = splitList(obj.GetAnnotations()[DefaultToolchainsAnnotation])
 	a.Harness, _, _ = unstructured.NestedString(obj.Object, "spec", "harnessRef", "name")
@@ -2204,6 +2207,7 @@ func applyHelmRelease(a *Agent, hr *unstructured.Unstructured, rule *tags.Rule) 
 	a.HelmRelease = ref
 	if a.CreatedBy == "" {
 		a.CreatedBy = hr.GetAnnotations()[CreatedByAnnotation]
+		a.CreatedByName = hr.GetAnnotations()[CreatedByNameAnnotation]
 	}
 	switch {
 	case PlatformOwnedRelease(hr) || a.Managed == ManagedPlatform:

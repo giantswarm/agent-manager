@@ -13,6 +13,7 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
+	"github.com/santhosh-tekuri/jsonschema/v6"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
@@ -115,7 +116,7 @@ func modernMeta(withURL bool) map[string]any {
 	}}
 }
 
-// legacySession is a client session of protocol 2025-11-25 that keeps the
+// legacySession is a client session of a protocol before 2026-07-28 that keeps the
 // capabilities it declared at initialize.
 type legacySession struct {
 	mu           sync.Mutex
@@ -145,9 +146,9 @@ func (s *legacySession) SetProtocolVersion(v string) {
 	s.version = v
 }
 
-// legacyContext initializes a 2025-11-25 session that declares, or not,
-// URL elicitation.
-func legacyContext(t *testing.T, f *orgFixture, withURL bool) context.Context {
+// legacyContext initializes a session of a protocol before 2026-07-28 that
+// declares, or not, URL elicitation.
+func legacyContext(t *testing.T, f *orgFixture, version string, withURL bool) context.Context {
 	t.Helper()
 	session := &legacySession{ch: make(chan mcp.JSONRPCNotification, 16)}
 	require.NoError(t, f.srv.RegisterSession(f.ctx, session))
@@ -158,7 +159,7 @@ func legacyContext(t *testing.T, f *orgFixture, withURL bool) context.Context {
 		capabilities["elicitation"] = map[string]any{"url": map[string]any{}}
 	}
 	res := rawCall(t, ctx, f.srv, map[string]any{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": map[string]any{
-		"protocolVersion": "2025-11-25", "capabilities": capabilities, "clientInfo": map[string]any{"name": "t", "version": "0"},
+		"protocolVersion": version, "capabilities": capabilities, "clientInfo": map[string]any{"name": "t", "version": "0"},
 	}})
 	require.Nil(t, res["error"], res)
 	return ctx
@@ -188,7 +189,7 @@ func TestAMissingCredentialIsAURLElicitation(t *testing.T) {
 			if modern {
 				extra = modernMeta(true)
 			} else {
-				ctx = legacyContext(t, fixture, true)
+				ctx = legacyContext(t, fixture, mcp.ProtocolVersion20251125, true)
 			}
 			response := rawCall(t, ctx, fixture.srv, toolCall(ToolSetOrganizationModel, arguments, extra))
 			var elicitation map[string]any
@@ -244,20 +245,25 @@ func TestAMissingCredentialIsAURLElicitation(t *testing.T) {
 }
 
 func TestCredentialInputCanBeCancelledWithoutWriting(t *testing.T) {
-	fixture := newOrgFixture(t)
-	arguments := map[string]any{"namespace": orgNS, "name": "claude", "provider": "Anthropic", "model": "claude-sonnet-4-6"}
-	response := rawCall(t, fixture.ctx, fixture.srv, toolCall(ToolSetOrganizationModel, arguments, modernMeta(true)))
-	requests := response["result"].(map[string]any)["inputRequests"].(map[string]any)
-	key := ""
-	for name := range requests {
-		key = name
+	for action, outcome := range map[string]string{"decline": "declined", "cancel": "cancelled"} {
+		t.Run(action, func(t *testing.T) {
+			fixture := newOrgFixture(t)
+			arguments := map[string]any{"namespace": orgNS, "name": "claude", "provider": "Anthropic", "model": "claude-sonnet-4-6"}
+			response := rawCall(t, fixture.ctx, fixture.srv, toolCall(ToolSetOrganizationModel, arguments, modernMeta(true)))
+			requests := response["result"].(map[string]any)["inputRequests"].(map[string]any)
+			key := ""
+			for name := range requests {
+				key = name
+			}
+			extra := modernMeta(true)
+			extra["inputResponses"] = map[string]any{key: map[string]any{"action": action}}
+			response = rawCall(t, fixture.ctx, fixture.srv, toolCall(ToolSetOrganizationModel, arguments, extra))
+			require.Equal(t, true, response["result"].(map[string]any)["isError"], response)
+			require.Contains(t, resultText(t, response), "Credential input was "+outcome)
+			require.Nil(t, fixture.get(t, mcGVR, orgNS, "claude"))
+			require.Nil(t, fixture.get(t, secretGVR, orgNS, "tenant-credential-claude"))
+		})
 	}
-	extra := modernMeta(true)
-	extra["inputResponses"] = map[string]any{key: map[string]any{"action": "cancel"}}
-	response = rawCall(t, fixture.ctx, fixture.srv, toolCall(ToolSetOrganizationModel, arguments, extra))
-	require.Contains(t, resultText(t, response), "cancelled")
-	require.Nil(t, fixture.get(t, mcGVR, orgNS, "claude"))
-	require.Nil(t, fixture.get(t, secretGVR, orgNS, "tenant-credential-claude"))
 }
 
 func TestCredentialFallbackAndDryRun(t *testing.T) {
@@ -271,4 +277,103 @@ func TestCredentialFallbackAndDryRun(t *testing.T) {
 	require.False(t, failed, text)
 	require.NotContains(t, text, "credentialOperation")
 	require.Nil(t, fixture.get(t, mcGVR, orgNS, "claude"))
+}
+
+func TestCredentialWithoutURLElicitationIsAStructuredResultWithAResourceLink(t *testing.T) {
+	arguments := map[string]any{"namespace": orgNS, "name": "claude", "provider": "Anthropic", "model": "claude-sonnet-4-6"}
+
+	t.Run("apply", func(t *testing.T) {
+		fixture := newOrgFixture(t)
+		structured, content := structuredCredentialResult(t, fixture, arguments)
+		credential := structured["credentials"].([]any)[0].(map[string]any)
+		formURL := credential["formUrl"].(string)
+		require.Contains(t, formURL, "https://portal.example.com/credentials?operation=")
+		require.Contains(t, credential["next"], formURL)
+		require.Len(t, content, 2)
+		link := content[1].(map[string]any)
+		require.Equal(t, "resource_link", link["type"])
+		require.Equal(t, formURL, link["uri"])
+		require.Equal(t, map[string]any{"audience": []any{"user"}}, link["annotations"])
+	})
+
+	t.Run("before resource_link", func(t *testing.T) {
+		fixture := newOrgFixture(t)
+		ctx := legacyContext(t, fixture, mcp.ProtocolVersion20250326, false)
+		response := rawCall(t, ctx, fixture.srv, toolCall(ToolSetOrganizationModel, arguments, nil))
+		result := response["result"].(map[string]any)
+		require.NotEqual(t, true, result["isError"], result)
+		require.NotNil(t, result["structuredContent"])
+		require.Len(t, result["content"].([]any), 1)
+	})
+
+	t.Run("dry run", func(t *testing.T) {
+		dryRun := map[string]any{"dryRun": true}
+		for key, value := range arguments {
+			dryRun[key] = value
+		}
+		structuredCredentialResult(t, newOrgFixture(t), dryRun)
+	})
+
+	t.Run("commit", func(t *testing.T) {
+		commit := map[string]any{"mode": "commit"}
+		for key, value := range arguments {
+			commit[key] = value
+		}
+		fixture, _ := commitFixture(t, nil)
+		structured, _ := structuredCredentialResult(t, fixture, commit)
+		require.NotEmpty(t, structured["credentials"])
+	})
+}
+
+// structuredCredentialResult calls set_organization_model without URL
+// elicitation and returns the structuredContent, validated against the
+// outputSchema tools/list declares and equal to the JSON text, with the
+// result's content.
+func structuredCredentialResult(t *testing.T, fixture *orgFixture, arguments map[string]any) (map[string]any, []any) {
+	t.Helper()
+	response := rawCall(t, fixture.ctx, fixture.srv, toolCall(ToolSetOrganizationModel, arguments, modernMeta(false)))
+	result := response["result"].(map[string]any)
+	require.NotEqual(t, true, result["isError"], result)
+	structured := result["structuredContent"].(map[string]any)
+	require.NoError(t, outputSchema(t, fixture, ToolSetOrganizationModel).Validate(structured))
+	content := result["content"].([]any)
+	var text map[string]any
+	require.NoError(t, json.Unmarshal([]byte(content[0].(map[string]any)["text"].(string)), &text))
+	require.Equal(t, structured, text)
+	return structured, content
+}
+
+// outputSchema compiles the outputSchema tools/list declares for the tool.
+func outputSchema(t *testing.T, fixture *orgFixture, name string) *jsonschema.Schema {
+	t.Helper()
+	response := rawCall(t, fixture.ctx, fixture.srv, map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
+	for _, tool := range response["result"].(map[string]any)["tools"].([]any) {
+		tool := tool.(map[string]any)
+		if tool["name"] != name {
+			continue
+		}
+		compiler := jsonschema.NewCompiler()
+		require.NoError(t, compiler.AddResource("output.schema.json", tool["outputSchema"]))
+		compiled, err := compiler.Compile("output.schema.json")
+		require.NoError(t, err)
+		return compiled
+	}
+	t.Fatalf("tools/list has no tool %s", name)
+	return nil
+}
+
+func TestCredentialWriteToolsDeclareTheirOutputSchema(t *testing.T) {
+	fixture := newOrgFixture(t)
+	response := rawCall(t, fixture.ctx, fixture.srv, map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
+	declared := map[string]bool{}
+	for _, tool := range response["result"].(map[string]any)["tools"].([]any) {
+		tool := tool.(map[string]any)
+		if schema, ok := tool["outputSchema"].(map[string]any); ok {
+			_, hasCredentials := schema["properties"].(map[string]any)["credentials"]
+			declared[tool["name"].(string)] = hasCredentials
+		}
+	}
+	for _, name := range []string{ToolSetOrganizationModel, ToolSetOrganizationConnector, ToolSetOrganizationEgress} {
+		require.True(t, declared[name], name)
+	}
 }

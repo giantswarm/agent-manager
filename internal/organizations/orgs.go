@@ -8,6 +8,8 @@ import (
 	"time"
 
 	apov1alpha1 "github.com/giantswarm/agent-platform-operator/api/v1alpha1"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -18,6 +20,8 @@ import (
 
 	"github.com/giantswarm/agent-manager/internal/agents"
 	"github.com/giantswarm/agent-manager/internal/identity"
+	"github.com/giantswarm/agent-manager/internal/kagent"
+	apiv1alpha1 "github.com/giantswarm/agent-manager/internal/kagent/gen/kagent/api/v1alpha1"
 	"github.com/giantswarm/agent-manager/internal/kube"
 )
 
@@ -44,6 +48,14 @@ type Organization struct {
 	Ready                  *Condition `json:"ready,omitempty"`
 	DefaultModelConfigured *Condition `json:"defaultModelConfigured,omitempty"`
 	Orphaned               *Condition `json:"orphaned,omitempty"`
+	// LastAppliedRevision is the operator's status.lastAppliedRevision: the
+	// last source revision Flux applied the organization from, kept while it
+	// is Orphaned.
+	LastAppliedRevision string `json:"lastAppliedRevision,omitempty"`
+	// LastAppliedRevisionURL is that revision's commit on GitHub, when mode
+	// commit names the installation repository and the revision is a git
+	// commit.
+	LastAppliedRevisionURL string `json:"lastAppliedRevisionUrl,omitempty"`
 	// Deleting: the object is deleted and the operator erases it;
 	// ErasureStep names the step it is on.
 	Deleting    bool   `json:"deleting,omitempty"`
@@ -61,12 +73,15 @@ func organizationOf(u *unstructured.Unstructured) (*apov1alpha1.AgentPlatformOrg
 	return org, nil
 }
 
-func summary(org *apov1alpha1.AgentPlatformOrganization) Organization {
+func (s *Service) summary(org *apov1alpha1.AgentPlatformOrganization) Organization {
 	out := Organization{
 		Name: org.Name, Parent: org.Namespace, DisplayName: org.Annotations[apov1alpha1.DisplayNameAnnotation],
 		Namespace: org.Status.Namespace, Harnesses: slices.Clone(org.Spec.Harnesses), WorkerReplicas: org.Spec.Workers.Replicas,
 		SnapshotPrefix: org.Status.SnapshotPrefix, Deleting: org.DeletionTimestamp != nil, ErasureStep: org.Status.ErasureStep,
-		GitOps: org.Labels[agents.KustomizationNameLabel],
+		GitOps: org.Labels[agents.KustomizationNameLabel], LastAppliedRevision: org.Status.LastAppliedRevision,
+	}
+	if s.cfg.Commit != nil {
+		out.LastAppliedRevisionURL = commitURL(s.cfg.Commit.Objects.Repository, org.Status.LastAppliedRevision)
 	}
 	if out.Harnesses == nil {
 		out.Harnesses = []string{}
@@ -112,7 +127,7 @@ func (s *Service) List(ctx context.Context, parent string) ([]Organization, erro
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, summary(org))
+		out = append(out, s.summary(org))
 	}
 	slices.SortFunc(out, func(a, b Organization) int {
 		return strings.Compare(a.Parent+"/"+a.Name, b.Parent+"/"+b.Name)
@@ -143,10 +158,26 @@ type Erasure struct {
 	// (agent-platform:admin, editor and user).
 	Members        []string `json:"members"`
 	SnapshotPrefix string   `json:"snapshotPrefix,omitempty"`
+	// Sessions counts, per Agent, the sessions of the organization the erase
+	// deletes, as the caller sees them across every creator: running ones
+	// stop, stopped ones lose their worker snapshots and cannot be resumed.
+	// Only Agents with a session are listed. Null when they could not be
+	// listed, and then SessionsUnavailable says why.
+	Sessions            []AgentSessions `json:"sessions"`
+	SessionsUnavailable string          `json:"sessionsUnavailable,omitempty"`
 	// Kept is what a delete does not erase.
 	Kept string `json:"kept"`
 	// Unreadable names what the caller may not read there, with why.
 	Unreadable []string `json:"unreadable,omitempty"`
+}
+
+// AgentSessions counts one Agent's sessions the erase deletes.
+type AgentSessions struct {
+	Agent string `json:"agent"`
+	// Running are in RuntimeState CREATING or READY.
+	Running int `json:"running"`
+	// Stopped are in RuntimeState SUSPENDED or FAILED.
+	Stopped int `json:"stopped"`
 }
 
 // Get reads one organization and what deleting it erases.
@@ -155,7 +186,7 @@ func (s *Service) Get(ctx context.Context, parent, name string) (*Details, error
 	if err != nil {
 		return nil, err
 	}
-	out := &Details{Organization: summary(org)}
+	out := &Details{Organization: s.summary(org)}
 	if org.Status.Namespace != "" {
 		out.Erases = s.erasure(ctx, c.Dynamic(), org)
 	}
@@ -189,12 +220,12 @@ func (s *Service) erasure(ctx context.Context, dyn dynamic.Interface, org *apov1
 	out := &Erasure{Namespace: ns, SnapshotPrefix: org.Status.SnapshotPrefix,
 		Kept: "session tombstones stay in the agent runtime; everything else of the organization namespace is erased, worker snapshots and connector sign-ins included"}
 	credentials := map[string]bool{}
-	read := func(what string, gvr func() ([]unstructured.Unstructured, error), into *[]string, each func(*unstructured.Unstructured)) {
+	read := func(what string, gvr func() ([]unstructured.Unstructured, error), into *[]string, each func(*unstructured.Unstructured)) bool {
 		items, err := gvr()
 		*into = []string{}
 		if err != nil {
 			out.Unreadable = append(out.Unreadable, fmt.Sprintf("%s: %v (an organizations-admin reads them once it binds itself in the organization, which its members see)", what, err))
-			return
+			return false
 		}
 		for i := range items {
 			*into = append(*into, items[i].GetName())
@@ -202,6 +233,7 @@ func (s *Service) erasure(ctx context.Context, dyn dynamic.Interface, org *apov1
 				each(&items[i])
 			}
 		}
+		return true
 	}
 	lister := func(gvr schema.GroupVersionResource) func() ([]unstructured.Unstructured, error) {
 		return func() ([]unstructured.Unstructured, error) {
@@ -216,7 +248,7 @@ func (s *Service) erasure(ctx context.Context, dyn dynamic.Interface, org *apov1
 	if err != nil {
 		hrGV = schema.GroupVersion{Group: "helm.toolkit.fluxcd.io", Version: "v2"}
 	}
-	read("agents", lister(s.kagentGVR("agents")), &out.Agents, nil)
+	agentsRead := read("agents", lister(s.kagentGVR("agents")), &out.Agents, nil)
 	read("HelmReleases", lister(hrGV.WithResource("helmreleases")), &out.HelmReleases, nil)
 	read("models", lister(s.kagentGVR("modelconfigs")), &out.Models, func(u *unstructured.Unstructured) {
 		if secret, _, _ := unstructured.NestedString(u.Object, "spec", "apiKeySecret"); secret != "" {
@@ -249,7 +281,60 @@ func (s *Service) erasure(ctx context.Context, dyn dynamic.Interface, org *apov1
 		out.Credentials = append(out.Credentials, name)
 	}
 	slices.Sort(out.Credentials)
+	out.Sessions, out.SessionsUnavailable = s.erasedSessions(ctx, ns, out.Agents, agentsRead)
 	return out
+}
+
+// erasedSessions counts, as the caller and across every creator, the
+// sessions of the organization's Agents the erase deletes. It answers why
+// when it cannot list them.
+func (s *Service) erasedSessions(ctx context.Context, ns string, agentNames []string, agentsRead bool) ([]AgentSessions, string) {
+	if s.cfg.Sessions == nil {
+		return nil, "agent-manager has no agent runtime target (--kagent-target), so it lists no sessions"
+	}
+	if !agentsRead {
+		return nil, "the organization's agents could not be read (see unreadable)"
+	}
+	token, ok := identity.TokenFromContext(ctx)
+	if !ok {
+		return nil, "the request carries no identity token, and sessions are listed as the caller"
+	}
+	out := []AgentSessions{}
+	for _, name := range agentNames {
+		sessions, err := s.cfg.Sessions.ListSessions(ctx, token, kagent.Ref{Namespace: ns, Name: name}, true)
+		if err != nil {
+			return nil, sessionsRefusal(name, err)
+		}
+		count := AgentSessions{Agent: name}
+		for _, session := range sessions {
+			switch session.GetState() {
+			case apiv1alpha1.RuntimeState_RUNTIME_STATE_CREATING, apiv1alpha1.RuntimeState_RUNTIME_STATE_READY:
+				count.Running++
+			case apiv1alpha1.RuntimeState_RUNTIME_STATE_SUSPENDED, apiv1alpha1.RuntimeState_RUNTIME_STATE_FAILED:
+				count.Stopped++
+			}
+		}
+		if count.Running+count.Stopped > 0 {
+			out = append(out, count)
+		}
+	}
+	return out, ""
+}
+
+// sessionsRefusal says why an Agent's sessions could not be listed: the
+// controller's own words for a refusal of the caller, the status code alone
+// for anything else, whose message may name the runtime's address.
+func sessionsRefusal(agent string, err error) string {
+	st, ok := status.FromError(err)
+	if !ok {
+		return fmt.Sprintf("the sessions of agent %s could not be listed", agent)
+	}
+	switch st.Code() {
+	case codes.PermissionDenied, codes.Unauthenticated, codes.NotFound:
+		return fmt.Sprintf("the sessions of agent %s: %s: %s", agent, st.Code(), st.Message())
+	default:
+		return fmt.Sprintf("the sessions of agent %s: the agent runtime answered %s", agent, st.Code())
+	}
 }
 
 // ---- create -----------------------------------------------------------------------
@@ -310,10 +395,11 @@ type Subject struct {
 // Create writes an AgentPlatformOrganization as the caller, waits for the
 // operator to make it Ready, then writes its first admins as the caller.
 // Before any write it asks, as the caller, whether the first admins can be
-// bound (create RoleBindings and bind agent-platform:admin in the parent,
-// which the operator mirrors into the organization namespace) and dry-runs
-// the object, so a refusal comes before the object exists. A create of an
-// organization that exists without its first admins finishes them.
+// bound (create RoleBindings and bind agent-platform:admin in the parent),
+// whether that right will reach the organization namespace
+// (requireRightReachesOrganization), and dry-runs the object, so a refusal
+// comes before the object exists. A create of an organization that exists
+// without its first admins finishes them.
 func (s *Service) Create(ctx context.Context, req CreateRequest) (*CreateResult, error) {
 	if req.Parent == "" || req.Name == "" {
 		return nil, invalidf("namespace (the parent namespace) and name are required")
@@ -352,6 +438,9 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (*CreateResult,
 	existing, err := orgs.Get(ctx, req.Name, metav1.GetOptions{})
 	switch {
 	case apierrors.IsNotFound(err):
+		if err := s.requireRightReachesOrganization(ctx, c, req.Parent); err != nil {
+			return nil, err
+		}
 		obj := s.organizationObject(req)
 		w := write{gvr: GVR, kind: orgKind, op: opCreate, obj: obj, ns: req.Parent, name: req.Name, what: what, reason: way}
 		if err := apply(ctx, c.Dynamic(), []write{w}, req.DryRun); err != nil {
@@ -362,7 +451,7 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (*CreateResult,
 			if err != nil {
 				return nil, err
 			}
-			res.Organization = summary(planned)
+			res.Organization = s.summary(planned)
 			res.Created = true
 			res.FirstAdmins = &Binding{Name: FirstAdminsBinding, Role: RoleAdmin, Subjects: subjects}
 			res.Pending = "dry run: nothing was written; the first admins are bound once the organization is Ready"
@@ -390,7 +479,7 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (*CreateResult,
 			return nil, fmt.Errorf("%w: %s exists with its first admins; update_organization changes it, add_organization_member adds admins", agents.ErrConflict, what)
 		}
 		if req.DryRun {
-			res.Organization = summary(org)
+			res.Organization = s.summary(org)
 			res.FirstAdmins = &Binding{Name: FirstAdminsBinding, Role: RoleAdmin, Subjects: subjects}
 			res.Pending = "dry run: the organization exists without its first admins; a call without dryRun binds them once it is Ready"
 			return res, nil
@@ -401,20 +490,16 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (*CreateResult,
 	if err != nil {
 		return nil, err
 	}
-	res.Organization = summary(org)
+	res.Organization = s.summary(org)
 	if !ready(org) {
 		res.Pending = fmt.Sprintf("the organization is not Ready after %s (%s), so its first admins are not bound yet; call create_organization again with the same arguments to bind them once it is", s.cfg.ReadyTimeout, describeReady(res.Organization.Ready))
 		return res, nil
 	}
-	// The parent's check holds for an organizations-admin, whose bindings the
-	// operator mirrors into the new namespace. Rights there from another
-	// source (a Giant Swarm Organization admin's cluster-admin in its
-	// org-<name>) are not mirrored: ask again where the binding goes, so the
-	// answer names who can finish it instead of a Forbidden write.
-	if err := requireAccess(ctx, c, wayFirstAdmins(org),
-		access{namespace: org.Status.Namespace, verb: "create", group: rbacGVR.Group, resource: rbacGVR.Resource},
-		access{namespace: org.Status.Namespace, verb: "bind", group: rbacGVR.Group, resource: "clusterroles", name: RoleAdmin},
-	); err != nil {
+	// The right in the parent was checked to reach the new namespace before
+	// the write, but the operator may not have mirrored it yet, or the
+	// caller's bindings could not be read: ask again where the binding goes,
+	// so the answer names who can finish it instead of a Forbidden write.
+	if err := requireAccess(ctx, c, wayFirstAdmins(org), firstAdminsAccess(org.Status.Namespace)...); err != nil {
 		res.Pending = fmt.Sprintf("the organization %s exists and is Ready, but its first admins are not bound: %v", what, err)
 		return res, nil
 	}
@@ -482,7 +567,7 @@ func (s *Service) waitReady(ctx context.Context, c kube.Client, parent, name str
 		if ready(org) || !time.Now().Before(deadline) {
 			return org, nil
 		}
-		progress(fmt.Sprintf("waiting for organization %s/%s to be Ready (%s)", parent, name, describeReady(summary(org).Ready)))
+		progress(fmt.Sprintf("waiting for organization %s/%s to be Ready (%s)", parent, name, describeReady(s.summary(org).Ready)))
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
@@ -560,7 +645,7 @@ func (s *Service) Update(ctx context.Context, req UpdateRequest) (*UpdateResult,
 	if err := refuseLive(org); err != nil {
 		return nil, err
 	}
-	res := &UpdateResult{Before: summary(org), DryRun: req.DryRun, RequestedBy: identity.Caller(ctx)}
+	res := &UpdateResult{Before: s.summary(org), DryRun: req.DryRun, RequestedBy: identity.Caller(ctx)}
 	next := u.DeepCopy()
 	if res.Changed, err = changeOrganization(next, req); err != nil {
 		return nil, err
@@ -569,7 +654,7 @@ func (s *Service) Update(ctx context.Context, req UpdateRequest) (*UpdateResult,
 	if err != nil {
 		return nil, err
 	}
-	res.After = summary(after)
+	res.After = s.summary(after)
 	if len(res.Changed) == 0 {
 		return res, nil
 	}
@@ -678,7 +763,7 @@ func (s *Service) Delete(ctx context.Context, req DeleteRequest) (*DeleteResult,
 		}
 	}
 	confirm := req.Parent + "/" + req.Name
-	res := &DeleteResult{Organization: summary(org), DryRun: req.DryRun, RequestedBy: identity.Caller(ctx)}
+	res := &DeleteResult{Organization: s.summary(org), DryRun: req.DryRun, RequestedBy: identity.Caller(ctx)}
 	if org.Status.Namespace != "" {
 		res.Erases = s.erasure(ctx, c.Dynamic(), org)
 	}

@@ -15,8 +15,10 @@ credentials:
   uiURL: https://portal.example.com/organizations/graveler/{parent}/{organization}/credentials?operation={operation}
 ```
 
-`{operation}` is required once in the path or query. `{parent}` and
-`{organization}` are optional; the scheme and host are fixed. Routes and the
+The template is an [RFC 6570](https://www.rfc-editor.org/rfc/rfc6570) URI
+template. One `{operation}` expression is required in the path or query
+(`{?operation}` works too). `{parent}` and `{organization}` are optional; the
+scheme and host are fixed, and no other variable is accepted. Routes and the
 installation name belong to the UI configuration. Agent-manager neither hosts a
 form nor constructs a Backstage route. The operation ID grants no authority.
 
@@ -109,10 +111,11 @@ Reads, saves and cancellation independently verify issuer/subject ownership and
 current organization permissions. Saves recheck resource versions, existing
 Secret keys and consumers, Git destination, file hashes and encryption policy,
 then server-side dry-run all intended writes as the person. Stale operation
-versions return `412`; changed resources or Git inputs return `409`. Unknown
-credential state, shared Secrets and multi-key Secrets are refused. Backend
-refusals are sanitized before entering errors or logs. HTTP intermediaries and
-Kubernetes audit policy must also exclude request/response bodies for credentials.
+versions return `412`, a save or cancellation without `If-Match` returns `428`,
+and changed resources or Git inputs return `409`. Unknown credential state,
+shared Secrets and multi-key Secrets are refused. Backend refusals are
+sanitized before entering errors or logs. HTTP intermediaries and Kubernetes
+audit policy must also exclude request/response bodies for credentials.
 Several headers of one connector may reference the same Secret/key pair; its
 confirmation requests that value once.
 
@@ -130,7 +133,7 @@ applied it. See [repository requirements](organizations-commit-mode.md).
 ## Upgrading credential UI configuration
 
 Replace `--dev-portal-url` and chart `devPortal.url` with `--credential-ui-url`
-and `credentials.uiURL`. Supply an HTTPS URL template containing `{operation}`.
+and `credentials.uiURL`. Supply an HTTPS RFC 6570 URI template containing `{operation}`.
 Enable OAuth and downstream authorization and configure a dedicated metadata
 namespace with `--credential-operations-namespace`; the chart derives that
 namespace when `credentials.operationsNamespace` is empty. The client form

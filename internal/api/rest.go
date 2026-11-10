@@ -440,6 +440,7 @@ var errorCodes = []struct {
 	code     string
 }{
 	{organizations.ErrCredentialOperationChanged, http.StatusPreconditionFailed, "precondition_failed"},
+	{errIfMatchRequired, http.StatusPreconditionRequired, "precondition_required"},
 	{agents.ErrNotFound, http.StatusNotFound, "not_found"},
 	{agents.ErrInvalid, http.StatusBadRequest, "invalid_request"},
 	{agents.ErrGitOpsOwned, http.StatusConflict, "gitops_owned"},
