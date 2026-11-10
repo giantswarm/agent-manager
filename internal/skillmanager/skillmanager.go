@@ -177,36 +177,6 @@ func (c *Client) Resolve(ctx context.Context, skillItems, pluginItems []Item) ([
 	return out.Skills, out.Plugins, nil
 }
 
-// GitHead resolves ref of repoURL (empty: the default branch) to a commit.
-func (c *Client) GitHead(ctx context.Context, repoURL, ref string) (string, error) {
-	got, _, err := c.Resolve(ctx, []Item{{Name: itemName(repoURL), Git: &Git{URL: repoURL, Ref: ref}}}, nil)
-	if err != nil {
-		return "", err
-	}
-	if got[0].Git == nil {
-		return "", errOtherSource
-	}
-	return got[0].Git.Commit, nil
-}
-
-// OCIDigest pins an OCI reference to <repository>@sha256:<digest>.
-func (c *Client) OCIDigest(ctx context.Context, ref string) (string, error) {
-	got, _, err := c.Resolve(ctx, []Item{{Name: itemName(ref), OCI: &OCI{Ref: ref}}}, nil)
-	if err != nil {
-		return "", err
-	}
-	if got[0].OCI == nil {
-		return "", errOtherSource
-	}
-	return got[0].OCI.Ref, nil
-}
-
-var errOtherSource = fmt.Errorf("%w: POST /v1/resolve answered another kind of source", ErrUnavailable)
-
-// RequireReadable is a no-op: skill-manager checks readability as it
-// resolves, which every write does for every git item.
-func (c *Client) RequireReadable(context.Context, string, string) error { return nil }
-
 // ClaudeFormatPlugin answers from the formats resolve reported, else
 // resolves the plugin at commit to learn it.
 func (c *Client) ClaudeFormatPlugin(ctx context.Context, repoURL, commit, at string) (bool, error) {
@@ -357,17 +327,4 @@ func answerError(method, p string, status int, raw []byte) error {
 		e.Item = *body.Item
 	}
 	return e
-}
-
-// itemName names a single-source item: the last segment of its repository
-// or image.
-func itemName(source string) string {
-	source = strings.TrimSuffix(strings.Trim(source, "/"), ".git")
-	if i := strings.LastIndex(source, "/"); i >= 0 {
-		source = source[i+1:]
-	}
-	if i := strings.IndexAny(source, ":@"); i > 0 {
-		source = source[:i]
-	}
-	return source
 }

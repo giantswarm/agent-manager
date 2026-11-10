@@ -168,7 +168,7 @@ func runMigrate(ctx context.Context, out io.Writer, o *migrateOptions) error {
 	if err != nil {
 		return err
 	}
-	var pinner agents.SkillPinner = skills.NewResolver(o.skillsGitHubAPI, skills.StaticToken(o.skillsToken), nil, nil)
+	pinner := agents.InProcessPinner(skills.NewResolver(o.skillsGitHubAPI, skills.StaticToken(o.skillsToken), nil, nil))
 	if o.skillManagerURL != "" {
 		client, err := skillmanager.New(skillmanager.Config{URL: o.skillManagerURL, Token: o.skillManagerToken})
 		if err != nil {

@@ -39,7 +39,7 @@ func newSessionService(t *testing.T) (*agents.Service, *kagenttest.Controller) {
 	t.Cleanup(bindings.Close)
 	binder, err := muster.New(bindings.URL+"/session-bindings", nil)
 	require.NoError(t, err)
-	svc := agents.New(kube.NewServiceAccountProvider(kube.FromInterfaces(dyn, typed, typed.Discovery())), embeddedChart{}, nil, pinner{}, agents.Config{
+	svc := agents.New(kube.NewServiceAccountProvider(kube.FromInterfaces(dyn, typed, typed.Discovery())), embeddedChart{}, nil, agents.InProcessPinner(pinner{}), agents.Config{
 		DefaultNamespace: "kagent", Version: "test", Sessions: kagent.NewClient(conn), Bindings: binder,
 	}, nil)
 	return svc, ctrl

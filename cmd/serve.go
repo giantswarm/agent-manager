@@ -327,7 +327,7 @@ func runServe(ctx context.Context, o *serveOptions) error {
 			log.Warn("--skill-manager-url without --enable-oauth: skill-manager is called with no bearer, which only a skill-manager without OAuth accepts", "skillManager", o.skillManagerURL)
 		}
 	} else {
-		pinner = skills.NewResolver(o.skillsGitHubAPI, skillsTokens, nil, nil)
+		pinner = agents.InProcessPinner(skills.NewResolver(o.skillsGitHubAPI, skillsTokens, nil, nil))
 		if repos := splitList(o.skillsRepositories); len(repos) > 0 {
 			discoverer = skills.New(skills.Config{Repositories: repos, APIURL: o.skillsGitHubAPI, Tokens: skillsTokens, CacheTTL: o.skillsCacheTTL, Tags: tagRule}, log)
 		}

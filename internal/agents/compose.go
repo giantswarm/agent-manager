@@ -177,7 +177,7 @@ func ValidateName(name string) error {
 }
 
 // BuildValues composes the chart values from a spec whose skills are pinned
-// (see pinSkills). Only what the caller set is emitted so the chart's
+// (see pinSources). Only what the caller set is emitted so the chart's
 // defaults apply to everything else — the same rule as the portal (an empty
 // prompt means "the chart's default prompt").
 func BuildValues(spec Spec, cfg ComposeConfig) map[string]any {

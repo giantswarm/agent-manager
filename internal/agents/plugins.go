@@ -1,14 +1,12 @@
 package agents
 
 import (
-	"context"
 	"fmt"
 	"strings"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/giantswarm/agent-manager/internal/oci"
-	"github.com/giantswarm/agent-manager/internal/skillmanager"
 	"github.com/giantswarm/agent-manager/internal/skills"
 )
 
@@ -87,56 +85,6 @@ func validateSkillNames(list Skills, plugins Plugins) error {
 		}
 	}
 	return nil
-}
-
-// pinPlugins returns the list with every source pinned as pinSkills pins a
-// skill's: a git plugin to a full commit, an OCI plugin to its digest; with
-// refresh, every git plugin to the head of its ref or default branch.
-func pinPlugins(ctx context.Context, p SkillPinner, list Plugins, refresh bool) (Plugins, error) {
-	if len(list) == 0 {
-		return nil, nil
-	}
-	if bp, ok := p.(BatchPinner); ok {
-		return batchPinPlugins(ctx, bp, list, refresh)
-	}
-	out := make(Plugins, 0, len(list))
-	for i, pl := range list {
-		pinned := Plugin{Path: pl.Path, Skills: pl.Skills}
-		var err error
-		if pinned.Git, pinned.OCI, err = pinSource(ctx, p, fmt.Sprintf("plugins[%d]", i), pl.Git, pl.OCI, refresh); err != nil {
-			return nil, err
-		}
-		out = append(out, pinned)
-	}
-	return out, nil
-}
-
-// batchPinPlugins is pinPlugins in one call of a BatchPinner, which also
-// learns each git plugin's format.
-func batchPinPlugins(ctx context.Context, bp BatchPinner, list Plugins, refresh bool) (Plugins, error) {
-	at := func(i int) string { return fmt.Sprintf("plugins[%d]", i) }
-	items := make([]skillmanager.Item, len(list))
-	for i, pl := range list {
-		it, err := batchItem(at(i), pl.Git, pl.OCI, refresh)
-		if err != nil {
-			return nil, err
-		}
-		it.Path, it.Skills = pl.Path, pl.Skills
-		items[i] = it
-	}
-	_, got, err := bp.Resolve(ctx, nil, items)
-	if err != nil {
-		return nil, batchError(skillmanager.ListPlugins, len(list), at, err)
-	}
-	out := make(Plugins, 0, len(list))
-	for i, pl := range list {
-		pinned := Plugin{Path: pl.Path, Skills: pl.Skills}
-		if pinned.Git, pinned.OCI, err = batchPinned(pl.Git, pl.OCI, got[i]); err != nil {
-			return nil, sourceError(at(i), err)
-		}
-		out = append(out, pinned)
-	}
-	return out, nil
 }
 
 // pluginsValues renders the plugins list as chart values; nil when empty.

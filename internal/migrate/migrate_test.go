@@ -157,7 +157,7 @@ func newCluster(objs ...runtime.Object) *cluster {
 func (c *cluster) runner(t *testing.T, opts Options, latest, token string) *Runner {
 	t.Helper()
 	ch := fakeChart{latest: latest}
-	p := pinner{git: skills.NewResolver(fakeGitHub(t).URL, skills.StaticToken(token), nil, nil)}
+	p := agents.InProcessPinner(pinner{git: skills.NewResolver(fakeGitHub(t).URL, skills.StaticToken(token), nil, nil)})
 	opts.Version = "test"
 	r, err := New(c.client, ch, p, TemplateStatus{Client: c.dyn, APIVersion: "v1alpha3", Harness: kagentNS}, opts, nil)
 	require.NoError(t, err)
@@ -872,7 +872,7 @@ func TestNothingToMigrateIsComplete(t *testing.T) {
 
 func TestRewriteValues(t *testing.T) {
 	ctx := context.Background()
-	p := pinner{git: skills.NewResolver(fakeGitHub(t).URL, nil, nil, nil)}
+	p := agents.InProcessPinner(pinner{git: skills.NewResolver(fakeGitHub(t).URL, nil, nil, nil)})
 	cases := map[string]struct {
 		values  map[string]any
 		harness string

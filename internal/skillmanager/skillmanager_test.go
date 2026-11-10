@@ -216,7 +216,7 @@ func TestTheGitHubRegistrationsBearerIsForwardedAsReceived(t *testing.T) {
 	ctx := identity.ContextWithToken(t.Context(), "id-token")
 	ctx = identity.ContextWithGitHub(ctx, &identity.GitHub{Login: "alice", Token: "gh-token"})
 
-	_, err := c.GitHead(ctx, repo, "main")
+	_, _, err := c.Resolve(ctx, []Item{{Name: "r", Git: &Git{URL: repo, Ref: "main"}}}, nil)
 	require.NoError(t, err)
 	req, _ := f.last()
 	assert.Equal(t, "Bearer gh-token", req.Header.Get("Authorization"))
@@ -229,9 +229,9 @@ func TestWithoutACallerTheServiceTokenIsTheBearer(t *testing.T) {
 	f := &fakeSkillManager{}
 	c := newClient(t, f, "service")
 
-	got, err := c.GitHead(t.Context(), repo, "main")
+	got, _, err := c.Resolve(t.Context(), []Item{{Name: "r", Git: &Git{URL: repo, Ref: "main"}}}, nil)
 	require.NoError(t, err)
-	assert.Equal(t, mainHead, got)
+	assert.Equal(t, mainHead, got[0].Git.Commit)
 	req, _ := f.last()
 	assert.Equal(t, "Bearer service", req.Header.Get("Authorization"))
 
@@ -240,25 +240,11 @@ func TestWithoutACallerTheServiceTokenIsTheBearer(t *testing.T) {
 	assert.Empty(t, req.Header.Get("Authorization"), "the service token is a resolve's only")
 }
 
-func TestOCIDigestPinsThroughResolve(t *testing.T) {
+// Readability is skill-manager's, inside resolve: a repository the caller
+// cannot read is refused naming its item.
+func TestResolveRefusesARepositoryTheCallerCannotRead(t *testing.T) {
 	f := &fakeSkillManager{}
 	c := newClient(t, f, "t")
-
-	got, err := c.OCIDigest(t.Context(), "ghcr.io/giantswarm/skills/kubectl:1.4.0")
-	require.NoError(t, err)
-	assert.Equal(t, "ghcr.io/giantswarm/skills/kubectl@"+digest, got)
-	_, body := f.last()
-	assert.Equal(t, &OCI{Ref: "ghcr.io/giantswarm/skills/kubectl:1.4.0"}, body.Skills[0].OCI)
-}
-
-// Readability is skill-manager's, inside resolve: RequireReadable asks
-// nothing.
-func TestRequireReadableAsksNothing(t *testing.T) {
-	f := &fakeSkillManager{}
-	c := newClient(t, f, "t")
-	require.NoError(t, c.RequireReadable(t.Context(), privateRepo, "alice"))
-	assert.Zero(t, f.calls())
-
 	_, _, err := c.Resolve(t.Context(), nil, []Item{{Git: &Git{URL: privateRepo}}})
 	require.ErrorIs(t, err, skills.ErrNotReadable)
 	var refused *ResolveError
@@ -303,7 +289,7 @@ func TestAnUnreachableSkillManagerIsUnavailable(t *testing.T) {
 	srv.Close()
 	c, err := New(Config{URL: url})
 	require.NoError(t, err)
-	_, err = c.GitHead(t.Context(), repo, "main")
+	_, _, err = c.Resolve(t.Context(), []Item{{Name: "x", Git: &Git{URL: repo, Ref: "main"}}}, nil)
 	require.ErrorIs(t, err, ErrUnavailable)
 }
 
@@ -314,7 +300,7 @@ func TestAMalformedPinIsUnavailable(t *testing.T) {
 	t.Cleanup(srv.Close)
 	c, err := New(Config{URL: srv.URL})
 	require.NoError(t, err)
-	_, err = c.GitHead(t.Context(), repo, "main")
+	_, _, err = c.Resolve(t.Context(), []Item{{Name: "x", Git: &Git{URL: repo, Ref: "main"}}}, nil)
 	require.ErrorIs(t, err, ErrUnavailable)
 }
 

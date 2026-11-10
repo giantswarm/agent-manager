@@ -99,7 +99,7 @@ func newServiceAllowed(t *testing.T, allowed bool) (*agents.Service, *dynamicfak
 		return true, review, nil
 	})
 	client := kube.FromInterfaces(dyn, typed, typed.Discovery())
-	svc := agents.New(kube.NewServiceAccountProvider(client), embeddedChart{}, nil, pinner{}, agents.Config{DefaultNamespace: "kagent", Version: "test", Tags: tagstest.Rule()}, nil)
+	svc := agents.New(kube.NewServiceAccountProvider(client), embeddedChart{}, nil, agents.InProcessPinner(pinner{}), agents.Config{DefaultNamespace: "kagent", Version: "test", Tags: tagstest.Rule()}, nil)
 	return svc, dyn
 }
 

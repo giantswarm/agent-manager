@@ -58,7 +58,7 @@ func TestEnvtestDryRunAgainstTheAgentCRD(t *testing.T) {
 	require.NoError(t, err)
 	_, err = dyn.Resource(harnessGVR).Namespace("kagent").Create(ctx, harness("kagent", "kagent", "kagent"), metav1.CreateOptions{})
 	require.NoError(t, err)
-	svc := New(kube.NewServiceAccountProvider(kube.FromInterfaces(dyn, typed, typed.Discovery())), embeddedChart{}, nil, &fakePinner{}, Config{
+	svc := New(kube.NewServiceAccountProvider(kube.FromInterfaces(dyn, typed, typed.Discovery())), embeddedChart{}, nil, InProcessPinner(&fakePinner{}), Config{
 		DefaultNamespace: "kagent", Version: "test",
 		Compose: ComposeConfig{MusterURL: "http://muster.agent-platform.svc.cluster.local:8090/mcp"},
 	}, nil)

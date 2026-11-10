@@ -149,7 +149,8 @@ const (
 )
 
 // New builds the service. skills may be nil (list_skills then reports
-// unsupported); pinner may be nil (skills must then come pinned).
+// unsupported); pinner may be nil (a git skill then needs its commit, and
+// no private repository is readable).
 func New(k kube.Provider, c ChartSource, s *skills.Discoverer, p SkillPinner, cfg Config, log *slog.Logger) *Service {
 	if log == nil {
 		log = slog.Default()
@@ -163,6 +164,9 @@ func New(k kube.Provider, c ChartSource, s *skills.Discoverer, p SkillPinner, cf
 	cfg.Compose.HelmReleaseAPIVersion = orDefault(cfg.Compose.HelmReleaseAPIVersion, DefaultHelmReleaseAPIVersion)
 	cfg.Compose.OCIRepositoryAPIVersion = orDefault(cfg.Compose.OCIRepositoryAPIVersion, DefaultOCIRepositoryAPIVersion)
 	cfg.ManagedNamespaces = ManagedNamespaces(cfg.DefaultNamespace, cfg.ManagedNamespaces)
+	if p == nil {
+		p = InProcessPinner(nil)
+	}
 	return &Service{kube: k, chart: c, skills: s, pinner: p, cfg: cfg, log: log, defaults: cache.NewLRUExpireCache(maxDefaultAgentEntries)}
 }
 
@@ -799,7 +803,11 @@ func (s *Service) ListSkills(ctx context.Context, repository, ref string, refres
 	out := &skills.Result{Repositories: []skills.Repository{}}
 	for _, repo := range res.Repositories {
 		if repo.Private {
-			if err := s.pinner.RequireReadable(ctx, repo.RepoURL, gitHubLogin(ctx)); err != nil {
+			err := fmt.Errorf("%w: %s: no check of who can read it", skills.ErrNotReadable, repo.RepoURL)
+			if rc, ok := s.pinner.(ReadChecker); ok {
+				err = rc.RequireReadable(ctx, repo.RepoURL, gitHubLogin(ctx))
+			}
+			if err != nil {
 				repo = skills.Repository{RepoURL: repo.RepoURL, Private: true, Skills: []skills.Skill{}, Error: err.Error(), FetchedAt: repo.FetchedAt}
 			}
 		}
@@ -1086,18 +1094,13 @@ func (s *Service) ValidateCreate(ctx context.Context, spec Spec) (*ValidateResul
 	if err := requireReadableSkills(ctx, s.pinner, spec.Skills); err != nil {
 		res.addError(err)
 	}
-	if pinned, err := pinSkills(ctx, s.pinner, spec.Skills, false); err != nil {
-		res.addError(err)
-	} else {
-		spec.Skills = pinned
-	}
 	if err := requireReadablePlugins(ctx, s.pinner, spec.Plugins); err != nil {
 		res.addError(err)
 	}
-	if pinned, err := pinPlugins(ctx, s.pinner, spec.Plugins, false); err != nil {
+	if sk, pl, err := pinSources(ctx, s.pinner, spec.Skills, spec.Plugins, false); err != nil {
 		res.addError(err)
 	} else {
-		spec.Plugins = pinned
+		spec.Skills, spec.Plugins = sk, pl
 	}
 	values := BuildValues(spec, st.compose)
 	setCreator(values, identity.Caller(ctx))
@@ -1316,13 +1319,10 @@ func (s *Service) Create(ctx context.Context, spec Spec) (*CreateResult, error) 
 	if err := requireReadableSkills(ctx, s.pinner, spec.Skills); err != nil {
 		return nil, err
 	}
-	if spec.Skills, err = pinSkills(ctx, s.pinner, spec.Skills, false); err != nil {
-		return nil, err
-	}
 	if err := requireReadablePlugins(ctx, s.pinner, spec.Plugins); err != nil {
 		return nil, err
 	}
-	if spec.Plugins, err = pinPlugins(ctx, s.pinner, spec.Plugins, false); err != nil {
+	if spec.Skills, spec.Plugins, err = pinSources(ctx, s.pinner, spec.Skills, spec.Plugins, false); err != nil {
 		return nil, err
 	}
 	values := BuildValues(spec, st.compose)
@@ -1554,46 +1554,52 @@ func (s *Service) mergedValues(ctx context.Context, st *site, upd Update, hr *un
 		}
 		after["modelConfig"] = map[string]any{"name": *upd.ModelConfig}
 	}
-	if upd.Skills != nil || upd.RefreshSkills {
-		list := skillsFromValues(after)
+	repinSkills := upd.Skills != nil || upd.RefreshSkills
+	repinPlugins := upd.Plugins != nil || upd.RefreshSkills
+	var skillList Skills
+	var pluginList Plugins
+	if repinSkills {
+		skillList = skillsFromValues(after)
 		if upd.Skills != nil {
-			list = *upd.Skills
-			if err := ValidateSkills(list); err != nil {
+			skillList = *upd.Skills
+			if err := ValidateSkills(skillList); err != nil {
 				return after, before, err
 			}
-			if err := requireReadableSkills(ctx, s.pinner, list); err != nil {
+			if err := requireReadableSkills(ctx, s.pinner, skillList); err != nil {
 				return after, before, err
 			}
-		}
-		pinned, err := pinSkills(ctx, s.pinner, list, upd.RefreshSkills)
-		if err != nil {
-			return after, before, err
-		}
-		if sk := skillsValues(pinned); sk != nil {
-			after["skills"] = sk
-		} else {
-			delete(after, "skills")
 		}
 	}
-	if upd.Plugins != nil || upd.RefreshSkills {
-		list := pluginsFromValues(after)
+	if repinPlugins {
+		pluginList = pluginsFromValues(after)
 		if upd.Plugins != nil {
-			list = *upd.Plugins
-			if err := ValidatePlugins(list); err != nil {
+			pluginList = *upd.Plugins
+			if err := ValidatePlugins(pluginList); err != nil {
 				return after, before, err
 			}
-			if err := requireReadablePlugins(ctx, s.pinner, list); err != nil {
+			if err := requireReadablePlugins(ctx, s.pinner, pluginList); err != nil {
 				return after, before, err
 			}
 		}
-		pinned, err := pinPlugins(ctx, s.pinner, list, upd.RefreshSkills)
+	}
+	if repinSkills || repinPlugins {
+		pinnedSkills, pinnedPlugins, err := pinSources(ctx, s.pinner, skillList, pluginList, upd.RefreshSkills)
 		if err != nil {
 			return after, before, err
 		}
-		if pl := pluginsValues(pinned); pl != nil {
-			after["plugins"] = pl
-		} else {
-			delete(after, "plugins")
+		if repinSkills {
+			if sk := skillsValues(pinnedSkills); sk != nil {
+				after["skills"] = sk
+			} else {
+				delete(after, "skills")
+			}
+		}
+		if repinPlugins {
+			if pl := pluginsValues(pinnedPlugins); pl != nil {
+				after["plugins"] = pl
+			} else {
+				delete(after, "plugins")
+			}
 		}
 	}
 	if upd.Skills != nil || upd.Plugins != nil {

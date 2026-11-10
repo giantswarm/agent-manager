@@ -143,6 +143,29 @@ func TestCreatePinsThroughSkillManager(t *testing.T) {
 	}
 }
 
+// A write with skills and plugins pins both in one resolve; a refused
+// plugin is named by its index.
+func TestSkillsAndPluginsArePinnedInOneResolve(t *testing.T) {
+	sm := &fakeSkillManager{}
+	f := withSkillManager(t, sm)
+	ctx := identity.ContextWithToken(t.Context(), "id-token")
+
+	res, err := f.svc.Create(ctx, Spec{Name: "sre", ModelConfig: "default-model-config", Toolset: []string{"preset:read-only"},
+		Skills:  Skills{{Git: &GitSkill{URL: skillsRepo, Ref: "feature"}, Path: "runbooks"}},
+		Plugins: Plugins{{Git: &GitSkill{URL: skillsRepo}, Path: "plugins/review"}},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, sm.calls, "skills and plugins in one call; the plugin's format comes with it")
+	assert.Equal(t, Plugins{{Path: "plugins/review", Git: &GitSkill{URL: skillsRepo, Commit: mainHead}}}, res.Agent.Plugins)
+
+	_, err = f.svc.Update(ctx, Update{Name: "sre", Plugins: &Plugins{
+		{Git: &GitSkill{URL: skillsRepo}, Path: "plugins/review"},
+		{Git: &GitSkill{URL: privateSkillsRepo}, Path: "plugins/secret"},
+	}})
+	require.ErrorIs(t, err, ErrForbidden)
+	assert.Contains(t, err.Error(), "plugins[1]")
+}
+
 // refreshSkills re-pins through skill-manager too: a platform skill to its
 // source's ref, any other to its default-branch head.
 func TestRefreshSkillsPinsThroughSkillManager(t *testing.T) {

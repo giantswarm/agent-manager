@@ -277,7 +277,7 @@ must be unique per agent; `path` is relative without `..`.
 
 With `--skill-manager-url` (chart `skillManager.url`) every pin goes through
 [skill-manager](https://github.com/giantswarm/skill-manager)'s
-`POST /v1/resolve`, one call per list, as the caller (the bearer
+`POST /v1/resolve`, skills and plugins in one call, as the caller (the bearer
 agent-manager received): `create_agent`, `update_agent` (with
 `refreshSkills`), `validate_agent` and `migrate` (skill-manager's service
 token, `--skill-manager-token` / `SKILL_MANAGER_TOKEN`, as it has no

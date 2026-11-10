@@ -63,7 +63,7 @@ func newFixture(t *testing.T, dynObjs []runtime.Object, typedObjs ...runtime.Obj
 	allowCreate(typed, func(string) bool { return true })
 	client := kube.FromInterfaces(dyn, typed, typed.Discovery())
 	pinner := &fakePinner{}
-	svc := New(kube.NewServiceAccountProvider(client), embeddedChart{}, nil, pinner, Config{
+	svc := New(kube.NewServiceAccountProvider(client), embeddedChart{}, nil, InProcessPinner(pinner), Config{
 		DefaultNamespace: "kagent", ManagedNamespaces: []string{"tenant"}, Version: "test",
 		Compose:       ComposeConfig{MusterURL: "http://muster.agent-platform.svc.cluster.local:8090/mcp"},
 		HarnessEgress: map[string][]string{"claude": {"https://github.com", "https://*.githubusercontent.com"}},
