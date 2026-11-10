@@ -26,7 +26,8 @@ const defaultModelInterval = 30 * time.Second
 // agent, rendered without a model so a default marked later still reaches it.
 // None or several marked: the Agent is left as it is. It runs without a
 // caller, as the ServiceAccount (get and patch on that Agent, list on the
-// namespace's ModelConfigs).
+// namespace's ModelConfigs). It stands in for a namespace default
+// ModelConfig in kagent itself, kagent-dev/kagent#3553.
 type DefaultModelFollower struct {
 	dyn       dynamic.Interface
 	agents    schema.GroupVersionResource
