@@ -94,7 +94,6 @@ type operationWrite struct {
 type operationCredential struct {
 	Secret  string `json:"secret"`
 	Key     string `json:"key"`
-	Version string `json:"version,omitempty"`
 	Replace bool   `json:"replace"`
 	Exists  bool   `json:"exists"`
 }
@@ -248,9 +247,6 @@ func (s *Service) CredentialReceipt(ctx context.Context) (*ResourceResult, error
 }
 
 func (s *Service) landResource(ctx context.Context, writer *contentWriter, writes []write, result *ResourceResult, replace bool, verb, title string) error {
-	if slices.ContainsFunc(result.Credentials, func(credential Credential) bool { return credential.State == CredentialUnknown }) {
-		return fmt.Errorf("%w: credential state cannot be verified", agents.ErrForbidden)
-	}
 	needsCredential := slices.ContainsFunc(result.Credentials, func(credential Credential) bool {
 		return credential.State == CredentialMissing || credential.State == CredentialReplace
 	})
@@ -316,23 +312,7 @@ func (s *Service) landResource(ctx context.Context, writer *contentWriter, write
 				return fmt.Errorf("%w: another consumer references the credential Secret", agents.ErrConflict)
 			}
 		}
-		secret, err := liveSecret(ctx, caller, writer.org.Name, credential.Secret)
-		if err != nil {
-			return err
-		}
-		version := ""
-		if secret != nil {
-			version = secret.GetResourceVersion()
-			for _, field := range []string{"data", "stringData"} {
-				data, _, _ := unstructured.NestedMap(secret.Object, field)
-				for key := range data {
-					if key != credential.Key {
-						return fmt.Errorf("%w: credential replacement requires a Secret with one key", agents.ErrConflict)
-					}
-				}
-			}
-		}
-		operation.Credentials = append(operation.Credentials, operationCredential{Secret: credential.Secret, Key: credential.Key, Version: version, Replace: replace, Exists: secret != nil})
+		operation.Credentials = append(operation.Credentials, operationCredential{Secret: credential.Secret, Key: credential.Key, Replace: replace, Exists: credential.exists})
 	}
 	if writer.commit != nil {
 		operation.GitTarget = &CredentialGitTarget{Repository: writer.commit.cfg.Objects.Repository.String(), Base: writer.commit.cfg.Objects.Branch, Directory: writer.dir.Path()}

@@ -108,13 +108,25 @@ receipt. Values, ciphertext, ID tokens and App tokens never enter them. The
 manager's ServiceAccount gains no tenant Secret or application ConfigMap access.
 
 Reads, saves and cancellation independently verify issuer/subject ownership and
-current organization permissions. Saves recheck resource versions, existing
-Secret keys and consumers, Git destination, file hashes and encryption policy,
-then server-side dry-run all intended writes as the person. Stale operation
-versions return `412`, a save or cancellation without `If-Match` returns `428`,
-and changed resources or Git inputs return `409`. Unknown credential state,
-shared Secrets and multi-key Secrets are refused. Backend refusals are
-sanitized before entering errors or logs. HTTP intermediaries and Kubernetes
+current organization permissions. Saves recheck consumers, Git destination,
+file hashes and encryption policy, then server-side dry-run all intended writes
+as the person. Stale operation versions return `412`, a save or cancellation
+without `If-Match` returns `428`, and changed resources or Git inputs return
+`409`. Shared Secrets are refused. Backend refusals are sanitized before
+entering errors or logs.
+
+Credentials are write-only. Neither the person nor agent-manager reads a
+credential Secret: `get`, `list` and `watch` return its data, and so does a
+`patch`, so an organization admin holds none of them on Secrets. Whether a
+Secret exists is the answer to a server-side dry-run create as the person:
+`AlreadyExists` means it exists, and nothing is written. A missing credential
+is created; one the person asked to replace is written whole with an
+unconditional update (no `resourceVersion`), so a Secret holds the one key its
+consumer names and any other key is dropped. A Secret that appears between the
+confirmation and the save fails the save's create with `409`. Two replacements
+of one Secret at once leave the last one written. Whether the consumer resolved
+its credential is in the consumer's status (a ModelConfig's `ResolvedRefs`
+condition). HTTP intermediaries and Kubernetes
 audit policy must also exclude request/response bodies for credentials.
 Several headers of one connector may reference the same Secret/key pair; its
 confirmation requests that value once.
@@ -141,10 +153,13 @@ must use the authenticated operation API and its `If-Match` confirmation.
 
 ## Recovery
 
-Resource-version comparisons serialize saves across replicas. Completed retries
-return the receipt without another write. After a known partial apply, refresh
-the confirmation and retry: markers and recorded API-server resource versions
-identify unchanged successful writes, preserving the first Secret value. Only
+Resource-version comparisons of the consumers serialize saves across replicas.
+Completed retries return the receipt without another write. After a known
+partial apply, refresh the confirmation and retry with the value: a Secret write
+the operation recorded is not repeated, so the first value stays; one it did not
+record is written again, created or, when the earlier attempt created it, updated
+with the retried value. Consumers are recognized by their marker and recorded
+resource version. Only
 direct writes carry the `agent-manager.giantswarm.io/credential-operation`
 marker; committed files hold the desired state alone. An uncertain Git save
 verifies the same private branch against stored encrypted-file hashes and

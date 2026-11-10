@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -68,12 +69,15 @@ func answerCredentialResourceVersions(t *testing.T, client *dynamicfake.FakeDyna
 			if err != nil {
 				return true, nil, err
 			}
-			if stored.(*unstructured.Unstructured).GetResourceVersion() != object.GetResourceVersion() {
+			// An update without a resourceVersion is unconditional, as the API
+			// server allows for these kinds; one with a stale version conflicts.
+			current := stored.(*unstructured.Unstructured).GetResourceVersion()
+			if object.GetResourceVersion() != "" && object.GetResourceVersion() != current {
 				return true, nil, apierrors.NewConflict(action.GetResource().GroupResource(), object.GetName(), errors.New("stale version"))
 			}
 			version := 0
-			if object.GetResourceVersion() != "" {
-				version, err = strconv.Atoi(object.GetResourceVersion())
+			if current != "" {
+				version, err = strconv.Atoi(current)
 				require.NoError(t, err)
 			}
 			object.SetResourceVersion(strconv.Itoa(version + 1))
@@ -505,12 +509,8 @@ func testCredentialPartialApply(t *testing.T, interveningEdit bool) {
 	secret := fixture.get(t, secretGVR, orgNS, "tenant-credential-claude")
 	if interveningEdit {
 		secret.SetAnnotations(map[string]string{credentialOperationAnnotation: result.ElicitationID, "other-writer": "changed"})
-		_, err := fixture.dyn.Resource(secretGVR).Namespace(orgNS).Update(t.Context(), secret, metav1.UpdateOptions{})
+		err := fixture.dyn.Tracker().Update(secretGVR, secret, orgNS)
 		require.NoError(t, err)
-		status, answer, _ := operationHTTP(t, fixture, http.MethodPost, result.CredentialOperation, confirmation.Version, valuesBody(t, result, "replacement-synthetic-value"), nil)
-		require.Equal(t, http.StatusConflict, status, answer)
-		require.Nil(t, fixture.get(t, mcGVR, orgNS, "claude"))
-		return
 	}
 	status, answer, _ := operationHTTP(t, fixture, http.MethodPost, result.CredentialOperation, confirmation.Version, valuesBody(t, result, "replacement-synthetic-value"), nil)
 	require.Equal(t, http.StatusOK, status, answer)
@@ -519,9 +519,14 @@ func testCredentialPartialApply(t *testing.T, interveningEdit bool) {
 	require.NoError(t, err)
 	require.Equal(t, base64.StdEncoding.EncodeToString([]byte("first-synthetic-value")), value)
 	require.NotNil(t, fixture.get(t, mcGVR, orgNS, "claude"))
+	if interveningEdit {
+		require.Equal(t, "changed", secret.GetAnnotations()["other-writer"], "the retry neither reads nor rewrites a Secret an earlier attempt wrote")
+	}
 }
 
-func TestCredentialApplyRefusesAnInterveningSecretEdit(t *testing.T) {
+// The retry after a partial apply leaves the Secret its first attempt wrote
+// as it finds it: it never reads it, so an edit in between is not judged.
+func TestCredentialApplyRetryLeavesAWrittenSecretAlone(t *testing.T) {
 	testCredentialPartialApply(t, true)
 }
 
@@ -555,9 +560,14 @@ func TestCredentialReplacementKeepsOrdinaryEditsSeparate(t *testing.T) {
 	require.False(t, failed, text)
 	require.NotContains(t, text, "credentialOperation")
 	for _, action := range fixture.dyn.Actions()[before:] {
-		if action.GetResource().Resource == "secrets" {
-			require.NotContains(t, []string{"create", "update", "patch", "delete"}, action.GetVerb())
+		if action.GetResource().Resource != "secrets" {
+			continue
 		}
+		// The dry-run create that tells the Secret exists writes nothing.
+		if creation, ok := action.(k8stesting.CreateActionImpl); ok && slices.Equal(creation.CreateOptions.DryRun, []string{metav1.DryRunAll}) {
+			continue
+		}
+		require.NotContains(t, []string{"create", "update", "patch", "delete"}, action.GetVerb())
 	}
 	result := prepareModelOperation(t, fixture, map[string]any{"replaceCredential": true, "requestId": "rotation"})
 	confirmation := confirmOperation(t, fixture, result.CredentialOperation)
@@ -583,4 +593,40 @@ func TestCredentialOperationRequiresIfMatch(t *testing.T) {
 			require.Nil(t, fixture.get(t, secretGVR, orgNS, "tenant-credential-claude"))
 		})
 	}
+}
+
+// A Secret that appears between the preparation and the save is refused at
+// the save's dry-run create: nothing overwrites it and no consumer is written.
+func TestCredentialSaveRefusesASecretCreatedSinceThePreparation(t *testing.T) {
+	fixture := newOrgFixture(t)
+	result := prepareModelOperation(t, fixture, nil)
+	confirmation := confirmOperation(t, fixture, result.CredentialOperation)
+	seedSecret(t, fixture, "tenant-credential-claude", "apiKey")
+
+	status, answer, _ := operationHTTP(t, fixture, http.MethodPost, result.CredentialOperation, confirmation.Version, valuesBody(t, result, "synthetic-value"), nil)
+	require.Equal(t, http.StatusConflict, status, answer)
+	secret := fixture.get(t, secretGVR, orgNS, "tenant-credential-claude")
+	value, _, err := unstructured.NestedString(secret.Object, "data", "apiKey")
+	require.NoError(t, err)
+	require.Equal(t, base64.StdEncoding.EncodeToString([]byte(liveValue)), value)
+	require.Nil(t, fixture.get(t, mcGVR, orgNS, "claude"))
+}
+
+// A replacement writes the credential Secret whole, as the caller, without
+// reading it first: the one key the operation names, nothing else.
+func TestCredentialReplacementWritesTheSecretWhole(t *testing.T) {
+	fixture := newOrgFixture(t, model("claude", true))
+	seedSecret(t, fixture, "tenant-credential-claude", "apiKey")
+	stored := fixture.get(t, secretGVR, orgNS, "tenant-credential-claude")
+	require.NoError(t, unstructured.SetNestedField(stored.Object, base64.StdEncoding.EncodeToString([]byte(liveValue)), "data", "other"))
+	require.NoError(t, fixture.dyn.Tracker().Update(secretGVR, stored, orgNS))
+
+	result := prepareModelOperation(t, fixture, map[string]any{"replaceCredential": true})
+	confirmation := confirmOperation(t, fixture, result.CredentialOperation)
+	status, answer, _ := operationHTTP(t, fixture, http.MethodPost, result.CredentialOperation, confirmation.Version, valuesBody(t, result, "replacement-value"), nil)
+	require.Equal(t, http.StatusOK, status, answer)
+
+	data, _, err := unstructured.NestedMap(fixture.get(t, secretGVR, orgNS, "tenant-credential-claude").Object, "data")
+	require.NoError(t, err)
+	require.Equal(t, map[string]any{"apiKey": base64.StdEncoding.EncodeToString([]byte("replacement-value"))}, data)
 }

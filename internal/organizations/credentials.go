@@ -6,22 +6,21 @@ import (
 	"strings"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/giantswarm/agent-manager/internal/kube"
 )
 
-// The states of a credential Secret, as the caller can read it.
+// The states of a credential Secret. Credentials are write-only: neither the
+// caller nor agent-manager reads a Secret, so a state says whether the Secret
+// exists, never what it holds.
 const (
-	// CredentialPresent: the Secret exists and holds the key.
+	// CredentialPresent: the Secret exists.
 	CredentialPresent   = "present"
 	CredentialCommitted = "committed"
-	// CredentialMissing: the Secret or its key does not exist.
+	// CredentialMissing: the Secret does not exist.
 	CredentialMissing = "missing"
 	// CredentialReplace: the caller asked to replace it.
 	CredentialReplace = "replace"
-	// CredentialUnknown: the caller may not read the Secret.
-	CredentialUnknown = "unknown"
 )
 
 // Credential is a credential Secret an object names, by reference only: the
@@ -39,6 +38,9 @@ type Credential struct {
 	// Next tells the person what to do when the value is missing or to be
 	// replaced.
 	Next string `json:"next,omitempty"`
+
+	// exists says the Secret exists, whatever State the caller asked for.
+	exists bool
 }
 
 // credentialRef checks a credential Secret name an argument gave.
@@ -56,32 +58,54 @@ func credentialRef(secret, key string) error {
 }
 
 // credential reports the state of a Secret an object of kind and name in org
-// names. It GETs the Secret as the caller, which returns its data (the API
-// has no read of a Secret's keys without their values), to tell whether the
-// key holds a value; the value stays in this function, which reports only
-// the state, and it is never returned, logged or traced. A caller who may not
-// read the Secret gets the state unknown.
-func (s *Service) credential(ctx context.Context, c kube.Client, org Namespace, kind, name, secret, key string, replace bool) Credential {
-	cred := Credential{Secret: secret, Key: key}
-	obj, err := c.Typed().CoreV1().Secrets(org.Name).Get(ctx, secret, metav1.GetOptions{})
+// names. It never reads the Secret: get, list and watch return its data, and
+// so does a patch, so an organization admin holds none of them on Secrets.
+// It asks the API server instead with a dry-run create of the Secret as the
+// caller, which needs only the create the admin holds and answers
+// AlreadyExists when the Secret exists. A refusal of the dry run (the caller
+// may not create the Secret, or admission refuses its name) is the error.
+func (s *Service) credential(ctx context.Context, c kube.Client, org Namespace, kind, name, secret, key string, replace bool) (Credential, error) {
+	exists, err := secretExists(ctx, c, org.Name, secret)
+	if err != nil {
+		return Credential{}, err
+	}
+	cred := Credential{Secret: secret, Key: key, State: CredentialMissing, exists: exists}
 	switch {
-	case apierrors.IsNotFound(err):
-		cred.State = CredentialMissing
-	case err != nil:
-		cred.State = CredentialUnknown
-	case len(obj.Data[key]) == 0 && obj.StringData[key] == "":
-		cred.State = CredentialMissing
-	default:
+	case replace:
+		cred.State = CredentialReplace
+	case exists:
 		cred.State = CredentialPresent
 	}
-	if replace {
-		cred.State = CredentialReplace
-	}
-	switch cred.State {
-	case CredentialMissing, CredentialReplace, CredentialUnknown:
+	if cred.State != CredentialPresent {
 		cred.Next = s.next(cred, kind, name)
 	}
-	return cred
+	return cred, nil
+}
+
+// secretExists says whether the Secret ns/name exists, by a dry-run create
+// as the caller: nothing is written and nothing of the Secret is returned.
+func secretExists(ctx context.Context, c kube.Client, ns, name string) (bool, error) {
+	_, err := do(ctx, c.Dynamic(), credentialSecretWrite(ns, name, opCreate, nil), dryRunAll)
+	switch {
+	case err == nil:
+		return false, nil
+	case apierrors.IsAlreadyExists(err):
+		return true, nil
+	}
+	return false, err
+}
+
+// credentialSecretWrite is the write of credential Secret ns/name holding
+// data, all of the Secret: an update replaces it whole, so the caller never
+// needs to read it, and any key data does not name is dropped.
+func credentialSecretWrite(ns, name, op string, data map[string]any) write {
+	secret := newObject("v1", kindSecret, ns, name)
+	delete(secret.Object, "spec")
+	secret.Object["type"] = "Opaque"
+	if data != nil {
+		secret.Object["data"] = data
+	}
+	return write{gvr: secretGVR, kind: kindSecret, op: op, obj: secret.Object, ns: ns, name: name, what: "credential Secret " + ns + "/" + name, reason: wayOrganizationAdmin(ns)}
 }
 
 // NeedsInput reports whether a person has to enter the credential's value in
@@ -94,11 +118,8 @@ func (c Credential) NeedsInput() bool {
 func (s *Service) next(c Credential, kind, name string) string {
 	what := fmt.Sprintf("the value of key %s of Secret %s, which %s %s uses", c.Key, c.Secret, kind, name)
 	lead := "A person enters " + what
-	switch c.State {
-	case CredentialMissing:
+	if c.State == CredentialMissing {
 		lead = "The credential is missing: a person enters " + what
-	case CredentialUnknown:
-		lead = "You may not read the Secret, so whether it holds the value is unknown; if it does not, a person enters " + what
 	}
 	if c.FormURL == "" {
 		return lead + " in the credential UI (prepare a credential operation to obtain a link). Never pass the value to a tool or a chat."
