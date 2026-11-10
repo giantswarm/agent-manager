@@ -1,10 +1,10 @@
 # Organization credential operations
 
 Models, connectors and EgressPolicies name credential Secrets by reference. The
-organization tools accept no credential values. Missing credentials and explicit
-`replaceCredential: true` prepare an operation before writing any consumer.
-Ordinary edits with existing credentials do not prepare an operation or change
-the Secret.
+organization tools accept no credential values. A missing credential prepares
+an operation before writing any consumer. Ordinary edits with existing
+credentials do not prepare an operation or change the Secret; a new value for
+an existing credential goes through `replace_organization_credential`.
 
 `replace_organization_credential` takes the organization namespace, the Secret
 and the key, and prepares an operation that writes that Secret and no consumer:

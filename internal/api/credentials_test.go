@@ -58,7 +58,7 @@ func TestNoOrganizationToolAnswerCarriesASecretValue(t *testing.T) {
 		ToolListOrganizationMembers:   {"namespace": orgNS},
 		ToolAddOrganizationMember:     {"namespace": orgNS, "group": "payments-devs", "role": "editor"},
 		ToolRemoveOrganizationMember:  {"namespace": orgNS, "group": "payments-devs"},
-		ToolSetOrganizationModel:      {"namespace": orgNS, "name": "claude", "replaceCredential": true},
+		ToolSetOrganizationModel:      {"namespace": orgNS, "name": "claude"},
 		ToolListOrganizationConnector: {"namespace": orgNS},
 		ToolSetOrganizationConnector:  {"namespace": orgNS, "name": "gh", "url": "https://mcp.github.example/mcp", "credentialHeader": "Authorization"},
 		ToolSetOrganizationEgress: {"namespace": orgNS, "name": "github", "destinations": []any{map[string]any{

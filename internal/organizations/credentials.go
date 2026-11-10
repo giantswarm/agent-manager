@@ -24,7 +24,8 @@ const (
 	// CredentialMissing: the Secret does not exist, or its consumer reports
 	// that it lacks the key (a ModelConfig's ResolvedRefs condition).
 	CredentialMissing = "missing"
-	// CredentialReplace: the caller asked to replace it.
+	// CredentialReplace: a person enters a new value for it
+	// (replace_organization_credential).
 	CredentialReplace = "replace"
 )
 
@@ -69,16 +70,13 @@ func credentialRef(secret, key string) error {
 // caller, which needs only the create the admin holds and answers
 // AlreadyExists when the Secret exists. A refusal of the dry run (the caller
 // may not create the Secret, or admission refuses its name) is the error.
-func (s *Service) credential(ctx context.Context, c kube.Client, org Namespace, kind, name, secret, key string, replace bool) (Credential, error) {
+func (s *Service) credential(ctx context.Context, c kube.Client, org Namespace, kind, name, secret, key string) (Credential, error) {
 	exists, err := secretExists(ctx, c, org.Name, secret)
 	if err != nil {
 		return Credential{}, err
 	}
 	cred := Credential{Secret: secret, Key: key, State: CredentialMissing, exists: exists}
-	switch {
-	case replace:
-		cred.State = CredentialReplace
-	case exists:
+	if exists {
 		cred.State = CredentialPresent
 	}
 	if cred.State != CredentialPresent {
