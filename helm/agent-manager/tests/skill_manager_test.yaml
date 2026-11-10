@@ -94,3 +94,21 @@ tests:
     asserts:
       - failedTemplate:
           errorPattern: skillManager.url
+
+  - it: takes an absolute name (trailing dot) as outside the cluster
+    template: templates/networkpolicy.yaml
+    set:
+      networkPolicy:
+        enabled: true
+      skillManager:
+        url: https://skills.example.:443
+    asserts:
+      - contains:
+          path: spec.egress
+          content:
+            to:
+              - ipBlock:
+                  cidr: 0.0.0.0/0
+            ports:
+              - protocol: TCP
+                port: 443

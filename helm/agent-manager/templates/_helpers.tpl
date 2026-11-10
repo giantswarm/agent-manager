@@ -165,8 +165,11 @@ the union adds nothing there.
 
 {{/*
 The namespace of an in-cluster Service host, for an egress rule: <svc> (the
-release's namespace), <svc>.<namespace> or <svc>.<namespace>.svc[...];
-empty for any other host (egress to every address).
+release's namespace), <svc>.<namespace> or <svc>.<namespace>.svc[...], as the
+pod's resolver tries them first (its search path); empty for any other host
+(egress to every address). A host outside the cluster with one or two labels
+is written as an absolute name, with a trailing dot (example.com.), which the
+resolver never completes.
 */}}
 {{- define "agent-manager.hostNamespace" -}}
 {{- $labels := splitList "." .host -}}

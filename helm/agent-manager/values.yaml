@@ -157,7 +157,9 @@ skillManager:
   # -- skill-manager's base URL (`http://skill-manager.agent-platform.svc:8080`):
   # skills and plugins are pinned through it, `list_skills` proxies its
   # catalogue (deprecated), as the caller; `skills.repositories` is unused.
-  # Empty: in-process discovery and pinning (deprecated).
+  # Empty: in-process discovery and pinning (deprecated). An outside host
+  # with one or two labels is written with a trailing dot (`example.com.`):
+  # otherwise the egress rule reads it as `<service>.<namespace>`.
   url: ""  # @schema pattern: ^(https?://[^\s/]+(/\S*)?)?$
 
 skills:
