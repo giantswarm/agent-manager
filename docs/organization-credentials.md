@@ -116,18 +116,27 @@ without `If-Match` returns `428`, and changed resources or Git inputs return
 entering errors or logs.
 
 Credentials are write-only. Neither the person nor agent-manager reads a
-credential Secret: `get`, `list` and `watch` return its data, and so does a
-`patch`, so an organization admin holds none of them on Secrets. Whether a
-Secret exists is the answer to a server-side dry-run create as the person:
-`AlreadyExists` means it exists, and nothing is written. A missing credential
-is created; one the person asked to replace is written whole with an
-unconditional update (no `resourceVersion`), so a Secret holds the one key its
-consumer names and any other key is dropped. A Secret that appears between the
+credential Secret. `get`, `list` and `watch` return its data, and so does a
+`patch` (its response is the stored object), so the organization admin role
+must grant none of them on Secrets. Whether a Secret exists is the answer to a
+server-side dry-run create as the person: `AlreadyExists` means it exists, and
+nothing is written. A missing credential is created. One the person asked to
+replace is written whole with an unconditional update (no `resourceVersion`):
+the Secret then holds the one key its consumer names, the type `Opaque`, the
+`app.kubernetes.io/managed-by` label and the operation marker, and any other
+key, label or annotation is dropped. A Secret that appears between the
 confirmation and the save fails the save's create with `409`. Two replacements
-of one Secret at once leave the last one written. Whether the consumer resolved
-its credential is in the consumer's status (a ModelConfig's `ResolvedRefs`
-condition). HTTP intermediaries and Kubernetes
-audit policy must also exclude request/response bodies for credentials.
+of one Secret at once leave the last one written.
+
+Without a read, a Secret that exists counts as `present` whatever keys it
+holds, except where its consumer reports the key missing: a ModelConfig whose
+`ResolvedRefs` condition is `False` with reason `APIKeySecretKeyNotFound` for
+its current generation names a `missing` credential, and the save writes the
+Secret whole with the entered value. RemoteMCPServers and EgressPolicies report
+no such condition.
+
+HTTP intermediaries and Kubernetes audit policy must also exclude
+request/response bodies for credentials.
 Several headers of one connector may reference the same Secret/key pair; its
 confirmation requests that value once.
 
@@ -157,10 +166,10 @@ Resource-version comparisons of the consumers serialize saves across replicas.
 Completed retries return the receipt without another write. After a known
 partial apply, refresh the confirmation and retry with the value: a Secret write
 the operation recorded is not repeated, so the first value stays; one it did not
-record is written again, created or, when the earlier attempt created it, updated
-with the retried value. Consumers are recognized by their marker and recorded
-resource version. Only
-direct writes carry the `agent-manager.giantswarm.io/credential-operation`
+record is written again: created when the Secret does not exist, otherwise
+updated with the retried value, whoever created it in between. Consumers are
+recognized by their marker and recorded resource version. Only direct writes
+carry the `agent-manager.giantswarm.io/credential-operation`
 marker; committed files hold the desired state alone. An uncertain Git save
 verifies the same private branch against stored encrypted-file hashes and
 opens or reuses its PR. It never creates a second branch automatically.

@@ -312,7 +312,9 @@ func (s *Service) landResource(ctx context.Context, writer *contentWriter, write
 				return fmt.Errorf("%w: another consumer references the credential Secret", agents.ErrConflict)
 			}
 		}
-		operation.Credentials = append(operation.Credentials, operationCredential{Secret: credential.Secret, Key: credential.Key, Replace: replace, Exists: credential.exists})
+		// A missing key of an existing Secret is written as a replacement:
+		// the Secret is written whole, holding that one key.
+		operation.Credentials = append(operation.Credentials, operationCredential{Secret: credential.Secret, Key: credential.Key, Replace: replace || credential.exists, Exists: credential.exists})
 	}
 	if writer.commit != nil {
 		operation.GitTarget = &CredentialGitTarget{Repository: writer.commit.cfg.Objects.Repository.String(), Base: writer.commit.cfg.Objects.Branch, Directory: writer.dir.Path()}

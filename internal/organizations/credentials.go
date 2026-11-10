@@ -6,6 +6,10 @@ import (
 	"strings"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 
 	"github.com/giantswarm/agent-manager/internal/kube"
 )
@@ -17,7 +21,8 @@ const (
 	// CredentialPresent: the Secret exists.
 	CredentialPresent   = "present"
 	CredentialCommitted = "committed"
-	// CredentialMissing: the Secret does not exist.
+	// CredentialMissing: the Secret does not exist, or its consumer reports
+	// that it lacks the key (a ModelConfig's ResolvedRefs condition).
 	CredentialMissing = "missing"
 	// CredentialReplace: the caller asked to replace it.
 	CredentialReplace = "replace"
@@ -81,6 +86,43 @@ func (s *Service) credential(ctx context.Context, c kube.Client, org Namespace, 
 	}
 	return cred, nil
 }
+
+// modelKeyNotFound says kagent reports, for the current generation of the
+// live ModelConfig, that its apiKeySecret secret exists without the key: the
+// ModelConfig's ResolvedRefs condition is False with reason
+// APIKeySecretKeyNotFound. It is the only word on a Secret's keys that needs
+// no read of the Secret.
+func modelKeyNotFound(live *unstructured.Unstructured, secret, key string) bool {
+	if live == nil {
+		return false
+	}
+	liveSecret, _, _ := unstructured.NestedString(live.Object, "spec", "apiKeySecret")
+	liveKey, _, _ := unstructured.NestedString(live.Object, "spec", "apiKeySecretKey")
+	if liveSecret != secret || liveKey != key {
+		return false
+	}
+	raw, _, _ := unstructured.NestedSlice(live.Object, "status", "conditions")
+	conditions := make([]metav1.Condition, 0, len(raw))
+	for _, item := range raw {
+		fields, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		var condition metav1.Condition
+		if runtime.DefaultUnstructuredConverter.FromUnstructured(fields, &condition) == nil {
+			conditions = append(conditions, condition)
+		}
+	}
+	resolved := apimeta.FindStatusCondition(conditions, conditionResolvedRefs)
+	return resolved != nil && resolved.Status == metav1.ConditionFalse && resolved.Reason == reasonAPIKeySecretKeyNotFound && resolved.ObservedGeneration == live.GetGeneration()
+}
+
+// The ModelConfig condition and reason kagent writes when its apiKeySecret
+// lacks apiKeySecretKey (kagent go/core/internal/translator/modelconfig.go).
+const (
+	conditionResolvedRefs         = "ResolvedRefs"
+	reasonAPIKeySecretKeyNotFound = "APIKeySecretKeyNotFound"
+)
 
 // secretExists says whether the Secret ns/name exists, by a dry-run create
 // as the caller: nothing is written and nothing of the Secret is returned.

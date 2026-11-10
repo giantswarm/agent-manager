@@ -612,6 +612,48 @@ func TestCredentialSaveRefusesASecretCreatedSinceThePreparation(t *testing.T) {
 	require.Nil(t, fixture.get(t, mcGVR, orgNS, "claude"))
 }
 
+// A Secret its ModelConfig reports without the key (kagent's ResolvedRefs
+// False, APIKeySecretKeyNotFound, for the current generation) is missing: the
+// person enters the value and the Secret is written whole. A condition of an
+// older generation says nothing about the current one.
+func TestCredentialKeyMissingFromAnExistingSecret(t *testing.T) {
+	for _, current := range []bool{true, false} {
+		t.Run(fmt.Sprintf("current generation %t", current), func(t *testing.T) {
+			live := model("claude", true)
+			live.SetGeneration(2)
+			observed := int64(2)
+			if !current {
+				observed = 1
+			}
+			require.NoError(t, unstructured.SetNestedSlice(live.Object, []any{map[string]any{
+				"type": "ResolvedRefs", "status": "False", "reason": "APIKeySecretKeyNotFound", "message": "secret tenant-credential-claude does not contain key apiKey",
+				"observedGeneration": observed, "lastTransitionTime": "2026-11-10T00:00:00Z",
+			}}, "status", "conditions"))
+			fixture := newOrgFixture(t, live)
+			seedSecret(t, fixture, "tenant-credential-claude", "other")
+
+			text, failed := fixture.call(t, ToolSetOrganizationModel, map[string]any{"namespace": orgNS, "name": "claude", "provider": "Anthropic", "model": "claude-sonnet-4-6"})
+			require.False(t, failed, text)
+			var result organizations.ResourceResult
+			require.NoError(t, json.Unmarshal([]byte(text), &result))
+			if !current {
+				require.Equal(t, organizations.CredentialPresent, result.Credentials[0].State, text)
+				require.Empty(t, result.CredentialOperation, text)
+				return
+			}
+			require.Equal(t, organizations.CredentialMissing, result.Credentials[0].State, text)
+			require.NotEmpty(t, result.CredentialOperation, text)
+
+			confirmation := confirmOperation(t, fixture, result.CredentialOperation)
+			status, answer, _ := operationHTTP(t, fixture, http.MethodPost, result.CredentialOperation, confirmation.Version, valuesBody(t, result, "entered-value"), nil)
+			require.Equal(t, http.StatusOK, status, answer)
+			data, _, err := unstructured.NestedMap(fixture.get(t, secretGVR, orgNS, "tenant-credential-claude").Object, "data")
+			require.NoError(t, err)
+			require.Equal(t, map[string]any{"apiKey": base64.StdEncoding.EncodeToString([]byte("entered-value"))}, data)
+		})
+	}
+}
+
 // A replacement writes the credential Secret whole, as the caller, without
 // reading it first: the one key the operation names, nothing else.
 func TestCredentialReplacementWritesTheSecretWhole(t *testing.T) {
