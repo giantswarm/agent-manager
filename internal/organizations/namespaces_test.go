@@ -31,7 +31,7 @@ func TestNamesAreTheOrganizationNamespacesOnly(t *testing.T) {
 		ns("kagent", org, nil),
 		ns("plain", nil, nil),
 		ns("agents-gone-a1b2c", org, func(n *corev1.Namespace) { n.DeletionTimestamp = &gone }),
-	), "kagent")
+	), nil, "kagent")
 
 	names, err := finder.Names(t.Context())
 	require.NoError(t, err)
