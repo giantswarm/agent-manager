@@ -109,6 +109,9 @@ const (
 	// namespace/name. One is reported: a platform-owned one first, then the
 	// first by namespace/name.
 	DefaultAgentLabel = "agent-platform.giantswarm.io/default"
+	// FollowsDefaultModelLabel ("true") on an Agent: its modelConfig follows
+	// the namespace's default model (DefaultModelFollower).
+	FollowsDefaultModelLabel = "agent-platform.giantswarm.io/follows-default-model"
 	// ManagedByLabel / ManagedByValue mark the HelmReleases and
 	// OCIRepositories agent-manager created.
 	ManagedByLabel = "app.kubernetes.io/managed-by"
@@ -493,8 +496,11 @@ type Agent struct {
 	// Managed is helmrelease, gitops, platform or none.
 	Managed string `json:"managed"`
 	// Default: the installation's default agent, which clients preselect.
-	Default     bool            `json:"default,omitempty"`
-	HelmRelease *HelmReleaseRef `json:"helmRelease,omitempty"`
+	Default bool `json:"default,omitempty"`
+	// FollowsDefaultModel: modelConfig follows the namespace's default model
+	// (label FollowsDefaultModelLabel).
+	FollowsDefaultModel bool            `json:"followsDefaultModel,omitempty"`
+	HelmRelease         *HelmReleaseRef `json:"helmRelease,omitempty"`
 	// Values are the HelmRelease's inline values (the chart contract), when a
 	// HelmRelease owns the agent.
 	Values map[string]any `json:"values,omitempty"`
@@ -524,6 +530,7 @@ type AgentSummary struct {
 	Ready                     *bool    `json:"ready"`
 	Managed                   string   `json:"managed"`
 	Default                   bool     `json:"default,omitempty"`
+	FollowsDefaultModel       bool     `json:"followsDefaultModel,omitempty"`
 	// The owning HelmRelease's state, when it needs attention: suspended,
 	// being uninstalled, or not Ready (its reason and message).
 	Suspended      bool   `json:"suspended,omitempty"`
@@ -555,6 +562,7 @@ func (a Agent) Summary() AgentSummary {
 		Ready:                     a.Ready,
 		Managed:                   a.Managed,
 		Default:                   a.Default,
+		FollowsDefaultModel:       a.FollowsDefaultModel,
 	}
 	if hr := a.HelmRelease; hr != nil {
 		s.Suspended = hr.Suspended

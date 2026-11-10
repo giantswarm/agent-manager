@@ -1174,8 +1174,9 @@ func (s *Service) apiserverUser(ctx context.Context, st *site) string {
 	return fmt.Sprintf("User %q", review.Status.UserInfo.Username)
 }
 
-// requireFreeName fails when a HelmRelease or an Agent object of that name
-// exists.
+// requireFreeName fails when a HelmRelease of that name exists, or an Agent
+// of that name exists or a HelmRelease renders one, whatever its name: two
+// releases rendering one Agent overwrite each other.
 func (s *Service) requireFreeName(ctx context.Context, st *site, name string) error {
 	if name == "" {
 		return nil
@@ -1188,9 +1189,51 @@ func (s *Service) requireFreeName(ctx context.Context, st *site, name string) er
 	if obj, err := s.getAgentObject(ctx, st.agent, st.ns(), name); err != nil {
 		return err
 	} else if obj != nil {
+		if owner, ownerNS := ownerOf(obj); owner != "" {
+			return conflictf("Agent %s already exists, rendered by HelmRelease %s/%s; pick another name", st.describe(name), ownerNS, owner)
+		}
 		return conflictf("Agent %s already exists without a HelmRelease (a bare Agent); delete it first (delete_agent with force) or pick another name", st.describe(name))
 	}
+	// The platform's releases live in its own namespace and target this one:
+	// every namespace, else (refused) the site's.
+	list, err := st.flux.Resource(s.helmReleaseGVR()).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		if list, err = st.flux.Resource(s.helmReleaseGVR()).Namespace(st.fluxNS).List(ctx, metav1.ListOptions{}); err != nil {
+			return wrapKube(err, "list helmreleases in "+st.fluxNS)
+		}
+	}
+	for i := range list.Items {
+		hr := &list.Items[i]
+		secret, ns, agent := renderedAgent(hr)
+		// On a workload cluster, a release of the site's namespace with its
+		// kubeconfig; on this cluster, one without.
+		here := secret == "" && !st.loc.IsSet() || st.loc.IsSet() && secret == st.loc.KubeconfigSecret() && hr.GetNamespace() == st.fluxNS
+		if here && ns == st.ns() && agent == name {
+			return conflictf("Agent %s is rendered by HelmRelease %s/%s; pick another name", st.describe(name), hr.GetNamespace(), hr.GetName())
+		}
+	}
 	return nil
+}
+
+// renderedAgent is the Agent a release of the agent chart renders: the
+// kubeconfig Secret of its cluster (empty for this one), its namespace and
+// its name (values agent.name, else the Helm release name).
+func renderedAgent(hr *unstructured.Unstructured) (secret, ns, name string) {
+	secret, ns = placedOn(hr)
+	if ns == "" {
+		ns = hr.GetNamespace()
+	}
+	if name, _, _ = unstructured.NestedString(hr.Object, "spec", "values", "agent", "name"); name != "" {
+		return secret, ns, name
+	}
+	if name, _, _ = unstructured.NestedString(hr.Object, "spec", "releaseName"); name != "" {
+		return secret, ns, name
+	}
+	// helm-controller's default release name: [<targetNamespace>-]<name>.
+	if target, _, _ := unstructured.NestedString(hr.Object, "spec", "targetNamespace"); target != "" {
+		return secret, ns, target + "-" + hr.GetName()
+	}
+	return secret, ns, hr.GetName()
 }
 
 // requireTargetMuster refuses an agent on a workload cluster when the
@@ -2114,6 +2157,7 @@ func agentFromObject(obj, server *unstructured.Unstructured, rule *tags.Rule) Ag
 	a.Harness, _, _ = unstructured.NestedString(obj.Object, "spec", "harnessRef", "name")
 	a.Description, _, _ = unstructured.NestedString(obj.Object, "spec", "template", "description")
 	a.ModelConfig, _, _ = unstructured.NestedString(obj.Object, "spec", "template", "modelConfig", "name")
+	a.FollowsDefaultModel = obj.GetLabels()[FollowsDefaultModelLabel] == "true"
 	a.SystemMessage, _, _ = unstructured.NestedString(obj.Object, "spec", "template", "systemPrompt")
 	a.Skills = skillsFromObject(obj)
 	a.Plugins = pluginsFromObject(obj)
