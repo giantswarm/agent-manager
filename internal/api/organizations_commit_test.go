@@ -269,6 +269,78 @@ func TestAMergedPullRequestThatKeptTheFileIsNotTheDelete(t *testing.T) {
 	assert.NotNil(t, g.get(t, orgGVR, "org-acme", "payments"))
 }
 
+// The erase needs the merged delete pull request itself to have removed the
+// object's file. A pull request edited before its merge erases nothing: one
+// that kept the file, which another merge then removed, and one that moved
+// it, so the organization is still in git. Nor does one whose files GitHub
+// could not list.
+func TestAMergedDeleteThatDidNotRemoveTheFileErasesNothing(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name string
+		// edit changes the delete pull request's branch before the merge, and
+		// after receives the main branch's file content.
+		edit  func(t *testing.T, fake *commit.Fake, head string, file []byte)
+		after func(t *testing.T, fake *commit.Fake)
+		want  []string
+	}{
+		{
+			name: "the removal was reverted and another merge removed the file",
+			edit: func(t *testing.T, fake *commit.Fake, head string, file []byte) {
+				require.NoError(t, fake.Commit(ctx, mcRepo, head, "keep it", map[string][]byte{paymentsFile: file}))
+			},
+			after: func(t *testing.T, fake *commit.Fake) {
+				require.NoError(t, fake.Commit(ctx, mcRepo, "main", "oops", map[string][]byte{paymentsFile: nil}))
+			},
+			want: []string{"conflict:", "did not remove it", "restore its file"},
+		},
+		{
+			name: "the file was moved",
+			edit: func(t *testing.T, fake *commit.Fake, head string, file []byte) {
+				require.NoError(t, fake.Commit(ctx, mcRepo, head, "move it", map[string][]byte{objectsPath + "/archive/payments.yaml": file}))
+			},
+			want: []string{"conflict:", "moved its file to " + objectsPath + "/archive/payments.yaml", "still in git"},
+		},
+		{
+			name: "the files cannot be listed",
+			after: func(t *testing.T, fake *commit.Fake) {
+				fake.Fail[commit.OpMergedFiles] = errors.New("GitHub listed 3000 of 3200 changed files")
+			},
+			want: []string{"GitHub listed 3000 of 3200 changed files", "nothing was erased"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, fake := gitOrganization(t)
+			file := fake.Files(mcRepo, "main")[paymentsFile]
+			text, isErr := f.call(t, ToolDeleteOrganization, map[string]any{"namespace": "org-acme", "name": "payments", "mode": "commit"})
+			require.False(t, isErr, text)
+			require.Len(t, fake.PullRequests(), 1)
+			pr := fake.PullRequests()[0]
+			merge := pr.PullRequest
+			if tc.edit != nil {
+				tc.edit(t, fake, pr.Head, file)
+				st, err := fake.Status(ctx, merge)
+				require.NoError(t, err)
+				merge.HeadSHA = st.HeadSHA
+			}
+			require.NoError(t, fake.Merge(ctx, merge))
+			if tc.after != nil {
+				tc.after(t, fake)
+			}
+			require.NotContains(t, fake.Files(mcRepo, "main"), paymentsFile, "the file is gone from git")
+
+			text, isErr = f.call(t, ToolDeleteOrganization, map[string]any{"namespace": "org-acme", "name": "payments", "mode": "commit", "confirm": "org-acme/payments"})
+			require.True(t, isErr, text)
+			for _, w := range tc.want {
+				assert.Contains(t, text, w)
+			}
+			live := f.get(t, orgGVR, "org-acme", "payments")
+			require.NotNil(t, live, "nothing is erased")
+			assert.Equal(t, organizations.PruneDisabled, live.GetAnnotations()[organizations.PruneAnnotation], "the delete intent is not written")
+		})
+	}
+}
+
 // The other tools write their files into the content path: a model's file
 // keeps what git says (not what the API server defaulted live), moving the
 // default mark rewrites the other model's file too; an update changes the

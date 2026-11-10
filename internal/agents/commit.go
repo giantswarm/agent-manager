@@ -36,12 +36,14 @@ const KustomizationNamespaceLabel = "kustomize.toolkit.fluxcd.io/namespace"
 // layout, the one cluster-manager and model-manager write theirs to).
 const CommitDirectory = "agent-manager"
 
-// GitHubRemote is what commit mode needs of GitHub: the pull request seams
-// and the reads of the base, acting as the person.
+// GitHubRemote is what commit mode needs of GitHub: the pull request seams,
+// the reads of the base and the files a merged pull request changed, acting
+// as the person.
 type GitHubRemote interface {
 	commit.Remote
 	commit.Reader
 	commit.Lister
+	commit.MergedFilesLister
 }
 
 // RemoteFor builds the GitHub remote from the person's App user token.
