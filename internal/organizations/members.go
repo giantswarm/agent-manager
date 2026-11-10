@@ -43,14 +43,14 @@ type Members struct {
 // agent-platform-operator keeps.
 func (s *Service) organization(ctx context.Context, ns string) (Namespace, error) {
 	if ns == "" {
-		return Namespace{}, invalidf("namespace (the organization namespace) is required; list_my_organizations lists yours, get_organization names an organization's")
+		return Namespace{}, invalidf("namespace (the organization namespace) is required; list_organizations lists yours, get_organization names an organization's")
 	}
 	org, ok, err := s.cfg.Namespaces.Get(ctx, ns)
 	if err != nil {
 		return Namespace{}, fmt.Errorf("%w: %v", agents.ErrUnsupported, err)
 	}
 	if !ok {
-		return Namespace{}, invalidf("namespace %s is not an organization namespace; list_my_organizations lists yours", ns)
+		return Namespace{}, invalidf("namespace %s is not an organization namespace; list_organizations lists yours", ns)
 	}
 	return org, nil
 }

@@ -599,7 +599,7 @@ Everything else runs as the caller, which needs `--downstream-oauth`.
 
 The organization tools (every name holds `organization`):
 
-- for an `agent-platform:organizations-admin`: `list_organizations`,
+- for an `agent-platform:organizations-admin`:
   `get_organization` (with what a delete erases), `create_organization`,
   `update_organization` and `delete_organization`. A create asks first, with
   SelfSubjectAccessReviews as the caller, whether the caller may create the
@@ -638,9 +638,15 @@ The organization tools (every name holds `organization`):
   new model until one is chosen); `list_organization_connectors` and
   `set_organization_connector` (RemoteMCPServers);
   `set_organization_egress_policy`; and `delete_organization_object`.
-- for everyone: `list_my_organizations`, the New agent picker's list: the
-  organization namespaces in which the caller may list Agents, asked with a
-  SelfSubjectAccessReview as the caller.
+- for everyone: `list_organizations`, the organizations the caller manages
+  or belongs to. agent-manager's ServiceAccount lists the
+  AgentPlatformOrganizations; two SelfSubjectAccessReviews as the caller
+  decide each one's `permissions`: `manage` (update it in its parent) and
+  `member` (list the Agents of its namespace, which every organization role
+  grants). An organization with neither is not listed; one the caller only
+  belongs to carries its status alone (namespace, `orphaned`, `deleting`), and
+  one the caller manages also its summary (`organization`). The New agent
+  picker keeps those with `member`.
 
 Every write is dry-run as the caller first, all of a call's writes before any
 of them, so RBAC, schemas and admission refuse before anything changes; a

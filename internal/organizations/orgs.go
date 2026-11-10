@@ -56,6 +56,12 @@ type Organization struct {
 	// commit names the installation repository and the revision is a git
 	// commit.
 	LastAppliedRevisionURL string `json:"lastAppliedRevisionUrl,omitempty"`
+	// LastAppliedFile is the repository path mode commit keeps the
+	// organization's file at, and LastAppliedFileURL that file's GitHub page
+	// at LastAppliedRevision: where a removed file is restored from. Both are
+	// set with LastAppliedRevisionURL.
+	LastAppliedFile    string `json:"lastAppliedFile,omitempty"`
+	LastAppliedFileURL string `json:"lastAppliedFileUrl,omitempty"`
 	// Deleting: the object is deleted and the operator erases it;
 	// ErasureStep names the step it is on.
 	Deleting    bool   `json:"deleting,omitempty"`
@@ -81,7 +87,12 @@ func (s *Service) summary(org *apov1alpha1.AgentPlatformOrganization) Organizati
 		GitOps: org.Labels[agents.KustomizationNameLabel], LastAppliedRevision: org.Status.LastAppliedRevision,
 	}
 	if s.cfg.Commit != nil {
-		out.LastAppliedRevisionURL = commitURL(s.cfg.Commit.Objects.Repository, org.Status.LastAppliedRevision)
+		repository := s.cfg.Commit.Objects.Repository
+		out.LastAppliedRevisionURL = commitURL(repository, org.Status.LastAppliedRevision)
+		if out.LastAppliedRevisionURL != "" {
+			out.LastAppliedFile = s.cfg.Commit.objectFile(org.Namespace, org.Name)
+			out.LastAppliedFileURL = fileURL(repository, org.Status.LastAppliedRevision, out.LastAppliedFile)
+		}
 	}
 	if out.Harnesses == nil {
 		out.Harnesses = []string{}
@@ -104,36 +115,6 @@ func ready(org *apov1alpha1.AgentPlatformOrganization) bool {
 }
 
 // ---- reads ------------------------------------------------------------------------
-
-// List lists the AgentPlatformOrganizations of parent, or of every namespace
-// when parent is empty, as the caller.
-func (s *Service) List(ctx context.Context, parent string) ([]Organization, error) {
-	c, err := s.caller(ctx)
-	if err != nil {
-		return nil, err
-	}
-	list, err := c.Dynamic().Resource(GVR).Namespace(parent).List(ctx, metav1.ListOptions{})
-	if err != nil {
-		where := "every namespace"
-		way := fmt.Sprintf("listing in every namespace needs %s bound cluster-wide; name the parent namespace (namespace) where yours is bound", RoleOrganizationsAdmin)
-		if parent != "" {
-			where, way = parent, wayOrganizationsAdmin(parent)
-		}
-		return nil, kubeErr(err, "list AgentPlatformOrganizations in "+where, way)
-	}
-	out := make([]Organization, 0, len(list.Items))
-	for i := range list.Items {
-		org, err := organizationOf(&list.Items[i])
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, s.summary(org))
-	}
-	slices.SortFunc(out, func(a, b Organization) int {
-		return strings.Compare(a.Parent+"/"+a.Name, b.Parent+"/"+b.Name)
-	})
-	return out, nil
-}
 
 // Details is get_organization's answer: the organization and what a delete
 // takes along.

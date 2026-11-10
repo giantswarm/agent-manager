@@ -20,7 +20,6 @@ Generated from the registered tools (`make tools-doc`); through muster every too
 | `list_agents` | read-only |
 | `list_egress_policies` | read-only |
 | `list_model_configs` | read-only |
-| `list_my_organizations` | read-only |
 | `list_organization_connectors` | read-only |
 | `list_organization_members` | read-only |
 | `list_organizations` | read-only |
@@ -64,7 +63,7 @@ Writes the RoleBinding organization-<role>s (admins: organization-admins), dry r
       "type": "string"
     },
     "namespace": {
-      "description": "The organization namespace, e.g. agents-payments-x7k2q (list_my_organizations, get_organization)",
+      "description": "The organization namespace, e.g. agents-payments-x7k2q (list_organizations, get_organization)",
       "type": "string"
     },
     "role": {
@@ -529,7 +528,7 @@ Dry run first. Its credential Secret stays. Deleting the default model leaves th
       "type": "string"
     },
     "namespace": {
-      "description": "The organization namespace, e.g. agents-payments-x7k2q (list_my_organizations, get_organization)",
+      "description": "The organization namespace, e.g. agents-payments-x7k2q (list_organizations, get_organization)",
       "type": "string"
     }
   },
@@ -862,22 +861,6 @@ Each with provider, model, its Accepted and ResolvedRefs conditions, who manages
 }
 ```
 
-## `list_my_organizations`
-
-```text
-List the organizations you belong to: the namespaces a New agent can go into.
-
-An organization namespace is listed when you may list its Agents, which every organization role grants, asked with your own token. none says who can add you when there is none.
-```
-
-```json
-{
-  "properties": {},
-  "required": [],
-  "type": "object"
-}
-```
-
 ## `list_organization_connectors`
 
 ```text
@@ -890,7 +873,7 @@ Read as you. A credential in a URL written elsewhere is shown as REDACTED. curat
 {
   "properties": {
     "namespace": {
-      "description": "The organization namespace, e.g. agents-payments-x7k2q (list_my_organizations, get_organization)",
+      "description": "The organization namespace, e.g. agents-payments-x7k2q (list_organizations, get_organization)",
       "type": "string"
     }
   },
@@ -913,7 +896,7 @@ Read as you; every member may read them.
 {
   "properties": {
     "namespace": {
-      "description": "The organization namespace, e.g. agents-payments-x7k2q (list_my_organizations, get_organization)",
+      "description": "The organization namespace, e.g. agents-payments-x7k2q (list_organizations, get_organization)",
       "type": "string"
     }
   },
@@ -927,9 +910,9 @@ Read as you; every member may read them.
 ## `list_organizations`
 
 ```text
-List the Agent Platform organizations (AgentPlatformOrganizations) of a parent namespace, or of all, as you.
+List the organizations you manage or belong to, of one parent namespace or of all.
 
-Each with its organization namespace, harnesses, worker replicas, the operator's Ready, DefaultModelConfigured and Orphaned conditions, and the last revision Flux applied it from (lastAppliedRevision, with its GitHub commit as lastAppliedRevisionUrl in mode commit), which stays while it is Orphaned. Needs agent-platform:organizations-admin; omit namespace only when it is bound to you cluster-wide.
+Each with its organization namespace, Orphaned condition, deleting, and permissions (manage, member), asked with your own token; a New agent goes where member is true. Where you manage it, organization is its summary: harnesses, workers, Ready, DefaultModelConfigured, the last revision Flux applied (lastAppliedRevision) and in mode commit its commit and the organization's file (lastAppliedRevisionUrl, lastAppliedFile, lastAppliedFileUrl). none says who can add you when there is none.
 ```
 
 ```json
@@ -1045,7 +1028,7 @@ From every binding of the role that holds them, dry run first; an emptied bindin
       "type": "string"
     },
     "namespace": {
-      "description": "The organization namespace, e.g. agents-payments-x7k2q (list_my_organizations, get_organization)",
+      "description": "The organization namespace, e.g. agents-payments-x7k2q (list_organizations, get_organization)",
       "type": "string"
     },
     "role": {
@@ -1113,7 +1096,7 @@ A credential field sets the Secret-backed header it names (default: the only one
       "type": "string"
     },
     "namespace": {
-      "description": "The organization namespace, e.g. agents-payments-x7k2q (list_my_organizations, get_organization)",
+      "description": "The organization namespace, e.g. agents-payments-x7k2q (list_organizations, get_organization)",
       "type": "string"
     },
     "noCredential": {
@@ -1201,7 +1184,7 @@ destinations replaces the whole list. A credentialHeader makes the egress gatewa
       "type": "string"
     },
     "namespace": {
-      "description": "The organization namespace, e.g. agents-payments-x7k2q (list_my_organizations, get_organization)",
+      "description": "The organization namespace, e.g. agents-payments-x7k2q (list_organizations, get_organization)",
       "type": "string"
     },
     "replaceCredential": {
@@ -1266,7 +1249,7 @@ The first model of an organization without a default becomes its default (annota
       "type": "string"
     },
     "namespace": {
-      "description": "The organization namespace, e.g. agents-payments-x7k2q (list_my_organizations, get_organization)",
+      "description": "The organization namespace, e.g. agents-payments-x7k2q (list_organizations, get_organization)",
       "type": "string"
     },
     "provider": {
