@@ -38,3 +38,35 @@ func TestToolchainSourceReadsTheRegistryConfig(t *testing.T) {
 	_, err = toolchainSource("gsoci.azurecr.io/giantswarm/agent-toolchains", config)
 	require.ErrorContains(t, err, "--toolchain-registry-config")
 }
+
+func TestValidateCredentialOptionsGitHubTokenExchange(t *testing.T) {
+	secretFile := filepath.Join(t.TempDir(), "client-secret")
+	exchange := func() *serveOptions {
+		return &serveOptions{
+			oauthEnabled:             true,
+			downstreamOAuth:          true,
+			oauthProvider:            "dex",
+			dexIssuerURL:             "https://identity.example.com",
+			githubExchangeEndpoint:   "https://broker.example.com/oauth/token",
+			githubExchangeClient:     "manager-client",
+			githubExchangeSecretFile: secretFile,
+			githubExchangeAudience:   "manager-app",
+		}
+	}
+	require.NoError(t, validateCredentialOptions(exchange()))
+
+	for name, mutate := range map[string]func(*serveOptions){
+		"GitHub-pinned registration": func(o *serveOptions) {
+			o.githubAuthorizationServer = "https://github.com/apps/giantswarm-agent-manager"
+		},
+		"OAuth off":            func(o *serveOptions) { o.oauthEnabled = false },
+		"downstream OAuth off": func(o *serveOptions) { o.downstreamOAuth = false },
+		"Google provider":      func(o *serveOptions) { o.oauthProvider = "google" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			options := exchange()
+			mutate(options)
+			require.EqualError(t, validateCredentialOptions(options), "GitHub token exchange requires Dex OAuth and downstream OAuth, and replaces the GitHub-pinned MCP registration")
+		})
+	}
+}

@@ -71,9 +71,10 @@ The existing Secret contains `client-secret`. An optional CA Secret contains
 `ca.crt`. The endpoint and output audience are operator-controlled; requests
 cannot change them. This mode requires Dex OAuth and downstream authorization,
 and replaces the App-pinned MCP registration: the chart refuses to render it
-together with `github.enabled`, or without `oauth.downstream.enabled` and the
-`dex` provider. It also supplies ordinary agent
-and organization commits with the person's grant.
+together with `github.enabled`, or without `oauth.enabled`,
+`oauth.downstream.enabled` and the `dex` provider, and the server refuses to
+start with that configuration. It also supplies ordinary agent and organization
+commits with the person's grant.
 
 The authorization server must independently validate the subject ID token and
 confidential client, allow that client only the manager App's target audience,
