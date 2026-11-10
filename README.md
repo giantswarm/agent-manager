@@ -603,12 +603,21 @@ The organization tools (every name holds `organization`):
   `get_organization` (with what a delete erases), `create_organization`,
   `update_organization` and `delete_organization`. A create asks first, with
   SelfSubjectAccessReviews as the caller, whether the caller may create the
-  object and bind `agent-platform:admin` in the parent (the operator mirrors
-  the parent's organizations-admin bindings into the new namespace), dry-runs
-  the object, writes it, waits for the operator's `Ready`, then writes the
-  first admins as the RoleBinding `organization-admins`. An organization that
-  is not Ready in time keeps its first admins for a second call with the same
-  arguments. A delete answers what it erases until the caller passes
+  object and bind `agent-platform:admin` in the parent, then whether that
+  right will reach the new namespace: it does when the caller may bind there
+  cluster-wide, or when a RoleBinding in the parent that the operator mirrors
+  (`adminmirror.IsMirroredAdmin` of agent-platform-operator: one to
+  `agent-platform:organizations-admin`, or rbac-operator's to `cluster-admin`)
+  names the caller as one of its mirrored Users or Groups. Otherwise it
+  refuses before any write, dry run included, naming the caller's bindings
+  and the two ways out (an `agent-platform:organizations-admin` RoleBinding
+  for the caller in the parent, or a cluster-admin creating it). A caller who
+  may not list the parent's RoleBindings is not checked there. Then it
+  dry-runs the object, writes it, waits for the operator's `Ready`, asks again
+  in the new namespace, and writes the first admins as the RoleBinding
+  `organization-admins`. An organization that is not Ready in time, or whose
+  namespace the caller's right has not reached yet (`pending`), keeps its
+  first admins for a second call with the same arguments. A delete answers what it erases until the caller passes
   `confirm: <parent>/<name>`, then marks the object
   `kustomize.toolkit.fluxcd.io/prune: enabled` (the delete intent the
   admission policy requires) and deletes it; the operator erases it. An
