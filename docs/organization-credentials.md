@@ -126,7 +126,11 @@ the Secret then holds the one key its consumer names, the type `Opaque`, the
 `app.kubernetes.io/managed-by` label and the operation marker, and any other
 key, label or annotation is dropped. A Secret that appears between the
 confirmation and the save fails the save's create with `409`. Two replacements
-of one Secret at once leave the last one written.
+of one Secret at once leave the last one written. In apply mode a replacement is
+dry-run as an update when it is prepared, so admission, which sees the stored
+Secret, refuses it before a value is entered; the platform refuses the update
+of a Secret an organization's Kustomization applied
+(`agent-platform-organization-git-secrets`), which is changed in Git.
 
 Without a read, a Secret that exists counts as `present` whatever keys it
 holds, except where its consumer reports the key missing: a ModelConfig whose

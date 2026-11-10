@@ -312,6 +312,14 @@ func (s *Service) landResource(ctx context.Context, writer *contentWriter, write
 				return fmt.Errorf("%w: another consumer references the credential Secret", agents.ErrConflict)
 			}
 		}
+		// Admission judges the replacement before the person enters a value:
+		// it sees the stored Secret the caller may not read, and refuses one
+		// git applied in an apply-mode write.
+		if credential.exists && writer.mode == agents.ModeApply {
+			if _, err := do(ctx, caller.Dynamic(), credentialSecretWrite(writer.org.Name, credential.Secret, opUpdate, map[string]any{credential.Key: ""}), dryRunAll); err != nil {
+				return err
+			}
+		}
 		// A missing key of an existing Secret is written as a replacement:
 		// the Secret is written whole, holding that one key.
 		operation.Credentials = append(operation.Credentials, operationCredential{Secret: credential.Secret, Key: credential.Key, Replace: replace || credential.exists, Exists: credential.exists})

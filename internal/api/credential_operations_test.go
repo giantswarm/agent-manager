@@ -654,6 +654,28 @@ func TestCredentialKeyMissingFromAnExistingSecret(t *testing.T) {
 	}
 }
 
+// A replacement admission refuses (a Secret git applied, which only its
+// Flux ServiceAccount changes) is refused when it is prepared, by a dry-run
+// update, before a person enters a value: no operation, nothing written.
+func TestCredentialReplacementAdmissionRefusesBeforeAValueIsEntered(t *testing.T) {
+	fixture := newOrgFixture(t, model("claude", true))
+	seedSecret(t, fixture, "tenant-credential-claude", "apiKey")
+	fixture.dryRuns.Refuse = func(object *unstructured.Unstructured) error {
+		if object.GetKind() == "Secret" {
+			return apierrors.NewForbidden(schema.GroupResource{Resource: "secrets"}, object.GetName(), errors.New("a Secret applied from an organization path in git is changed in git"))
+		}
+		return nil
+	}
+
+	text, failed := fixture.call(t, ToolSetOrganizationModel, map[string]any{"namespace": orgNS, "name": "claude", "provider": "Anthropic", "model": "claude-sonnet-4-6", "replaceCredential": true})
+	require.True(t, failed, text)
+	require.Contains(t, text, "changed in git")
+	require.NotContains(t, text, "credentialOperation")
+	data, _, err := unstructured.NestedMap(fixture.get(t, secretGVR, orgNS, "tenant-credential-claude").Object, "data")
+	require.NoError(t, err)
+	require.Equal(t, map[string]any{"apiKey": base64.StdEncoding.EncodeToString([]byte(liveValue))}, data)
+}
+
 // A replacement writes the credential Secret whole, as the caller, without
 // reading it first: the one key the operation names, nothing else.
 func TestCredentialReplacementWritesTheSecretWhole(t *testing.T) {
