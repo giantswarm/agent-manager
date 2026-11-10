@@ -223,7 +223,8 @@ func TestTheGitHubRegistrationsBearerIsForwardedAsReceived(t *testing.T) {
 	assert.Equal(t, "id-token", req.Header.Get("X-Muster-Id-Token"))
 }
 
-// The migrate command has no caller: the service token is the bearer.
+// The migrate command has no caller: the service token is the bearer of a
+// resolve, and of nothing else.
 func TestWithoutACallerTheServiceTokenIsTheBearer(t *testing.T) {
 	f := &fakeSkillManager{}
 	c := newClient(t, f, "service")
@@ -233,6 +234,10 @@ func TestWithoutACallerTheServiceTokenIsTheBearer(t *testing.T) {
 	assert.Equal(t, mainHead, got)
 	req, _ := f.last()
 	assert.Equal(t, "Bearer service", req.Header.Get("Authorization"))
+
+	_, _ = c.Skills(t.Context(), "", false)
+	req, _ = f.last()
+	assert.Empty(t, req.Header.Get("Authorization"), "the service token is a resolve's only")
 }
 
 func TestOCIDigestPinsThroughResolve(t *testing.T) {

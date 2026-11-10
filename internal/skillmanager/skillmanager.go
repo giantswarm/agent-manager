@@ -37,6 +37,9 @@ var (
 	ErrInvalid = errors.New("skill-manager refused the request")
 )
 
+// resolvePath is skill-manager's pinning call.
+const resolvePath = "/v1/resolve"
+
 // The lists of a resolve, as its errors name them.
 const (
 	ListSkills  = "skills"
@@ -64,7 +67,7 @@ func (e *ResolveError) Unwrap() error { return e.kind }
 type Config struct {
 	// URL is skill-manager's base URL (http://skill-manager.agent-platform.svc:8080).
 	URL string
-	// Token is the bearer of a call with no caller on its context: the
+	// Token is the bearer of a resolve with no caller on its context: the
 	// service token of the migrate command. Empty sends none.
 	Token string
 	// HTTPClient overrides the client (tests); default 30s timeout.
@@ -140,7 +143,7 @@ func (c *Client) Resolve(ctx context.Context, skillItems, pluginItems []Item) ([
 	if pluginItems == nil {
 		pluginItems = []Item{}
 	}
-	raw, err := c.do(ctx, http.MethodPost, "/v1/resolve", nil, resolveBody{Skills: skillItems, Plugins: pluginItems})
+	raw, err := c.do(ctx, http.MethodPost, resolvePath, nil, resolveBody{Skills: skillItems, Plugins: pluginItems})
 	if err != nil {
 		return nil, nil, err
 	}
@@ -274,7 +277,7 @@ func (c *Client) do(ctx context.Context, method, p string, q url.Values, body an
 		req.Header.Set("Content-Type", "application/json")
 	}
 	req.Header.Set("Accept", "application/json")
-	if err := c.authorize(ctx, req); err != nil {
+	if err := c.authorize(ctx, req, p); err != nil {
 		return nil, err
 	}
 	resp, err := c.http.Do(req)
@@ -294,10 +297,10 @@ func (c *Client) do(ctx context.Context, method, p string, q url.Values, body an
 
 // authorize sets the bearer as agent-manager received it: on the GitHub
 // registration the person's GitHub token with the ID token in muster's
-// forwarded header, else the ID token; with no caller, the service token.
-// skill-manager refuses a GitHub token alone, so such a call is refused
-// here.
-func (c *Client) authorize(ctx context.Context, req *http.Request) error {
+// forwarded header, else the ID token; with no caller, the service token on
+// POST /v1/resolve, the one call skill-manager takes it on. skill-manager
+// refuses a GitHub token alone, so such a call is refused here.
+func (c *Client) authorize(ctx context.Context, req *http.Request, p string) error {
 	idToken, _ := identity.TokenFromContext(ctx)
 	if gh, ok := identity.GitHubFromContext(ctx); ok {
 		if idToken == "" {
@@ -308,7 +311,7 @@ func (c *Client) authorize(ctx context.Context, req *http.Request) error {
 		return nil
 	}
 	bearer := idToken
-	if bearer == "" {
+	if bearer == "" && p == resolvePath {
 		bearer = c.token
 	}
 	if bearer != "" {
@@ -332,7 +335,7 @@ func answerError(method, p string, status int, raw []byte) error {
 	if msg == "" {
 		msg = http.StatusText(status)
 	}
-	resolve := p == "/v1/resolve"
+	resolve := p == resolvePath
 	var kind error
 	switch {
 	case status == http.StatusForbidden:

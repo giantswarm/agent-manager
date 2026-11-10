@@ -175,6 +175,9 @@ func runMigrate(ctx context.Context, out io.Writer, o *migrateOptions) error {
 			return fmt.Errorf("--skill-manager-url: %w", err)
 		}
 		pinner = client
+		if o.skillManagerToken == "" {
+			log.Warn("--skill-manager-url without --skill-manager-token: skill-manager is called with no bearer, which only a skill-manager without OAuth accepts", "skillManager", o.skillManagerURL)
+		}
 	}
 	compose := agents.ComposeConfig{
 		ChartOCIURL: o.chartOCIURL, ChartName: resolver.Name(), ChartSemver: o.chartSemver, ChartSemverFilter: o.chartSemverFilter,
