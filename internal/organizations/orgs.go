@@ -48,6 +48,14 @@ type Organization struct {
 	Ready                  *Condition `json:"ready,omitempty"`
 	DefaultModelConfigured *Condition `json:"defaultModelConfigured,omitempty"`
 	Orphaned               *Condition `json:"orphaned,omitempty"`
+	// LastAppliedRevision is the operator's status.lastAppliedRevision: the
+	// last source revision Flux applied the organization from, kept while it
+	// is Orphaned.
+	LastAppliedRevision string `json:"lastAppliedRevision,omitempty"`
+	// LastAppliedRevisionURL is that revision's commit on GitHub, when mode
+	// commit names the installation repository and the revision is a git
+	// commit.
+	LastAppliedRevisionURL string `json:"lastAppliedRevisionUrl,omitempty"`
 	// Deleting: the object is deleted and the operator erases it;
 	// ErasureStep names the step it is on.
 	Deleting    bool   `json:"deleting,omitempty"`
@@ -65,12 +73,15 @@ func organizationOf(u *unstructured.Unstructured) (*apov1alpha1.AgentPlatformOrg
 	return org, nil
 }
 
-func summary(org *apov1alpha1.AgentPlatformOrganization) Organization {
+func (s *Service) summary(org *apov1alpha1.AgentPlatformOrganization) Organization {
 	out := Organization{
 		Name: org.Name, Parent: org.Namespace, DisplayName: org.Annotations[apov1alpha1.DisplayNameAnnotation],
 		Namespace: org.Status.Namespace, Harnesses: slices.Clone(org.Spec.Harnesses), WorkerReplicas: org.Spec.Workers.Replicas,
 		SnapshotPrefix: org.Status.SnapshotPrefix, Deleting: org.DeletionTimestamp != nil, ErasureStep: org.Status.ErasureStep,
-		GitOps: org.Labels[agents.KustomizationNameLabel],
+		GitOps: org.Labels[agents.KustomizationNameLabel], LastAppliedRevision: org.Status.LastAppliedRevision,
+	}
+	if s.cfg.Commit != nil {
+		out.LastAppliedRevisionURL = commitURL(s.cfg.Commit.Objects.Repository, org.Status.LastAppliedRevision)
 	}
 	if out.Harnesses == nil {
 		out.Harnesses = []string{}
@@ -116,7 +127,7 @@ func (s *Service) List(ctx context.Context, parent string) ([]Organization, erro
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, summary(org))
+		out = append(out, s.summary(org))
 	}
 	slices.SortFunc(out, func(a, b Organization) int {
 		return strings.Compare(a.Parent+"/"+a.Name, b.Parent+"/"+b.Name)
@@ -175,7 +186,7 @@ func (s *Service) Get(ctx context.Context, parent, name string) (*Details, error
 	if err != nil {
 		return nil, err
 	}
-	out := &Details{Organization: summary(org)}
+	out := &Details{Organization: s.summary(org)}
 	if org.Status.Namespace != "" {
 		out.Erases = s.erasure(ctx, c.Dynamic(), org)
 	}
@@ -440,7 +451,7 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (*CreateResult,
 			if err != nil {
 				return nil, err
 			}
-			res.Organization = summary(planned)
+			res.Organization = s.summary(planned)
 			res.Created = true
 			res.FirstAdmins = &Binding{Name: FirstAdminsBinding, Role: RoleAdmin, Subjects: subjects}
 			res.Pending = "dry run: nothing was written; the first admins are bound once the organization is Ready"
@@ -468,7 +479,7 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (*CreateResult,
 			return nil, fmt.Errorf("%w: %s exists with its first admins; update_organization changes it, add_organization_member adds admins", agents.ErrConflict, what)
 		}
 		if req.DryRun {
-			res.Organization = summary(org)
+			res.Organization = s.summary(org)
 			res.FirstAdmins = &Binding{Name: FirstAdminsBinding, Role: RoleAdmin, Subjects: subjects}
 			res.Pending = "dry run: the organization exists without its first admins; a call without dryRun binds them once it is Ready"
 			return res, nil
@@ -479,7 +490,7 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (*CreateResult,
 	if err != nil {
 		return nil, err
 	}
-	res.Organization = summary(org)
+	res.Organization = s.summary(org)
 	if !ready(org) {
 		res.Pending = fmt.Sprintf("the organization is not Ready after %s (%s), so its first admins are not bound yet; call create_organization again with the same arguments to bind them once it is", s.cfg.ReadyTimeout, describeReady(res.Organization.Ready))
 		return res, nil
@@ -556,7 +567,7 @@ func (s *Service) waitReady(ctx context.Context, c kube.Client, parent, name str
 		if ready(org) || !time.Now().Before(deadline) {
 			return org, nil
 		}
-		progress(fmt.Sprintf("waiting for organization %s/%s to be Ready (%s)", parent, name, describeReady(summary(org).Ready)))
+		progress(fmt.Sprintf("waiting for organization %s/%s to be Ready (%s)", parent, name, describeReady(s.summary(org).Ready)))
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
@@ -634,7 +645,7 @@ func (s *Service) Update(ctx context.Context, req UpdateRequest) (*UpdateResult,
 	if err := refuseLive(org); err != nil {
 		return nil, err
 	}
-	res := &UpdateResult{Before: summary(org), DryRun: req.DryRun, RequestedBy: identity.Caller(ctx)}
+	res := &UpdateResult{Before: s.summary(org), DryRun: req.DryRun, RequestedBy: identity.Caller(ctx)}
 	next := u.DeepCopy()
 	if res.Changed, err = changeOrganization(next, req); err != nil {
 		return nil, err
@@ -643,7 +654,7 @@ func (s *Service) Update(ctx context.Context, req UpdateRequest) (*UpdateResult,
 	if err != nil {
 		return nil, err
 	}
-	res.After = summary(after)
+	res.After = s.summary(after)
 	if len(res.Changed) == 0 {
 		return res, nil
 	}
@@ -752,7 +763,7 @@ func (s *Service) Delete(ctx context.Context, req DeleteRequest) (*DeleteResult,
 		}
 	}
 	confirm := req.Parent + "/" + req.Name
-	res := &DeleteResult{Organization: summary(org), DryRun: req.DryRun, RequestedBy: identity.Caller(ctx)}
+	res := &DeleteResult{Organization: s.summary(org), DryRun: req.DryRun, RequestedBy: identity.Caller(ctx)}
 	if org.Status.Namespace != "" {
 		res.Erases = s.erasure(ctx, c.Dynamic(), org)
 	}

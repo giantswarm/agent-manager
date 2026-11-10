@@ -99,7 +99,7 @@ func (s *Service) createCommit(ctx context.Context, c kube.Client, req CreateReq
 	if err != nil {
 		return nil, err
 	}
-	res.Organization = summary(planned)
+	res.Organization = s.summary(planned)
 	res.FirstAdmins = &Binding{Name: FirstAdminsBinding, Role: RoleAdmin, Subjects: subjects}
 	res.Commit.LiveSteps = []string{fmt.Sprintf("after the merge Flux applies the object; agent-platform-operator creates the organization namespace and the organization's Kustomization, which applies %s from %s", FirstAdminsBinding, content.Path())}
 	if req.DryRun {
@@ -139,7 +139,7 @@ func (s *Service) updateCommit(ctx context.Context, c kube.Client, u *unstructur
 	if file == nil {
 		return nil, fmt.Errorf("%w: AgentPlatformOrganization %s/%s is applied from git, but not from %s in %s: change it in the file that defines it", agents.ErrConflict, req.Parent, req.Name, p, cm.cfg.Objects.Repository)
 	}
-	res := &UpdateResult{Before: summary(org), DryRun: req.DryRun, RequestedBy: identity.Caller(ctx)}
+	res := &UpdateResult{Before: s.summary(org), DryRun: req.DryRun, RequestedBy: identity.Caller(ctx)}
 	if res.Changed, err = changeOrganization(file, req); err != nil {
 		return nil, err
 	}
@@ -163,7 +163,7 @@ func (s *Service) updateCommit(ctx context.Context, c kube.Client, u *unstructur
 	if err != nil {
 		return nil, err
 	}
-	res.After = summary(after)
+	res.After = s.summary(after)
 	if len(res.Changed) == 0 {
 		return res, nil
 	}
