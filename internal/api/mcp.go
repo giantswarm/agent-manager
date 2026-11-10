@@ -370,7 +370,7 @@ func NewMCPServer(svc *agents.Service, version string, opts ...Option) *mcpserve
 
 	s.AddTool(mcp.NewTool(ToolGetAgentStatus,
 		tooldesc.Describe("One readiness verdict for an agent: ready, progressing, failed or unknown, with a one-line summary.",
-			"From the Agent's conditions and warnings, the HelmRelease's conditions and history, and recent Warning events. Poll it after a create or update until ready. No Deployment or pod is involved: agents run as Substrate actors."),
+			"From the Agent's conditions and warnings, the HelmRelease's conditions and history, and recent Warning events. Poll it after a create or update until ready. No Deployment or pod is involved: agents run as Substrate actors. If you may not read the agent's HelmRelease, the verdict comes from the Agent alone and releaseWithheld names the role that may read it."),
 		mcp.WithString(argName, mcp.Required(), mcp.Description("Agent name")),
 		nsProp,
 		orgProp,

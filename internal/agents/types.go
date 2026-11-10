@@ -705,6 +705,9 @@ type Status struct {
 	Agent       *ObjectStatus      `json:"agent,omitempty"`
 	HelmRelease *HelmReleaseStatus `json:"helmRelease,omitempty"`
 	Events      []Event            `json:"events,omitempty"`
+	// ReleaseWithheld is Agent.ReleaseWithheld: set when HelmRelease is not
+	// reported because the caller may not read it.
+	ReleaseWithheld string `json:"releaseWithheld,omitempty"`
 
 	// sourceFailure is the Ready condition of a chart source that reports a
 	// failure while the HelmRelease waits for it.

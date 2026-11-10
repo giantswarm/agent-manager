@@ -536,23 +536,23 @@ func (s *Service) Get(ctx context.Context, loc Location, name string) (*Agent, e
 	if err != nil {
 		return nil, err
 	}
-	return s.read(ctx, st, name, true)
+	obj, hr, withheld, err := s.readAgentObjects(ctx, st, name)
+	if err != nil {
+		return nil, err
+	}
+	return s.agentOf(ctx, st, name, obj, hr, withheld)
 }
 
 // get reads an agent for a write, which needs its HelmRelease.
 func (s *Service) get(ctx context.Context, st *site, name string) (*Agent, error) {
-	return s.read(ctx, st, name, false)
-}
-
-func (s *Service) read(ctx context.Context, st *site, name string, releaseOptional bool) (*Agent, error) {
 	obj, hr, err := s.agentObjects(ctx, st, name)
-	withheld := ""
-	if unreadable := (*releaseUnreadableError)(nil); releaseOptional && errors.As(err, &unreadable) && unreadable.agent != nil {
-		obj, withheld, err = unreadable.agent, unreadable.withheld, nil
-	}
 	if err != nil {
 		return nil, err
 	}
+	return s.agentOf(ctx, st, name, obj, hr, "")
+}
+
+func (s *Service) agentOf(ctx context.Context, st *site, name string, obj, hr *unstructured.Unstructured, withheld string) (*Agent, error) {
 	var a Agent
 	if obj != nil {
 		server, err := s.getMCPServer(ctx, st.agent, st.ns(), name)
@@ -613,6 +613,17 @@ func (s *Service) agentObjects(ctx context.Context, st *site, name string) (obj,
 		return nil, nil, notFoundf("agent %s: no Agent and no HelmRelease of that name", st.describe(name))
 	}
 	return obj, hr, nil
+}
+
+// readAgentObjects is agentObjects for a read: when the caller may not read
+// the HelmRelease but the Agent object exists, hr is nil and withheld says
+// why (Agent.ReleaseWithheld).
+func (s *Service) readAgentObjects(ctx context.Context, st *site, name string) (obj, hr *unstructured.Unstructured, withheld string, err error) {
+	obj, hr, err = s.agentObjects(ctx, st, name)
+	if unreadable := (*releaseUnreadableError)(nil); errors.As(err, &unreadable) && unreadable.agent != nil {
+		return unreadable.agent, nil, unreadable.withheld, nil
+	}
+	return obj, hr, "", err
 }
 
 // getAgentObject returns nil, nil when the Agent object does not exist.

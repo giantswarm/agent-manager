@@ -97,3 +97,23 @@ func TestUpdate_WithoutHelmReleaseReadAccessIsStillForbidden(t *testing.T) {
 	_, err := f.svc.Update(t.Context(), Update{Name: "verifier", Description: &desc})
 	require.ErrorIs(t, err, ErrForbidden)
 }
+
+func TestStatus_WithoutHelmReleaseReadAccessIsTheAgentVerdict(t *testing.T) {
+	f := seeded(t)
+	refuse(f, "get", hrGVR)
+
+	st, err := f.svc.Status(t.Context(), In(""), "verifier")
+	require.NoError(t, err)
+	assert.Equal(t, VerdictReady, st.Verdict)
+	assert.True(t, st.Agent.Exists)
+	assert.Nil(t, st.HelmRelease)
+	assert.Contains(t, st.ReleaseWithheld, "agent-platform:editor")
+}
+
+func TestStatus_AbsentAgentWithoutHelmReleaseReadAccessIsForbidden(t *testing.T) {
+	f := seeded(t)
+	refuse(f, "get", hrGVR)
+
+	_, err := f.svc.Status(t.Context(), In(""), "pending")
+	require.ErrorIs(t, err, ErrForbidden)
+}

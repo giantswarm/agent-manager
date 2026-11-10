@@ -1280,6 +1280,7 @@ components:
                   status: { type: string }
                   lastDeployed: { type: string }
             lastAttemptedRevision: { type: string }
+        releaseWithheld: { type: string, description: "Set when the caller may not read the agent's HelmRelease: helmRelease is absent, the verdict comes from the Agent alone, and it names the role that may read it (agent-platform:editor)" }
         events:
           type: array
           description: Recent Warning events on the agent's objects (Agent, RemoteMCPServer, HelmRelease)
