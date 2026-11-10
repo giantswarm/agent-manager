@@ -444,9 +444,11 @@ paths:
       tags: [sessions]
       summary: List an agent's sessions
       description: |
-        `SessionService/ListSessions` for the Agent, as the caller, walked to
-        the end. The caller's own sessions unless `allCreators=true`, which the
-        controller grants only to a caller authorized for it.
+        `SessionService/ListSessions` for the Agent, as the caller, at most
+        2000 sessions per answer. The caller's own sessions unless
+        `allCreators=true`, which the controller grants only to a caller
+        authorized for it. `nextPageToken` in the answer says more follow:
+        list again with it as `pageToken`.
       operationId: listSessions
       x-mcp-tool: list_sessions
       parameters:
@@ -454,6 +456,10 @@ paths:
           in: query
           description: Include every person's sessions of the agent
           schema: { type: boolean }
+        - name: pageToken
+          in: query
+          description: nextPageToken of the previous answer, with the same agent and allCreators; empty lists from the start
+          schema: { type: string, maxLength: 512 }
       responses:
         "200":
           description: the sessions
@@ -1411,6 +1417,8 @@ components:
             namespace: { type: string }
             name: { type: string }
         sessions: { type: array, items: { $ref: "#/components/schemas/Session" } }
+        nextPageToken: { type: string, description: More sessions follow; list again with it as pageToken }
+        hint: { type: string }
     SessionDetail:
       type: object
       properties:

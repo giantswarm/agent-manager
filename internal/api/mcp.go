@@ -19,6 +19,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/giantswarm/agent-manager/internal/agents"
+	"github.com/giantswarm/agent-manager/internal/kagent"
 	"github.com/giantswarm/agent-manager/internal/tags"
 )
 
@@ -91,6 +92,7 @@ const (
 	argBranch         = "branch"
 	argPath           = "path"
 	argAllCreators    = "allCreators"
+	argPageToken      = "pageToken"
 	argSessionID      = "sessionId"
 	argMessage        = "message"
 	argRequestID      = "requestId"
@@ -454,10 +456,11 @@ func NewMCPServer(svc *agents.Service, version string, opts ...Option) *mcpserve
 
 	s.AddTool(mcp.NewTool(ToolListSessions,
 		tooldesc.Describe("List your conversations with one agent: id, name, state, failure and timestamps.",
-			"Read through agentgateway as you. allCreators includes every person's sessions, when the controller authorizes you for it."),
+			fmt.Sprintf("Read through agentgateway as you. allCreators includes every person's sessions, when the controller authorizes you for it. At most %d sessions are answered at a time; nextPageToken says more follow: list again with it as pageToken.", kagent.MaxListedSessions)),
 		mcp.WithString(argName, mcp.Required(), mcp.Description("Agent name")),
 		nsProp,
 		mcp.WithBoolean(argAllCreators, mcp.Description("Include every person's sessions of the agent, when the controller authorizes the caller for it (default false)")),
+		mcp.WithString(argPageToken, mcp.MaxLength(agents.MaxPageTokenLength), mcp.Description("nextPageToken of the previous answer, with the same name, namespace and allCreators; empty lists from the start")),
 		mcp.WithReadOnlyHintAnnotation(true),
 		mcp.WithDestructiveHintAnnotation(false),
 		mcp.WithIdempotentHintAnnotation(false),
@@ -721,7 +724,7 @@ func (t *tools) listSessions(ctx context.Context, req mcp.CallToolRequest) (*mcp
 	if err != nil {
 		return errResult(fmt.Errorf("%w: %v", agents.ErrInvalid, err)), nil
 	}
-	res, err := t.svc.ListSessions(ctx, req.GetString(argNamespace, ""), name, req.GetBool(argAllCreators, false))
+	res, err := t.svc.ListSessions(ctx, req.GetString(argNamespace, ""), name, req.GetBool(argAllCreators, false), req.GetString(argPageToken, ""))
 	if err != nil {
 		return errResult(err), nil
 	}
