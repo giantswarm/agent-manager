@@ -1189,17 +1189,21 @@ func (s *Service) requireFreeName(ctx context.Context, st *site, name string) er
 		}
 		return conflictf("Agent %s already exists without a HelmRelease (a bare Agent); delete it first (delete_agent with force) or pick another name", st.describe(name))
 	}
-	list, err := st.flux.Resource(s.helmReleaseGVR()).Namespace(st.fluxNS).List(ctx, metav1.ListOptions{})
+	// The platform's releases live in its own namespace and target this one:
+	// every namespace, else (refused) the site's.
+	list, err := st.flux.Resource(s.helmReleaseGVR()).List(ctx, metav1.ListOptions{})
 	if err != nil {
-		return wrapKube(err, "list helmreleases in "+st.fluxNS)
-	}
-	kubeconfig := ""
-	if st.loc.IsSet() {
-		kubeconfig = st.loc.KubeconfigSecret()
+		if list, err = st.flux.Resource(s.helmReleaseGVR()).Namespace(st.fluxNS).List(ctx, metav1.ListOptions{}); err != nil {
+			return wrapKube(err, "list helmreleases in "+st.fluxNS)
+		}
 	}
 	for i := range list.Items {
 		hr := &list.Items[i]
-		if secret, ns, agent := renderedAgent(hr); secret == kubeconfig && ns == st.ns() && agent == name {
+		secret, ns, agent := renderedAgent(hr)
+		// On a workload cluster, a release of the site's namespace with its
+		// kubeconfig; on this cluster, one without.
+		here := secret == "" && !st.loc.IsSet() || st.loc.IsSet() && secret == st.loc.KubeconfigSecret() && hr.GetNamespace() == st.fluxNS
+		if here && ns == st.ns() && agent == name {
 			return conflictf("Agent %s is rendered by HelmRelease %s/%s; pick another name", st.describe(name), hr.GetNamespace(), hr.GetName())
 		}
 	}

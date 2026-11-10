@@ -1555,19 +1555,23 @@ func TestPlatformOwnedRelease(t *testing.T) {
 func TestCreateRefusesANameAnotherReleaseRenders(t *testing.T) {
 	ctx := context.Background()
 	readOnly := []string{"preset:read-only"}
-	platform := helmRelease("kagent", "agent-platform-default-agent", map[string]any{"agent": map[string]any{"name": "default-agent"}}, false, map[string]any{PlatformManagedByLabel: PlatformManagedByValue})
+	// As the agent-platform chart writes it: in its own namespace, targeting
+	// kagent under another release name.
+	platform := helmRelease("agent-platform", "agent-platform-default-agent", nil, false, map[string]any{PlatformManagedByLabel: PlatformManagedByValue})
+	_ = unstructured.SetNestedField(platform.Object, "default-agent", "spec", "releaseName")
+	_ = unstructured.SetNestedField(platform.Object, "kagent", "spec", "targetNamespace")
 
 	// The release has not rendered its Agent yet (no default model, say).
 	f := newFixture(t, []runtime.Object{modelConfig("kagent", "default-model-config", "Anthropic", "claude-sonnet-4-6"), harness("kagent", "kagent", "kagent"), ociRepository("kagent", "2.x"), platform})
 	_, err := f.svc.Create(ctx, Spec{Name: "default-agent", ModelConfig: "default-model-config", Toolset: readOnly})
 	require.ErrorIs(t, err, ErrConflict)
-	assert.Contains(t, err.Error(), "Agent kagent/default-agent is rendered by HelmRelease kagent/agent-platform-default-agent; pick another name")
+	assert.Contains(t, err.Error(), "Agent kagent/default-agent is rendered by HelmRelease agent-platform/agent-platform-default-agent; pick another name")
 
 	// It has.
-	mustCreate(t, f, agentGVR, agentObject("kagent", "default-agent", "agent-platform-default-agent", "kagent", true, false))
+	mustCreate(t, f, agentGVR, agentObject("kagent", "default-agent", "agent-platform-default-agent", "agent-platform", true, false))
 	_, err = f.svc.Create(ctx, Spec{Name: "default-agent", ModelConfig: "default-model-config", Toolset: readOnly})
 	require.ErrorIs(t, err, ErrConflict)
-	assert.Contains(t, err.Error(), "Agent kagent/default-agent already exists, rendered by HelmRelease kagent/agent-platform-default-agent; pick another name")
+	assert.Contains(t, err.Error(), "Agent kagent/default-agent already exists, rendered by HelmRelease agent-platform/agent-platform-default-agent; pick another name")
 
 	// Another name is free.
 	_, err = f.svc.Create(ctx, Spec{Name: "helper", ModelConfig: "default-model-config", Toolset: readOnly})
