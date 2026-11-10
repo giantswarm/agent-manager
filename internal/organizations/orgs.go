@@ -163,9 +163,9 @@ type Erasure struct {
 // AgentSessions counts one Agent's sessions the erase deletes.
 type AgentSessions struct {
 	Agent string `json:"agent"`
-	// Running are starting or ready.
+	// Running are in RuntimeState CREATING or READY.
 	Running int `json:"running"`
-	// Stopped are suspended or failed.
+	// Stopped are in RuntimeState SUSPENDED or FAILED.
 	Stopped int `json:"stopped"`
 }
 

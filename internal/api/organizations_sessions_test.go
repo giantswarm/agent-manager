@@ -85,12 +85,17 @@ func TestTheErasePreviewCountsTheSessions(t *testing.T) {
 			}
 			assert.NotContains(t, erases, "sessionsUnavailable")
 			assert.ElementsMatch(t, tc.sessions, erases["sessions"])
+			var listed []string
 			for _, call := range ctrl.Calls() {
 				if call.Method == "ListSessions" {
-					assert.True(t, call.Request.(*apiv1alpha1.ListSessionsRequest).GetAllCreators(), "sessions are listed across creators")
+					request := call.Request.(*apiv1alpha1.ListSessionsRequest)
+					listed = append(listed, request.GetAgent().GetName())
+					assert.Equal(t, orgNS, request.GetAgent().GetNamespace())
+					assert.True(t, request.GetAllCreators(), "sessions are listed across creators")
 					assert.Equal(t, []string{"Bearer id-token-of-alice"}, call.Metadata.Get("authorization"))
 				}
 			}
+			assert.ElementsMatch(t, []string{"review", "triage"}, listed, "every agent of the organization is listed")
 		})
 	}
 
