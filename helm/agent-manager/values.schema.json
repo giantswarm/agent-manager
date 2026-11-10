@@ -71,7 +71,7 @@
                 },
                 "uiURL": {
                     "type": "string",
-                    "description": "HTTPS UI URL template with one {operation} placeholder. The UI owns its routes; agent-manager supplies only a non-authorizing operation ID."
+                    "description": "HTTPS RFC 6570 URI template with one {operation} expression. The UI owns its routes; agent-manager supplies only a non-authorizing operation ID."
                 }
             }
         },

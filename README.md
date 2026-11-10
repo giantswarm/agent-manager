@@ -522,9 +522,9 @@ client, a portal session forwards the id_token of the portal's own client —
 and every forwarded token carries the audiences the MCPServer requires, the
 ones the kube-apiserver trusts. So the chart trusts both: `oauth.trustedAudiences`
 (default `[global.identity.clientId]`) plus `muster.mcpServer.auth.requiredAudiences`,
-always. A token for none of them is refused with `401`; the log line and the
-`WWW-Authenticate` description name its `aud` next to the trusted audiences
-(muster shows the description in its session hint). The caller
+always. A token for none of them is refused with `401`; the
+`Unknown JWT bearer refused` log line names its `token_audience` next to the
+`trusted_audiences`. The caller
 (`internal/identity`: subject, email, groups, source `sso|oauth`) is on every
 write's log line (`caller=`) and on every create/update/delete result as
 `requestedBy`.
@@ -603,13 +603,26 @@ The organization tools (every name holds `organization`):
   `get_organization` (with what a delete erases), `create_organization`,
   `update_organization` and `delete_organization`. A create asks first, with
   SelfSubjectAccessReviews as the caller, whether the caller may create the
-  object and bind `agent-platform:admin` in the parent (the operator mirrors
-  the parent's organizations-admin bindings into the new namespace), dry-runs
-  the object, writes it, waits for the operator's `Ready`, then writes the
-  first admins as the RoleBinding `organization-admins`. An organization that
-  is not Ready in time keeps its first admins for a second call with the same
-  arguments. A delete answers what it erases until the caller passes
-  `confirm: <parent>/<name>`, then marks the object
+  object and bind `agent-platform:admin` in the parent, then whether that
+  right will reach the new namespace: it does when the caller may bind there
+  cluster-wide, or when a RoleBinding in the parent that the operator mirrors
+  now (`adminmirror.Mirrors` of agent-platform-operator: one to
+  `agent-platform:organizations-admin`, or rbac-operator's to `cluster-admin`,
+  and not being deleted, since the operator writes no mirror of a deleting
+  binding) names the caller as one of its mirrored Users or Groups
+  (`adminmirror.MirroredSubjects`). Otherwise it
+  refuses before any write, dry run included, naming the caller's bindings
+  and the two ways out (an `agent-platform:organizations-admin` RoleBinding
+  for the caller in the parent, or a cluster-admin creating it). A caller who
+  may not list the parent's RoleBindings is not checked there. Then it
+  dry-runs the object, writes it, waits for the operator's `Ready`, asks again
+  in the new namespace, and writes the first admins as the RoleBinding
+  `organization-admins`. An organization that is not Ready in time, or whose
+  namespace the caller's right has not reached yet (`pending`), keeps its
+  first admins for a second call with the same arguments. A caller who is a
+  ServiceAccount or another `system:` name is never mirrored: only a right
+  cluster-wide reaches the namespace for it. A delete answers what it erases
+  until the caller passes `confirm: <parent>/<name>`, then marks the object
   `kustomize.toolkit.fluxcd.io/prune: enabled` (the delete intent the
   admission policy requires) and deletes it; the operator erases it. An
   organization Flux applies from git is refused live (commit mode is
@@ -638,8 +651,10 @@ missing, or `replaceCredential` asks for a new value, `set_organization_model`,
 `set_organization_connector` and `set_organization_egress_policy` answer with
 an MCP URL elicitation of a client-owned credential UI. The server prepares
 the intended change without writing consumers, and supplies a user-bound
-operation ID through the configured `credentials.uiURL` template. A client
-without `elicitation.url` receives the link in `credentials[].next`. A dry run
+operation ID through the configured `credentials.uiURL` RFC 6570 template. A client
+without `elicitation.url` receives the result as `structuredContent`, declared
+by the tools' `outputSchema`, with a `resource_link` to the credential UI from
+protocol 2025-06-18 and the link in `credentials[].next`. A dry run
 creates no operation. Without a configured UI, a change requiring credential
 input is refused before writing resources.
 

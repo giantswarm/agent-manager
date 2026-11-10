@@ -4,18 +4,24 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	apov1alpha1 "github.com/giantswarm/agent-platform-operator/api/v1alpha1"
+	"github.com/giantswarm/agent-platform-operator/pkg/adminmirror"
 	mcpserver "github.com/mark3labs/mcp-go/server"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	authenticationv1 "k8s.io/api/authentication/v1"
 	authorizationv1 "k8s.io/api/authorization/v1"
 	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -69,8 +75,11 @@ type orgFixture struct {
 	// ready makes the operator report an organization Ready with its
 	// namespace as soon as it is created.
 	ready bool
-	ctx   context.Context
-	orgs  *organizations.Service
+	// user is who the API server authenticates the caller as (a
+	// SelfSubjectReview).
+	user authenticationv1.UserInfo
+	ctx  context.Context
+	orgs *organizations.Service
 	// cfg and provider build the tools again, with another logger.
 	cfg      organizations.Config
 	provider kube.Provider
@@ -87,7 +96,8 @@ func newOrgFixture(t *testing.T, objs ...runtime.Object) *orgFixture {
 // by configure.
 func newOrgFixtureWith(t *testing.T, configure func(*organizations.Config), objs ...runtime.Object) *orgFixture {
 	t.Helper()
-	f := &orgFixture{ready: true, deny: func(string, string, string, string) bool { return false }}
+	f := &orgFixture{ready: true, deny: func(string, string, string, string) bool { return false },
+		user: authenticationv1.UserInfo{Username: "alice@example.com"}}
 	f.dyn = dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{
 		orgGVR: "AgentPlatformOrganizationList", rbGVR: "RoleBindingList", mcGVR: "ModelConfigList", connGVR: "RemoteMCPServerList",
 		egressGVR: "EgressPolicyList", orgAgentGV: "AgentList", hrGVR: "HelmReleaseList",
@@ -130,6 +140,9 @@ func newOrgFixtureWith(t *testing.T, configure func(*organizations.Config), objs
 		ra := review.Spec.ResourceAttributes
 		review.Status.Allowed = !f.deny(ra.Namespace, ra.Verb, ra.Resource, ra.Name)
 		return true, review, nil
+	})
+	f.typed.PrependReactor("create", "selfsubjectreviews", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, &authenticationv1.SelfSubjectReview{Status: authenticationv1.SelfSubjectReviewStatus{UserInfo: f.user}}, nil
 	})
 	sa := kubefake.NewClientset(
 		namespace(orgNS, map[string]string{apov1alpha1.OrganizationLabel: "payments", apov1alpha1.ParentLabel: "org-acme"}),
@@ -573,10 +586,10 @@ func TestOrganizationMembers(t *testing.T) {
 	assert.NotContains(t, text, "tenant", "an org-* namespace is no tenant of any kind")
 }
 
-// A creator whose rights in the parent do not reach the new namespace (a
-// Giant Swarm Organization admin's cluster-admin there, which the operator
-// does not mirror) gets the organization without a Forbidden write, and an
-// answer naming who can bind the first admins; their call finishes it.
+// A creator whose rights have not reached the new namespace by Ready (the
+// operator has not mirrored them yet) gets the organization without a
+// Forbidden write, and an answer naming who can bind the first admins; a
+// second call finishes it.
 func TestCreateOrganizationNamesWhoBindsTheFirstAdminsWhenTheCreatorCannot(t *testing.T) {
 	f := newOrgFixture(t)
 	f.deny = func(ns, verb, resource, _ string) bool {
@@ -820,4 +833,121 @@ func TestDeleteOrganizationObject(t *testing.T) {
 	require.True(t, isErr)
 	assert.True(t, strings.HasPrefix(text, "conflict:"), text)
 	assert.NotNil(t, f.get(t, connGVR, orgNS, "muster"))
+}
+
+// parentBinding writes rb into the parent org-acme, as its admins did before
+// the create.
+func (f *orgFixture) parentBinding(t *testing.T, rb rbacv1.RoleBinding) {
+	t.Helper()
+	rb.Namespace = "org-acme"
+	obj, err := runtime.DefaultUnstructuredConverter.ToUnstructured(&rb)
+	require.NoError(t, err)
+	u := &unstructured.Unstructured{Object: obj}
+	u.SetAPIVersion("rbac.authorization.k8s.io/v1")
+	u.SetKind("RoleBinding")
+	_, err = f.dyn.Resource(rbGVR).Namespace("org-acme").Create(t.Context(), u, metav1.CreateOptions{})
+	require.NoError(t, err)
+}
+
+// callerNamed is who the API server authenticates as the subject s of a
+// RoleBinding.
+func callerNamed(s rbacv1.Subject) authenticationv1.UserInfo {
+	switch s.Kind {
+	case rbacv1.GroupKind:
+		return authenticationv1.UserInfo{Username: "carol@example.com", Groups: []string{s.Name}}
+	case rbacv1.ServiceAccountKind:
+		return authenticationv1.UserInfo{Username: "system:serviceaccount:" + s.Namespace + ":" + s.Name}
+	}
+	return authenticationv1.UserInfo{Username: s.Name}
+}
+
+// A caller without a right cluster-wide whose right in the parent comes from
+// a binding agent-platform-operator does not mirror for them is refused
+// before anything is written, dry run or not; one the operator mirrors goes
+// on and binds the first admins. The bindings and their mirrored subjects are
+// the operator's own table, so the two cannot drift: a binding counts when
+// Case.Mirrors (a binding being deleted does not), and then its mirror binds
+// Case.Mirrored.
+func TestCreateOrganizationRefusesBeforeTheWriteWhenTheParentRightIsNotMirrored(t *testing.T) {
+	for _, c := range adminmirror.Cases() {
+		for _, subject := range c.Binding.Subjects {
+			mirrored := c.Mirrors && slices.ContainsFunc(c.Mirrored, func(m rbacv1.Subject) bool { return m.Kind == subject.Kind && m.Name == subject.Name })
+			for _, dryRun := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s/%s %s/dryRun=%t", c.Binding.Name, subject.Kind, path.Join(subject.Namespace, subject.Name), dryRun), func(t *testing.T) {
+					f := newOrgFixture(t)
+					f.deny = func(ns, _, _, _ string) bool { return ns == "" }
+					f.user = callerNamed(subject)
+					f.parentBinding(t, c.Binding)
+					text, isErr := f.call(t, ToolCreateOrganization, map[string]any{"namespace": "org-acme", "name": "payments", "adminGroups": []any{"payments-leads"}, "dryRun": dryRun})
+
+					if mirrored {
+						require.False(t, isErr, text)
+						assert.Equal(t, true, decode(t, text)["created"], text)
+						assert.Equal(t, !dryRun, f.get(t, rbGVR, orgNS, organizations.FirstAdminsBinding) != nil, "the first admins are bound unless it is a dry run")
+						return
+					}
+					require.True(t, isErr, text)
+					assert.True(t, strings.HasPrefix(text, "forbidden:"), text)
+					assert.Contains(t, text, c.Binding.Name+" (", "the refusal names the binding")
+					if c.IsMirroredAdmin && !c.Mirrors {
+						assert.Contains(t, text, "; it is being deleted, so the operator will not mirror it)", "the refusal says the binding is being deleted")
+					}
+					if strings.HasPrefix(f.user.Username, "system:") {
+						assert.Contains(t, text, "a cluster-admin creates the organization, or binds the right to you cluster-wide", "a system: name is never mirrored")
+					} else {
+						assert.Contains(t, text, "binds "+organizations.RoleOrganizationsAdmin+" to you", "the first way out")
+						assert.Contains(t, text, "or a cluster-admin creates the organization", "the second way out")
+					}
+					assert.Nil(t, f.get(t, orgGVR, "org-acme", "payments"))
+					assert.Empty(t, f.dryRuns.Received(), "not even a dry run is sent")
+				})
+			}
+		}
+	}
+}
+
+// The check beyond the operator's table: a caller whose bindings cannot be
+// read goes on, and the access review in the organization namespace after
+// Ready answers pending when the right has not reached it; a caller with only
+// half the right cluster-wide, and no parent binding, is refused.
+func TestCreateOrganizationGoesOnUnreadCallersAndRefusesHalfARight(t *testing.T) {
+	forbidden := func(a k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewForbidden(a.GetResource().GroupResource(), "", errors.New("RBAC: access denied"))
+	}
+	for _, tc := range []struct {
+		name    string
+		deny    func(ns, verb, resource, name string) bool
+		prepare func(f *orgFixture)
+		refused string
+	}{{
+		name:    "may not list the parent's RoleBindings",
+		deny:    func(ns, _, _, _ string) bool { return ns == "" || ns == orgNS },
+		prepare: func(f *orgFixture) { f.dyn.PrependReactor("list", "rolebindings", forbidden) },
+	}, {
+		name:    "may not ask who it is",
+		deny:    func(ns, _, _, _ string) bool { return ns == "" || ns == orgNS },
+		prepare: func(f *orgFixture) { f.typed.PrependReactor("create", "selfsubjectreviews", forbidden) },
+	}, {
+		name:    "may create RoleBindings cluster-wide but not bind the role",
+		deny:    func(ns, verb, _, _ string) bool { return ns == "" && verb == "bind" },
+		prepare: func(*orgFixture) {},
+		refused: "No RoleBinding in org-acme that agent-platform-operator mirrors names you",
+	}} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newOrgFixture(t)
+			f.deny = tc.deny
+			tc.prepare(f)
+			text, isErr := f.call(t, ToolCreateOrganization, map[string]any{"namespace": "org-acme", "name": "payments", "adminGroups": []any{"payments-leads"}})
+			if tc.refused != "" {
+				require.True(t, isErr, text)
+				assert.True(t, strings.HasPrefix(text, "forbidden:"), text)
+				assert.Contains(t, text, tc.refused)
+				assert.Nil(t, f.get(t, orgGVR, "org-acme", "payments"))
+				return
+			}
+			require.False(t, isErr, text)
+			assert.Contains(t, decode(t, text)["pending"], "first admins are not bound")
+			assert.NotNil(t, f.get(t, orgGVR, "org-acme", "payments"))
+		})
+	}
 }

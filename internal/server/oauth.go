@@ -296,47 +296,17 @@ func (o *oauthRuntime) attachIdentity(next http.Handler) http.Handler {
 	})
 }
 
-// refuse answers a request that yields no IdP token to present downstream
-// with 401 and names the cause. The usual one: the bearer is an IdP id_token
-// (a JWT) whose audience is not trusted — the session signed in through a
-// client this server was not told about, the portal's own for instance.
-// mcp-oauth then skipped the forwarded-id_token branch and authenticated the
-// caller through the IdP's userinfo endpoint instead (Dex answers for any
-// token it signed), which is why the caller is known but not SSO and no token
-// is in the local store. The token's aud is read without verification, for
-// the message only: mcp-oauth has authenticated the caller already and the
-// decision — 401 — does not depend on it. muster shows the WWW-Authenticate
-// description in its session hint.
+// refuse answers 401 for a caller mcp-oauth authenticated whose bearer yields
+// no IdP token to present downstream: a token this server issued with no IdP
+// id_token stored next to it. An id_token for an untrusted audience never
+// gets here; mcp-oauth refuses it and logs its aud next to the trusted
+// audiences.
 func (o *oauthRuntime) refuse(w http.ResponseWriter, r *http.Request, id *identity.Identity) {
-	reason := "no identity token to act with towards the Kubernetes API"
-	attrs := []any{"caller", id.String(), "source", id.Source, "path", r.URL.Path}
-	if aud, ok := untrustedAudience(bearerToken(r), o.cfg.TrustedAudiences); ok {
-		reason = fmt.Sprintf("token audience %v matches none of the trusted audiences %v (--oauth-trusted-audiences)", aud, o.cfg.TrustedAudiences)
-		attrs = append(attrs, "aud", aud, "trustedAudiences", o.cfg.TrustedAudiences)
-	}
-	o.log.Warn("request refused: "+reason+" — the ServiceAccount holds no permissions, nothing else can run the request", attrs...)
-	w.Header().Set("WWW-Authenticate", `Bearer error="invalid_token", error_description="`+headerQuotedString(reason)+`"`)
+	const reason = "no identity token to act with towards the Kubernetes API"
+	o.log.Warn("request refused: "+reason+" — the ServiceAccount holds no permissions, nothing else can run the request",
+		"caller", id.String(), "source", id.Source, "path", r.URL.Path)
+	w.Header().Set("WWW-Authenticate", `Bearer error="invalid_token", error_description="`+reason+`"`)
 	http.Error(w, "unauthorized: "+reason, http.StatusUnauthorized)
-}
-
-// untrustedAudience is the aud claim of bearer when bearer is a JWT — the
-// shape of an IdP id_token — that names none of trusted: the IdP issued it
-// for other clients. false for opaque bearers, for JWTs without a readable
-// aud, and for tokens that do name a trusted audience (their refusal has
-// another cause).
-func untrustedAudience(bearer string, trusted []string) ([]string, bool) {
-	aud, ok := unverifiedAudience(bearer)
-	if !ok {
-		return nil, false
-	}
-	for _, a := range aud {
-		for _, t := range trusted {
-			if a == t {
-				return nil, false
-			}
-		}
-	}
-	return aud, true
 }
 
 // unverifiedAudience reads the aud claim (a string or a list) of a compact

@@ -154,10 +154,12 @@ func wayOrganizationsAdmin(parent string) string {
 }
 
 // wayFirstAdmins names who can bind the first admins of org when the
-// creator may not: rights in the parent that the operator does not mirror
-// into the organization namespace.
+// creator may not: create_organization refuses before the write a creator
+// whose bindings in the parent the operator does not mirror, so what is left
+// is a mirror the operator has not written yet, or a creator it could not
+// check.
 func wayFirstAdmins(org *apov1alpha1.AgentPlatformOrganization) string {
-	return fmt.Sprintf("your right to create it in %s does not reach its namespace %s (agent-platform-operator mirrors only %s bindings of the parent); someone with %s bound in %s or cluster-wide, or a cluster-admin, calls create_organization with the same arguments to bind them", org.Namespace, org.Status.Namespace, RoleOrganizationsAdmin, RoleOrganizationsAdmin, org.Namespace)
+	return fmt.Sprintf("your right to create it in %s does not reach its namespace %s; if agent-platform-operator mirrors your binding there, call create_organization again with the same arguments once it has; else someone with %s bound in %s or cluster-wide, or a cluster-admin, calls it to bind them", org.Namespace, org.Status.Namespace, RoleOrganizationsAdmin, org.Namespace)
 }
 
 // wayOrganizationAdmin names who can make the caller an admin of the
@@ -206,6 +208,9 @@ func (a access) String() string {
 	if a.name != "" {
 		r += "/" + a.name
 	}
+	if a.namespace == "" {
+		return fmt.Sprintf("%s %s cluster-wide", a.verb, r)
+	}
 	return fmt.Sprintf("%s %s in %s", a.verb, r, a.namespace)
 }
 
@@ -213,18 +218,29 @@ func (a access) String() string {
 // refuses, naming way, at the first one RBAC denies.
 func requireAccess(ctx context.Context, c kube.Client, way string, checks ...access) error {
 	for _, a := range checks {
-		review := &authorizationv1.SelfSubjectAccessReview{Spec: authorizationv1.SelfSubjectAccessReviewSpec{
-			ResourceAttributes: &authorizationv1.ResourceAttributes{Namespace: a.namespace, Verb: a.verb, Group: a.group, Resource: a.resource, Name: a.name},
-		}}
-		res, err := c.Typed().AuthorizationV1().SelfSubjectAccessReviews().Create(ctx, review, metav1.CreateOptions{})
+		allowed, err := reviewAccess(ctx, c, a)
 		if err != nil {
-			return kubeErr(err, "access review for "+a.String(), "")
+			return err
 		}
-		if !res.Status.Allowed {
+		if !allowed {
 			return fmt.Errorf("%w: you may not %s; %s", agents.ErrForbidden, a.String(), way)
 		}
 	}
 	return nil
+}
+
+// reviewAccess asks one SelfSubjectAccessReview as the caller. An empty
+// namespace asks for the right in every namespace, which only a
+// ClusterRoleBinding gives.
+func reviewAccess(ctx context.Context, c kube.Client, a access) (bool, error) {
+	review := &authorizationv1.SelfSubjectAccessReview{Spec: authorizationv1.SelfSubjectAccessReviewSpec{
+		ResourceAttributes: &authorizationv1.ResourceAttributes{Namespace: a.namespace, Verb: a.verb, Group: a.group, Resource: a.resource, Name: a.name},
+	}}
+	res, err := c.Typed().AuthorizationV1().SelfSubjectAccessReviews().Create(ctx, review, metav1.CreateOptions{})
+	if err != nil {
+		return false, kubeErr(err, "access review for "+a.String(), "")
+	}
+	return res.Status.Allowed, nil
 }
 
 var dryRunAll = []string{metav1.DryRunAll}
