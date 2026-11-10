@@ -8,6 +8,8 @@ import (
 	"time"
 
 	apov1alpha1 "github.com/giantswarm/agent-platform-operator/api/v1alpha1"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -18,6 +20,8 @@ import (
 
 	"github.com/giantswarm/agent-manager/internal/agents"
 	"github.com/giantswarm/agent-manager/internal/identity"
+	"github.com/giantswarm/agent-manager/internal/kagent"
+	apiv1alpha1 "github.com/giantswarm/agent-manager/internal/kagent/gen/kagent/api/v1alpha1"
 	"github.com/giantswarm/agent-manager/internal/kube"
 )
 
@@ -143,10 +147,26 @@ type Erasure struct {
 	// (agent-platform:admin, editor and user).
 	Members        []string `json:"members"`
 	SnapshotPrefix string   `json:"snapshotPrefix,omitempty"`
+	// Sessions counts, per Agent, the sessions of the organization the erase
+	// deletes, as the caller sees them across every creator: running ones
+	// stop, stopped ones lose their worker snapshots and cannot be resumed.
+	// Only Agents with a session are listed. Null when they could not be
+	// listed, and then SessionsUnavailable says why.
+	Sessions            []AgentSessions `json:"sessions"`
+	SessionsUnavailable string          `json:"sessionsUnavailable,omitempty"`
 	// Kept is what a delete does not erase.
 	Kept string `json:"kept"`
 	// Unreadable names what the caller may not read there, with why.
 	Unreadable []string `json:"unreadable,omitempty"`
+}
+
+// AgentSessions counts one Agent's sessions the erase deletes.
+type AgentSessions struct {
+	Agent string `json:"agent"`
+	// Running are in RuntimeState CREATING or READY.
+	Running int `json:"running"`
+	// Stopped are in RuntimeState SUSPENDED or FAILED.
+	Stopped int `json:"stopped"`
 }
 
 // Get reads one organization and what deleting it erases.
@@ -189,12 +209,12 @@ func (s *Service) erasure(ctx context.Context, dyn dynamic.Interface, org *apov1
 	out := &Erasure{Namespace: ns, SnapshotPrefix: org.Status.SnapshotPrefix,
 		Kept: "session tombstones stay in the agent runtime; everything else of the organization namespace is erased, worker snapshots and connector sign-ins included"}
 	credentials := map[string]bool{}
-	read := func(what string, gvr func() ([]unstructured.Unstructured, error), into *[]string, each func(*unstructured.Unstructured)) {
+	read := func(what string, gvr func() ([]unstructured.Unstructured, error), into *[]string, each func(*unstructured.Unstructured)) bool {
 		items, err := gvr()
 		*into = []string{}
 		if err != nil {
 			out.Unreadable = append(out.Unreadable, fmt.Sprintf("%s: %v (an organizations-admin reads them once it binds itself in the organization, which its members see)", what, err))
-			return
+			return false
 		}
 		for i := range items {
 			*into = append(*into, items[i].GetName())
@@ -202,6 +222,7 @@ func (s *Service) erasure(ctx context.Context, dyn dynamic.Interface, org *apov1
 				each(&items[i])
 			}
 		}
+		return true
 	}
 	lister := func(gvr schema.GroupVersionResource) func() ([]unstructured.Unstructured, error) {
 		return func() ([]unstructured.Unstructured, error) {
@@ -216,7 +237,7 @@ func (s *Service) erasure(ctx context.Context, dyn dynamic.Interface, org *apov1
 	if err != nil {
 		hrGV = schema.GroupVersion{Group: "helm.toolkit.fluxcd.io", Version: "v2"}
 	}
-	read("agents", lister(s.kagentGVR("agents")), &out.Agents, nil)
+	agentsRead := read("agents", lister(s.kagentGVR("agents")), &out.Agents, nil)
 	read("HelmReleases", lister(hrGV.WithResource("helmreleases")), &out.HelmReleases, nil)
 	read("models", lister(s.kagentGVR("modelconfigs")), &out.Models, func(u *unstructured.Unstructured) {
 		if secret, _, _ := unstructured.NestedString(u.Object, "spec", "apiKeySecret"); secret != "" {
@@ -249,7 +270,60 @@ func (s *Service) erasure(ctx context.Context, dyn dynamic.Interface, org *apov1
 		out.Credentials = append(out.Credentials, name)
 	}
 	slices.Sort(out.Credentials)
+	out.Sessions, out.SessionsUnavailable = s.erasedSessions(ctx, ns, out.Agents, agentsRead)
 	return out
+}
+
+// erasedSessions counts, as the caller and across every creator, the
+// sessions of the organization's Agents the erase deletes. It answers why
+// when it cannot list them.
+func (s *Service) erasedSessions(ctx context.Context, ns string, agentNames []string, agentsRead bool) ([]AgentSessions, string) {
+	if s.cfg.Sessions == nil {
+		return nil, "agent-manager has no agent runtime target (--kagent-target), so it lists no sessions"
+	}
+	if !agentsRead {
+		return nil, "the organization's agents could not be read (see unreadable)"
+	}
+	token, ok := identity.TokenFromContext(ctx)
+	if !ok {
+		return nil, "the request carries no identity token, and sessions are listed as the caller"
+	}
+	out := []AgentSessions{}
+	for _, name := range agentNames {
+		sessions, err := s.cfg.Sessions.ListSessions(ctx, token, kagent.Ref{Namespace: ns, Name: name}, true)
+		if err != nil {
+			return nil, sessionsRefusal(name, err)
+		}
+		count := AgentSessions{Agent: name}
+		for _, session := range sessions {
+			switch session.GetState() {
+			case apiv1alpha1.RuntimeState_RUNTIME_STATE_CREATING, apiv1alpha1.RuntimeState_RUNTIME_STATE_READY:
+				count.Running++
+			case apiv1alpha1.RuntimeState_RUNTIME_STATE_SUSPENDED, apiv1alpha1.RuntimeState_RUNTIME_STATE_FAILED:
+				count.Stopped++
+			}
+		}
+		if count.Running+count.Stopped > 0 {
+			out = append(out, count)
+		}
+	}
+	return out, ""
+}
+
+// sessionsRefusal says why an Agent's sessions could not be listed: the
+// controller's own words for a refusal of the caller, the status code alone
+// for anything else, whose message may name the runtime's address.
+func sessionsRefusal(agent string, err error) string {
+	st, ok := status.FromError(err)
+	if !ok {
+		return fmt.Sprintf("the sessions of agent %s could not be listed", agent)
+	}
+	switch st.Code() {
+	case codes.PermissionDenied, codes.Unauthenticated, codes.NotFound:
+		return fmt.Sprintf("the sessions of agent %s: %s: %s", agent, st.Code(), st.Message())
+	default:
+		return fmt.Sprintf("the sessions of agent %s: the agent runtime answered %s", agent, st.Code())
+	}
 }
 
 // ---- create -----------------------------------------------------------------------
