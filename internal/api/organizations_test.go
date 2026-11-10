@@ -865,11 +865,13 @@ func callerNamed(s rbacv1.Subject) authenticationv1.UserInfo {
 // a binding agent-platform-operator does not mirror for them is refused
 // before anything is written, dry run or not; one the operator mirrors goes
 // on and binds the first admins. The bindings and their mirrored subjects are
-// the operator's own table, so the two cannot drift.
+// the operator's own table, so the two cannot drift: a binding counts when
+// Case.Mirrors (a binding being deleted does not), and then its mirror binds
+// Case.Mirrored.
 func TestCreateOrganizationRefusesBeforeTheWriteWhenTheParentRightIsNotMirrored(t *testing.T) {
 	for _, c := range adminmirror.Cases() {
 		for _, subject := range c.Binding.Subjects {
-			mirrored := slices.ContainsFunc(c.Mirrored, func(m rbacv1.Subject) bool { return m.Kind == subject.Kind && m.Name == subject.Name })
+			mirrored := c.Mirrors && slices.ContainsFunc(c.Mirrored, func(m rbacv1.Subject) bool { return m.Kind == subject.Kind && m.Name == subject.Name })
 			for _, dryRun := range []bool{false, true} {
 				t.Run(fmt.Sprintf("%s/%s %s/dryRun=%t", c.Binding.Name, subject.Kind, path.Join(subject.Namespace, subject.Name), dryRun), func(t *testing.T) {
 					f := newOrgFixture(t)

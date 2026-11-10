@@ -606,10 +606,11 @@ The organization tools (every name holds `organization`):
   object and bind `agent-platform:admin` in the parent, then whether that
   right will reach the new namespace: it does when the caller may bind there
   cluster-wide, or when a RoleBinding in the parent that the operator mirrors
-  (`adminmirror.IsMirroredAdmin` of agent-platform-operator: one to
-  `agent-platform:organizations-admin`, or rbac-operator's to `cluster-admin`)
-  names the caller as one of its mirrored Users or Groups and is not being
-  deleted (the operator writes no mirror of a deleting binding). Otherwise it
+  now (`adminmirror.Mirrors` of agent-platform-operator: one to
+  `agent-platform:organizations-admin`, or rbac-operator's to `cluster-admin`,
+  and not being deleted, since the operator writes no mirror of a deleting
+  binding) names the caller as one of its mirrored Users or Groups
+  (`adminmirror.MirroredSubjects`). Otherwise it
   refuses before any write, dry run included, naming the caller's bindings
   and the two ways out (an `agent-platform:organizations-admin` RoleBinding
   for the caller in the parent, or a cluster-admin creating it). A caller who
