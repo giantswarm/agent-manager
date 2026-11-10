@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -364,4 +365,60 @@ func TestSessionsUnsupportedWithoutATarget(t *testing.T) {
 	asCaller(mux).ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusNotImplemented, rec.Code, rec.Body.String())
 	assert.Contains(t, rec.Body.String(), "--kagent-target")
+}
+
+// list_sessions answers at most kagent.MaxListedSessions and a token that
+// continues the listing, over MCP and REST.
+func TestListSessionsContinuesPastItsBound(t *testing.T) {
+	svc, ctrl := newSessionService(t)
+	for range kagent.MaxListedSessions + 1 {
+		ctrl.AddSession("kagent", "sre")
+	}
+	type list struct {
+		Sessions      []json.RawMessage `json:"sessions"`
+		NextPageToken string            `json:"nextPageToken"`
+		Hint          string            `json:"hint"`
+	}
+
+	t.Run("mcp", func(t *testing.T) {
+		srv := NewMCPServer(svc, "test")
+		ctx := identity.ContextWithToken(t.Context(), callerToken)
+
+		text, isErr := callToolCtx(t, ctx, srv, ToolListSessions, map[string]any{"name": "sre"})
+		require.False(t, isErr, text)
+		var first list
+		require.NoError(t, json.Unmarshal([]byte(text), &first))
+		assert.Len(t, first.Sessions, kagent.MaxListedSessions)
+		require.NotEmpty(t, first.NextPageToken)
+		assert.Contains(t, first.Hint, "pageToken")
+
+		text, isErr = callToolCtx(t, ctx, srv, ToolListSessions, map[string]any{"name": "sre", "pageToken": first.NextPageToken})
+		require.False(t, isErr, text)
+		var rest list
+		require.NoError(t, json.Unmarshal([]byte(text), &rest))
+		assert.Len(t, rest.Sessions, 1)
+		assert.NotContains(t, text, "nextPageToken")
+		assert.NotContains(t, text, "hint")
+	})
+
+	t.Run("rest", func(t *testing.T) {
+		mux := http.NewServeMux()
+		NewREST(svc, nil).Register(mux)
+		h := asCaller(mux)
+		path := Prefix + "/agents/kagent/sre/sessions"
+
+		code, body := do(t, h, http.MethodGet, path, nil)
+		require.Equal(t, http.StatusOK, code, body)
+		assert.Len(t, body["sessions"], kagent.MaxListedSessions)
+		next, _ := body["nextPageToken"].(string)
+		require.NotEmpty(t, next)
+
+		code, body = do(t, h, http.MethodGet, path+"?pageToken="+url.QueryEscape(next), nil)
+		require.Equal(t, http.StatusOK, code, body)
+		assert.Len(t, body["sessions"], 1)
+		assert.NotContains(t, body, "nextPageToken")
+
+		code, body = do(t, h, http.MethodGet, path+"?pageToken="+strings.Repeat("a", agents.MaxPageTokenLength+1), nil)
+		assert.Equal(t, http.StatusBadRequest, code, body)
+	})
 }

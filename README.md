@@ -56,7 +56,7 @@ MCP-server-writer half.
 | kagent ModelConfigs of a namespace, with the namespace default (`default`) and their `accepted` and `resolvedRefs` conditions | `GET /api/v1/modelconfigs?namespace=` | `list_model_configs` | no |
 | kagent EgressPolicies of a namespace, read as the caller: each origin and its credential header's name, never the Secret | `GET /api/v1/egresspolicies?namespace=` | `list_egress_policies` | no |
 | Skills (`SKILL.md`) of the configured GitHub repositories, grouped by repository with its head commit, tags from `metadata.tags`; `tags` keeps those with any of them | `GET /api/v1/skills[?repository=&ref=&refresh=&tags=]` | `list_skills` | no |
-| Sessions of an agent, as the caller (`SessionService/ListSessions`; `allCreators` when the controller grants it) | `GET /api/v1/agents/{ns}/{name}/sessions[?allCreators=true]` | `list_sessions` | no |
+| Sessions of an agent, as the caller (`SessionService/ListSessions`; `allCreators` when the controller grants it) | `GET /api/v1/agents/{ns}/{name}/sessions[?allCreators=true][&pageToken=…]` | `list_sessions` | no |
 | Start a session: create it (in a workspace with `workspaceGrant`), send the first message when one is given and answer once the turn is accepted; without `message` only create it | `POST /api/v1/agents/{ns}/{name}/sessions` | `start_session` | a kagent Session |
 | One session and its conversation, one turn per A2A task of its context, oldest first, within `maxBytes`: a summary per turn by default, a transcript or the raw tasks on request | `GET /api/v1/sessions/{id}[?detail=&lastTurns=&maxBytes=]` | `get_session` | no |
 | One turn of a session: its messages, paged within `maxBytes`, or one tool call whole | `GET /api/v1/sessions/{id}/turns/{turn}[?detail=&toolCall=&fromMessage=&maxBytes=]` | `get_session_turn` | no |
@@ -794,7 +794,9 @@ and without the caller's token a session operation is `401 unauthenticated`.
   whole and the larger is clipped (`argsText`, `responseText`).
 - Both read conversations of up to 10000 turns; a longer one is `409
   conflict`, as its newest turns could not be named.
-- `list_sessions` is `SessionService/ListSessions` for one Agent.
+- `list_sessions` is `SessionService/ListSessions` for one Agent, at most
+  2000 sessions per answer. `nextPageToken` in the answer says more follow:
+  list again with it as `pageToken`.
 - `delete_session` is `SessionService/DeleteSession`: the controller ends the
   session's runtime, removes its state and answers it in
   `RUNTIME_STATE_DELETED`; it is gone from `list_sessions` and `get_session`

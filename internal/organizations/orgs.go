@@ -301,12 +301,15 @@ func (s *Service) erasedSessions(ctx context.Context, ns string, agentNames []st
 	}
 	out := []AgentSessions{}
 	for _, name := range agentNames {
-		sessions, err := s.cfg.Sessions.ListSessions(ctx, token, kagent.Ref{Namespace: ns, Name: name}, true)
+		page, err := s.cfg.Sessions.ListSessions(ctx, token, kagent.Ref{Namespace: ns, Name: name}, true, "")
 		if err != nil {
 			return nil, sessionsRefusal(name, err)
 		}
+		if page.NextPageToken != "" {
+			return nil, fmt.Sprintf("the sessions of agent %s number more than %d, the most read for one agent, so they are not counted", name, kagent.MaxListedSessions)
+		}
 		count := AgentSessions{Agent: name}
-		for _, session := range sessions {
+		for _, session := range page.Sessions {
 			switch session.GetState() {
 			case apiv1alpha1.RuntimeState_RUNTIME_STATE_CREATING, apiv1alpha1.RuntimeState_RUNTIME_STATE_READY:
 				count.Running++

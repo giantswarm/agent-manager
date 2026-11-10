@@ -1,6 +1,7 @@
 package api
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -50,6 +51,15 @@ func TestTheErasePreviewCountsTheSessions(t *testing.T) {
 			name:     "none",
 			seed:     func(*kagenttest.Controller) {},
 			sessions: []any{},
+		},
+		{
+			name: "an agent with more sessions than one listing reads",
+			seed: func(c *kagenttest.Controller) {
+				for range kagent.MaxListedSessions + 1 {
+					c.AddSession(orgNS, "review")
+				}
+			},
+			unavailable: fmt.Sprintf("the sessions of agent review number more than %d", kagent.MaxListedSessions),
 		},
 		{
 			name: "a refused list",

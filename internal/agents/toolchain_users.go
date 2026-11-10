@@ -125,12 +125,15 @@ func (s *Service) ToolchainUsers(ctx context.Context, name, version string) (*To
 					out.Agents = append(out.Agents, ToolchainAgent{Namespace: ns, Name: agent.Name, Toolchain: entry})
 				}
 			}
-			sessions, err := s.sessionsOfAgent(ctx, token, agent)
+			page, err := s.sessionsOfAgent(ctx, token, agent)
 			if err != nil {
 				out.Unreadable = append(out.Unreadable, fmt.Sprintf("sessions of agent %s: %v", agent.Tenant(), err))
 				continue
 			}
-			for _, session := range sessions {
+			if page.NextPageToken != "" {
+				out.Unreadable = append(out.Unreadable, fmt.Sprintf("sessions of agent %s: more than %d; only the first %d by session id were searched", agent.Tenant(), kagent.MaxListedSessions, kagent.MaxListedSessions))
+			}
+			for _, session := range page.Sessions {
 				if session.GetState() == apiv1alpha1.RuntimeState_RUNTIME_STATE_DELETED {
 					continue
 				}
@@ -150,20 +153,21 @@ func (s *Service) ToolchainUsers(ctx context.Context, name, version string) (*To
 }
 
 // sessionsOfAgent is every person's Sessions of the agent when the
-// controller grants the caller that, else the caller's own.
-func (s *Service) sessionsOfAgent(ctx context.Context, token string, agent kagent.Ref) ([]*apiv1alpha1.Session, error) {
-	sessions, err := s.cfg.Sessions.ListSessions(ctx, token, agent, true)
+// controller grants the caller that, else the caller's own, from the start
+// through at most kagent.MaxListedSessions.
+func (s *Service) sessionsOfAgent(ctx context.Context, token string, agent kagent.Ref) (*kagent.SessionPage, error) {
+	page, err := s.cfg.Sessions.ListSessions(ctx, token, agent, true, "")
 	if err == nil {
-		return sessions, nil
+		return page, nil
 	}
 	if !errors.Is(kagentError(err, ""), ErrForbidden) {
 		return nil, kagentError(err, fmt.Sprintf("sessions of agent %s", agent.Tenant()))
 	}
-	sessions, err = s.cfg.Sessions.ListSessions(ctx, token, agent, false)
+	page, err = s.cfg.Sessions.ListSessions(ctx, token, agent, false, "")
 	if err != nil {
 		return nil, kagentError(err, fmt.Sprintf("sessions of agent %s", agent.Tenant()))
 	}
-	return sessions, nil
+	return page, nil
 }
 
 // toolchainDigests are the digests toolchain name's image tag resolves to:

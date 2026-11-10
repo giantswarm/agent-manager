@@ -950,7 +950,7 @@ Each with its organization namespace, harnesses, worker replicas, the operator's
 ```text
 List your conversations with one agent: id, name, state, failure and timestamps.
 
-Read through agentgateway as you. allCreators includes every person's sessions, when the controller authorizes you for it.
+Read through agentgateway as you. allCreators includes every person's sessions, when the controller authorizes you for it. At most 2000 sessions are answered at a time; nextPageToken says more follow: list again with it as pageToken.
 ```
 
 ```json
@@ -966,6 +966,11 @@ Read through agentgateway as you. allCreators includes every person's sessions, 
     },
     "namespace": {
       "description": "Namespace of the agent; default: the installation's kagent namespace (get_info lists the managed ones).",
+      "type": "string"
+    },
+    "pageToken": {
+      "description": "nextPageToken of the previous answer, with the same name, namespace and allCreators; empty lists from the start",
+      "maxLength": 512,
       "type": "string"
     }
   },
