@@ -5,6 +5,8 @@ import (
 	"slices"
 	"sync"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -15,8 +17,9 @@ import (
 // DryRuns plays the API server's side of the dry-run creates, updates and
 // deletes (dryRun=All) a fake dynamic client receives, which the fake would otherwise
 // perform: it records every object and answers with Refuse's error, accepting
-// when Refuse is nil or returns nil. A dry-run never reaches the fake's
-// tracker; every other write does.
+// when Refuse is nil or returns nil. A dry-run create of an object the fake
+// holds answers AlreadyExists, as the API server does. A dry-run never
+// changes the fake's tracker; every other write does.
 type DryRuns struct {
 	// Refuse is the API server's judgement of an object.
 	Refuse func(*unstructured.Unstructured) error
@@ -36,6 +39,13 @@ func AnswerDryRuns(dyn *dynamicfake.FakeDynamicClient) *DryRuns {
 	d := &DryRuns{}
 	dyn.PrependReactor("create", "*", func(a k8stesting.Action) (bool, runtime.Object, error) {
 		c := a.(k8stesting.CreateActionImpl)
+		if slices.Equal(c.CreateOptions.DryRun, []string{metav1.DryRunAll}) {
+			if m, err := meta.Accessor(c.GetObject()); err == nil {
+				if _, err := dyn.Tracker().Get(c.GetResource(), c.GetNamespace(), m.GetName()); err == nil {
+					return true, nil, apierrors.NewAlreadyExists(c.GetResource().GroupResource(), m.GetName())
+				}
+			}
+		}
 		return d.answer(c.GetObject(), c.CreateOptions.DryRun, c.CreateOptions.FieldManager)
 	})
 	dyn.PrependReactor("update", "*", func(a k8stesting.Action) (bool, runtime.Object, error) {

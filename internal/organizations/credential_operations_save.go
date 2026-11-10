@@ -106,17 +106,6 @@ func (s *Service) saveCredentialOperation(ctx context.Context, id, version strin
 			return nil, invalidf("each credential needs one nonempty value")
 		}
 		seen[credential.Secret] = true
-		secret, err := liveSecret(ctx, caller, operation.Namespace.Name, credential.Secret)
-		if err != nil {
-			return nil, err
-		}
-		alreadyWritten := secret != nil && operation.State == operationUncertain && secret.GetAnnotations()[credentialOperationAnnotation] == operation.ElicitationID
-		if alreadyWritten && !operationVersionMatches(operation, secret) {
-			return nil, fmt.Errorf("%w: a partially written credential changed or lacks a confirmed version", agents.ErrConflict)
-		}
-		if !alreadyWritten && ((secret != nil) != credential.Exists || (secret != nil && secret.GetResourceVersion() != credential.Version)) {
-			return nil, fmt.Errorf("%w: credential Secret changed", agents.ErrConflict)
-		}
 		references, _, err := s.references(ctx, caller, operation.Namespace.Name, credential.Secret)
 		if err != nil {
 			return nil, err
@@ -125,40 +114,33 @@ func (s *Service) saveCredentialOperation(ctx context.Context, id, version strin
 			if reference.Kind != kinds[operation.Result.Kind].kubeKind || reference.Name != operation.Result.Name {
 				return nil, fmt.Errorf("%w: another object references this Secret", agents.ErrConflict)
 			}
+			if operation.Mode == agents.ModeApply && reference.FromGit {
+				return nil, fmt.Errorf("%w: a credential whose consumer Flux applies must be changed in Git", agents.ErrGitOpsOwned)
+			}
+		}
+		if credential.Exists && !credential.Replace {
+			return nil, fmt.Errorf("%w: credential replacement requires explicit confirmation", agents.ErrConflict)
+		}
+		if operation.State == operationUncertain && operation.AppliedVersions[kindSecret+"/"+credential.Secret] != "" {
+			continue
 		}
 		action := opCreate
-		if secret != nil {
+		if credential.Exists {
 			action = opUpdate
-			data, _, _ := unstructured.NestedMap(secret.Object, "data")
-			stringData, _, _ := unstructured.NestedMap(secret.Object, "stringData")
-			for key := range data {
-				if key != credential.Key {
-					return nil, fmt.Errorf("%w: a credential Secret must contain one key", agents.ErrConflict)
-				}
+		} else if operation.State == operationUncertain {
+			// An earlier attempt may have created the Secret before its write
+			// was recorded; the retry carries the same value, so it writes it
+			// whole either way.
+			exists, err := secretExists(ctx, caller, operation.Namespace.Name, credential.Secret)
+			if err != nil {
+				return nil, err
 			}
-			for key := range stringData {
-				if key != credential.Key {
-					return nil, fmt.Errorf("%w: a credential Secret must contain one key", agents.ErrConflict)
-				}
+			if exists {
+				action = opUpdate
 			}
-			if alreadyWritten {
-				continue
-			}
-			if !credential.Replace && (data[credential.Key] != "" && data[credential.Key] != nil || stringData[credential.Key] != "" && stringData[credential.Key] != nil) {
-				return nil, fmt.Errorf("%w: credential replacement requires explicit confirmation", agents.ErrConflict)
-			}
-			if operation.Mode == agents.ModeApply && fromGit(secret) {
-				return nil, fmt.Errorf("%w: a credential Secret managed by Flux must be changed in Git", agents.ErrGitOpsOwned)
-			}
-		} else {
-			secret = newObject("v1", kindSecret, operation.Namespace.Name, credential.Secret)
 		}
-		secret = secret.DeepCopy()
-		delete(secret.Object, "spec")
-		delete(secret.Object, "stringData")
-		secret.Object["type"] = "Opaque"
-		secret.Object["data"] = map[string]any{credential.Key: base64.StdEncoding.EncodeToString([]byte(values[index].Value))}
-		writes = append([]write{{gvr: secretGVR, kind: kindSecret, op: action, obj: secret.Object, ns: operation.Namespace.Name, name: credential.Secret, what: "credential Secret", reason: wayOrganizationAdmin(operation.Namespace.Name)}}, writes...)
+		data := map[string]any{credential.Key: base64.StdEncoding.EncodeToString([]byte(values[index].Value))}
+		writes = append([]write{credentialSecretWrite(operation.Namespace.Name, credential.Secret, action, data)}, writes...)
 	}
 	if err := apply(ctx, caller.Dynamic(), writes, true); err != nil {
 		return nil, err
@@ -302,8 +284,7 @@ func (s *Service) recoverAppliedCredential(ctx context.Context, operation *crede
 		}
 	}
 	for _, credential := range operation.Credentials {
-		secret, err := liveSecret(ctx, caller, operation.Namespace.Name, credential.Secret)
-		if err != nil || secret == nil || !operationVersionMatches(operation, secret) || secret.GetAnnotations()[credentialOperationAnnotation] != operation.ElicitationID {
+		if operation.AppliedVersions[kindSecret+"/"+credential.Secret] == "" {
 			return nil, fmt.Errorf("%w: credential save is in progress; retry after it finishes", agents.ErrConflict)
 		}
 	}

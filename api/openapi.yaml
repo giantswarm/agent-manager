@@ -1606,7 +1606,7 @@ components:
             properties:
               secret: { type: string }
               key: { type: string }
-              state: { type: string, enum: [present, committed, missing, replace, unknown] }
+              state: { type: string, enum: [present, committed, missing, replace] }
               formUrl: { type: string }
               next: { type: string }
         commit:

@@ -92,6 +92,14 @@ func newOrgFixture(t *testing.T, objs ...runtime.Object) *orgFixture {
 	return newOrgFixtureWith(t, nil, objs...)
 }
 
+// secretReads are the verbs that return a Secret's data: an organization
+// admin holds none of them.
+var secretReads = []string{"get", "list", "watch", "patch"}
+
+func refuseSecretRead(a k8stesting.Action) (bool, runtime.Object, error) {
+	return true, nil, apierrors.NewForbidden(a.GetResource().GroupResource(), "", fmt.Errorf("RBAC: an organization admin may not %s Secrets", a.GetVerb()))
+}
+
 // newOrgFixtureWith is newOrgFixture with the tools' configuration changed
 // by configure.
 func newOrgFixtureWith(t *testing.T, configure func(*organizations.Config), objs ...runtime.Object) *orgFixture {
@@ -135,6 +143,13 @@ func newOrgFixtureWith(t *testing.T, configure func(*organizations.Config), objs
 		return false, nil, nil
 	})
 	f.typed = kubefake.NewClientset()
+	// Credentials are write-only: no read of a Secret, typed or dynamic, is
+	// answered, as for an organization admin, who holds no get, list, watch
+	// or patch on Secrets.
+	for _, verb := range secretReads {
+		f.dyn.PrependReactor(verb, "secrets", refuseSecretRead)
+		f.typed.PrependReactor(verb, "secrets", refuseSecretRead)
+	}
 	f.typed.PrependReactor("create", "selfsubjectaccessreviews", func(a k8stesting.Action) (bool, runtime.Object, error) {
 		review := a.(k8stesting.CreateAction).GetObject().(*authorizationv1.SelfSubjectAccessReview)
 		ra := review.Spec.ResourceAttributes
@@ -179,14 +194,18 @@ func (f *orgFixture) call(t *testing.T, tool string, args map[string]any) (strin
 	return callToolCtx(t, f.ctx, f.srv, tool, args)
 }
 
+// get reads the fake API server's stored object, past the reactors that
+// answer the caller: what a test asserts, not what the tools may read.
 func (f *orgFixture) get(t *testing.T, gvr schema.GroupVersionResource, ns, name string) *unstructured.Unstructured {
 	t.Helper()
-	obj, err := f.dyn.Resource(gvr).Namespace(ns).Get(context.Background(), name, metav1.GetOptions{})
+	obj, err := f.dyn.Tracker().Get(gvr, ns, name)
 	if apierrors.IsNotFound(err) {
 		return nil
 	}
 	require.NoError(t, err)
-	return obj
+	u, ok := obj.(*unstructured.Unstructured)
+	require.True(t, ok, "%T", obj)
+	return u
 }
 
 func decode(t *testing.T, text string) map[string]any {
@@ -490,14 +509,10 @@ func TestCredentialsAreReferencesOnly(t *testing.T) {
 	assert.Contains(t, cred["formUrl"], "https://portal.example.com/credentials?operation=")
 	assert.Contains(t, cred["next"], cred["formUrl"])
 
-	_, err := f.typed.CoreV1().Secrets(orgNS).Create(context.Background(), &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: "tenant-credential-gh", Namespace: orgNS},
-		Data:       map[string][]byte{"token": []byte("ghp-live-value")},
-	}, metav1.CreateOptions{})
-	require.NoError(t, err)
+	seedSecret(t, f, "tenant-credential-gh", "token")
 	text, isErr = f.call(t, ToolSetOrganizationConnector, map[string]any{"namespace": orgNS, "name": "gh", "url": "https://mcp.github.example/mcp", "credentialHeader": "Authorization"})
 	require.False(t, isErr, text)
-	assert.NotContains(t, text, "ghp-live-value")
+	assert.NotContains(t, text, liveValue)
 	cred = decode(t, text)["credentials"].([]any)[0].(map[string]any)
 	assert.Equal(t, organizations.CredentialPresent, cred["state"])
 	assert.NotContains(t, cred, "next")
@@ -507,7 +522,7 @@ func TestCredentialsAreReferencesOnly(t *testing.T) {
 	text, isErr = f.call(t, ToolSetOrganizationEgress, map[string]any{"namespace": orgNS, "name": "github",
 		"destinations": []any{map[string]any{"origin": "https://api.github.com", "credentialHeader": "Authorization", "credentialPrefix": "Bearer ", "credentialSecret": "tenant-credential-gh"}}}) // #nosec G101 -- a Secret's name, not a credential
 	require.False(t, isErr, text)
-	assert.NotContains(t, text, "ghp-live-value")
+	assert.NotContains(t, text, liveValue)
 }
 
 // list_organizations lists what the caller manages or belongs to, each
@@ -713,8 +728,6 @@ func TestConnectorURLsAndHeaders(t *testing.T) {
 	f := newOrgFixture(t, conn, malformed)
 	seedSecret(t, f, "tenant-credential-jira", "token")
 	seedSecret(t, f, "tenant-credential-jira-v2", "token")
-	_, err := f.typed.CoreV1().Secrets(orgNS).Update(t.Context(), &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "tenant-credential-jira", Namespace: orgNS}, Data: map[string][]byte{"token": []byte(liveValue), "xsrf": []byte(liveValue)}}, metav1.UpdateOptions{})
-	require.NoError(t, err)
 
 	for _, url := range []string{
 		"https://bot:hunter2@mcp.example/mcp",
