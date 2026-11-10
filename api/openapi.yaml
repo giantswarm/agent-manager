@@ -662,6 +662,7 @@ paths:
         "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
         "412": { $ref: "#/components/responses/Error" }
+        "428": { $ref: "#/components/responses/Error" }
         "500": { $ref: "#/components/responses/Error" }
     delete:
       tags: [organizations]
@@ -680,6 +681,7 @@ paths:
         "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
         "412": { $ref: "#/components/responses/Error" }
+        "428": { $ref: "#/components/responses/Error" }
   /api/v1/sessions/{id}:
     parameters:
       - name: id
@@ -868,7 +870,7 @@ components:
           properties:
             code:
               type: string
-              enum: [not_found, invalid_request, conflict, gitops_owned, forbidden, unauthenticated, auth_required, unsupported, backend_error]
+              enum: [not_found, invalid_request, conflict, gitops_owned, forbidden, unauthenticated, auth_required, unsupported, precondition_failed, precondition_required, backend_error]
             message: { type: string }
     Info:
       type: object

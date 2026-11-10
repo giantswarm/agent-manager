@@ -111,10 +111,11 @@ Reads, saves and cancellation independently verify issuer/subject ownership and
 current organization permissions. Saves recheck resource versions, existing
 Secret keys and consumers, Git destination, file hashes and encryption policy,
 then server-side dry-run all intended writes as the person. Stale operation
-versions return `412`; changed resources or Git inputs return `409`. Unknown
-credential state, shared Secrets and multi-key Secrets are refused. Backend
-refusals are sanitized before entering errors or logs. HTTP intermediaries and
-Kubernetes audit policy must also exclude request/response bodies for credentials.
+versions return `412`, a save or cancellation without `If-Match` returns `428`,
+and changed resources or Git inputs return `409`. Unknown credential state,
+shared Secrets and multi-key Secrets are refused. Backend refusals are
+sanitized before entering errors or logs. HTTP intermediaries and Kubernetes
+audit policy must also exclude request/response bodies for credentials.
 Several headers of one connector may reference the same Secret/key pair; its
 confirmation requests that value once.
 
