@@ -1549,3 +1549,46 @@ func TestPlatformOwnedRelease(t *testing.T) {
 	assert.True(t, PlatformOwnedRelease(helmRelease("kagent", "a", map[string]any{"labels": map[string]any{PlatformManagedByLabel: PlatformManagedByValue}}, true, nil)))
 	assert.False(t, PlatformOwnedRelease(helmRelease("kagent", "a", map[string]any{"labels": map[string]any{PlatformManagedByLabel: "someone"}}, true, nil)))
 }
+
+// A name whose Agent another release renders is taken, whatever that
+// release is called: the two releases would overwrite one Agent.
+func TestCreateRefusesANameAnotherReleaseRenders(t *testing.T) {
+	ctx := context.Background()
+	readOnly := []string{"preset:read-only"}
+	platform := helmRelease("kagent", "agent-platform-default-agent", map[string]any{"agent": map[string]any{"name": "default-agent"}}, false, map[string]any{PlatformManagedByLabel: PlatformManagedByValue})
+
+	// The release has not rendered its Agent yet (no default model, say).
+	f := newFixture(t, []runtime.Object{modelConfig("kagent", "default-model-config", "Anthropic", "claude-sonnet-4-6"), harness("kagent", "kagent", "kagent"), ociRepository("kagent", "2.x"), platform})
+	_, err := f.svc.Create(ctx, Spec{Name: "default-agent", ModelConfig: "default-model-config", Toolset: readOnly})
+	require.ErrorIs(t, err, ErrConflict)
+	assert.Contains(t, err.Error(), "Agent kagent/default-agent is rendered by HelmRelease kagent/agent-platform-default-agent; pick another name")
+
+	// It has.
+	mustCreate(t, f, agentGVR, agentObject("kagent", "default-agent", "agent-platform-default-agent", "kagent", true, false))
+	_, err = f.svc.Create(ctx, Spec{Name: "default-agent", ModelConfig: "default-model-config", Toolset: readOnly})
+	require.ErrorIs(t, err, ErrConflict)
+	assert.Contains(t, err.Error(), "Agent kagent/default-agent already exists, rendered by HelmRelease kagent/agent-platform-default-agent; pick another name")
+
+	// Another name is free.
+	_, err = f.svc.Create(ctx, Spec{Name: "helper", ModelConfig: "default-model-config", Toolset: readOnly})
+	require.NoError(t, err)
+}
+
+func TestRenderedAgent(t *testing.T) {
+	named := helmRelease("kagent", "platform", map[string]any{"agent": map[string]any{"name": "default-agent"}}, true, nil)
+	plain := helmRelease("kagent", "sre", nil, true, nil)
+	released := helmRelease("kagent", "x", nil, true, nil)
+	_ = unstructured.SetNestedField(released.Object, "y", "spec", "releaseName")
+	targeted := helmRelease("org-acme", "sre", nil, true, nil)
+	_ = unstructured.SetNestedField(targeted.Object, "team", "spec", "targetNamespace")
+	_ = unstructured.SetNestedField(targeted.Object, "c1-kubeconfig", "spec", "kubeConfig", "secretRef", "name")
+	for hr, want := range map[*unstructured.Unstructured][3]string{
+		named:    {"", "kagent", "default-agent"},
+		plain:    {"", "kagent", "sre"},
+		released: {"", "kagent", "y"},
+		targeted: {"c1-kubeconfig", "team", "team-sre"},
+	} {
+		secret, ns, name := renderedAgent(hr)
+		assert.Equal(t, want, [3]string{secret, ns, name}, hr.GetName())
+	}
+}
