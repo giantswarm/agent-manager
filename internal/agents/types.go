@@ -95,14 +95,14 @@ const (
 	// git (applied by a Flux Kustomization): a live write would be undone on
 	// the next reconciliation.
 	KustomizationNameLabel = "kustomize.toolkit.fluxcd.io/name"
-	// PlatformManagedByLabel / PlatformManagedByValue mark a HelmRelease the
-	// Agent Platform ships: no write of agent-manager reaches it.
+	// PlatformManagedByLabel / PlatformManagedByValue mark a HelmRelease or
+	// an Agent the Agent Platform ships: no write of agent-manager reaches it.
 	PlatformManagedByLabel = "agent-platform.giantswarm.io/managed-by"
 	PlatformManagedByValue = "agent-platform"
-	// DefaultAgentLabel ("true") on a HelmRelease or its Agent marks the
-	// installation's default agent, which clients preselect, reported as
-	// the Agent's namespace/name. One is reported: a platform-owned one
-	// first, then the first by namespace/name.
+	// DefaultAgentLabel ("true") on an Agent marks the installation's
+	// default agent, which clients preselect, reported as the Agent's
+	// namespace/name. One is reported: a platform-owned one first, then the
+	// first by namespace/name.
 	DefaultAgentLabel = "agent-platform.giantswarm.io/default"
 	// ManagedByLabel / ManagedByValue mark the HelmReleases and
 	// OCIRepositories agent-manager created.

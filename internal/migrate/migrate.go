@@ -486,7 +486,7 @@ func (r *Runner) sourceOf(obj *unstructured.Unstructured, external bool) *source
 }
 
 func (st *nsState) addRelease(hr *unstructured.Unstructured, src *source, external bool) *release {
-	rel := &release{obj: hr, ns: hr.GetNamespace(), name: hr.GetName(), source: src, gitops: gitOpsOwned(hr), external: external, platform: agents.PlatformOwned(hr)}
+	rel := &release{obj: hr, ns: hr.GetNamespace(), name: hr.GetName(), source: src, gitops: gitOpsOwned(hr), external: external, platform: agents.PlatformOwnedRelease(hr)}
 	if rel.platform {
 		src.platform = true // moving it would move the platform's chart
 	}

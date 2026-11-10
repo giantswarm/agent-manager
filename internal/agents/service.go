@@ -17,6 +17,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/cache"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/util/retry"
 
@@ -135,7 +136,8 @@ type Service struct {
 	cfg    Config
 	log    *slog.Logger
 
-	defaults defaultAgentCache
+	// defaults keeps each caller's default agent (Config.DefaultAgentTTL).
+	defaults *cache.LRUExpireCache
 }
 
 // KagentAPIGroup is the API group of the Agent, Harness, RemoteMCPServer and
@@ -161,7 +163,7 @@ func New(k kube.Provider, c ChartSource, s *skills.Discoverer, p SkillPinner, cf
 	cfg.Compose.HelmReleaseAPIVersion = orDefault(cfg.Compose.HelmReleaseAPIVersion, DefaultHelmReleaseAPIVersion)
 	cfg.Compose.OCIRepositoryAPIVersion = orDefault(cfg.Compose.OCIRepositoryAPIVersion, DefaultOCIRepositoryAPIVersion)
 	cfg.ManagedNamespaces = ManagedNamespaces(cfg.DefaultNamespace, cfg.ManagedNamespaces)
-	return &Service{kube: k, chart: c, skills: s, pinner: p, cfg: cfg, log: log}
+	return &Service{kube: k, chart: c, skills: s, pinner: p, cfg: cfg, log: log, defaults: cache.NewLRUExpireCache(maxDefaultAgentEntries)}
 }
 
 // ManagedNamespaces are the default namespace followed by the additional
@@ -1462,7 +1464,7 @@ func (s *Service) writableHelmRelease(ctx context.Context, st *site, name string
 	if err != nil {
 		return nil, nil, err
 	}
-	if PlatformOwned(hr) || PlatformOwned(obj) {
+	if PlatformOwnedRelease(hr) || PlatformOwned(obj) {
 		// The release is returned with the refusal: a forced delete removes
 		// a bare Agent only, never one the platform ships.
 		return hr, obj, platformRefusal(st, name)
@@ -2056,6 +2058,19 @@ func PlatformOwned(obj *unstructured.Unstructured) bool {
 	return obj != nil && obj.GetLabels()[PlatformManagedByLabel] == PlatformManagedByValue
 }
 
+// PlatformOwnedRelease is PlatformOwned for a HelmRelease, which also holds
+// when the release renders the label onto its Agent (values.labels).
+func PlatformOwnedRelease(hr *unstructured.Unstructured) bool {
+	if hr == nil {
+		return false
+	}
+	if PlatformOwned(hr) {
+		return true
+	}
+	v, _, _ := unstructured.NestedString(hr.Object, "spec", "values", "labels", PlatformManagedByLabel)
+	return v == PlatformManagedByValue
+}
+
 func gitOpsOwnedHR(hr *unstructured.Unstructured) bool {
 	_, ok := hr.GetLabels()[KustomizationNameLabel]
 	return ok
@@ -2185,7 +2200,7 @@ func applyHelmRelease(a *Agent, hr *unstructured.Unstructured, rule *tags.Rule) 
 		a.CreatedBy = hr.GetAnnotations()[CreatedByAnnotation]
 	}
 	switch {
-	case PlatformOwned(hr) || a.Managed == ManagedPlatform:
+	case PlatformOwnedRelease(hr) || a.Managed == ManagedPlatform:
 		// The label on the HelmRelease or on its Agent: both are refused
 		// alike (writableHelmRelease).
 		a.Managed = ManagedPlatform

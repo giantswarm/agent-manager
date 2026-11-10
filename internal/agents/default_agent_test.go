@@ -2,7 +2,9 @@ package agents
 
 import (
 	"encoding/json"
+	"maps"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/assert"
@@ -26,6 +28,20 @@ func defaultsOf(t *testing.T, f *fixture) map[string]bool {
 	return out
 }
 
+// labelledAgent is an Agent with labels, rendered by the HelmRelease of
+// the same name in ns.
+func labelledAgent(ns, name string, labels map[string]string) *unstructured.Unstructured {
+	obj := agentObject(ns, name, name, ns, true, true)
+	all := obj.GetLabels()
+	maps.Copy(all, labels)
+	obj.SetLabels(all)
+	return obj
+}
+
+// platformDefault is the platform's default agent as the agent-platform
+// chart ships it: its HelmRelease and its Agent carry both marks.
+var platformDefault = map[string]string{PlatformManagedByLabel: PlatformManagedByValue, DefaultAgentLabel: "true"}
+
 // The agent labelled the default is reported so by list_agents, get_agent
 // and get_info; with none, nothing is.
 func TestTheLabelledAgentIsTheDefault(t *testing.T) {
@@ -35,6 +51,7 @@ func TestTheLabelledAgentIsTheDefault(t *testing.T) {
 
 	mustCreate(t, f, hrGVR, helmRelease("kagent", "default-agent", defaultValues("default-agent"), true, map[string]any{
 		PlatformManagedByLabel: PlatformManagedByValue, DefaultAgentLabel: "true"}))
+	mustCreate(t, f, agentGVR, labelledAgent("kagent", "default-agent", platformDefault))
 
 	assert.Equal(t, "kagent/default-agent", f.svc.Info(t.Context()).DefaultAgent)
 	assert.Equal(t, map[string]bool{"verifier": false, "default-agent": true}, defaultsOf(t, f))
@@ -46,10 +63,13 @@ func TestTheLabelledAgentIsTheDefault(t *testing.T) {
 	assert.False(t, got.Default)
 }
 
-// The label on the Agent alone suffices; a value other than "true" is no
-// label.
-func TestTheDefaultLabelOnTheAgentSuffices(t *testing.T) {
+// The default is the labelled Agent: a labelled HelmRelease whose Agent is
+// not rendered (yet) names nothing; a value other than "true" is no label.
+func TestTheDefaultIsTheLabelledAgent(t *testing.T) {
 	f := seeded(t)
+	mustCreate(t, f, hrGVR, helmRelease("kagent", "pending", defaultValues("pending"), true, map[string]any{DefaultAgentLabel: "true"}))
+	assert.Empty(t, f.svc.Info(t.Context()).DefaultAgent, "no Agent behind the release")
+
 	obj := agentObject("kagent", "assistant", "", "", true, true)
 	obj.SetLabels(map[string]string{DefaultAgentLabel: "true"})
 	mustCreate(t, f, agentGVR, obj)
@@ -58,21 +78,20 @@ func TestTheDefaultLabelOnTheAgentSuffices(t *testing.T) {
 	mustCreate(t, f, agentGVR, off)
 
 	assert.Equal(t, "kagent/assistant", f.svc.Info(t.Context()).DefaultAgent)
-	assert.Equal(t, map[string]bool{"verifier": false, "assistant": true, "other": false}, defaultsOf(t, f))
+	assert.Equal(t, map[string]bool{"verifier": false, "assistant": true, "other": false, "pending": false}, defaultsOf(t, f))
 }
 
 // Several labelled: the platform-owned one wins, then the first by
 // namespace/name; only the winner is reported as the default.
 func TestOneDefaultWhenSeveralAreLabelled(t *testing.T) {
 	f := seeded(t)
-	label := map[string]any{DefaultAgentLabel: "true"}
-	mustCreate(t, f, hrGVR, helmRelease("kagent", "beta", defaultValues("beta"), true, label))
-	mustCreate(t, f, hrGVR, helmRelease("kagent", "alpha", defaultValues("alpha"), true, label))
+	label := map[string]string{DefaultAgentLabel: "true"}
+	mustCreate(t, f, agentGVR, labelledAgent("kagent", "beta", label))
+	mustCreate(t, f, agentGVR, labelledAgent("kagent", "alpha", label))
 	assert.Equal(t, "kagent/alpha", f.svc.Info(t.Context()).DefaultAgent, "alphabetical")
 	assert.Equal(t, map[string]bool{"verifier": false, "alpha": true, "beta": false}, defaultsOf(t, f))
 
-	mustCreate(t, f, hrGVR, helmRelease("tenant", "zeta", defaultValues("zeta"), true, map[string]any{
-		PlatformManagedByLabel: PlatformManagedByValue, DefaultAgentLabel: "true"}))
+	mustCreate(t, f, agentGVR, labelledAgent("tenant", "zeta", platformDefault))
 	assert.Equal(t, "tenant/zeta", f.svc.Info(t.Context()).DefaultAgent, "the platform's wins")
 	assert.Equal(t, map[string]bool{"verifier": false, "alpha": false, "beta": false}, defaultsOf(t, f))
 }
@@ -114,76 +133,22 @@ func TestCallersCannotSetThePlatformLabels(t *testing.T) {
 	require.NoError(t, err, "removed")
 }
 
-// platformRelease is the platform's default agent as the agent-platform
-// chart ships it: a release in the platform's namespace that renders the
-// Agent into kagent (targetNamespace, releaseName).
-func platformRelease(ns string) *unstructured.Unstructured {
-	hr := helmRelease(ns, "default-agent", map[string]any{"modelConfig": map[string]any{"name": "default-model-config"}}, true, map[string]any{
-		PlatformManagedByLabel: PlatformManagedByValue, DefaultAgentLabel: "true"})
-	spec := hr.Object["spec"].(map[string]any)
-	spec["targetNamespace"], spec["releaseName"] = "kagent", "default-agent"
-	return hr
-}
-
-// A labelled HelmRelease reports the Agent it renders, as a portal agent id
-// names it, wherever the release lives; with its Agent labelled too, that
-// is one agent, not two.
-func TestTheDefaultIsTheAgentAReleaseRenders(t *testing.T) {
-	for _, releaseNS := range []string{"agent-platform", "tenant"} {
-		t.Run(releaseNS, func(t *testing.T) {
-			f := seeded(t)
-			mustCreate(t, f, hrGVR, platformRelease(releaseNS))
-			assert.Equal(t, "kagent/default-agent", f.svc.Info(t.Context()).DefaultAgent, "the release alone")
-
-			obj := agentObject("kagent", "default-agent", "default-agent", releaseNS, true, true)
-			labels := obj.GetLabels()
-			labels[PlatformManagedByLabel], labels[DefaultAgentLabel] = PlatformManagedByValue, "true"
-			obj.SetLabels(labels)
-			mustCreate(t, f, agentGVR, obj)
-			assert.Equal(t, "kagent/default-agent", f.svc.Info(t.Context()).DefaultAgent)
-			assert.True(t, defaultsOf(t, f)["default-agent"])
-		})
-	}
-}
-
-// renderedAgent follows the chart and Flux: agent.name, else the release
-// name, else [<targetNamespace>-]<name>; a release onto another cluster
-// renders nothing here.
-func TestRenderedAgent(t *testing.T) {
-	hr := helmRelease("flux", "x", map[string]any{}, true, nil)
-	ns, name, local := renderedAgent(hr)
-	assert.Equal(t, []any{"flux", "x", true}, []any{ns, name, local})
-	spec := hr.Object["spec"].(map[string]any)
-	spec["targetNamespace"] = "kagent"
-	ns, name, _ = renderedAgent(hr)
-	assert.Equal(t, "kagent/kagent-x", ns+"/"+name)
-	spec["releaseName"] = "rel"
-	_, name, _ = renderedAgent(hr)
-	assert.Equal(t, "rel", name)
-	spec["values"] = map[string]any{"agent": map[string]any{"name": "named"}}
-	_, name, _ = renderedAgent(hr)
-	assert.Equal(t, "named", name)
-	spec["kubeConfig"] = map[string]any{"secretRef": map[string]any{"name": "wc1-kubeconfig"}}
-	_, _, local = renderedAgent(hr)
-	assert.False(t, local)
-}
-
-// A release that renders outside the managed namespaces is not the default.
+// An Agent outside the managed namespaces is not the default.
 func TestADefaultOutsideTheManagedNamespacesIsNone(t *testing.T) {
 	f := seeded(t)
-	hr := platformRelease("agent-platform")
-	hr.Object["spec"].(map[string]any)["targetNamespace"] = "elsewhere"
-	mustCreate(t, f, hrGVR, hr)
+	mustCreate(t, f, agentGVR, labelledAgent("elsewhere", "default-agent", platformDefault))
 	assert.Empty(t, f.svc.Info(t.Context()).DefaultAgent)
 }
 
 // With DefaultAgentTTL a caller's default is reused until it expires.
 func TestTheDefaultAgentIsCached(t *testing.T) {
-	f := seeded(t)
-	f.svc.cfg.DefaultAgentTTL = time.Hour
-	assert.Empty(t, f.svc.Info(t.Context()).DefaultAgent)
-	mustCreate(t, f, hrGVR, platformRelease("agent-platform"))
-	assert.Empty(t, f.svc.Info(t.Context()).DefaultAgent, "reused")
-	f.svc.defaults.put("", "", time.Now().Add(-time.Second))
-	assert.Equal(t, "kagent/default-agent", f.svc.Info(t.Context()).DefaultAgent, "read again once expired")
+	synctest.Test(t, func(t *testing.T) {
+		f := seeded(t)
+		f.svc.cfg.DefaultAgentTTL = time.Minute
+		assert.Empty(t, f.svc.Info(t.Context()).DefaultAgent)
+		mustCreate(t, f, agentGVR, labelledAgent("kagent", "default-agent", platformDefault))
+		assert.Empty(t, f.svc.Info(t.Context()).DefaultAgent, "reused")
+		time.Sleep(time.Minute + time.Second)
+		assert.Equal(t, "kagent/default-agent", f.svc.Info(t.Context()).DefaultAgent, "read again once expired")
+	})
 }

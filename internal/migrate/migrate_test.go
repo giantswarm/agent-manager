@@ -1048,3 +1048,18 @@ func TestExpandNeverWritesAPlatformOwnedRelease(t *testing.T) {
 	assert.Equal(t, portalValues(), c.values(t, "kagent", "sre"), "1.x values under the 0.x chart would fail its render")
 	assert.Contains(t, rep.Pending, "release kagent/agent-manager-assistant: ships with the Agent Platform; its rewrite (the diff in this report) comes with the platform release")
 }
+
+// A release that renders the platform's label onto its Agent (values.labels)
+// ships with the Agent Platform too.
+func TestExpandNeverWritesAReleaseThatLabelsItsAgentPlatformOwned(t *testing.T) {
+	values := portalValues()
+	values["labels"] = map[string]any{agents.PlatformManagedByLabel: agents.PlatformManagedByValue}
+	c := newCluster(ociRepository("kagent", legacyRange), helmRelease("kagent", "assistant", values, "0.6.1"), harness("kagent"))
+
+	res, err := c.runner(t, Options{Namespaces: []string{"kagent"}}, "1.0.0", "secret").Run(t.Context())
+	require.NoError(t, err)
+	rel := byRelease(res.Reports[0])["kagent/assistant"]
+	assert.Equal(t, ActionDiff, rel.Action)
+	assert.Equal(t, OwnershipPlatform, rel.Ownership)
+	assert.Equal(t, values, c.values(t, "kagent", "assistant"))
+}

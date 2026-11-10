@@ -1539,3 +1539,13 @@ func TestStatusVerdictOfAHelmReleaseThatIsNotReady(t *testing.T) {
 		})
 	}
 }
+
+// PlatformOwnedRelease holds for the label on the release or in the labels
+// it renders onto its Agent.
+func TestPlatformOwnedRelease(t *testing.T) {
+	assert.False(t, PlatformOwnedRelease(nil))
+	assert.False(t, PlatformOwnedRelease(helmRelease("kagent", "a", map[string]any{}, true, nil)))
+	assert.True(t, PlatformOwnedRelease(helmRelease("kagent", "a", map[string]any{}, true, map[string]any{PlatformManagedByLabel: PlatformManagedByValue})))
+	assert.True(t, PlatformOwnedRelease(helmRelease("kagent", "a", map[string]any{"labels": map[string]any{PlatformManagedByLabel: PlatformManagedByValue}}, true, nil)))
+	assert.False(t, PlatformOwnedRelease(helmRelease("kagent", "a", map[string]any{"labels": map[string]any{PlatformManagedByLabel: "someone"}}, true, nil)))
+}
