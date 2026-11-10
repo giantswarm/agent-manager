@@ -12,15 +12,11 @@ tests:
       - hasDocuments:
           count: 0
 
-  - it: grants get and patch on that Agent by name and list on ModelConfigs in the kagent namespace
+  - it: grants get and patch on that Agent by name and list on ModelConfigs in the kagent namespace, whatever the other RBAC
     template: templates/default-agent-model-rbac.yaml
     set:
       defaultAgentModel:
         agent: default-agent
-      oauth:
-        enabled: true
-        downstream:
-          enabled: true
     asserts:
       - hasDocuments:
           count: 2
