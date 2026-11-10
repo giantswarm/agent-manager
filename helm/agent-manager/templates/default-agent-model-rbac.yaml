@@ -1,0 +1,41 @@
+{{- /*
+defaultAgentModel.agent: agent-manager keeps that Agent of kagent.namespace on
+the namespace's default model, without a caller. This Role is its permission
+for it, with or without oauth.downstream: get and patch that one Agent, list
+the ModelConfigs (it reads their default mark).
+*/}}
+{{- with .Values.defaultAgentModel.agent }}
+{{- $name := printf "%s-default-agent-model" (include "agent-manager.fullname" $) }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $name }}
+  namespace: {{ $.Values.kagent.namespace }}
+  labels:
+    {{- include "agent-manager.labels" $ | nindent 4 }}
+rules:
+  - apiGroups: ["api.kagent.dev"]
+    resources: ["agents"]
+    resourceNames: [{{ . | quote }}]
+    verbs: ["get", "patch"]
+  - apiGroups: ["api.kagent.dev"]
+    resources: ["modelconfigs"]
+    verbs: ["list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $name }}
+  namespace: {{ $.Values.kagent.namespace }}
+  labels:
+    {{- include "agent-manager.labels" $ | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $name }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "agent-manager.serviceAccountName" $ }}
+    namespace: {{ $.Release.Namespace }}
+{{- end }}

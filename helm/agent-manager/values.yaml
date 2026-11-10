@@ -60,6 +60,16 @@ kagent:
   # every address otherwise.
   controllerTarget: grpc://agentgateway.agent-platform.svc.cluster.local:8080
 
+defaultAgentModel:
+  # -- An Agent of `kagent.namespace` whose modelConfig follows the
+  # namespace's default model (the ModelConfig annotated
+  # `agent-platform.giantswarm.io/is-default-model-config: "true"`) while it
+  # carries the label `agent-platform.giantswarm.io/follows-default-model:
+  # "true"`; none or several marked leaves it as it is. Checked at start and
+  # every 30s as the ServiceAccount, with a Role that may get and patch that
+  # Agent and list the ModelConfigs. Empty: off.
+  agent: ""
+
 toolchains:
   # -- The OCI repository the installation's toolchains are published under:
   # toolchain `<name>` is the image `<repository>/<name>`, its versions its

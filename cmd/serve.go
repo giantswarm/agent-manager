@@ -78,6 +78,7 @@ type serveOptions struct {
 	skillsGitAuth      string
 	skillsGitAuthPrev  string
 	skillsGitAuthMint  bool
+	defaultModelAgent  string
 	skillsCacheTTL     time.Duration
 	skillManagerURL    string
 
@@ -168,6 +169,7 @@ environment variable named next to it; flags win over the environment.`,
 	f.StringVar(&o.skillsGitAuth, "skills-git-auth-secret-name", envOr("AGENT_MANAGER_SKILLS_GIT_AUTH_SECRET_NAME", ""), "Secret (key token) in the agent's namespace every agent with a git skill fetches its skills with, unless the agent names its own gitAuthSecretName; composed as the chart value skillsGitAuthSecretRef.name. Empty: such agents fetch anonymously (AGENT_MANAGER_SKILLS_GIT_AUTH_SECRET_NAME)")
 	f.StringVar(&o.skillsGitAuthPrev, "skills-git-auth-previous-secret-names", envOr("AGENT_MANAGER_SKILLS_GIT_AUTH_PREVIOUS_SECRET_NAMES", ""), "Comma-separated earlier names of the --skills-git-auth-secret-name Secret: an agent that names one is composed with the current name on its next update (agent-manager migrate moves the rest), and with --skills-git-auth-mint their Secrets are kept filled too until no agent names them (AGENT_MANAGER_SKILLS_GIT_AUTH_PREVIOUS_SECRET_NAMES)")
 	f.BoolVar(&o.skillsGitAuthMint, "skills-git-auth-mint", envBool("AGENT_MANAGER_SKILLS_GIT_AUTH_MINT", false), "Keep the Secret --skills-git-auth-secret-name names filled with the skills GitHub App's installation token in every managed namespace, refreshed before it expires; the Secret must exist (the chart renders it) and the ServiceAccount may update it. Needs the skills GitHub App (AGENT_MANAGER_SKILLS_GIT_AUTH_MINT)")
+	f.StringVar(&o.defaultModelAgent, "default-model-agent", envOr("AGENT_MANAGER_DEFAULT_MODEL_AGENT", ""), "Agent in --kagent-namespace whose modelConfig follows the namespace's default model while it carries the label "+agents.FollowsDefaultModelLabel+"=true, checked at start and every 30s as the ServiceAccount (get and patch on that Agent, list on ModelConfigs); empty: off (AGENT_MANAGER_DEFAULT_MODEL_AGENT)")
 	f.StringVar(&o.skillManagerURL, "skill-manager-url", envOr("AGENT_MANAGER_SKILL_MANAGER_URL", ""), "Base URL of skill-manager (http://skill-manager.agent-platform.svc:8080): skills and plugins are pinned through its POST /v1/resolve and list_skills proxies its GET /v1/skills, as the caller; --skills-repositories is then unused. Empty: skills are discovered and pinned in process, deprecated (AGENT_MANAGER_SKILL_MANAGER_URL)")
 	f.DurationVar(&o.skillsCacheTTL, "skills-cache-ttl", envDuration("AGENT_MANAGER_SKILLS_CACHE_TTL", 5*time.Minute), "How long a repository's discovered skills are reused (AGENT_MANAGER_SKILLS_CACHE_TTL)")
 	f.StringVar(&o.kagentTarget, "kagent-target", envOr("AGENT_MANAGER_KAGENT_TARGET", ""), "The kagent controller's gRPC target through agentgateway, which list_sessions, get_session, get_session_turn, start_session and delete_session call as the caller: grpc://host:port (h2c, the in-cluster agentgateway Service) or grpcs://host[:port] (TLS). Empty: the session tools answer unsupported. Needs --enable-oauth for a caller token (AGENT_MANAGER_KAGENT_TARGET)")
@@ -333,9 +335,9 @@ func runServe(ctx context.Context, o *serveOptions) error {
 		}
 	}
 
-	// The one thing agent-manager does without a caller: the boot Secret of
-	// private git skills, written with the ServiceAccount's permission to
-	// update that one Secret.
+	// What agent-manager does without a caller, each with the
+	// ServiceAccount's narrow permission: the boot Secret of private git
+	// skills, and the default agent's model (--default-model-agent).
 	var bootSecret *skills.BootSecret
 	if o.skillsGitAuthMint {
 		bootSecret = skills.NewBootSecret(app, clients.Typed(), o.skillsGitAuth, splitList(o.skillsGitAuthPrev), agents.ManagedNamespaces(o.kagentNamespace, splitList(o.managedNamespaces)), log)
@@ -507,10 +509,13 @@ func runServe(ctx context.Context, o *serveOptions) error {
 	log.Info("agent-manager starting", "version", build.Version, "commit", build.Commit, "listen", o.listen, "rest", api.Prefix, "mcp", o.mcpPath, "mcpEnabled", o.mcpEnabled,
 		"oauth", o.oauthEnabled, "downstreamOAuth", o.downstreamOAuth, "commit", info.Capabilities["commit"], "identity", info.Identity,
 		"namespaces", svc.Managed(ctx), "multiTenant", o.multiTenant, "chart", o.chartOCIURL, "chartSemver", o.chartSemver, "chartVersion", info.Chart.LatestVersion, "schemaSource", info.Chart.SchemaSource,
-		"kagentAPI", kagentVersion, "harness", info.Harness.Name, "musterURL", info.Muster.URL, "helmReleaseAPI", helmReleaseAPI, "ociRepositoryAPI", ociRepositoryAPI, "skillsRepositories", info.SkillsRepositories, "skillManager", info.SkillManager, "skillsGitHubApp", o.skillsAppID, "skillsGitAuthSecretName", o.skillsGitAuth, "kagentTarget", o.kagentTarget)
+		"kagentAPI", kagentVersion, "harness", info.Harness.Name, "musterURL", info.Muster.URL, "helmReleaseAPI", helmReleaseAPI, "ociRepositoryAPI", ociRepositoryAPI, "skillsRepositories", info.SkillsRepositories, "skillManager", info.SkillManager, "skillsGitHubApp", o.skillsAppID, "skillsGitAuthSecretName", o.skillsGitAuth, "kagentTarget", o.kagentTarget, "defaultModelAgent", o.defaultModelAgent)
 
 	if bootSecret != nil {
 		go bootSecret.Run(ctx)
+	}
+	if o.defaultModelAgent != "" {
+		go agents.NewDefaultModelFollower(clients.Dynamic(), kagentVersion, o.kagentNamespace, o.defaultModelAgent, log).Run(ctx)
 	}
 	return srv.Run(ctx)
 }

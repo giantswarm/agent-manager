@@ -118,6 +118,9 @@ spec:
             {{- if .Values.skills.mintGitAuthSecret }}
             - --skills-git-auth-mint=true
             {{- end }}
+            {{- with .Values.defaultAgentModel.agent }}
+            - --default-model-agent={{ . }}
+            {{- end }}
             {{- if .Values.skills.github.app.secretName }}
             {{- if .Values.skills.github.tokenSecret.name }}
             {{- fail "skills.github.app.secretName and skills.github.tokenSecret.name are mutually exclusive: skills are read with one credential" }}

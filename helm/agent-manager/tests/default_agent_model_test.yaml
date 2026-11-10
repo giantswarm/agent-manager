@@ -1,0 +1,62 @@
+# The default agent's model follower: its flag and its one narrow Role.
+#
+# Run with: make helm-test (helm unittest helm/agent-manager)
+suite: default agent model
+templates:
+  - templates/default-agent-model-rbac.yaml
+  - templates/deployment.yaml
+tests:
+  - it: renders no Role and no flag while off
+    template: templates/default-agent-model-rbac.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: grants get and patch on that Agent by name and list on ModelConfigs in the kagent namespace
+    template: templates/default-agent-model-rbac.yaml
+    set:
+      defaultAgentModel:
+        agent: default-agent
+      oauth:
+        enabled: true
+        downstream:
+          enabled: true
+    asserts:
+      - hasDocuments:
+          count: 2
+      - equal:
+          path: metadata.namespace
+          value: kagent
+        documentIndex: 0
+      - equal:
+          path: rules
+          value:
+            - apiGroups: ["api.kagent.dev"]
+              resources: ["agents"]
+              resourceNames: ["default-agent"]
+              verbs: ["get", "patch"]
+            - apiGroups: ["api.kagent.dev"]
+              resources: ["modelconfigs"]
+              verbs: ["list"]
+        documentIndex: 0
+      - equal:
+          path: subjects[0].name
+          value: RELEASE-NAME-agent-manager
+        documentIndex: 1
+
+  - it: passes the agent to agent-manager
+    template: templates/deployment.yaml
+    set:
+      defaultAgentModel:
+        agent: default-agent
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --default-model-agent=default-agent
+
+  - it: passes no flag while off
+    template: templates/deployment.yaml
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --default-model-agent=default-agent

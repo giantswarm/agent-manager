@@ -2144,6 +2144,7 @@ func agentFromObject(obj, server *unstructured.Unstructured, rule *tags.Rule) Ag
 	a.Harness, _, _ = unstructured.NestedString(obj.Object, "spec", "harnessRef", "name")
 	a.Description, _, _ = unstructured.NestedString(obj.Object, "spec", "template", "description")
 	a.ModelConfig, _, _ = unstructured.NestedString(obj.Object, "spec", "template", "modelConfig", "name")
+	a.FollowsDefaultModel = obj.GetLabels()[FollowsDefaultModelLabel] == "true"
 	a.SystemMessage, _, _ = unstructured.NestedString(obj.Object, "spec", "template", "systemPrompt")
 	a.Skills = skillsFromObject(obj)
 	a.Plugins = pluginsFromObject(obj)
