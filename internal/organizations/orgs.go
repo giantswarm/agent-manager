@@ -56,6 +56,12 @@ type Organization struct {
 	// commit names the installation repository and the revision is a git
 	// commit.
 	LastAppliedRevisionURL string `json:"lastAppliedRevisionUrl,omitempty"`
+	// LastAppliedFile is the repository path mode commit keeps the
+	// organization's file at, and LastAppliedFileURL that file's GitHub page
+	// at LastAppliedRevision: where a removed file is restored from. Both are
+	// set with LastAppliedRevisionURL.
+	LastAppliedFile    string `json:"lastAppliedFile,omitempty"`
+	LastAppliedFileURL string `json:"lastAppliedFileUrl,omitempty"`
 	// Deleting: the object is deleted and the operator erases it;
 	// ErasureStep names the step it is on.
 	Deleting    bool   `json:"deleting,omitempty"`
@@ -81,7 +87,12 @@ func (s *Service) summary(org *apov1alpha1.AgentPlatformOrganization) Organizati
 		GitOps: org.Labels[agents.KustomizationNameLabel], LastAppliedRevision: org.Status.LastAppliedRevision,
 	}
 	if s.cfg.Commit != nil {
-		out.LastAppliedRevisionURL = commitURL(s.cfg.Commit.Objects.Repository, org.Status.LastAppliedRevision)
+		repository := s.cfg.Commit.Objects.Repository
+		out.LastAppliedRevisionURL = commitURL(repository, org.Status.LastAppliedRevision)
+		if out.LastAppliedRevisionURL != "" {
+			out.LastAppliedFile = s.cfg.Commit.objectFile(org.Namespace, org.Name)
+			out.LastAppliedFileURL = fileURL(repository, org.Status.LastAppliedRevision, out.LastAppliedFile)
+		}
 	}
 	if out.Harnesses == nil {
 		out.Harnesses = []string{}
