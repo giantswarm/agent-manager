@@ -234,6 +234,20 @@ func TestReplaceCredentialCommitsTheSecretOnly(t *testing.T) {
 	}
 }
 
+// In commit mode a consumer written live is refused, as the set tools refuse
+// it: no file in git defines it, so its Secret stays out of git.
+func TestReplaceCredentialCommitRefusesALiveConsumer(t *testing.T) {
+	liveModel := sharedModel("token")
+	liveModel.SetLabels(fromGitLabels("payments"))
+	fixture, forge := commitFixture(t, map[string][]byte{paymentsPath + "/modelconfig-claude.yaml": gitManifest(t, sharedModel("token"))}, liveModel, connector("gh", sharedSecret, "token"))
+	text, failed := fixture.call(t, ToolReplaceOrganizationCredential, map[string]any{"namespace": orgNS, "secret": sharedSecret, "key": "token", "mode": "commit"})
+	require.True(t, failed, text)
+	require.True(t, strings.HasPrefix(text, "conflict:"), text)
+	require.Contains(t, text, "RemoteMCPServer "+orgNS+"/gh was written live")
+	require.NotContains(t, text, "credentialOperation")
+	require.Empty(t, forge.PullRequests())
+}
+
 // The confirmation of a consumer tool's operation lists every live object
 // that names the Secret, the planned write in place of its live object.
 func TestCredentialConfirmationListsLiveReferences(t *testing.T) {

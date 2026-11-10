@@ -41,7 +41,7 @@ func (s *Service) ReplaceCredential(ctx context.Context, req CredentialRequest) 
 	if err != nil {
 		return nil, err
 	}
-	references, _, err := s.references(ctx, c, org.Name, req.Secret)
+	references, live, err := s.references(ctx, c, org.Name, req.Secret)
 	if err != nil {
 		return nil, err
 	}
@@ -58,8 +58,10 @@ func (s *Service) ReplaceCredential(ctx context.Context, req CredentialRequest) 
 		if reference.Key != req.Key {
 			return nil, otherKey(reference, req.Secret, req.Key)
 		}
-		if w.mode == agents.ModeApply && reference.FromGit {
-			return nil, fmt.Errorf("%w: %s %s/%s, which uses Secret %s, is applied from git, so its credential is changed in git: use mode commit", agents.ErrGitOpsOwned, reference.Kind, org.Name, reference.Name, req.Secret)
+		// The Secret lands where its consumers live: in git for objects Flux
+		// applies, live for objects written live.
+		if err := w.owned(live[reference.Kind+"/"+reference.Name], reference.Kind); err != nil {
+			return nil, err
 		}
 	}
 	exists, err := secretExists(ctx, c, org.Name, req.Secret)
