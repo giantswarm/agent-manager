@@ -70,7 +70,11 @@ The three writes take `dryRun` and `mode` (`apply` | `commit`, see
 column is files of a pull request, nothing live. `validate_agent` takes
 `mode` too and answers as the write would.
 
-Errors are `{"error":{"code":"not_found|invalid_request|conflict|gitops_owned|forbidden|unauthenticated|auth_required|unsupported|backend_error","message":"…"}}`;
+Errors are `{"error":{"code":"not_found|invalid_request|conflict|gitops_owned|forbidden|unauthenticated|auth_required|unsupported|precondition_failed|precondition_required|backend_error","message":"…"}}`;
+`unsupported` (501) is something this installation is not configured for,
+`backend_error` (502) a failure of the API server, Git or a store behind it;
+`precondition_failed` (412) and `precondition_required` (428) answer a
+credential save or cancellation whose `If-Match` is stale or missing;
 `conflict` (409) covers "exists already", "suspended" and "bare
 Agent", the cases `force` overrides where documented;
 `gitops_owned` (409) is an apply-mode write to a release applied from git,
