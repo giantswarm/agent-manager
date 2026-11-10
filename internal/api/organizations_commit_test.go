@@ -283,6 +283,9 @@ func TestAMergedDeleteThatDidNotRemoveTheFileErasesNothing(t *testing.T) {
 		edit  func(t *testing.T, fake *commit.Fake, head string, file []byte)
 		after func(t *testing.T, fake *commit.Fake)
 		want  []string
+		// noConfirm: the call without confirm is refused too, and does not
+		// answer pending erase.
+		noConfirm bool
 	}{
 		{
 			name: "the removal was reverted and another merge removed the file",
@@ -292,21 +295,22 @@ func TestAMergedDeleteThatDidNotRemoveTheFileErasesNothing(t *testing.T) {
 			after: func(t *testing.T, fake *commit.Fake) {
 				require.NoError(t, fake.Commit(ctx, mcRepo, "main", "oops", map[string][]byte{paymentsFile: nil}))
 			},
-			want: []string{"conflict:", "did not remove it", "restore its file"},
+			want:      []string{"conflict:", "did not remove it", "restore its file"},
+			noConfirm: true,
 		},
 		{
 			name: "the file was moved",
 			edit: func(t *testing.T, fake *commit.Fake, head string, file []byte) {
 				require.NoError(t, fake.Commit(ctx, mcRepo, head, "move it", map[string][]byte{objectsPath + "/archive/payments.yaml": file}))
 			},
-			want: []string{"conflict:", "moved its file to " + objectsPath + "/archive/payments.yaml", "still in git"},
+			want: []string{"conflict:", "moved its file to " + objectsPath + "/archive/payments.yaml", "move the file back"},
 		},
 		{
 			name: "the files cannot be listed",
 			after: func(t *testing.T, fake *commit.Fake) {
-				fake.Fail[commit.OpMergedFiles] = errors.New("GitHub listed 3000 of 3200 changed files")
+				fake.Fail[commit.OpMergedFiles] = errors.New("boom")
 			},
-			want: []string{"GitHub listed 3000 of 3200 changed files", "nothing was erased"},
+			want: []string{"nothing was erased"},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -328,6 +332,11 @@ func TestAMergedDeleteThatDidNotRemoveTheFileErasesNothing(t *testing.T) {
 				tc.after(t, fake)
 			}
 			require.NotContains(t, fake.Files(mcRepo, "main"), paymentsFile, "the file is gone from git")
+			if tc.noConfirm {
+				text, isErr = f.call(t, ToolDeleteOrganization, map[string]any{"namespace": "org-acme", "name": "payments", "mode": "commit"})
+				require.True(t, isErr, text)
+				assert.NotContains(t, text, "pending erase:")
+			}
 
 			text, isErr = f.call(t, ToolDeleteOrganization, map[string]any{"namespace": "org-acme", "name": "payments", "mode": "commit", "confirm": "org-acme/payments"})
 			require.True(t, isErr, text)

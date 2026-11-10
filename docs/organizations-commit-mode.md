@@ -97,8 +97,8 @@ giantswarm/agent-platform-operator#15 is the long-term fix.
    agent-platform-operator reports the organization `Orphaned` with reason
    `DeleteMerged` once the file has left the installation Kustomization's inventory.
 2. After the merge, the organization is pending erase once agent-manager has read the
-   merged pull request's files and found the object's file removed by it (a move does not
-   count). Without `confirm` the call
+   merged pull request's files and found the object's file removed by it (a move that
+   GitHub reports as a rename does not count). Without `confirm` the call
    answers what is erased. With `confirm: <parent>/<name>` (Erase now) it sets
    `kustomize.toolkit.fluxcd.io/prune: enabled` on the live object and deletes it; the
    operator erases it.
@@ -111,7 +111,11 @@ The erase is refused:
   git): restore the file instead;
 - when the merged delete pull request did not remove the file itself: it was edited
   before its merge, and another merge removed the file (Missing from git), or it moved
-  the file to another path, which still defines the organization in git. Restore the
-  file and open the delete again with `mode: commit` and no `confirm`;
+  the file to another path (a rename on GitHub), which may still define the
+  organization in git. Restore the file, or move it back, and open the delete again with
+  `mode: commit` and no `confirm`. A move whose content changed so much that GitHub
+  reports a removal and an addition is not detected;
 - when GitHub cannot list the merged pull request's files (it lists at most 3000, or
-  the call fails): whether it removed the file is unknown, so nothing is erased.
+  the call fails): whether it removed the file is unknown, so nothing is erased. Call
+  again to retry; if the listing keeps failing, restore the file and open the delete
+  again.
