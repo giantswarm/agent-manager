@@ -310,10 +310,11 @@ type Subject struct {
 // Create writes an AgentPlatformOrganization as the caller, waits for the
 // operator to make it Ready, then writes its first admins as the caller.
 // Before any write it asks, as the caller, whether the first admins can be
-// bound (create RoleBindings and bind agent-platform:admin in the parent,
-// which the operator mirrors into the organization namespace) and dry-runs
-// the object, so a refusal comes before the object exists. A create of an
-// organization that exists without its first admins finishes them.
+// bound (create RoleBindings and bind agent-platform:admin in the parent),
+// whether that right will reach the organization namespace
+// (requireRightReachesOrganization), and dry-runs the object, so a refusal
+// comes before the object exists. A create of an organization that exists
+// without its first admins finishes them.
 func (s *Service) Create(ctx context.Context, req CreateRequest) (*CreateResult, error) {
 	if req.Parent == "" || req.Name == "" {
 		return nil, invalidf("namespace (the parent namespace) and name are required")
@@ -352,6 +353,9 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (*CreateResult,
 	existing, err := orgs.Get(ctx, req.Name, metav1.GetOptions{})
 	switch {
 	case apierrors.IsNotFound(err):
+		if err := s.requireRightReachesOrganization(ctx, c, req.Parent); err != nil {
+			return nil, err
+		}
 		obj := s.organizationObject(req)
 		w := write{gvr: GVR, kind: orgKind, op: opCreate, obj: obj, ns: req.Parent, name: req.Name, what: what, reason: way}
 		if err := apply(ctx, c.Dynamic(), []write{w}, req.DryRun); err != nil {
@@ -406,15 +410,11 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (*CreateResult,
 		res.Pending = fmt.Sprintf("the organization is not Ready after %s (%s), so its first admins are not bound yet; call create_organization again with the same arguments to bind them once it is", s.cfg.ReadyTimeout, describeReady(res.Organization.Ready))
 		return res, nil
 	}
-	// The parent's check holds for an organizations-admin, whose bindings the
-	// operator mirrors into the new namespace. Rights there from another
-	// source (a Giant Swarm Organization admin's cluster-admin in its
-	// org-<name>) are not mirrored: ask again where the binding goes, so the
-	// answer names who can finish it instead of a Forbidden write.
-	if err := requireAccess(ctx, c, wayFirstAdmins(org),
-		access{namespace: org.Status.Namespace, verb: "create", group: rbacGVR.Group, resource: rbacGVR.Resource},
-		access{namespace: org.Status.Namespace, verb: "bind", group: rbacGVR.Group, resource: "clusterroles", name: RoleAdmin},
-	); err != nil {
+	// The right in the parent was checked to reach the new namespace before
+	// the write, but the operator may not have mirrored it yet, or the
+	// caller's bindings could not be read: ask again where the binding goes,
+	// so the answer names who can finish it instead of a Forbidden write.
+	if err := requireAccess(ctx, c, wayFirstAdmins(org), firstAdminsAccess(org.Status.Namespace)...); err != nil {
 		res.Pending = fmt.Sprintf("the organization %s exists and is Ready, but its first admins are not bound: %v", what, err)
 		return res, nil
 	}
