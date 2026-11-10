@@ -608,7 +608,8 @@ The organization tools (every name holds `organization`):
   cluster-wide, or when a RoleBinding in the parent that the operator mirrors
   (`adminmirror.IsMirroredAdmin` of agent-platform-operator: one to
   `agent-platform:organizations-admin`, or rbac-operator's to `cluster-admin`)
-  names the caller as one of its mirrored Users or Groups. Otherwise it
+  names the caller as one of its mirrored Users or Groups and is not being
+  deleted (the operator writes no mirror of a deleting binding). Otherwise it
   refuses before any write, dry run included, naming the caller's bindings
   and the two ways out (an `agent-platform:organizations-admin` RoleBinding
   for the caller in the parent, or a cluster-admin creating it). A caller who

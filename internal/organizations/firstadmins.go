@@ -85,7 +85,7 @@ func (s *Service) requireRightReachesOrganization(ctx context.Context, c kube.Cl
 		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(list.Items[i].Object, &rb); err != nil {
 			return fmt.Errorf("read RoleBinding %s/%s: %w", parent, list.Items[i].GetName(), err)
 		}
-		if adminmirror.IsMirroredAdmin(&rb) && slices.ContainsFunc(adminmirror.MirroredSubjects(rb.Subjects), namesUser(user, parent)) {
+		if mirrors(&rb) && slices.ContainsFunc(adminmirror.MirroredSubjects(rb.Subjects), namesUser(user, parent)) {
 			return nil
 		}
 		if slices.ContainsFunc(rb.Subjects, namesUser(user, parent)) {
@@ -93,6 +93,17 @@ func (s *Service) requireRightReachesOrganization(ctx context.Context, c kube.Cl
 		}
 	}
 	return fmt.Errorf("%w: %s", agents.ErrForbidden, refuseUnmirrored(parent, user.Username, naming))
+}
+
+// mirrors reports whether the operator writes a mirror of the parent binding
+// rb now: adminmirror.IsMirroredAdmin, and not being deleted. A binding a
+// finalizer holds still grants in RBAC, but the operator skips one with a
+// deletion timestamp when it writes the mirrors, so this repeats the
+// operator's guard. adminmirror.IsMirroredAdmin itself must keep matching a
+// deleting binding, since the operator's watch needs the delete event; a
+// shared helper for the guard in pkg/adminmirror is a follow-up.
+func mirrors(rb *rbacv1.RoleBinding) bool {
+	return adminmirror.IsMirroredAdmin(rb) && rb.DeletionTimestamp == nil
 }
 
 // namesUser reports whether a subject of a RoleBinding in ns names user, as the
@@ -120,6 +131,8 @@ func namesUser(user authenticationv1.UserInfo, ns string) func(rbacv1.Subject) b
 func notMirrored(rb *rbacv1.RoleBinding) string {
 	ref := fmt.Sprintf("%s %s", rb.RoleRef.Kind, rb.RoleRef.Name)
 	switch {
+	case adminmirror.IsMirroredAdmin(rb) && rb.DeletionTimestamp != nil:
+		return fmt.Sprintf("%s (%s; it is being deleted, so the operator will not mirror it)", rb.Name, ref)
 	case adminmirror.IsMirroredAdmin(rb):
 		return fmt.Sprintf("%s (%s; it names you as a ServiceAccount or a system: name, which the mirror leaves out)", rb.Name, ref)
 	case rb.RoleRef.Kind == "ClusterRole" && rb.RoleRef.Name == adminmirror.ClusterAdminClusterRole:
