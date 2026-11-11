@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -96,8 +97,11 @@ func TestTheContractListsEveryErrorCode(t *testing.T) {
 	assert.ElementsMatch(t, answered, listed)
 }
 
-// No operation lists an error status the server never answers.
-func TestTheContractListsOnlyErrorStatusesTheServerAnswers(t *testing.T) {
+// No operation lists an error status that no route of the server answers.
+// The check is global, not per route: an operation that lists a status only
+// another route answers still passes. The credential routes' own statuses are
+// pinned per route by TestTheCredentialRoutesListTheirFailureStatuses.
+func TestNoOperationListsAnErrorStatusNoRouteAnswers(t *testing.T) {
 	backendStatus, _ := statusFor(assert.AnError)
 	answered := []int{backendStatus}
 	for _, c := range errorCodes {
@@ -136,28 +140,33 @@ func TestTheCredentialRoutesListTheirFailureStatuses(t *testing.T) {
 		f.dyn.PrependReactor("list", "modelconfigs", storeDown)
 		return newRoute(t, f)
 	}
+	// serve returns the mux under test and the context of the request it gets.
 	outcomes := []struct {
 		name   string
-		mux    func(*testing.T) *http.ServeMux
+		serve  func(*testing.T) (*http.ServeMux, context.Context)
 		status int
 	}{
-		{"without the organization tools", func(t *testing.T) *http.ServeMux {
+		{"without the organization tools", func(t *testing.T) (*http.ServeMux, context.Context) {
 			svc, _ := newService(t)
 			mux := http.NewServeMux()
 			NewREST(svc, nil).Register(mux)
-			return mux
+			// The routes answer 501 before they read the caller.
+			return mux, t.Context()
 		}, http.StatusNotImplemented},
-		{"when the backend fails", func(t *testing.T) *http.ServeMux { return failing(t).mux }, http.StatusBadGateway},
+		{"when the backend fails", func(t *testing.T) (*http.ServeMux, context.Context) {
+			r := failing(t)
+			return r.mux, r.ctx
+		}, http.StatusBadGateway},
 	}
 	for _, outcome := range outcomes {
 		for _, route := range routes {
 			t.Run(outcome.name+"/"+route.operationID, func(t *testing.T) {
-				f := newOrgFixture(t)
-				request := httptest.NewRequestWithContext(f.ctx, route.method, route.path, strings.NewReader(`{"values":[]}`))
+				mux, ctx := outcome.serve(t)
+				request := httptest.NewRequestWithContext(ctx, route.method, route.path, strings.NewReader(`{"values":[]}`))
 				request.Header.Set("Content-Type", "application/json")
 				request.Header.Set("If-Match", `"1"`)
 				recorder := httptest.NewRecorder()
-				outcome.mux(t).ServeHTTP(recorder, request)
+				mux.ServeHTTP(recorder, request)
 
 				require.Equal(t, outcome.status, recorder.Code, recorder.Body.String())
 				assert.True(t, slices.Contains(listed[route.operationID], recorder.Code), "%s answers %d, the contract lists %v", route.operationID, recorder.Code, listed[route.operationID])
