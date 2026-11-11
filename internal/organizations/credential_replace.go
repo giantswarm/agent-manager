@@ -121,8 +121,17 @@ func otherKey(reference CredentialReference, secret, key string) error {
 
 // operationReferences lists, as the caller, every object of the operation's
 // namespace that names one of its credential Secrets, each planned write in
-// place of the live object it changes.
+// place of the live object it changes. A replacement lists the consumers it
+// was prepared for: the save requires exactly those live, so the person
+// confirms where the value goes, whatever changes in between.
 func (s *Service) operationReferences(ctx context.Context, operation *credentialOperation) ([]CredentialReference, error) {
+	if operation.Result.Kind == KindCredential {
+		references := slices.Clone(operation.Consumers)
+		slices.SortStableFunc(references, func(a, b CredentialReference) int {
+			return cmp.Or(cmp.Compare(a.Kind, b.Kind), cmp.Compare(a.Name, b.Name), cmp.Compare(a.Key, b.Key))
+		})
+		return references, nil
+	}
 	c, err := s.caller(ctx)
 	if err != nil {
 		return nil, err
