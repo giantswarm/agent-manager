@@ -9,7 +9,7 @@ require (
 	github.com/a2aproject/a2a-go/v2 v2.8.0
 	github.com/giantswarm/agent-platform-operator v0.3.1
 	github.com/giantswarm/gitops-commit v0.12.0-rc.7
-	github.com/giantswarm/mcp-oauth v1.13.4
+	github.com/giantswarm/mcp-oauth v1.13.5
 	github.com/giantswarm/mcp-toolkit v0.5.3
 	github.com/go-jose/go-jose/v4 v4.1.9
 	github.com/golang-jwt/jwt/v5 v5.3.1
@@ -204,7 +204,7 @@ require (
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	golang.org/x/crypto v0.58.0 // indirect
 	golang.org/x/net v0.62.0 // indirect
-	golang.org/x/oauth2 v0.37.0 // indirect
+	golang.org/x/oauth2 v0.38.0 // indirect
 	golang.org/x/sys v0.49.0 // indirect
 	golang.org/x/term v0.47.0 // indirect
 	golang.org/x/time v0.16.0 // indirect
