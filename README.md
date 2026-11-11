@@ -164,6 +164,10 @@ conditions.
 - `validate_agent` reports in `modelConfig` the model a create would write,
   and adds a `notes` entry when that ModelConfig is not `ResolvedRefs=True`
   (its key Secret missing, say). The create is not refused for it.
+- `--default-model-agent` (chart: `defaultAgentModel.agent`) names one Agent
+  of `--kagent-namespace` whose empty `modelConfig` is filled with the default,
+  checked every 30s, like a default StorageClass fills a PVC. Once set, by
+  anyone, it is never changed. Several marked: a warning, nothing.
 
 ## The Harness and plugins
 

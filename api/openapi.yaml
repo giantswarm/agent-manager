@@ -1146,7 +1146,6 @@ components:
         ready: { type: [boolean, "null"] }
         managed: { type: string, enum: [helmrelease, gitops, platform, none] }
         default: { type: boolean, description: "The installation's default agent (label agent-platform.giantswarm.io/default); clients preselect it. Absent when not" }
-        followsDefaultModel: { type: boolean, description: "modelConfig follows the namespace's default model (label agent-platform.giantswarm.io/follows-default-model). Absent when not" }
         suspended: { type: boolean, description: The HelmRelease is suspended (absent when not) }
         deleting: { type: boolean, description: helm-controller is uninstalling the release (absent when not) }
         releaseReason: { type: string, description: The HelmRelease's Ready reason, when it is not Ready }
@@ -1179,7 +1178,6 @@ components:
         status: { $ref: "#/components/schemas/ObjectStatus" }
         managed: { type: string, enum: [helmrelease, gitops, platform, none] }
         default: { type: boolean, description: "The installation's default agent (label agent-platform.giantswarm.io/default); clients preselect it. Absent when not" }
-        followsDefaultModel: { type: boolean, description: "modelConfig follows the namespace's default model (label agent-platform.giantswarm.io/follows-default-model). Absent when not" }
         helmRelease: { $ref: "#/components/schemas/HelmReleaseRef" }
         values: { type: object, description: The HelmRelease's inline values (the chart contract) }
     Manifests:

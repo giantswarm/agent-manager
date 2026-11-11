@@ -1,6 +1,6 @@
 {{- /*
-defaultAgentModel.agent: agent-manager keeps that Agent of kagent.namespace on
-the namespace's default model, without a caller. This Role is its permission
+defaultAgentModel.agent: agent-manager fills that Agent of kagent.namespace's
+empty modelConfig with the namespace's default model, without a caller. This Role is its permission
 for it, with or without oauth.downstream: get and patch that one Agent, list
 the ModelConfigs (it reads their default mark).
 */}}

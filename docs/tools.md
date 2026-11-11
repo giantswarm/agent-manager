@@ -570,7 +570,7 @@ Another person's session is refused as not_found. While another operation on it 
 ```text
 Get one agent: its HelmRelease values, Harness, pinned skills and plugins, toolset and Agent status.
 
-default: true is the installation's default agent, to preselect when starting a session. followsDefaultModel: true: modelConfig follows the namespace's default model.
+default: true is the installation's default agent, to preselect when starting a session.
 ```
 
 ```json

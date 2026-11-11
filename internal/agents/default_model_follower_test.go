@@ -1,7 +1,9 @@
 package agents
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -12,20 +14,14 @@ import (
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 )
 
-// followingAgent is the platform's default agent as the agent-platform chart
-// renders it without a model: labelled to follow the default, modelConfig
-// set to current ("" for none).
-func followingAgent(current string, follows bool) *unstructured.Unstructured {
+// defaultAgent is the platform's default agent as the agent-platform chart
+// renders it, modelConfig set to current ("" for none).
+func defaultAgent(current string) *unstructured.Unstructured {
 	obj := agentObject("kagent", "default-agent", "agent-platform-default-agent", "kagent", false, false)
 	if current == "" {
 		unstructured.RemoveNestedField(obj.Object, "spec", "template", "modelConfig")
 	} else {
 		_ = unstructured.SetNestedField(obj.Object, current, "spec", "template", "modelConfig", "name")
-	}
-	if follows {
-		labels := obj.GetLabels()
-		labels[FollowsDefaultModelLabel] = "true"
-		obj.SetLabels(labels)
 	}
 	return obj
 }
@@ -53,7 +49,7 @@ func modelOf(t *testing.T, dyn *dynamicfake.FakeDynamicClient) string {
 	return name
 }
 
-func TestTheDefaultAgentFollowsTheDefaultModel(t *testing.T) {
+func TestTheFollowerFillsAnEmptyModelConfigOnce(t *testing.T) {
 	tests := []struct {
 		name    string
 		objs    []runtime.Object
@@ -61,29 +57,23 @@ func TestTheDefaultAgentFollowsTheDefaultModel(t *testing.T) {
 		patched bool
 	}{
 		{
-			name:    "label and one default: patched",
-			objs:    []runtime.Object{followingAgent("", true), markedModel("kagent", "claude"), modelConfig("kagent", "qwen", "OpenAI", "qwen3")},
+			name:    "empty and one default: filled",
+			objs:    []runtime.Object{defaultAgent(""), markedModel("kagent", "claude"), modelConfig("kagent", "qwen", "OpenAI", "qwen3")},
 			want:    "claude",
 			patched: true,
 		},
 		{
-			name: "no default: left",
-			objs: []runtime.Object{followingAgent("", true), modelConfig("kagent", "qwen", "OpenAI", "qwen3")},
-		},
-		{
-			name: "several defaults: left",
-			objs: []runtime.Object{followingAgent("qwen", true), markedModel("kagent", "claude"), markedModel("kagent", "gpt")},
+			name: "set, another the default: untouched",
+			objs: []runtime.Object{defaultAgent("qwen"), markedModel("kagent", "claude")},
 			want: "qwen",
 		},
 		{
-			name: "no label: left",
-			objs: []runtime.Object{followingAgent("qwen", false), markedModel("kagent", "claude")},
-			want: "qwen",
+			name: "empty, several defaults: untouched",
+			objs: []runtime.Object{defaultAgent(""), markedModel("kagent", "claude"), markedModel("kagent", "gpt")},
 		},
 		{
-			name: "already on the default: no patch",
-			objs: []runtime.Object{followingAgent("claude", true), markedModel("kagent", "claude")},
-			want: "claude",
+			name: "empty, no default: untouched",
+			objs: []runtime.Object{defaultAgent(""), modelConfig("kagent", "qwen", "OpenAI", "qwen3")},
 		},
 		{
 			name: "no agent: nothing",
@@ -102,9 +92,9 @@ func TestTheDefaultAgentFollowsTheDefaultModel(t *testing.T) {
 	}
 }
 
-func TestTheDefaultAgentFollowsAMovedDefault(t *testing.T) {
+func TestTheFollowerKeepsAFilledModelWhenTheDefaultMoves(t *testing.T) {
 	ctx := context.Background()
-	dyn, f := followerFixture(followingAgent("", true), markedModel("kagent", "claude"), modelConfig("kagent", "qwen", "OpenAI", "qwen3"))
+	dyn, f := followerFixture(defaultAgent(""), markedModel("kagent", "claude"), modelConfig("kagent", "qwen", "OpenAI", "qwen3"))
 	require.NoError(t, f.Follow(ctx))
 	assert.Equal(t, "claude", modelOf(t, dyn))
 
@@ -118,21 +108,16 @@ func TestTheDefaultAgentFollowsAMovedDefault(t *testing.T) {
 	require.NoError(t, err)
 
 	require.NoError(t, f.Follow(ctx))
-	assert.Equal(t, "qwen", modelOf(t, dyn))
-	assert.Equal(t, 2, patches(dyn))
+	assert.Equal(t, "claude", modelOf(t, dyn))
+	assert.Equal(t, 1, patches(dyn))
 }
 
-func TestGetAndListReportFollowsDefaultModel(t *testing.T) {
-	ctx := context.Background()
-	f := newFixture(t, []runtime.Object{followingAgent("", true), agentObject("kagent", "sre", "sre", "kagent", true, false)})
-	got, err := f.svc.Get(ctx, In(""), "default-agent")
-	require.NoError(t, err)
-	assert.True(t, got.FollowsDefaultModel)
-	list, err := f.svc.List(ctx, In(""), nil)
-	require.NoError(t, err)
-	follows := map[string]bool{}
-	for _, a := range list {
-		follows[a.Name] = a.Summary().FollowsDefaultModel
-	}
-	assert.Equal(t, map[string]bool{"default-agent": true, "sre": false}, follows)
+func TestTheFollowerWarnsOnSeveralDefaults(t *testing.T) {
+	var buf bytes.Buffer
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), listKinds, defaultAgent(""), markedModel("kagent", "claude"), markedModel("kagent", "gpt"))
+	f := NewDefaultModelFollower(dyn, "v1alpha3", "kagent", "default-agent", slog.New(slog.NewTextHandler(&buf, nil)))
+	require.NoError(t, f.Follow(context.Background()))
+	assert.Contains(t, buf.String(), "level=WARN")
+	assert.Contains(t, buf.String(), "marked=\"[claude gpt]\"")
+	assert.Zero(t, patches(dyn))
 }

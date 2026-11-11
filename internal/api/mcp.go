@@ -278,7 +278,7 @@ func NewMCPServer(svc *agents.Service, version string, opts ...Option) *mcpserve
 
 	s.AddTool(mcp.NewTool(ToolGetAgent,
 		tooldesc.Describe("Get one agent: its HelmRelease values, Harness, pinned skills and plugins, toolset and Agent status.",
-			"default: true is the installation's default agent, to preselect when starting a session. followsDefaultModel: true: modelConfig follows the namespace's default model."),
+			"default: true is the installation's default agent, to preselect when starting a session."),
 		mcp.WithString(argName, mcp.Required(), mcp.Description("Agent name")),
 		nsProp,
 		orgProp,
