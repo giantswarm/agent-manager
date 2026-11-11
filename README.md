@@ -641,7 +641,9 @@ The organization tools (every name holds `organization`):
   `default: true` moves the mark, and a namespace with two marks takes no
   new model until one is chosen); `list_organization_connectors` and
   `set_organization_connector` (RemoteMCPServers);
-  `set_organization_egress_policy`; and `delete_organization_object`.
+  `set_organization_egress_policy`; `delete_organization_object`; and
+  `replace_organization_credential` (a new value for one key of a credential
+  Secret, for every object that reads it, writing the Secret only).
 - for everyone: `list_organizations`, the organizations the caller manages
   or belongs to. agent-manager's ServiceAccount lists the
   AgentPlatformOrganizations; two SelfSubjectAccessReviews as the caller
@@ -659,7 +661,9 @@ returns a secret value: a model's key, a connector's and an egress policy's
 credential are Secrets named by reference (`tenant-credential-…`). When one is
 missing, or `replaceCredential` asks for a new value, `set_organization_model`,
 `set_organization_connector` and `set_organization_egress_policy` answer with
-an MCP URL elicitation of a client-owned credential UI. The server prepares
+an MCP URL elicitation of a client-owned credential UI; so does
+`replace_organization_credential`, which takes the Secret and key and changes
+no object. The server prepares
 the intended change without writing consumers, and supplies a user-bound
 operation ID through the configured `credentials.uiURL` RFC 6570 template. A client
 without `elicitation.url` receives the result as `structuredContent`, declared

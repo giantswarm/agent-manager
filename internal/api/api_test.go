@@ -370,19 +370,20 @@ var wantHints = map[string]hints{
 	// The organization tools act on the cluster only. A create adds; a set or
 	// a member change converges on the arguments (idempotent) and may
 	// replace what was there; a delete erases.
-	ToolListOrganizations:         annotations(readOnly, additive, notIdempotent, closedWorld),
-	ToolGetOrganization:           annotations(readOnly, additive, notIdempotent, closedWorld),
-	ToolListOrganizationMembers:   annotations(readOnly, additive, notIdempotent, closedWorld),
-	ToolListOrganizationConnector: annotations(readOnly, additive, notIdempotent, closedWorld),
-	ToolCreateOrganization:        annotations(writes, additive, notIdempotent, closedWorld),
-	ToolUpdateOrganization:        annotations(writes, destructive, idempotent, closedWorld),
-	ToolDeleteOrganization:        annotations(writes, destructive, notIdempotent, closedWorld),
-	ToolAddOrganizationMember:     annotations(writes, additive, idempotent, closedWorld),
-	ToolRemoveOrganizationMember:  annotations(writes, destructive, idempotent, closedWorld),
-	ToolSetOrganizationModel:      annotations(writes, destructive, idempotent, closedWorld),
-	ToolSetOrganizationConnector:  annotations(writes, destructive, idempotent, closedWorld),
-	ToolSetOrganizationEgress:     annotations(writes, destructive, idempotent, closedWorld),
-	ToolDeleteOrganizationObject:  annotations(writes, destructive, notIdempotent, closedWorld),
+	ToolListOrganizations:             annotations(readOnly, additive, notIdempotent, closedWorld),
+	ToolGetOrganization:               annotations(readOnly, additive, notIdempotent, closedWorld),
+	ToolListOrganizationMembers:       annotations(readOnly, additive, notIdempotent, closedWorld),
+	ToolListOrganizationConnector:     annotations(readOnly, additive, notIdempotent, closedWorld),
+	ToolCreateOrganization:            annotations(writes, additive, notIdempotent, closedWorld),
+	ToolUpdateOrganization:            annotations(writes, destructive, idempotent, closedWorld),
+	ToolDeleteOrganization:            annotations(writes, destructive, notIdempotent, closedWorld),
+	ToolAddOrganizationMember:         annotations(writes, additive, idempotent, closedWorld),
+	ToolRemoveOrganizationMember:      annotations(writes, destructive, idempotent, closedWorld),
+	ToolSetOrganizationModel:          annotations(writes, destructive, idempotent, closedWorld),
+	ToolSetOrganizationConnector:      annotations(writes, destructive, idempotent, closedWorld),
+	ToolSetOrganizationEgress:         annotations(writes, destructive, idempotent, closedWorld),
+	ToolDeleteOrganizationObject:      annotations(writes, destructive, notIdempotent, closedWorld),
+	ToolReplaceOrganizationCredential: annotations(writes, destructive, idempotent, closedWorld),
 }
 
 func TestMCPToolsMirrorREST(t *testing.T) {

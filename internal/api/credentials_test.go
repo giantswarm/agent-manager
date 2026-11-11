@@ -63,7 +63,8 @@ func TestNoOrganizationToolAnswerCarriesASecretValue(t *testing.T) {
 		ToolSetOrganizationConnector:  {"namespace": orgNS, "name": "gh", "url": "https://mcp.github.example/mcp", "credentialHeader": "Authorization"},
 		ToolSetOrganizationEgress: {"namespace": orgNS, "name": "github", "destinations": []any{map[string]any{
 			"origin": "https://api.github.com", "credentialHeader": "Authorization", "credentialSecret": "tenant-credential-gh"}}}, // #nosec G101 -- a Secret's name
-		ToolDeleteOrganizationObject: {"namespace": orgNS, "kind": organizations.KindConnector, "name": "gh"},
+		ToolDeleteOrganizationObject:      {"namespace": orgNS, "kind": organizations.KindConnector, "name": "gh"},
+		ToolReplaceOrganizationCredential: {"namespace": orgNS, "secret": "tenant-credential-claude", "key": "apiKey"}, // #nosec G101 -- a Secret's name
 	}
 	for _, tool := range OrganizationToolNames() {
 		in, ok := args[tool]

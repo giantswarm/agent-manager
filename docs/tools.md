@@ -26,6 +26,7 @@ Generated from the registered tools (`make tools-doc`); through muster every too
 | `list_sessions` | read-only |
 | `list_skills` | read-only |
 | `remove_organization_member` | write, destructive |
+| `replace_organization_credential` | write, destructive |
 | `set_organization_connector` | write, destructive |
 | `set_organization_egress_policy` | write, destructive |
 | `set_organization_model` | write, destructive |
@@ -1047,6 +1048,55 @@ From every binding of the role that holds them, dry run first; an emptied bindin
   },
   "required": [
     "namespace"
+  ],
+  "type": "object"
+}
+```
+
+## `replace_organization_credential`
+
+```text
+Replace an organization's credential by its Secret and key, as you, writing only the Secret.
+
+No model, connector or egress policy is written. Answers with a URL elicitation of the credential UI, link in credentials[].next; the form lists every object that uses the Secret and where each sends the value. Refused when nothing uses that key of the Secret, and when an object reads another key of it: the Secret is written whole, holding the one key. A credential whose consumer git applies is replaced with mode commit. Never pass a value. Needs agent-platform:admin.
+```
+
+```json
+{
+  "properties": {
+    "dryRun": {
+      "description": "Check every write with the API server as you and write nothing (default false)",
+      "type": "boolean"
+    },
+    "key": {
+      "description": "Key of that Secret the objects read, e.g. apiKey or token",
+      "type": "string"
+    },
+    "mode": {
+      "description": "apply (default): write live as you; refused with gitops_owned for what git applies. commit: dry-run as you, then open a pull request as you",
+      "enum": [
+        "apply",
+        "commit"
+      ],
+      "type": "string"
+    },
+    "namespace": {
+      "description": "The organization namespace, e.g. agents-payments-x7k2q (list_organizations, get_organization)",
+      "type": "string"
+    },
+    "requestId": {
+      "description": "Idempotency key, at most 128 characters. Reuse on retries; use a fresh key for another save or a refreshed confirmation.",
+      "type": "string"
+    },
+    "secret": {
+      "description": "Secret in the organization namespace that holds the credential, by name (tenant-credential-...); never a value",
+      "type": "string"
+    }
+  },
+  "required": [
+    "namespace",
+    "secret",
+    "key"
   ],
   "type": "object"
 }

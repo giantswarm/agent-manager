@@ -20,19 +20,20 @@ import (
 // toolset preset excludes them all with OrganizationToolPattern: the curated
 // agent-manager-assistant carries the agent tools and not these.
 const (
-	ToolListOrganizations         = "list_organizations"
-	ToolGetOrganization           = "get_organization"
-	ToolCreateOrganization        = "create_organization"
-	ToolUpdateOrganization        = "update_organization"
-	ToolDeleteOrganization        = "delete_organization"
-	ToolListOrganizationMembers   = "list_organization_members"
-	ToolAddOrganizationMember     = "add_organization_member"
-	ToolRemoveOrganizationMember  = "remove_organization_member"
-	ToolSetOrganizationModel      = "set_organization_model"
-	ToolListOrganizationConnector = "list_organization_connectors"
-	ToolSetOrganizationConnector  = "set_organization_connector"
-	ToolSetOrganizationEgress     = "set_organization_egress_policy"
-	ToolDeleteOrganizationObject  = "delete_organization_object"
+	ToolListOrganizations             = "list_organizations"
+	ToolGetOrganization               = "get_organization"
+	ToolCreateOrganization            = "create_organization"
+	ToolUpdateOrganization            = "update_organization"
+	ToolDeleteOrganization            = "delete_organization"
+	ToolListOrganizationMembers       = "list_organization_members"
+	ToolAddOrganizationMember         = "add_organization_member"
+	ToolRemoveOrganizationMember      = "remove_organization_member"
+	ToolSetOrganizationModel          = "set_organization_model"
+	ToolListOrganizationConnector     = "list_organization_connectors"
+	ToolSetOrganizationConnector      = "set_organization_connector"
+	ToolSetOrganizationEgress         = "set_organization_egress_policy"
+	ToolDeleteOrganizationObject      = "delete_organization_object"
+	ToolReplaceOrganizationCredential = "replace_organization_credential"
 
 	// OrganizationToolPattern matches, as a muster toolset rule
 	// (filepath.Match on x_<server>_<tool>), every organization tool of the
@@ -47,7 +48,7 @@ func OrganizationToolNames() []string {
 		ToolListOrganizations, ToolGetOrganization, ToolCreateOrganization, ToolUpdateOrganization, ToolDeleteOrganization,
 		ToolListOrganizationMembers, ToolAddOrganizationMember, ToolRemoveOrganizationMember,
 		ToolSetOrganizationModel, ToolListOrganizationConnector, ToolSetOrganizationConnector, ToolSetOrganizationEgress,
-		ToolDeleteOrganizationObject,
+		ToolDeleteOrganizationObject, ToolReplaceOrganizationCredential,
 	}
 }
 
@@ -71,6 +72,8 @@ const (
 	argURL               = "url"
 	argDestinations      = "destinations"
 	argKind              = "kind"
+	argSecret            = "secret"
+	argKey               = "key"
 )
 
 // JSON Schema keys of the destinations item.
@@ -416,6 +419,32 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service, l
 			return nil, err
 		}
 		return t.svc.SetEgressPolicy(ctx, organizations.EgressRequest(in))
+	}))
+
+	s.AddTool(mcp.NewTool(ToolReplaceOrganizationCredential,
+		tooldesc.Describe("Replace an organization's credential by its Secret and key, as you, writing only the Secret.",
+			"No model, connector or egress policy is written. Answers with a URL elicitation of the credential UI, link in credentials[].next; the form lists every object that uses the Secret and where each sends the value. Refused when nothing uses that key of the Secret, and when an object reads another key of it: the Secret is written whole, holding the one key. A credential whose consumer git applies is replaced with mode commit. Never pass a value. Needs agent-platform:admin."),
+		orgNSProp,
+		mcp.WithString(argSecret, mcp.Required(), mcp.Description(credSecretDesc)),
+		mcp.WithString(argKey, mcp.Required(), mcp.Description("Key of that Secret the objects read, e.g. apiKey or token")),
+		credentialRequestID, dryRun, modeProp,
+		mcp.WithOutputSchema[organizations.ResourceResult](),
+		mcp.WithReadOnlyHintAnnotation(false),
+		mcp.WithDestructiveHintAnnotation(true),
+		mcp.WithIdempotentHintAnnotation(true),
+		mcp.WithOpenWorldHintAnnotation(false),
+	), t.runWrite(func(ctx context.Context, req mcp.CallToolRequest) (*organizations.ResourceResult, error) {
+		var in struct {
+			Namespace string `json:"namespace"`
+			Secret    string `json:"secret"`
+			Key       string `json:"key"`
+			DryRun    bool   `json:"dryRun"`
+			Mode      string `json:"mode"`
+		}
+		if err := bindArgs(req, &in); err != nil {
+			return nil, err
+		}
+		return t.svc.ReplaceCredential(ctx, organizations.CredentialRequest(in))
 	}))
 
 	s.AddTool(mcp.NewTool(ToolDeleteOrganizationObject,
