@@ -464,31 +464,46 @@ func TestReplaceCredentialSaveAnswersConsumersChanged(t *testing.T) {
 			status, answer, _ := operationHTTP(t, fixture, http.MethodPost, result.CredentialOperation, confirmation.Version, valuesBody(t, result, "rotated-value"), nil)
 			require.Equal(t, http.StatusConflict, status, answer)
 			require.Equal(t, "credential_consumers_changed", errorCode(t, answer))
-			for _, detail := range []string{"elsewhere", "claude", "gh", orgNS, "rotated-value"} {
-				require.NotContains(t, answer, detail)
-			}
+			requireNoConsumerDetail(t, answer)
 		})
 	}
 }
 
-// In commit mode the consumers in git are compared at the save too: a git
-// consumer changed since the preparation answers the same code.
-func TestReplaceCredentialCommitSaveAnswersConsumersChanged(t *testing.T) {
-	base := map[string][]byte{
-		paymentsPath + "/remotemcpserver-gh.yaml": gitManifest(t, connector("gh", sharedSecret, "token")),
-		paymentsPath + "/kustomization.yaml":      []byte("resources:\n  - remotemcpserver-gh.yaml\n"),
+// requireNoConsumerDetail says an answer names no object, destination,
+// namespace, repository or value.
+func requireNoConsumerDetail(t *testing.T, answer string) {
+	t.Helper()
+	for _, detail := range []string{"elsewhere", "claude", "gh", sharedSecret, orgNS, mcRepo.Name, "rotated-value"} {
+		require.NotContains(t, answer, detail)
 	}
-	live := connector("gh", sharedSecret, "token")
-	live.SetLabels(fromGitLabels("payments"))
-	fixture, forge := commitFixture(t, base, live)
-	result := replaceCredential(t, fixture, map[string]any{"mode": "commit"})
-	confirmation := confirmOperation(t, fixture, result.CredentialOperation)
+}
+
+// In commit mode the consumers in git are compared at the save too: a git
+// consumer changed or added since the preparation answers the same code.
+func TestReplaceCredentialCommitSaveAnswersConsumersChanged(t *testing.T) {
 	elsewhere := connector("gh", sharedSecret, "token")
-	_ = unstructured.SetNestedField(elsewhere.Object, "https://elsewhere.example.com/mcp", "spec", "url")
-	require.NoError(t, forge.Commit(t.Context(), mcRepo, "main", "send it elsewhere", map[string][]byte{paymentsPath + "/remotemcpserver-gh.yaml": gitManifest(t, elsewhere)}))
-	status, answer, _ := operationHTTP(t, fixture, http.MethodPost, result.CredentialOperation, confirmation.Version, valuesBody(t, result, "rotated-value"), nil)
-	require.Equal(t, http.StatusConflict, status, answer)
-	require.Equal(t, "credential_consumers_changed", errorCode(t, answer))
-	require.NotContains(t, answer, "elsewhere")
-	require.Empty(t, forge.PullRequests())
+	require.NoError(t, unstructured.SetNestedField(elsewhere.Object, "https://elsewhere.example.com/mcp", "spec", "url"))
+	for name, change := range map[string]map[string][]byte{
+		"git sends it elsewhere":           {paymentsPath + "/remotemcpserver-gh.yaml": gitManifest(t, elsewhere)},
+		"git adds a consumer of the key":   {paymentsPath + "/modelconfig-claude.yaml": gitManifest(t, sharedModel("token"))},
+		"git adds a consumer of other key": {paymentsPath + "/modelconfig-claude.yaml": gitManifest(t, sharedModel("apiKey"))},
+	} {
+		t.Run(name, func(t *testing.T) {
+			base := map[string][]byte{
+				paymentsPath + "/remotemcpserver-gh.yaml": gitManifest(t, connector("gh", sharedSecret, "token")),
+				paymentsPath + "/kustomization.yaml":      []byte("resources:\n  - remotemcpserver-gh.yaml\n"),
+			}
+			live := connector("gh", sharedSecret, "token")
+			live.SetLabels(fromGitLabels("payments"))
+			fixture, forge := commitFixture(t, base, live)
+			result := replaceCredential(t, fixture, map[string]any{"mode": "commit"})
+			confirmation := confirmOperation(t, fixture, result.CredentialOperation)
+			require.NoError(t, forge.Commit(t.Context(), mcRepo, "main", "change a consumer", change))
+			status, answer, _ := operationHTTP(t, fixture, http.MethodPost, result.CredentialOperation, confirmation.Version, valuesBody(t, result, "rotated-value"), nil)
+			require.Equal(t, http.StatusConflict, status, answer)
+			require.Equal(t, "credential_consumers_changed", errorCode(t, answer))
+			requireNoConsumerDetail(t, answer)
+			require.Empty(t, forge.PullRequests())
+		})
+	}
 }

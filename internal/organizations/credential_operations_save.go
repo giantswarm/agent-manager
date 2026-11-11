@@ -120,6 +120,9 @@ func (s *Service) saveCredentialOperation(ctx context.Context, id, version strin
 		if operation.Result.Kind == KindCredential && !sameConsumers(references, operation.Consumers) {
 			return nil, errConsumersChanged(operation.Namespace.Name, credential.Secret)
 		}
+		// The preparation stored at least one consumer of the key and none of
+		// another key, so for a replacement the comparison above already
+		// answers both cases below; they stay as a defence.
 		if operation.Result.Kind == KindCredential && !slices.ContainsFunc(references, func(reference CredentialReference) bool { return reference.Key == credential.Key }) {
 			return nil, fmt.Errorf("%w: nothing in %s uses key %s of credential Secret %s any more, so there is no credential to replace", agents.ErrConflict, operation.Namespace.Name, credential.Key, credential.Secret)
 		}

@@ -131,8 +131,9 @@ func errConsumersChanged(ns, secret string) error {
 }
 
 // otherKey refuses a write of Secret holding only key that would drop the
-// key reference reads. The preparation refuses such a reference, so at a
-// save it is a consumer added since: it is marked as consumers that differ.
+// key reference reads. It is marked as consumers that differ, so a save (where
+// such a reference can only be a consumer added since) answers
+// ErrCredentialConsumersChanged; the preparation answers its text.
 func otherKey(reference CredentialReference, secret, key string) error {
 	return consumersDiffer{fmt.Errorf("%w: %s %s reads key %s of Secret %s, which a write of key %s would drop: the Secret is written whole, holding that one key", agents.ErrConflict, reference.Kind, reference.Name, reference.Key, secret, key)}
 }
