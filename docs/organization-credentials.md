@@ -13,7 +13,12 @@ ModelConfig, RemoteMCPServer or EgressPolicy of the namespace must read that key
 of the Secret, else it answers `not_found`. An object reading another key of the
 same Secret is refused with `409` naming that key: the Secret is written whole,
 holding the one key, so the other key would be lost. Its result has `kind`
-`credential` and `name` the Secret.
+`credential` and `name` the Secret; the credential's state is `missing` when the
+Secret does not exist yet, else `replace`. The save checks the consumers again:
+it answers `409` when nothing reads the key any more, and refuses a consumer
+written live in commit mode, or applied by Flux in apply mode, as the
+preparation does. A dry run asks admission about the Secret write, as the
+real call does.
 
 ## Client-owned UI
 

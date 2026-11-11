@@ -106,16 +106,27 @@ func (s *Service) saveCredentialOperation(ctx context.Context, id, version strin
 			return nil, invalidf("each credential needs one nonempty value")
 		}
 		seen[credential.Secret] = true
-		references, _, err := s.references(ctx, caller, operation.Namespace.Name, credential.Secret)
+		references, live, err := s.references(ctx, caller, operation.Namespace.Name, credential.Secret)
 		if err != nil {
 			return nil, err
+		}
+		if operation.Result.Kind == KindCredential && !slices.ContainsFunc(references, func(reference CredentialReference) bool { return reference.Key == credential.Key }) {
+			return nil, fmt.Errorf("%w: nothing in %s uses key %s of credential Secret %s any more, so there is no credential to replace", agents.ErrConflict, operation.Namespace.Name, credential.Key, credential.Secret)
 		}
 		for _, reference := range references {
 			if !writesFor(operation.Result, reference) {
 				return nil, fmt.Errorf("%w: another object references this Secret", agents.ErrConflict)
 			}
-			if operation.Result.Kind == KindCredential && reference.Key != credential.Key {
-				return nil, otherKey(reference, credential.Secret, credential.Key)
+			if operation.Result.Kind == KindCredential {
+				if reference.Key != credential.Key {
+					return nil, otherKey(reference, credential.Secret, credential.Key)
+				}
+				// The Secret lands where its consumers live, as at the
+				// preparation: a consumer written live since then is refused
+				// in commit mode, one Flux applies in apply mode.
+				if err := (&contentWriter{mode: operation.Mode}).owned(live[reference.Kind+"/"+reference.Name], reference.Kind); err != nil {
+					return nil, err
+				}
 			}
 			if operation.Mode == agents.ModeApply && reference.FromGit {
 				return nil, fmt.Errorf("%w: a credential whose consumer Flux applies must be changed in Git", agents.ErrGitOpsOwned)
