@@ -3,6 +3,7 @@ package organizations
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 	"slices"
@@ -107,16 +108,34 @@ func sameConsumers(a, b []CredentialReference) bool {
 	return reflect.DeepEqual(normal(a), normal(b))
 }
 
+// ErrCredentialConsumersChanged answers the save of a replacement whose
+// consumers, or where they send the value, are no longer the ones it was
+// prepared for and its confirmation shows, live or in git: the person starts
+// the replacement again. It names no object: the confirmation already
+// showed them.
+var ErrCredentialConsumersChanged = errors.New("the objects that use this credential, or where they send it, changed since the replacement was prepared; prepare it again")
+
+// consumersDiffer marks a refusal because the consumers of a replacement
+// differ from the prepared ones, keeping its text. At the preparation the
+// refusal says which; a save answers ErrCredentialConsumersChanged instead
+// (credentialSaveError).
+type consumersDiffer struct{ err error }
+
+func (e consumersDiffer) Error() string { return e.err.Error() }
+func (e consumersDiffer) Unwrap() error { return e.err }
+
 // errConsumersChanged refuses a save whose consumers differ from the ones the
 // replacement was prepared for: the person confirmed other destinations.
 func errConsumersChanged(ns, secret string) error {
-	return fmt.Errorf("%w: the objects in %s that use Secret %s, or where they send its value, changed since the preparation; prepare it again", agents.ErrConflict, ns, secret)
+	return consumersDiffer{fmt.Errorf("%w: the objects in %s that use Secret %s, or where they send its value, changed since the preparation; prepare it again", agents.ErrConflict, ns, secret)}
 }
 
 // otherKey refuses a write of Secret holding only key that would drop the
-// key reference reads.
+// key reference reads. It is marked as consumers that differ, so a save (where
+// such a reference can only be a consumer added since) answers
+// ErrCredentialConsumersChanged; the preparation answers its text.
 func otherKey(reference CredentialReference, secret, key string) error {
-	return fmt.Errorf("%w: %s %s reads key %s of Secret %s, which a write of key %s would drop: the Secret is written whole, holding that one key", agents.ErrConflict, reference.Kind, reference.Name, reference.Key, secret, key)
+	return consumersDiffer{fmt.Errorf("%w: %s %s reads key %s of Secret %s, which a write of key %s would drop: the Secret is written whole, holding that one key", agents.ErrConflict, reference.Kind, reference.Name, reference.Key, secret, key)}
 }
 
 // operationReferences lists, as the caller, every object of the operation's
