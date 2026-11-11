@@ -400,3 +400,26 @@ func TestReplaceCredentialCommitRefusesGitConsumersThatDifferFromLive(t *testing
 		})
 	}
 }
+
+// A replacement's confirmation shows the consumers it was prepared for, the
+// ones the save requires live, never a passing state: a URL changed before the
+// confirmation read and restored before the save is not what the person sees.
+func TestReplaceCredentialConfirmationShowsThePreparedConsumers(t *testing.T) {
+	fixture := newOrgFixture(t, connector("gh", sharedSecret, "token"))
+	seedSecret(t, fixture, sharedSecret, "token")
+	result := replaceCredential(t, fixture, nil)
+	setURL := func(url string) {
+		current := fixture.get(t, serverGVR, orgNS, "gh")
+		require.NoError(t, unstructured.SetNestedField(current.Object, url, "spec", "url"))
+		_, err := fixture.dyn.Resource(serverGVR).Namespace(orgNS).Update(t.Context(), current, metav1.UpdateOptions{})
+		require.NoError(t, err)
+	}
+	setURL("https://elsewhere.example.com/mcp")
+	confirmation := confirmOperation(t, fixture, result.CredentialOperation)
+	require.Equal(t, []organizations.CredentialReference{
+		{Kind: "RemoteMCPServer", Name: "gh", Key: "token", URL: "https://mcp.example.com/mcp?api_key=REDACTED"},
+	}, confirmation.References)
+	setURL("https://mcp.example.com/mcp?api_key=k")
+	status, answer, _ := operationHTTP(t, fixture, http.MethodPost, result.CredentialOperation, confirmation.Version, valuesBody(t, result, "rotated-value"), nil)
+	require.Equal(t, http.StatusOK, status, answer)
+}
