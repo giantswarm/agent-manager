@@ -39,6 +39,11 @@ func credentialSaveError(err error) error {
 	if errors.Is(err, ErrCredentialOperationChanged) {
 		return ErrCredentialOperationChanged
 	}
+	// The consumers changed since the preparation: a stable sentinel the
+	// client switches on, naming nothing the confirmation did not show.
+	if errors.As(err, new(consumersDiffer)) {
+		return ErrCredentialConsumersChanged
+	}
 	for _, sentinel := range []error{agents.ErrUnauthenticated, agents.ErrAuthRequired, agents.ErrForbidden, agents.ErrNotFound, agents.ErrConflict, agents.ErrInvalid, agents.ErrUnsupported, agents.ErrGitOpsOwned} {
 		if errors.Is(err, sentinel) {
 			return fmt.Errorf("%w: credential save was refused; refresh the operation before retrying", sentinel)
@@ -110,6 +115,11 @@ func (s *Service) saveCredentialOperation(ctx context.Context, id, version strin
 		if err != nil {
 			return nil, err
 		}
+		// Consumers that differ from the prepared ones come first, whatever
+		// else is wrong with them: the person must see them again.
+		if operation.Result.Kind == KindCredential && !sameConsumers(references, operation.Consumers) {
+			return nil, errConsumersChanged(operation.Namespace.Name, credential.Secret)
+		}
 		if operation.Result.Kind == KindCredential && !slices.ContainsFunc(references, func(reference CredentialReference) bool { return reference.Key == credential.Key }) {
 			return nil, fmt.Errorf("%w: nothing in %s uses key %s of credential Secret %s any more, so there is no credential to replace", agents.ErrConflict, operation.Namespace.Name, credential.Key, credential.Secret)
 		}
@@ -131,9 +141,6 @@ func (s *Service) saveCredentialOperation(ctx context.Context, id, version strin
 			if operation.Mode == agents.ModeApply && reference.FromGit {
 				return nil, fmt.Errorf("%w: a credential whose consumer Flux applies must be changed in Git", agents.ErrGitOpsOwned)
 			}
-		}
-		if operation.Result.Kind == KindCredential && !sameConsumers(references, operation.Consumers) {
-			return nil, errConsumersChanged(operation.Namespace.Name, credential.Secret)
 		}
 		if credential.Exists && !credential.Replace {
 			return nil, fmt.Errorf("%w: credential replacement requires explicit confirmation", agents.ErrConflict)

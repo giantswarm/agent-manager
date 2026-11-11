@@ -121,7 +121,7 @@ func (c *orgCommit) credentialSnapshot(ctx context.Context, operation *credentia
 	// What git applies after the merge receives the value: it must be what
 	// the person confirmed, the live consumers, until Flux catches up.
 	if operation.Result.Kind == KindCredential && !sameConsumers(gitConsumers, operation.Consumers) {
-		return nil, fmt.Errorf("%w: the objects in %s that use Secret %s, or where they send its value, differ from the live ones the person confirms: wait for Flux to apply git, then prepare it again", agents.ErrConflict, c.cfg.Objects.Repository, operation.Credentials[0].Secret)
+		return nil, consumersDiffer{fmt.Errorf("%w: the objects in %s that use Secret %s, or where they send its value, differ from the live ones the person confirms: wait for Flux to apply git, then prepare it again", agents.ErrConflict, c.cfg.Objects.Repository, operation.Credentials[0].Secret)}
 	}
 	for _, planned := range operation.Writes {
 		file := contentFile(directory, planned.Kind, planned.Name)

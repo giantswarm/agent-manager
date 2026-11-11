@@ -14,14 +14,19 @@ of the Secret, else it answers `not_found`. An object reading another key of the
 same Secret is refused with `409` naming that key: the Secret is written whole,
 holding the one key, so the other key would be lost. Its result has `kind`
 `credential` and `name` the Secret; the credential's state is `missing` when the
-Secret does not exist yet, else `replace`. The save checks the consumers again:
-it answers `409` when nothing reads the key any more, and refuses a consumer
-written live in commit mode, or applied by Flux in apply mode, as the
-preparation does. The operation keeps the objects that read the Secret and
-where they send the value, as prepared: its confirmation lists those, and
-the save answers `409` when the live ones differ. In commit mode the objects in git must be the same as the live
-ones, else it answers `409` until Flux applies git. A dry run asks admission
-about the Secret write, as the real call does.
+Secret does not exist yet, else `replace`. The operation keeps the objects that
+read the Secret and where they send the value, as prepared, and its
+confirmation lists those. At the preparation, in commit mode, the objects in
+git must be the same as the live ones, else it answers `409` until Flux applies
+git. The save checks the consumers again, live and, in commit mode, in git:
+when they or where they send the value differ from the prepared ones (one
+changed, was added, reads another key or is gone), it answers `409` with error
+code `credential_consumers_changed` and does not write the credential. The
+message names no object; the person starts the replacement again, and the
+tool call that prepares it uses a fresh `requestId`. The save also refuses a
+consumer written live in commit mode, or applied by Flux in apply mode, as the
+preparation does. A dry run asks admission about the Secret write, as the real
+call does.
 
 ## Client-owned UI
 
@@ -133,7 +138,8 @@ current organization permissions. Saves recheck consumers, Git destination,
 file hashes and encryption policy, then server-side dry-run all intended writes
 as the person. Stale operation versions return `412`, a save or cancellation
 without `If-Match` returns `428`, and changed resources or Git inputs return
-`409`. A consumer tool refuses a Secret another object names;
+`409`: code `credential_consumers_changed` for the consumers of a replacement,
+`conflict` otherwise. A consumer tool refuses a Secret another object names;
 `replace_organization_credential` lists every consumer and replaces a shared
 Secret for all of them, and refuses at preparation and at save an object that
 reads another key of it. Backend refusals are sanitized before

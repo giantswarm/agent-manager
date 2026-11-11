@@ -419,3 +419,76 @@ func TestReplaceCredentialConfirmationShowsThePreparedConsumers(t *testing.T) {
 	status, answer, _ := operationHTTP(t, fixture, http.MethodPost, result.CredentialOperation, confirmation.Version, valuesBody(t, result, "rotated-value"), nil)
 	require.Equal(t, http.StatusOK, status, answer)
 }
+
+// errorCode is the code of an error answer.
+func errorCode(t *testing.T, answer string) string {
+	t.Helper()
+	var body struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(answer), &body), answer)
+	return body.Error.Code
+}
+
+// A save whose consumers changed since the preparation answers its own code,
+// so a client can tell the person to start the replacement again; the answer
+// names no consumer and no destination.
+func TestReplaceCredentialSaveAnswersConsumersChanged(t *testing.T) {
+	for name, change := range map[string]func(t *testing.T, fixture *orgFixture){
+		"a consumer sends it elsewhere": func(t *testing.T, fixture *orgFixture) {
+			current := fixture.get(t, serverGVR, orgNS, "gh")
+			require.NoError(t, unstructured.SetNestedField(current.Object, "https://elsewhere.example.com/mcp", "spec", "url"))
+			_, err := fixture.dyn.Resource(serverGVR).Namespace(orgNS).Update(t.Context(), current, metav1.UpdateOptions{})
+			require.NoError(t, err)
+		},
+		"another consumer of the key": func(t *testing.T, fixture *orgFixture) {
+			_, err := fixture.dyn.Resource(mcGVR).Namespace(orgNS).Create(t.Context(), sharedModel("token"), metav1.CreateOptions{})
+			require.NoError(t, err)
+		},
+		"a consumer of another key": func(t *testing.T, fixture *orgFixture) {
+			_, err := fixture.dyn.Resource(mcGVR).Namespace(orgNS).Create(t.Context(), sharedModel("apiKey"), metav1.CreateOptions{})
+			require.NoError(t, err)
+		},
+		"no consumer any more": func(t *testing.T, fixture *orgFixture) {
+			require.NoError(t, fixture.dyn.Resource(serverGVR).Namespace(orgNS).Delete(t.Context(), "gh", metav1.DeleteOptions{}))
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			fixture := newOrgFixture(t, connector("gh", sharedSecret, "token"))
+			seedSecret(t, fixture, sharedSecret, "token")
+			result := replaceCredential(t, fixture, nil)
+			confirmation := confirmOperation(t, fixture, result.CredentialOperation)
+			change(t, fixture)
+			status, answer, _ := operationHTTP(t, fixture, http.MethodPost, result.CredentialOperation, confirmation.Version, valuesBody(t, result, "rotated-value"), nil)
+			require.Equal(t, http.StatusConflict, status, answer)
+			require.Equal(t, "credential_consumers_changed", errorCode(t, answer))
+			for _, detail := range []string{"elsewhere", "claude", "gh", orgNS, "rotated-value"} {
+				require.NotContains(t, answer, detail)
+			}
+		})
+	}
+}
+
+// In commit mode the consumers in git are compared at the save too: a git
+// consumer changed since the preparation answers the same code.
+func TestReplaceCredentialCommitSaveAnswersConsumersChanged(t *testing.T) {
+	base := map[string][]byte{
+		paymentsPath + "/remotemcpserver-gh.yaml": gitManifest(t, connector("gh", sharedSecret, "token")),
+		paymentsPath + "/kustomization.yaml":      []byte("resources:\n  - remotemcpserver-gh.yaml\n"),
+	}
+	live := connector("gh", sharedSecret, "token")
+	live.SetLabels(fromGitLabels("payments"))
+	fixture, forge := commitFixture(t, base, live)
+	result := replaceCredential(t, fixture, map[string]any{"mode": "commit"})
+	confirmation := confirmOperation(t, fixture, result.CredentialOperation)
+	elsewhere := connector("gh", sharedSecret, "token")
+	_ = unstructured.SetNestedField(elsewhere.Object, "https://elsewhere.example.com/mcp", "spec", "url")
+	require.NoError(t, forge.Commit(t.Context(), mcRepo, "main", "send it elsewhere", map[string][]byte{paymentsPath + "/remotemcpserver-gh.yaml": gitManifest(t, elsewhere)}))
+	status, answer, _ := operationHTTP(t, fixture, http.MethodPost, result.CredentialOperation, confirmation.Version, valuesBody(t, result, "rotated-value"), nil)
+	require.Equal(t, http.StatusConflict, status, answer)
+	require.Equal(t, "credential_consumers_changed", errorCode(t, answer))
+	require.NotContains(t, answer, "elsewhere")
+	require.Empty(t, forge.PullRequests())
+}
