@@ -3,14 +3,17 @@ package api
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	k8stesting "k8s.io/client-go/testing"
 	"sigs.k8s.io/yaml"
 
@@ -270,4 +273,65 @@ func TestCredentialConfirmationListsLiveReferences(t *testing.T) {
 			{Kind: "ModelConfig", Name: "claude", Key: "apiKey", Provider: "Anthropic"},
 		}, confirmation.References)
 	})
+}
+
+// A dry run asks admission about the Secret write, as the real call does: a
+// Secret only git may change is refused before any operation exists.
+func TestReplaceCredentialDryRunAsksAdmission(t *testing.T) {
+	fixture := newOrgFixture(t, connector("gh", sharedSecret, "token"))
+	seedSecret(t, fixture, sharedSecret, "token")
+	fixture.dryRuns.Refuse = func(object *unstructured.Unstructured) error {
+		if object.GetKind() == "Secret" {
+			return apierrors.NewForbidden(schema.GroupResource{Resource: "secrets"}, object.GetName(), errors.New("a Secret applied from an organization path in git is changed in git"))
+		}
+		return nil
+	}
+	text, failed := fixture.call(t, ToolReplaceOrganizationCredential, map[string]any{"namespace": orgNS, "secret": sharedSecret, "key": "token", "dryRun": true})
+	require.True(t, failed, text)
+	require.Contains(t, text, "changed in git")
+}
+
+// A save after every consumer of the key is gone is refused: there is no
+// credential left to replace, and the Secret stays as it was.
+func TestReplaceCredentialSaveRefusesWhenNothingUsesTheKeyAnyMore(t *testing.T) {
+	fixture := newOrgFixture(t, sharedModel("token"))
+	seedSecret(t, fixture, sharedSecret, "token")
+	result := replaceCredential(t, fixture, nil)
+	confirmation := confirmOperation(t, fixture, result.CredentialOperation)
+	require.NoError(t, fixture.dyn.Resource(mcGVR).Namespace(orgNS).Delete(t.Context(), "claude", metav1.DeleteOptions{}))
+	status, answer, _ := operationHTTP(t, fixture, http.MethodPost, result.CredentialOperation, confirmation.Version, valuesBody(t, result, "rotated-value"), nil)
+	require.Equal(t, http.StatusConflict, status, answer)
+	data, _, err := unstructured.NestedMap(fixture.get(t, secretGVR, orgNS, sharedSecret).Object, "data")
+	require.NoError(t, err)
+	require.Equal(t, map[string]any{"token": base64.StdEncoding.EncodeToString([]byte(liveValue))}, data)
+}
+
+// In commit mode a consumer written live after the preparation is refused at
+// the save, as the preparation refuses one: no pull request is opened.
+func TestReplaceCredentialCommitSaveRefusesALiveConsumerAddedSincePreparation(t *testing.T) {
+	liveModel := sharedModel("token")
+	liveModel.SetLabels(fromGitLabels("payments"))
+	fixture, forge := commitFixture(t, map[string][]byte{paymentsPath + "/modelconfig-claude.yaml": gitManifest(t, sharedModel("token"))}, liveModel)
+	result := replaceCredential(t, fixture, map[string]any{"mode": "commit"})
+	confirmation := confirmOperation(t, fixture, result.CredentialOperation)
+	_, err := fixture.dyn.Resource(serverGVR).Namespace(orgNS).Create(t.Context(), connector("gh", sharedSecret, "token"), metav1.CreateOptions{})
+	require.NoError(t, err)
+	status, answer, _ := operationHTTP(t, fixture, http.MethodPost, result.CredentialOperation, confirmation.Version, valuesBody(t, result, "rotated-value"), nil)
+	require.Equal(t, http.StatusConflict, status, answer)
+	require.Empty(t, forge.PullRequests())
+}
+
+// A Secret that does not exist yet is missing, not replaced: the person
+// enters its first value, and the save creates it.
+func TestReplaceCredentialOfAMissingSecretSaysMissing(t *testing.T) {
+	fixture := newOrgFixture(t, connector("gh", sharedSecret, "token"))
+	result := replaceCredential(t, fixture, nil)
+	require.Len(t, result.Credentials, 1)
+	require.Equal(t, organizations.CredentialMissing, result.Credentials[0].State)
+	confirmation := confirmOperation(t, fixture, result.CredentialOperation)
+	status, answer, _ := operationHTTP(t, fixture, http.MethodPost, result.CredentialOperation, confirmation.Version, valuesBody(t, result, "first-value"), nil)
+	require.Equal(t, http.StatusOK, status, answer)
+	data, _, err := unstructured.NestedMap(fixture.get(t, secretGVR, orgNS, sharedSecret).Object, "data")
+	require.NoError(t, err)
+	require.Equal(t, map[string]any{"token": base64.StdEncoding.EncodeToString([]byte("first-value"))}, data)
 }

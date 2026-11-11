@@ -273,6 +273,33 @@ func (s *Service) landResource(ctx context.Context, writer *contentWriter, write
 			}
 		}
 	}
+	seenSecrets := map[string]bool{}
+	for _, credential := range result.Credentials {
+		if credential.State != CredentialMissing && credential.State != CredentialReplace {
+			continue
+		}
+		if seenSecrets[credential.Secret] {
+			return invalidf("each credential Secret must contain one credential key")
+		}
+		seenSecrets[credential.Secret] = true
+		references, _, err := s.references(ctx, caller, writer.org.Name, credential.Secret)
+		if err != nil {
+			return err
+		}
+		for _, reference := range references {
+			if !writesFor(*result, reference) {
+				return fmt.Errorf("%w: another consumer references the credential Secret", agents.ErrConflict)
+			}
+		}
+		// Admission judges the replacement before the person enters a value,
+		// in a dry run too: it sees the stored Secret the caller may not read,
+		// and refuses one git applied in an apply-mode write.
+		if credential.exists && writer.mode == agents.ModeApply {
+			if _, err := do(ctx, caller.Dynamic(), credentialSecretWrite(writer.org.Name, credential.Secret, opUpdate, map[string]any{credential.Key: ""}), dryRunAll); err != nil {
+				return err
+			}
+		}
+	}
 	if result.DryRun {
 		return nil
 	}
@@ -294,31 +321,9 @@ func (s *Service) landResource(ctx context.Context, writer *contentWriter, write
 		object := unstructuredOf(planned.obj)
 		operation.Writes = append(operation.Writes, operationWrite{Resource: planned.gvr, Kind: planned.kind, Action: planned.op, Object: object.DeepCopy().Object, Name: planned.name, Version: object.GetResourceVersion()})
 	}
-	seenSecrets := map[string]bool{}
 	for _, credential := range result.Credentials {
 		if credential.State != CredentialMissing && credential.State != CredentialReplace {
 			continue
-		}
-		if seenSecrets[credential.Secret] {
-			return invalidf("each credential Secret must contain one credential key")
-		}
-		seenSecrets[credential.Secret] = true
-		references, _, err := s.references(ctx, caller, writer.org.Name, credential.Secret)
-		if err != nil {
-			return err
-		}
-		for _, reference := range references {
-			if !writesFor(*result, reference) {
-				return fmt.Errorf("%w: another consumer references the credential Secret", agents.ErrConflict)
-			}
-		}
-		// Admission judges the replacement before the person enters a value:
-		// it sees the stored Secret the caller may not read, and refuses one
-		// git applied in an apply-mode write.
-		if credential.exists && writer.mode == agents.ModeApply {
-			if _, err := do(ctx, caller.Dynamic(), credentialSecretWrite(writer.org.Name, credential.Secret, opUpdate, map[string]any{credential.Key: ""}), dryRunAll); err != nil {
-				return err
-			}
 		}
 		// A missing key of an existing Secret is written as a replacement:
 		// the Secret is written whole, holding that one key.

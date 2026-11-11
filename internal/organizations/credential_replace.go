@@ -68,7 +68,13 @@ func (s *Service) ReplaceCredential(ctx context.Context, req CredentialRequest) 
 	if err != nil {
 		return nil, err
 	}
-	credential := Credential{Secret: req.Secret, Key: req.Key, State: CredentialReplace, exists: exists}
+	// A Secret that does not exist is missing, not replaced: the person
+	// enters its first value.
+	state := CredentialReplace
+	if !exists {
+		state = CredentialMissing
+	}
+	credential := Credential{Secret: req.Secret, Key: req.Key, State: state, exists: exists}
 	credential.Next = s.next(credential, users...)
 	res := &ResourceResult{Namespace: org.Name, Kind: KindCredential, Name: req.Secret, DryRun: req.DryRun, RequestedBy: identity.Caller(ctx), Credentials: []Credential{credential}}
 	if err := s.landResource(ctx, w, nil, res, true, "credential-"+req.Secret, "chore(organizations): replace credential "+req.Secret); err != nil {
