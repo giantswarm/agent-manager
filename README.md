@@ -171,6 +171,10 @@ conditions.
 - `validate_agent` reports in `modelConfig` the model a create would write,
   and adds a `notes` entry when that ModelConfig is not `ResolvedRefs=True`
   (its key Secret missing, say). The create is not refused for it.
+- `--default-model-agent` (chart: `defaultAgentModel.agent`) names one Agent
+  of `--kagent-namespace` whose empty `modelConfig` is filled with the default,
+  checked every 30s, like a default StorageClass fills a PVC. Once set, by
+  anyone, it is never changed. Several marked: a warning, nothing.
 
 ## The Harness and plugins
 
@@ -279,6 +283,11 @@ ref's head) and changes nothing else on the release — the way to pick up new
 skill and plugin commits. `name`
 defaults to the last path segment (else the repository or image name) and
 must be unique per agent; `path` is relative without `..`.
+
+### Through skill-manager
+
+With `--skill-manager-url` (chart `skillManager.url`) every pin goes through
+skill-manager: see [docs/skill-manager.md](docs/skill-manager.md).
 
 ## Private skills
 
@@ -1092,7 +1101,7 @@ and to the GitHub API on 0.x → 1.x.
 the [`giantswarm/agent-platform`](https://github.com/giantswarm/agent-platform)
 meta chart sets for its `agent-manager` component: `kagent.namespace`,
 `harness.name`, `agentChart.*`, `muster.url`, `mcp.enabled`, `oauth.*`,
-`muster.mcpServer.*`, `skills.repositories`, and
+`muster.mcpServer.*`, `skillManager.url`, `skills.repositories`, and
 `flux.helmReleaseServiceAccount` (derived from `kagent.fluxServiceAccountName`).
 Optional, off by default: `muster.mcpServer.enabled` (renders an
 `mcpservers.muster.giantswarm.io` CR), `httpRoute.enabled`,

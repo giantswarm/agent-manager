@@ -29,11 +29,13 @@ the RemoteMCPServer and the HelmRelease. Readiness is the Agent's own
   copy is the offline fallback).
 - `muster.url` is the platform's muster MCP URL composed into every agent as
   the chart value `muster.url`; empty leaves the Generic chart's default.
-- `skills.repositories` are the GitHub repositories `list_skills` discovers
-  `SKILL.md` files in, reporting the head commit an agent pins;
-  `skills.github.tokenSecret` names a Secret with the token that resolves
-  branches and tags in private repositories (there is no per-agent skill
-  credential).
+- `skillManager.url` names skill-manager: skills and plugins are pinned
+  through it and `list_skills` proxies its catalogue, as the caller.
+- Without it (deprecated): `skills.repositories` are the GitHub repositories
+  `list_skills` discovers `SKILL.md` files in, reporting the head commit an
+  agent pins; `skills.github.tokenSecret` names a Secret with the token that
+  resolves branches and tags in private repositories (there is no per-agent
+  skill credential).
 - With `oauth.enabled` the service is an OAuth 2.1 resource server: every
   request carries the caller's identity, and with `oauth.downstream.enabled`
   every Kubernetes call is made as the caller (the ServiceAccount holds no

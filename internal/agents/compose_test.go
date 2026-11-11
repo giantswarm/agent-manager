@@ -288,10 +288,21 @@ func TestValidateSkills(t *testing.T) {
 	}
 }
 
+// pinSkillsWith pins list through r in process; a nil r pins without
+// lookups.
+func pinSkillsWith(ctx context.Context, r SourceResolver, list Skills, refresh bool) (Skills, error) {
+	var p SkillPinner
+	if r != nil {
+		p = InProcessPinner(r)
+	}
+	pinned, _, err := pinSources(ctx, p, list, nil, refresh)
+	return pinned, err
+}
+
 func TestPinSkillsResolvesEveryMutableReference(t *testing.T) {
 	ctx := context.Background()
 	p := &fakePinner{}
-	pinned, err := pinSkills(ctx, p, Skills{
+	pinned, err := pinSkillsWith(ctx, p, Skills{
 		{Git: &GitSkill{URL: skillsRepo}, Path: "nested/runbooks"},               // default branch
 		{Git: &GitSkill{URL: skillsRepo, Ref: "feature"}, Path: "a", Name: "fa"}, // a branch
 		{Git: &GitSkill{URL: skillsRepo, Ref: "v1.2.0"}},                         // a tag
@@ -313,7 +324,7 @@ func TestPinSkillsResolvesEveryMutableReference(t *testing.T) {
 	// refresh: every git skill goes to the head of its ref, the default
 	// branch unless the request names one; a commit given is replaced too.
 	p = &fakePinner{}
-	refreshed, err := pinSkills(ctx, p, Skills{
+	refreshed, err := pinSkillsWith(ctx, p, Skills{
 		{Name: "runbooks", Git: &GitSkill{URL: skillsRepo, Commit: tagHead}},
 		{Name: "fa", Git: &GitSkill{URL: skillsRepo, Ref: "feature"}},
 		{Name: "kubectl", OCI: kubectlRef + "@" + kubectlSum},
@@ -324,26 +335,26 @@ func TestPinSkillsResolvesEveryMutableReference(t *testing.T) {
 	assert.Equal(t, kubectlRef+"@"+kubectlSum, refreshed[2].OCI, "OCI skills are not touched by a refresh")
 
 	// ref and commit together are ambiguous.
-	_, err = pinSkills(ctx, p, Skills{{Git: &GitSkill{URL: skillsRepo, Ref: "main", Commit: mainHead}}}, false)
+	_, err = pinSkillsWith(ctx, p, Skills{{Git: &GitSkill{URL: skillsRepo, Ref: "main", Commit: mainHead}}}, false)
 	require.ErrorIs(t, err, ErrInvalid)
 	assert.Contains(t, err.Error(), "both ref")
 
 	// A private repository nobody can read: the error names it, nothing crashes.
-	_, err = pinSkills(ctx, p, Skills{{Git: &GitSkill{URL: "https://github.com/giantswarm/private-skills", Ref: "main"}}}, false)
+	_, err = pinSkillsWith(ctx, p, Skills{{Git: &GitSkill{URL: "https://github.com/giantswarm/private-skills", Ref: "main"}}}, false)
 	require.ErrorIs(t, err, ErrInvalid)
 	assert.Contains(t, err.Error(), "https://github.com/giantswarm/private-skills")
 	assert.Contains(t, err.Error(), "404")
-	_, err = pinSkills(ctx, p, Skills{{OCI: "ghcr.io/nobody/skill:1"}}, false)
+	_, err = pinSkillsWith(ctx, p, Skills{{OCI: "ghcr.io/nobody/skill:1"}}, false)
 	require.ErrorIs(t, err, ErrInvalid)
 	assert.Contains(t, err.Error(), "ghcr.io/nobody/skill:1")
 
 	// Without a resolver only pins pass.
-	_, err = pinSkills(ctx, nil, Skills{{Git: &GitSkill{URL: skillsRepo, Ref: "main"}}}, false)
+	_, err = pinSkillsWith(ctx, nil, Skills{{Git: &GitSkill{URL: skillsRepo, Ref: "main"}}}, false)
 	assert.ErrorIs(t, err, ErrInvalid)
-	ok, err := pinSkills(ctx, nil, Skills{{Git: &GitSkill{URL: skillsRepo, Commit: mainHead}}}, false)
+	ok, err := pinSkillsWith(ctx, nil, Skills{{Git: &GitSkill{URL: skillsRepo, Commit: mainHead}}}, false)
 	require.NoError(t, err)
 	assert.Equal(t, mainHead, ok[0].Git.Commit)
-	empty, err := pinSkills(ctx, nil, nil, true)
+	empty, err := pinSkillsWith(ctx, nil, nil, true)
 	require.NoError(t, err)
 	assert.Nil(t, empty)
 }

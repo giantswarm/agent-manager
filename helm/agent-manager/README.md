@@ -28,11 +28,13 @@ the RemoteMCPServer and the HelmRelease. Readiness is the Agent's own
   copy is the offline fallback).
 - `muster.url` is the platform's muster MCP URL composed into every agent as
   the chart value `muster.url`; empty leaves the Generic chart's default.
-- `skills.repositories` are the GitHub repositories `list_skills` discovers
-  `SKILL.md` files in, reporting the head commit an agent pins;
-  `skills.github.tokenSecret` names a Secret with the token that resolves
-  branches and tags in private repositories (there is no per-agent skill
-  credential).
+- `skillManager.url` names skill-manager: skills and plugins are pinned
+  through it and `list_skills` proxies its catalogue, as the caller.
+- Without it (deprecated): `skills.repositories` are the GitHub repositories
+  `list_skills` discovers `SKILL.md` files in, reporting the head commit an
+  agent pins; `skills.github.tokenSecret` names a Secret with the token that
+  resolves branches and tags in private repositories (there is no per-agent
+  skill credential).
 - With `oauth.enabled` the service is an OAuth 2.1 resource server: every
   request carries the caller's identity, and with `oauth.downstream.enabled`
   every Kubernetes call is made as the caller (the ServiceAccount holds no
@@ -85,6 +87,7 @@ meta chart (`components.agent-manager.enabled`), which sets `kagent.namespace`,
 | kagent.additionalNamespaces | list | `[]` | Additional namespaces agents may live in (multi-tenant installs). Each gets the same Role; requests naming any other namespace are refused. |
 | kagent.apiVersion | string | `"auto"` | api.kagent.dev API version for Agents, Harnesses, RemoteMCPServers and ModelConfigs; `auto` discovers the version serving `agents` (default v1alpha3). |
 | kagent.controllerTarget | string | `"grpc://agentgateway.agent-platform.svc.cluster.local:8080"` | The kagent controller's gRPC API through agentgateway, which `list_sessions`, `get_session`, `start_session` and `delete_session` call as the caller (SessionService and the A2A service, the caller's IdP token as the bearer): `grpc://host:port` (h2c, the in-cluster agentgateway Service) or `grpcs://host[:port]` (TLS). Rendered only with `oauth.enabled`, since the calls never run as the ServiceAccount; empty turns the session tools off (`get_info` capabilities.sessions). With `networkPolicy.enabled` the policy opens egress to it: the Service's namespace for an in-cluster host, every address otherwise. |
+| defaultAgentModel.agent | string | `""` | An Agent of `kagent.namespace` whose empty modelConfig is filled with the namespace's default model (the ModelConfig annotated `agent-platform.giantswarm.io/is-default-model-config: "true"`); once set, by anyone, it is never changed. None marked: nothing; several: a warning, nothing. Checked at start and every 30s as the ServiceAccount, with a Role that may get and patch that Agent and list the ModelConfigs. Empty: off. |
 | toolchains.repository | string | `""` | The OCI repository the installation's toolchains are published under: toolchain `<name>` is the image `<repository>/<name>`, its versions its tags (`latest` the newest), read anonymously unless `registryConfig` has credentials for its host. A version the toolchain-manager's `list_toolchains` lists (`muster.toolchainsToolsPrefix`) is read from the image of the source that offers it, another registry too. `start_session` mounts the toolchains it names, else the agent's `defaultToolchains`, into the session at their digests, refuses one whose `io.giantswarm.toolchain.harnesses` label does not list the agent's Harness runtime, and gives the session the origins its `io.giantswarm.toolchain.egress` label declares. The kagent controller must admit the repository for session tool images (`KAGENT_SESSION_TOOL_IMAGE_REPOSITORIES`): set both together, on a kagent line that mounts them (`gsoci.azurecr.io/giantswarm/agent-toolchains`). Rendered with `kagent.controllerTarget`. Empty (the default) refuses toolchains and `get_info` reports the capability `toolchains` false. |
 | toolchains.registryConfig.secretName | string | `""` | A `kubernetes.io/dockerconfigjson` Secret in the release namespace: agent-manager reads the toolchains of a registry host its `.dockerconfigjson` has credentials for with them, a private source's (`--toolchain-registry-config`). The kagent controller pulls the images with its own pull secret. Optional: until the Secret exists, and when empty (the default), every registry is read anonymously. Read when the pod starts. Rendered with `repository`. |
 | harness.name | string | `"kagent"` | Name of the platform Harness an agent runs on unless `create_agent` names another (the connectivity chart renders it): composed as the chart value `agent.harness`, the Agent's `spec.harnessRef.name`. |
@@ -98,7 +101,8 @@ meta chart (`components.agent-manager.enabled`), which sets `kagent.namespace`,
 | flux.helmReleaseServiceAccount | string | `""` | HelmRelease.spec.serviceAccountName, required by a Flux multi-tenancy admission policy in tenant namespaces; empty omits it. |
 | flux.helmReleaseApiVersion | string | `"auto"` | helm.toolkit.fluxcd.io API version composed into HelmReleases; `auto` discovers it. |
 | flux.ociRepositoryApiVersion | string | `"auto"` | source.toolkit.fluxcd.io API version composed into OCIRepositories; `auto` discovers it. |
-| skills.repositories | list | `["https://github.com/giantswarm/agent-skills"]` | GitHub repositories whose SKILL.md files list_skills offers (the same list the portal's create flow reads), each with the head commit an agent pins. Empty turns the skills capability off; skills given by URL are still resolved through the GitHub API. |
+| skillManager.url | string | `""` | skill-manager's base URL (`http://skill-manager.agent-platform.svc:8080`): skills and plugins are pinned through it, `list_skills` proxies its catalogue (deprecated), as the caller; `skills.repositories` is unused. Empty: in-process discovery and pinning (deprecated). An outside host with one or two labels is written with a trailing dot (`example.com.`): otherwise the egress rule reads it as `<service>.<namespace>`. |
+| skills.repositories | list | `["https://github.com/giantswarm/agent-skills"]` | GitHub repositories whose SKILL.md files list_skills offers (the same list the portal's create flow reads), each with the head commit an agent pins. Empty turns the skills capability off; skills given by URL are still resolved through the GitHub API. Unused when `skillManager.url` is set. Deprecated: skill-manager's sources replace it. |
 | skills.github.apiUrl | string | `"https://api.github.com"` | GitHub API base URL. |
 | skills.github.app.secretName | string | `""` | Existing Secret in the release namespace of the read-only skills GitHub App, with the keys `app-id`, `installation-id` and `private-key` (PEM): skills are discovered and pinned with the App's short-lived installation tokens, at the App's rate limit, and a private repository is offered to and usable by only the people who can read it themselves (their GitHub login, verified through the `github` pin below; without the pin private repositories are refused). Mutually exclusive with `tokenSecret`. |
 | skills.github.tokenSecret.name | string | `""` | Existing Secret in the release namespace with a static GitHub token for skill discovery and pinning. Prefer `app`. Empty (and no `app`): anonymous, public repositories only. |
@@ -175,6 +179,7 @@ meta chart (`components.agent-manager.enabled`), which sets `kagent.namespace`,
 | tenants.commit.contentPrefix | string | `"agent-platform/organizations"` | The directory of the organizations' content paths, `<contentPrefix>/<parent>/<name>`: agent-platform-operator's `commitMode.path` without `{parent}/{name}`. |
 | credentials.uiURL | string | `""` | HTTPS RFC 6570 URI template with one {operation} expression. The UI owns its routes; agent-manager supplies only a non-authorizing operation ID. |
 | credentials.operationsNamespace | string | `""` | Dedicated namespace for nonsecret operation metadata. Empty derives a namespace from the release. Do not share it with application config. |
+| installation | string | `""` | The installation's name in the Dev Portal, reported by `get_info` as `installation`: a portal agent id is `<installation>/<namespace>/<name>`. Empty: not reported. |
 | podAnnotations | object | `{}` | Annotations on the pod. |
 | podLabels | object | `{}` | Labels on the pod. |
 | podSecurityContext | object | `{"fsGroup":1000,"runAsGroup":1000,"runAsNonRoot":true,"runAsUser":1000,"seccompProfile":{"type":"RuntimeDefault"}}` | Pod security context. |

@@ -39,7 +39,7 @@ var (
 func (c *cluster) runnerV2(t *testing.T, opts Options, latest string) *Runner {
 	t.Helper()
 	ch := fakeChart{latest: latest}
-	p := pinner{git: skills.NewResolver(fakeGitHub(t).URL, skills.StaticToken(""), nil, nil)}
+	p := agents.InProcessPinner(pinner{git: skills.NewResolver(fakeGitHub(t).URL, skills.StaticToken(""), nil, nil)})
 	svc := agents.New(kube.NewServiceAccountProvider(c.client), ch, nil, p, agents.Config{
 		DefaultNamespace: opts.Namespaces[0], ManagedNamespaces: opts.Namespaces, Compose: agents.ComposeConfig{HarnessName: kagentNS}, KagentAPIVersion: "v1alpha3",
 	}, nil)

@@ -391,7 +391,7 @@ Before any write, dry run too, refuses when you may not bind them or your right 
 ```text
 Delete an agent: its HelmRelease, which removes the Agent and its muster RemoteMCPServer.
 
-The chart's shared OCIRepository goes too when nothing else in the namespace uses it; the answer says why it was kept. A bare Agent or a suspended release is refused unless force is true; a GitOps-owned one needs mode commit.
+The chart's shared OCIRepository goes too when nothing else in the namespace uses it; the answer says why it was kept. A bare Agent or a suspended release is refused unless force is true; a GitOps-owned one needs mode commit; a platform one (managed: platform) is refused.
 ```
 
 ```json
@@ -569,6 +569,8 @@ Another person's session is refused as not_found. While another operation on it 
 
 ```text
 Get one agent: its HelmRelease values, Harness, pinned skills and plugins, toolset and Agent status.
+
+default: true is the installation's default agent, to preselect when starting a session.
 ```
 
 ```json
@@ -638,7 +640,7 @@ From the Agent's conditions and warnings, the HelmRelease's conditions and histo
 ```text
 Where you can create agents and what this installation offers: managed namespaces, chart, Harness, capabilities.
 
-Call it first: capabilities says whether this installation offers mode commit, the session tools and workload clusters. Also the service version, the served API versions, the muster URL and Flux settings composed into every agent, and how writes are authenticated.
+Call it first: capabilities says whether this installation offers mode commit, the session tools and workload clusters; defaultAgent (namespace/name) is the agent to preselect when starting a session; a portal agent id is <installation>/<namespace>/<name>. Also the service version, the served API versions, the muster URL and Flux settings composed into every agent, and how writes are authenticated.
 ```
 
 ```json
@@ -769,7 +771,7 @@ detail: transcript (default) clips tool arguments and gives tool results as stub
 ```text
 List the agents of a namespace, one summary each: model, Harness, toolset, readiness and how it is managed.
 
-managed: helmrelease is writable here, gitops changes only with mode commit, none is a bare Agent object. implicitFullAccess: true means the agent sees every gateway tool and still needs a toolset (update_agent). toolsetBound: true means the toolset is bound to each session at its start, for every process of its sandbox; otherwise the agent's runtime declares it. An agent's prompt, skills, plugins and values come from get_agent.
+managed: helmrelease is writable here, gitops only with mode commit, platform ships with the Agent Platform, read-only; none is a bare Agent. default: true is the installation's default agent: preselect it when starting a session. implicitFullAccess: true: the agent sees every gateway tool and still needs a toolset (update_agent). toolsetBound: true: the toolset is bound to each session at its start; else the runtime declares it. Prompt, skills, plugins and values come from get_agent.
 ```
 
 ```json
@@ -968,16 +970,16 @@ Read through agentgateway as you. allCreators includes every person's sessions, 
 ## `list_skills`
 
 ```text
-List the skills agents can mount, from the configured skill repositories, with each repository's head commit.
+Deprecated, use skill-manager's list_skills: the skills agents can mount, per repository with its head commit.
 
-Per repository: the ref read, the commit it resolved to (what a skills entry pins) and each SKILL.md's name, description, path and tags (metadata.tags). Cached briefly; refresh re-reads GitHub.
+Per repository: the ref read, the commit it resolved to (what a skills entry pins) and each SKILL.md's name, description, path and tags (metadata.tags). Cached briefly; refresh re-reads GitHub. With skill-manager (get_info skillManager) this is its list_skills, as you.
 ```
 
 ```json
 {
   "properties": {
     "ref": {
-      "description": "Git ref to read; default: the default branch (the ref refreshSkills follows)",
+      "description": "Git ref to read; default: the default branch (the ref refreshSkills follows). Refused with skill-manager",
       "type": "string"
     },
     "refresh": {
@@ -1413,7 +1415,7 @@ Read as you in every managed namespace, every person's sessions where the contro
 ```text
 Change an agent: only the fields passed change; a list, labels or annotations replaces the whole value.
 
-Lists are skills, plugins, egress and toolset. "" clears a text field back to the chart default; gitAuthSecretName "" goes back to the installation's. Presets: preset:read-only, preset:none, preset:infrastructure, preset:agent-platform, preset:full. refreshSkills re-pins every git skill and git plugin. harness re-runs the create-time checks on the new Harness. Returns the values before and after. A suspended release is refused unless force is true; a GitOps-owned one needs mode commit.
+Lists are skills, plugins, egress and toolset. "" clears a text field back to the chart default; gitAuthSecretName "" goes back to the installation's. Presets: preset:read-only, preset:none, preset:infrastructure, preset:agent-platform, preset:full. refreshSkills re-pins every git skill and git plugin. harness re-runs the create-time checks on the new Harness. Returns the values before and after. A suspended release needs force; a GitOps-owned one mode commit; a platform one is refused.
 ```
 
 ```json
@@ -1569,7 +1571,7 @@ Lists are skills, plugins, egress and toolset. "" clears a text field back to th
       "type": "array"
     },
     "refreshSkills": {
-      "description": "Re-pin every git skill and git plugin to its default-branch head and change nothing else on the release (default false).",
+      "description": "Re-pin every git skill and git plugin to its default-branch head (with skill-manager: its source's ref); nothing else changes (default false).",
       "type": "boolean"
     },
     "repository": {
@@ -1847,7 +1849,7 @@ Checks the name, modelConfig (omitted: the default), egressPolicyRefs, harness a
       "type": "array"
     },
     "refreshSkills": {
-      "description": "Re-pin every git skill and git plugin to its default-branch head and change nothing else on the release (default false).",
+      "description": "Re-pin every git skill and git plugin to its default-branch head (with skill-manager: its source's ref); nothing else changes (default false).",
       "type": "boolean"
     },
     "skills": {

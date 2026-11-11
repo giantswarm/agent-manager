@@ -18,6 +18,11 @@ import (
 // Source says how the caller was authenticated.
 type Source string
 
+// ForwardedIdentityHeader is where muster puts the person's IdP ID token on
+// every call to a registration with auth.forwardIdentity; agent-manager
+// forwards it to skill-manager beside the person's GitHub token.
+const ForwardedIdentityHeader = "X-Muster-Id-Token"
+
 const (
 	// SourceSSO is an IdP id_token forwarded by a trusted aggregator (muster)
 	// or sent by the portal through the gateway, validated against the IdP's

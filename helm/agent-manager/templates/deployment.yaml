@@ -98,6 +98,12 @@ spec:
             - --github-token-exchange-ca-file=/etc/agent-manager/github-token-exchange-ca/ca.crt
             {{- end }}
             {{- end }}
+            {{- with .Values.installation }}
+            - {{ printf "--installation=%s" . | quote }}
+            {{- end }}
+            {{- with .Values.skillManager.url }}
+            - --skill-manager-url={{ . }}
+            {{- end }}
             {{- with .Values.skills.repositories }}
             - --skills-repositories={{ join "," . }}
             {{- end }}
@@ -111,6 +117,9 @@ spec:
             {{- end }}
             {{- if .Values.skills.mintGitAuthSecret }}
             - --skills-git-auth-mint=true
+            {{- end }}
+            {{- with .Values.defaultAgentModel.agent }}
+            - --default-model-agent={{ . }}
             {{- end }}
             {{- if .Values.skills.github.app.secretName }}
             {{- if .Values.skills.github.tokenSecret.name }}
