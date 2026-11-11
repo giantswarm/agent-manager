@@ -116,6 +116,10 @@ type credentialOperation struct {
 	WrittenFiles    map[string]string     `json:"writtenFiles,omitempty"`
 	GitTarget       *CredentialGitTarget  `json:"gitTarget,omitempty"`
 	AppliedVersions map[string]string     `json:"appliedVersions,omitempty"`
+	// Consumers are, for a replace_organization_credential operation, the
+	// objects that read its Secret and where they send the value, as
+	// prepared.
+	Consumers []CredentialReference `json:"consumers,omitempty"`
 }
 
 type CredentialGitTarget struct {
@@ -274,6 +278,7 @@ func (s *Service) landResource(ctx context.Context, writer *contentWriter, write
 		}
 	}
 	seenSecrets := map[string]bool{}
+	var consumers []CredentialReference
 	for _, credential := range result.Credentials {
 		if credential.State != CredentialMissing && credential.State != CredentialReplace {
 			continue
@@ -286,6 +291,7 @@ func (s *Service) landResource(ctx context.Context, writer *contentWriter, write
 		if err != nil {
 			return err
 		}
+		consumers = append(consumers, references...)
 		for _, reference := range references {
 			if !writesFor(*result, reference) {
 				return fmt.Errorf("%w: another consumer references the credential Secret", agents.ErrConflict)
@@ -328,6 +334,12 @@ func (s *Service) landResource(ctx context.Context, writer *contentWriter, write
 		// A missing key of an existing Secret is written as a replacement:
 		// the Secret is written whole, holding that one key.
 		operation.Credentials = append(operation.Credentials, operationCredential{Secret: credential.Secret, Key: credential.Key, Replace: credential.State == CredentialReplace || credential.exists, Exists: credential.exists})
+	}
+	// A replacement writes no consumer, so no consumer version guards it: the
+	// operation keeps the consumers and where they send the value, and the
+	// save and the Git snapshot refuse any other.
+	if result.Kind == KindCredential {
+		operation.Consumers = consumers
 	}
 	if writer.commit != nil {
 		operation.GitTarget = &CredentialGitTarget{Repository: writer.commit.cfg.Objects.Repository.String(), Base: writer.commit.cfg.Objects.Branch, Directory: writer.dir.Path()}

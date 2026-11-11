@@ -132,6 +132,9 @@ func (s *Service) saveCredentialOperation(ctx context.Context, id, version strin
 				return nil, fmt.Errorf("%w: a credential whose consumer Flux applies must be changed in Git", agents.ErrGitOpsOwned)
 			}
 		}
+		if operation.Result.Kind == KindCredential && !sameConsumers(references, operation.Consumers) {
+			return nil, errConsumersChanged(operation.Namespace.Name, credential.Secret)
+		}
 		if credential.Exists && !credential.Replace {
 			return nil, fmt.Errorf("%w: credential replacement requires explicit confirmation", agents.ErrConflict)
 		}

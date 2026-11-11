@@ -17,8 +17,11 @@ holding the one key, so the other key would be lost. Its result has `kind`
 Secret does not exist yet, else `replace`. The save checks the consumers again:
 it answers `409` when nothing reads the key any more, and refuses a consumer
 written live in commit mode, or applied by Flux in apply mode, as the
-preparation does. A dry run asks admission about the Secret write, as the
-real call does.
+preparation does. The operation keeps the objects that read the Secret and
+where they send the value, as prepared: the save answers `409` when they
+changed, and in commit mode the objects in git must be the same as the live
+ones, else it answers `409` until Flux applies git. A dry run asks admission
+about the Secret write, as the real call does.
 
 ## Client-owned UI
 

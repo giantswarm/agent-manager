@@ -339,3 +339,64 @@ func TestReplaceCredentialOfAMissingSecretSaysMissing(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, map[string]any{"token": base64.StdEncoding.EncodeToString([]byte("first-value"))}, data)
 }
+
+// The save refuses consumers that differ from the ones the replacement was
+// prepared for: the person confirmed where the value goes.
+func TestReplaceCredentialSaveRefusesChangedConsumers(t *testing.T) {
+	for name, change := range map[string]func(t *testing.T, fixture *orgFixture){
+		"a consumer sends it elsewhere": func(t *testing.T, fixture *orgFixture) {
+			current := fixture.get(t, serverGVR, orgNS, "gh")
+			require.NoError(t, unstructured.SetNestedField(current.Object, "https://elsewhere.example.com/mcp", "spec", "url"))
+			_, err := fixture.dyn.Resource(serverGVR).Namespace(orgNS).Update(t.Context(), current, metav1.UpdateOptions{})
+			require.NoError(t, err)
+		},
+		"another consumer of the key": func(t *testing.T, fixture *orgFixture) {
+			_, err := fixture.dyn.Resource(mcGVR).Namespace(orgNS).Create(t.Context(), sharedModel("token"), metav1.CreateOptions{})
+			require.NoError(t, err)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			fixture := newOrgFixture(t, connector("gh", sharedSecret, "token"))
+			seedSecret(t, fixture, sharedSecret, "token")
+			result := replaceCredential(t, fixture, nil)
+			confirmation := confirmOperation(t, fixture, result.CredentialOperation)
+			change(t, fixture)
+			status, answer, _ := operationHTTP(t, fixture, http.MethodPost, result.CredentialOperation, confirmation.Version, valuesBody(t, result, "rotated-value"), nil)
+			require.Equal(t, http.StatusConflict, status, answer)
+			data, _, err := unstructured.NestedMap(fixture.get(t, secretGVR, orgNS, sharedSecret).Object, "data")
+			require.NoError(t, err)
+			require.Equal(t, map[string]any{"token": base64.StdEncoding.EncodeToString([]byte(liveValue))}, data)
+		})
+	}
+}
+
+// In commit mode what git applies after the merge receives the value, so git
+// must name the consumers the person confirms, the live ones: a git consumer
+// that sends the value elsewhere, or one not applied yet, is refused.
+func TestReplaceCredentialCommitRefusesGitConsumersThatDifferFromLive(t *testing.T) {
+	kustomization := []byte("resources:\n  - remotemcpserver-gh.yaml\n  - modelconfig-claude.yaml\n")
+	elsewhere := connector("gh", sharedSecret, "token")
+	_ = unstructured.SetNestedField(elsewhere.Object, "https://elsewhere.example.com/mcp", "spec", "url")
+	for name, git := range map[string]map[string][]byte{
+		"git sends it elsewhere": {
+			paymentsPath + "/remotemcpserver-gh.yaml": gitManifest(t, elsewhere),
+			paymentsPath + "/kustomization.yaml":      kustomization,
+		},
+		"a git consumer not applied yet": {
+			paymentsPath + "/remotemcpserver-gh.yaml": gitManifest(t, connector("gh", sharedSecret, "token")),
+			paymentsPath + "/modelconfig-claude.yaml": gitManifest(t, sharedModel("token")),
+			paymentsPath + "/kustomization.yaml":      kustomization,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			live := connector("gh", sharedSecret, "token")
+			live.SetLabels(fromGitLabels("payments"))
+			fixture, forge := commitFixture(t, git, live)
+			text, failed := fixture.call(t, ToolReplaceOrganizationCredential, map[string]any{"namespace": orgNS, "secret": sharedSecret, "key": "token", "mode": "commit"})
+			require.True(t, failed, text)
+			require.True(t, strings.HasPrefix(text, "conflict:"), text)
+			require.Contains(t, text, "differ from the live ones")
+			require.Empty(t, forge.PullRequests())
+		})
+	}
+}

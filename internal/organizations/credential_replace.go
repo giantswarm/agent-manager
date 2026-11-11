@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"reflect"
 	"slices"
 
 	"github.com/giantswarm/agent-manager/internal/agents"
@@ -81,6 +82,35 @@ func (s *Service) ReplaceCredential(ctx context.Context, req CredentialRequest) 
 		return nil, err
 	}
 	return res, nil
+}
+
+// sameConsumers says whether two lists name the same objects reading the same
+// keys and sending the value to the same places. Where an object comes from
+// (FromGit) is left out: the ownership checks judge it.
+func sameConsumers(a, b []CredentialReference) bool {
+	normal := func(references []CredentialReference) []CredentialReference {
+		out := make([]CredentialReference, 0, len(references))
+		for _, reference := range references {
+			reference.FromGit = false
+			reference.Origins = slices.Clone(reference.Origins)
+			slices.Sort(reference.Origins)
+			if len(reference.Origins) == 0 {
+				reference.Origins = nil
+			}
+			out = append(out, reference)
+		}
+		slices.SortFunc(out, func(x, y CredentialReference) int {
+			return cmp.Or(cmp.Compare(x.Kind, y.Kind), cmp.Compare(x.Name, y.Name), cmp.Compare(x.Key, y.Key))
+		})
+		return out
+	}
+	return reflect.DeepEqual(normal(a), normal(b))
+}
+
+// errConsumersChanged refuses a save whose consumers differ from the ones the
+// replacement was prepared for: the person confirmed other destinations.
+func errConsumersChanged(ns, secret string) error {
+	return fmt.Errorf("%w: the objects in %s that use Secret %s, or where they send its value, changed since the preparation; prepare it again", agents.ErrConflict, ns, secret)
 }
 
 // otherKey refuses a write of Secret holding only key that would drop the
