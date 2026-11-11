@@ -1578,6 +1578,45 @@ func TestCreateRefusesANameAnotherReleaseRenders(t *testing.T) {
 	require.NoError(t, err)
 }
 
+// The platform's agent names are taken in every namespace: a create of
+// default-agent in an organization namespace is refused, by the dry run too,
+// whether the platform's release or only its Agent can be read.
+func TestCreateRefusesThePlatformsAgentNameElsewhere(t *testing.T) {
+	ctx := t.Context()
+	platform := helmRelease("agent-platform", "default-agent", nil, false, map[string]any{PlatformManagedByLabel: PlatformManagedByValue})
+	_ = unstructured.SetNestedField(platform.Object, "kagent", "spec", "targetNamespace")
+	_ = unstructured.SetNestedField(platform.Object, "default-agent", "spec", "releaseName")
+	f := newFixture(t, []runtime.Object{modelConfig("org-acme", "default-model-config", "Anthropic", "claude-sonnet-4-6"), harness("org-acme", "kagent", "kagent"), ociRepository("org-acme", "2.x"), platform})
+	withTenants(f, &fakeTenants{namespaces: []string{"org-acme"}})
+	spec := Spec{Location: In("org-acme"), Name: "default-agent", ModelConfig: "default-model-config", Toolset: []string{"preset:read-only"}}
+	want := `the name "default-agent" is taken by the Agent Platform's agent kagent/default-agent; pick another name`
+
+	_, err := f.svc.Create(ctx, spec)
+	require.ErrorIs(t, err, ErrConflict)
+	assert.Contains(t, err.Error(), want)
+
+	// The caller may not list releases across namespaces; the Agent tells.
+	mustCreate(t, f, agentGVR, labelledAgent("kagent", "default-agent", platformDefault))
+	f.dyn.PrependReactor("list", "helmreleases", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		if a.GetNamespace() == "" {
+			return true, nil, apierrors.NewForbidden(hrGVR.GroupResource(), "", errors.New("no cluster-wide list"))
+		}
+		return false, nil, nil
+	})
+	_, err = f.svc.Create(ctx, spec)
+	require.ErrorIs(t, err, ErrConflict)
+	assert.Contains(t, err.Error(), want)
+
+	res, err := f.svc.ValidateCreate(ctx, spec)
+	require.NoError(t, err)
+	assert.False(t, res.Valid)
+	assert.Contains(t, res.Errors, want)
+
+	spec.Name = "helper"
+	_, err = f.svc.Create(ctx, spec)
+	require.NoError(t, err)
+}
+
 func TestRenderedAgent(t *testing.T) {
 	named := helmRelease("kagent", "platform", map[string]any{"agent": map[string]any{"name": "default-agent"}}, true, nil)
 	plain := helmRelease("kagent", "sre", nil, true, nil)

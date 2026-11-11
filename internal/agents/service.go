@@ -1176,7 +1176,8 @@ func (s *Service) apiserverUser(ctx context.Context, st *site) string {
 
 // requireFreeName fails when a HelmRelease of that name exists, or an Agent
 // of that name exists or a HelmRelease renders one, whatever its name: two
-// releases rendering one Agent overwrite each other.
+// releases rendering one Agent overwrite each other. A name the platform
+// ships an agent under (default-agent) is taken in every namespace.
 func (s *Service) requireFreeName(ctx context.Context, st *site, name string) error {
 	if name == "" {
 		return nil
@@ -1210,6 +1211,38 @@ func (s *Service) requireFreeName(ctx context.Context, st *site, name string) er
 		here := secret == "" && !st.loc.IsSet() || st.loc.IsSet() && secret == st.loc.KubeconfigSecret() && hr.GetNamespace() == st.fluxNS
 		if here && ns == st.ns() && agent == name {
 			return conflictf("Agent %s is rendered by HelmRelease %s/%s; pick another name", st.describe(name), hr.GetNamespace(), hr.GetName())
+		}
+		if agent == name && PlatformOwnedRelease(hr) {
+			return platformNameTaken(name, ns)
+		}
+	}
+	return s.requireNotPlatformName(ctx, st, name)
+}
+
+// platformNameTaken refuses a name the platform ships an agent under.
+func platformNameTaken(name, ns string) error {
+	return conflictf("the name %q is taken by the Agent Platform's agent %s/%s; pick another name", name, ns, name)
+}
+
+// requireNotPlatformName fails when an Agent the platform ships has that
+// name in any namespace of the installation: the platform's agents come
+// first, and a namesake elsewhere reads as theirs. It lists the labelled
+// Agents once across all namespaces, else (refused) once per managed one.
+func (s *Service) requireNotPlatformName(ctx context.Context, st *site, name string) error {
+	selector := metav1.ListOptions{LabelSelector: PlatformManagedByLabel + "=" + PlatformManagedByValue}
+	var found []unstructured.Unstructured
+	if list, err := st.flux.Resource(s.agentGVR()).List(ctx, selector); err == nil {
+		found = list.Items
+	} else {
+		for _, ns := range s.Managed(ctx) {
+			if list, err := st.flux.Resource(s.agentGVR()).Namespace(ns).List(ctx, selector); err == nil {
+				found = append(found, list.Items...)
+			}
+		}
+	}
+	for _, obj := range found {
+		if obj.GetName() == name {
+			return platformNameTaken(name, obj.GetNamespace())
 		}
 	}
 	return nil
