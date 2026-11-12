@@ -203,11 +203,11 @@ require (
 	go.opentelemetry.io/proto/otlp v1.11.1 // indirect
 	go.yaml.in/yaml/v2 v2.4.4 // indirect
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
-	golang.org/x/crypto v0.58.0 // indirect
+	golang.org/x/crypto v0.59.0 // indirect
 	golang.org/x/net v0.62.0 // indirect
 	golang.org/x/oauth2 v0.38.0 // indirect
-	golang.org/x/sys v0.49.0 // indirect
-	golang.org/x/term v0.47.0 // indirect
+	golang.org/x/sys v0.50.0 // indirect
+	golang.org/x/term v0.48.0 // indirect
 	golang.org/x/time v0.16.0 // indirect
 	google.golang.org/api v0.289.0 // indirect
 	google.golang.org/genproto v0.0.0-20260720171339-e059f2f05d78 // indirect
@@ -232,4 +232,4 @@ replace golang.org/x/mod => golang.org/x/mod v0.43.0
 
 // Same for golang.org/x/crypto < v0.56.0 (CVE-2026-56854, CVE-2026-78662; ssh source-address
 // permissions): pulled in through the Kubernetes client, never imported here.
-replace golang.org/x/crypto => golang.org/x/crypto v0.58.0
+replace golang.org/x/crypto => golang.org/x/crypto v0.59.0
