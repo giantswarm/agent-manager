@@ -264,7 +264,9 @@ func (s *Service) SetModel(ctx context.Context, req ModelRequest) (*ResourceResu
 // a provider write and a key write is safe, as one of the two providers
 // receives the other's key for a time. A new Secret is safe: when it does not
 // exist, the save writes it first and then the provider and the reference in
-// one write of the model.
+// one write of the model. A model that names no Secret has no key to send to
+// another provider, so its change is not refused; a provider that differs only
+// in case is no change here, and admission judges its spelling.
 func refuseProviderChangeOnSameSecret(obj *unstructured.Unstructured, req ModelRequest) error {
 	current, _, _ := unstructured.NestedString(obj.Object, "spec", "provider")
 	if req.Provider == "" || current == "" || strings.EqualFold(req.Provider, current) {

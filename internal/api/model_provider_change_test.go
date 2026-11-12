@@ -109,6 +109,30 @@ func TestSetModelProviderChangeWithANewSecret(t *testing.T) {
 	require.Equal(t, 1, consumerWrites(fixture))
 }
 
+// A model that names no credential Secret has no key to send to another
+// provider: its provider change is not refused. The Secret defaults to
+// tenant-credential-<name>, as for a new model.
+func TestSetModelProviderChangeWithoutAStoredSecretIsNotRefused(t *testing.T) {
+	existing := model("claude", true)
+	unstructured.RemoveNestedField(existing.Object, "spec", "apiKeySecret")
+	unstructured.RemoveNestedField(existing.Object, "spec", "apiKeySecretKey")
+	fixture := newOrgFixture(t, existing)
+	seedSecret(t, fixture, "tenant-credential-claude", "apiKey")
+	text, failed := fixture.call(t, ToolSetOrganizationModel, map[string]any{"namespace": orgNS, "name": "claude", "provider": "OpenAI", "model": "gpt-5"})
+	require.False(t, failed, text)
+	require.Equal(t, "OpenAI", liveModelField(t, fixture, "provider"))
+	require.Equal(t, "tenant-credential-claude", liveModelField(t, fixture, "apiKeySecret"))
+}
+
+// The stored provider in another case is no provider change: the refusal
+// does not answer it (admission judges the spelling).
+func TestSetModelProviderInAnotherCaseIsNotAProviderChange(t *testing.T) {
+	fixture := newOrgFixture(t, model("claude", true))
+	seedSecret(t, fixture, "tenant-credential-claude", "apiKey")
+	text, _ := fixture.call(t, ToolSetOrganizationModel, map[string]any{"namespace": orgNS, "name": "claude", "provider": "anthropic"})
+	require.False(t, strings.HasPrefix(text, "conflict:"), text)
+}
+
 // A change of the model id alone, with the same provider or none given,
 // keeps the Secret and is written as before.
 func TestSetModelChangesTheModelIDOnTheSameProvider(t *testing.T) {

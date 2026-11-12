@@ -31,7 +31,9 @@ old provider's key, so either order of a provider change and a key change
 sends one provider's key to the other for a time. To change the provider, give
 a new `credentialSecret` that does not exist yet: the call prepares an
 operation, and its save writes the new Secret first, then the provider and the
-reference in one write of the model. Or create a new model. A change of the
+reference in one write of the model. A different `credentialSecret` that
+exists already is used as it is: it must hold the new provider's key. Or create
+a new model. A change of the
 model id alone, with the same provider, is not affected.
 
 `replace_organization_credential` takes the organization namespace, the Secret
