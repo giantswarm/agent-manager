@@ -47,7 +47,7 @@ func credentialSaveError(err error) error {
 	// The object the operation creates exists by then: the name the person
 	// confirmed is taken. The message names nothing the confirmation did not.
 	if errors.As(err, new(nameTaken)) {
-		return fmt.Errorf("%w: the object this operation creates exists now, live or in git; prepare it again with another name", ErrAlreadyExists)
+		return fmt.Errorf("%w: the object this operation creates exists now, live or in git; prepare it again", ErrAlreadyExists)
 	}
 	for _, sentinel := range []error{agents.ErrUnauthenticated, agents.ErrAuthRequired, agents.ErrForbidden, agents.ErrNotFound, agents.ErrConflict, agents.ErrInvalid, agents.ErrUnsupported, agents.ErrGitOpsOwned} {
 		if errors.Is(err, sentinel) {

@@ -10,7 +10,6 @@ import (
 	"strings"
 
 	apov1alpha1 "github.com/giantswarm/agent-platform-operator/api/v1alpha1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -157,12 +156,22 @@ func (s *Service) SetModel(ctx context.Context, req ModelRequest) (*ResourceResu
 	if err != nil {
 		return nil, err
 	}
-	if req.Create && find(items, req.Name) != nil {
-		return nil, modelExists(ns, req.Name)
-	}
 	w, err := s.contentWriter(ctx, org, req.Mode)
 	if err != nil {
 		return nil, err
+	}
+	if req.Create {
+		// Only create: a model of that name live, or as its file in git
+		// (in commit mode), is refused here, a dry run included.
+		taken := find(items, req.Name) != nil
+		if !taken && w.commit != nil {
+			if taken, err = w.commit.exists(ctx, contentFile(w.dir, "ModelConfig", req.Name)); err != nil {
+				return nil, err
+			}
+		}
+		if taken {
+			return nil, modelExists(ns, req.Name)
+		}
 	}
 	obj, err := w.source(ctx, find(items, req.Name), "ModelConfig")
 	if err != nil {
@@ -248,7 +257,7 @@ func (s *Service) SetModel(ctx context.Context, req ModelRequest) (*ResourceResu
 	if err = s.landResource(ctx, w, writes, res, req.ReplaceCredential, "model-"+req.Name, "chore(organizations): set model "+req.Name); err != nil {
 		// With create, a model made since the read, live (the create itself
 		// refuses it) or as its file in git, answers ErrAlreadyExists too.
-		if req.Create && (errors.As(err, new(nameTaken)) || res.Created && apierrors.IsAlreadyExists(err)) {
+		if req.Create && errors.As(err, new(nameTaken)) {
 			return nil, modelExists(ns, req.Name)
 		}
 		return nil, err
@@ -265,7 +274,8 @@ func (s *Service) SetModel(ctx context.Context, req ModelRequest) (*ResourceResu
 var ErrAlreadyExists = errors.New("already exists")
 
 // nameTaken marks a refusal, keeping its text and code, because the object a
-// write creates exists by then: its file is in git, or it is live at a save.
+// write creates exists by then: its file is in git, or it is live (the save's
+// check sees it, or the create itself refuses it).
 // A tool call with create, and a save, answer ErrAlreadyExists for it.
 type nameTaken struct{ err error }
 

@@ -81,7 +81,7 @@ preparation (see [organization credentials](docs/organization-credentials.md));
 `already_exists` (409) a create of an organization model whose name is
 taken (`set_organization_model` with `create`), and a credential save whose
 operation creates an object that exists by then;
-`conflict` (409) covers "exists already", "suspended" and "bare
+`conflict` (409) covers an agent that "exists already", "suspended" and "bare
 Agent", the cases `force` overrides where documented;
 `gitops_owned` (409) is an apply-mode write to a release applied from git,
 `auth_required` (401) a commit without the caller's GitHub authorization.

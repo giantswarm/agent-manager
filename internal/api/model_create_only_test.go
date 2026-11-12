@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"net/http"
 	"strings"
 	"testing"
@@ -11,6 +12,8 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	k8stesting "k8s.io/client-go/testing"
+
+	"github.com/giantswarm/agent-manager/internal/organizations"
 )
 
 // createModel calls set_organization_model for a new model claude with
@@ -122,4 +125,66 @@ func TestSetModelCreateSaveRefusesAModelMadeSincePreparation(t *testing.T) {
 	require.Equal(t, "already_exists", errorCode(t, answer))
 	require.NotContains(t, answer, "first-value")
 	require.Equal(t, "m", liveModelSpec(t, fixture))
+	requireNoSecret(t, fixture, "tenant-credential-claude")
+}
+
+// requireNoSecret says the credential Secret name was not written.
+func requireNoSecret(t *testing.T, fixture *orgFixture, name string) {
+	t.Helper()
+	_, err := fixture.dyn.Tracker().Get(secretGVR, orgNS, name)
+	require.True(t, apierrors.IsNotFound(err), "Secret %s: %v", name, err)
+}
+
+// A dry run with create in commit mode sees the model's file in git too,
+// also when the key is missing: the dry run and the call agree.
+func TestSetModelCreateDryRunInCommitModeSeesTheGitFile(t *testing.T) {
+	fixture, forge := commitFixture(t, map[string][]byte{paymentsPath + "/modelconfig-claude.yaml": gitManifest(t, model("claude", true))})
+	text, failed := createModel(t, fixture, map[string]any{"mode": "commit", "dryRun": true})
+	require.True(t, failed, text)
+	require.True(t, strings.HasPrefix(text, "already_exists:"), text)
+	require.Empty(t, forge.PullRequests())
+}
+
+// A save of an operation that creates an object answers already_exists when
+// the object exists by then: a model as its file in git (commit mode), a
+// model made between the save's check and its create, and a connector (any
+// kind, with or without create). Nothing is written.
+func TestCredentialSaveAnswersAlreadyExists(t *testing.T) {
+	t.Run("commit mode, the model's file appears in git", func(t *testing.T) {
+		fixture, forge := commitFixture(t, nil)
+		result := prepareModelOperation(t, fixture, map[string]any{"create": true, "mode": "commit"})
+		confirmation := confirmOperation(t, fixture, result.CredentialOperation)
+		require.NoError(t, forge.Commit(t.Context(), mcRepo, "main", "add the model", map[string][]byte{paymentsPath + "/modelconfig-claude.yaml": gitManifest(t, model("claude", false))}))
+		status, answer, _ := operationHTTP(t, fixture, http.MethodPost, result.CredentialOperation, confirmation.Version, valuesBody(t, result, "first-value"), nil)
+		require.Equal(t, http.StatusConflict, status, answer)
+		require.Equal(t, "already_exists", errorCode(t, answer))
+		require.Empty(t, forge.PullRequests())
+	})
+	t.Run("apply mode, the model is made after the save's check", func(t *testing.T) {
+		fixture := newOrgFixture(t)
+		result := prepareModelOperation(t, fixture, map[string]any{"create": true})
+		confirmation := confirmOperation(t, fixture, result.CredentialOperation)
+		fixture.dyn.PrependReactor("create", "modelconfigs", func(k8stesting.Action) (bool, runtime.Object, error) {
+			return true, nil, apierrors.NewAlreadyExists(mcGVR.GroupResource(), "claude")
+		})
+		status, answer, _ := operationHTTP(t, fixture, http.MethodPost, result.CredentialOperation, confirmation.Version, valuesBody(t, result, "first-value"), nil)
+		require.Equal(t, http.StatusConflict, status, answer)
+		require.Equal(t, "already_exists", errorCode(t, answer))
+		requireNoSecret(t, fixture, "tenant-credential-claude")
+	})
+	t.Run("a connector made since the preparation", func(t *testing.T) {
+		fixture := newOrgFixture(t)
+		text, failed := fixture.call(t, ToolSetOrganizationConnector, map[string]any{"namespace": orgNS, "name": "gh", "url": "https://mcp.github.example/mcp", "credentialHeader": "Authorization"})
+		require.False(t, failed, text)
+		var result organizations.ResourceResult
+		require.NoError(t, json.Unmarshal([]byte(text), &result))
+		require.NotEmpty(t, result.CredentialOperation, text)
+		confirmation := confirmOperation(t, fixture, result.CredentialOperation)
+		_, err := fixture.dyn.Resource(serverGVR).Namespace(orgNS).Create(t.Context(), connector("gh", "tenant-credential-gh", "token"), metav1.CreateOptions{})
+		require.NoError(t, err)
+		status, answer, _ := operationHTTP(t, fixture, http.MethodPost, result.CredentialOperation, confirmation.Version, valuesBody(t, result, "first-value"), nil)
+		require.Equal(t, http.StatusConflict, status, answer)
+		require.Equal(t, "already_exists", errorCode(t, answer))
+		requireNoSecret(t, fixture, "tenant-credential-gh")
+	})
 }
