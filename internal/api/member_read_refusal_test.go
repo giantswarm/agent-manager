@@ -27,7 +27,8 @@ func TestMemberReadRefusalNamesEveryMemberRole(t *testing.T) {
 	text, isErr := f.call(t, ToolListOrganizationMembers, map[string]any{"namespace": orgNS})
 	require.True(t, isErr, text)
 	assert.Contains(t, text, "forbidden:")
-	assert.Contains(t, text, "list on RoleBindings")
+	assert.Contains(t, text, "right to list RoleBindings")
+	assert.Contains(t, text, "4.179.0", "the chart from which every member role reads them")
 	for _, role := range []string{organizations.RoleUser, organizations.RoleEditor, organizations.RoleAdmin} {
 		assert.Contains(t, text, role, "every member role reads the members")
 	}

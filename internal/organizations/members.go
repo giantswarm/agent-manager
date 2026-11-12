@@ -104,7 +104,7 @@ type roleBindingOf struct {
 // 4.179.0 on (giantswarm/agent-platform#1369); before, agent-platform:admin
 // alone did.
 func wayMemberRead(ns string) string {
-	return fmt.Sprintf("reading the members needs list on RoleBindings in organization namespace %s, which every member role (%s, %s or %s) holds from agent-platform chart 4.179.0 on, and %s alone before; an admin of the organization adds you (add_organization_member), or an organizations-admin (%s) does", ns, RoleUser, RoleEditor, RoleAdmin, RoleAdmin, RoleOrganizationsAdmin)
+	return fmt.Sprintf("reading the members needs the right to list RoleBindings in organization namespace %s. Every member role (%s, %s or %s) has it from agent-platform chart 4.179.0 on; before that chart, %s alone. An admin of the organization adds you with one of these roles (add_organization_member), or an organizations-admin (%s) does", ns, RoleUser, RoleEditor, RoleAdmin, RoleAdmin, RoleOrganizationsAdmin)
 }
 
 // roleBindings are the RoleBindings of ns to the organization's roles; way
