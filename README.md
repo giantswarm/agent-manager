@@ -78,8 +78,10 @@ credential save or cancellation whose `If-Match` is stale or missing;
 `credential_consumers_changed` (409) a credential save of
 `replace_organization_credential` whose consumers changed since the
 preparation (see [organization credentials](docs/organization-credentials.md));
-`already_exists` (409) a create of an organization model whose name is
-taken (`set_organization_model` with `create`), and a credential save whose
+`already_exists` (409) a create of an organization model, connector or egress
+policy whose name is taken (`set_organization_model`,
+`set_organization_connector` or `set_organization_egress_policy` with
+`create`), and a credential save whose
 operation creates an object that exists by then;
 `conflict` (409) covers an agent that "exists already", "suspended" and "bare
 Agent", the cases `force` overrides where documented;

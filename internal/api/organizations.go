@@ -358,6 +358,7 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service, l
 		mcp.WithString(argCredentialSecret, mcp.Description(credSecretDesc)),
 		mcp.WithString(argCredentialKey, mcp.Description("Key of that Secret; default token")),
 		mcp.WithBoolean(argNoCredential, mcp.Description("Remove the credential header (default false)")),
+		mcp.WithBoolean(argCreate, mcp.Description("Only create: a connector of that name, live or in git, is refused with already_exists, not changed (default false)")),
 		credentialRequestID, dryRun, modeProp,
 		mcp.WithOutputSchema[organizations.ResourceResult](),
 		mcp.WithReadOnlyHintAnnotation(false),
@@ -374,6 +375,7 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service, l
 			CredentialSecret string `json:"credentialSecret"`
 			CredentialKey    string `json:"credentialKey"`
 			NoCredential     bool   `json:"noCredential"`
+			Create           bool   `json:"create"`
 			DryRun           bool   `json:"dryRun"`
 			Mode             string `json:"mode"`
 		}
@@ -399,6 +401,7 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service, l
 			},
 			"required": []string{"origin"},
 		})),
+		mcp.WithBoolean(argCreate, mcp.Description("Only create: a policy of that name, live or in git, is refused with already_exists, not replaced (default false)")),
 		credentialRequestID, dryRun, modeProp,
 		mcp.WithOutputSchema[organizations.ResourceResult](),
 		mcp.WithReadOnlyHintAnnotation(false),
@@ -410,6 +413,7 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service, l
 			Namespace    string                            `json:"namespace"`
 			Name         string                            `json:"name"`
 			Destinations []organizations.EgressDestination `json:"destinations"`
+			Create       bool                              `json:"create"`
 			DryRun       bool                              `json:"dryRun"`
 			Mode         string                            `json:"mode"`
 		}
