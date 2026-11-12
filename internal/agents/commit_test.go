@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"testing"
 
@@ -350,6 +351,38 @@ func TestGitHubRefusalNamesWhatRenewsTheToken(t *testing.T) {
 	require.ErrorContains(t, err, "manager-app")
 	require.ErrorContains(t, err, "installed on the repository")
 	require.NotContains(t, err.Error(), "server=agent-manager")
+}
+
+// A 403 on a step that only reads is the App's permissions, which no new
+// sign-in or grant changes: the answer names the step and the App and asks
+// for no sign-in and no push access. A 401 on it still asks for the sign-in.
+func TestAReadRefusedWith403NamesTheAppsPermissions(t *testing.T) {
+	pinned := &identity.GitHub{Login: "alice", Token: "pinned"}
+	granted := &identity.GitHub{Login: "alice", Token: "granted", App: "manager-app"}
+	reads := []string{commit.OpStatus, commit.OpReadFile, commit.OpListFiles, commit.OpFindPullRequest, commit.OpMergedFiles}
+	for _, gh := range []*identity.GitHub{pinned, granted} {
+		for _, op := range reads {
+			t.Run(gh.Token+"/"+op, func(t *testing.T) {
+				err := GitHubRefusal(gh, &commit.AuthError{Op: op, Status: http.StatusForbidden})
+				require.ErrorIs(t, err, ErrForbidden)
+				require.NotErrorIs(t, err, ErrAuthRequired)
+				_, isGrant := errors.AsType[*GrantRequiredError](err)
+				require.False(t, isGrant)
+				require.ErrorContains(t, err, op)
+				require.ErrorContains(t, err, "permissions")
+				require.NotContains(t, err.Error(), "core_auth_login")
+				require.NotContains(t, err.Error(), "push")
+				if gh.App != "" {
+					require.ErrorContains(t, err, gh.App)
+				}
+			})
+		}
+	}
+
+	err := GitHubRefusal(pinned, &commit.AuthError{Op: commit.OpStatus, Status: http.StatusUnauthorized})
+	require.ErrorIs(t, err, ErrAuthRequired)
+	err = GitHubRefusal(pinned, &commit.AuthError{Op: commit.OpCommit, Status: http.StatusForbidden})
+	require.ErrorIs(t, err, ErrAuthRequired, "a write refused with 403 keeps its answer")
 }
 
 func TestCommitResolvesProviderAuthorizationWithoutAnMCPProviderBearer(t *testing.T) {

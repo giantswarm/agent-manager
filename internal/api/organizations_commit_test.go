@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"net/http"
 	"strings"
 	"testing"
 
@@ -245,6 +246,86 @@ func TestDeleteOrganizationInCommitModeTakesTwoSteps(t *testing.T) {
 	require.False(t, isErr, text)
 	assert.Equal(t, true, decode(t, text)["deleted"])
 	assert.Nil(t, f.get(t, orgGVR, "org-acme", "payments"))
+}
+
+// agent-manager's GitHub App has no permission for the commit statuses and
+// check runs of a pull request's head, and GitHub refuses them with 403. The
+// delete reads its pull request with the pull request reads alone (merged,
+// and its files), so every step, the erase too, works without them; a read
+// refused with 403 names the step and the App's permissions, not a new
+// sign-in.
+func TestTheDeleteInCommitModeReadsNoStatusesOrChecks(t *testing.T) {
+	f, fake := gitOrganization(t)
+	fake.Fail[commit.OpStatus] = &commit.AuthError{Op: commit.OpStatus, Status: http.StatusForbidden}
+	del := func(confirm string) (string, bool) {
+		args := map[string]any{"namespace": "org-acme", "name": "payments", "mode": "commit"}
+		if confirm != "" {
+			args["confirm"] = confirm
+		}
+		return f.call(t, ToolDeleteOrganization, args)
+	}
+
+	text, isErr := del("")
+	require.False(t, isErr, text)
+	require.Len(t, fake.PullRequests(), 1)
+	pr := fake.PullRequests()[0]
+
+	text, isErr = del("")
+	require.False(t, isErr, text)
+	assert.Contains(t, decode(t, text)["next"], "is open")
+
+	text, isErr = del("org-acme/payments")
+	require.True(t, isErr)
+	assert.Contains(t, text, "still in git")
+
+	require.NoError(t, fake.Merge(context.Background(), pr.PullRequest))
+	text, isErr = del("")
+	require.False(t, isErr, text)
+	assert.Contains(t, decode(t, text)["next"], "pending erase")
+
+	// A refused read of the merged files names the step and the App's
+	// permissions, erases nothing and asks for no new sign-in.
+	fake.Fail[commit.OpMergedFiles] = &commit.AuthError{Op: commit.OpMergedFiles, Status: http.StatusForbidden}
+	text, isErr = del("org-acme/payments")
+	require.True(t, isErr)
+	assert.True(t, strings.HasPrefix(text, "forbidden:"), text)
+	assert.Contains(t, text, commit.OpMergedFiles)
+	assert.Contains(t, text, "permissions")
+	assert.Contains(t, text, "nothing was erased")
+	assert.NotContains(t, text, "core_auth_login")
+	assert.NotContains(t, text, "push")
+	assert.NotNil(t, f.get(t, orgGVR, "org-acme", "payments"))
+
+	delete(fake.Fail, commit.OpMergedFiles)
+	text, isErr = del("org-acme/payments")
+	require.False(t, isErr, text)
+	assert.Equal(t, true, decode(t, text)["deleted"])
+	assert.Nil(t, f.get(t, orgGVR, "org-acme", "payments"))
+}
+
+// The recovery from a listing that keeps failing: restore the file and open
+// the delete again. While the file is in git the earlier pull request's
+// files are not needed, so a listing that fails does not stop the new delete
+// pull request.
+func TestARestoredFileOpensANewDeleteWhenTheListingKeepsFailing(t *testing.T) {
+	ctx := context.Background()
+	f, fake := gitOrganization(t)
+	file := fake.Files(mcRepo, "main")[paymentsFile]
+	del := map[string]any{"namespace": "org-acme", "name": "payments", "mode": "commit"}
+	text, isErr := f.call(t, ToolDeleteOrganization, del)
+	require.False(t, isErr, text)
+	require.Len(t, fake.PullRequests(), 1)
+	first := fake.PullRequests()[0]
+	require.NoError(t, fake.Merge(ctx, first.PullRequest))
+	fake.Fail[commit.OpMergedFiles] = errors.New("GitHub listed 3000 of 3001 changed files")
+
+	require.NoError(t, fake.Commit(ctx, mcRepo, "main", "restore", map[string][]byte{paymentsFile: file}))
+	text, isErr = f.call(t, ToolDeleteOrganization, del)
+	require.False(t, isErr, text)
+	require.Len(t, fake.PullRequests(), 2)
+	second := fake.PullRequests()[1]
+	assert.NotContains(t, fake.Files(mcRepo, second.Head), paymentsFile)
+	assert.Equal(t, second.URL, f.get(t, orgGVR, "org-acme", "payments").GetAnnotations()[organizations.DeletePullRequestAnnotation])
 }
 
 // A merged pull request counts as the organization's delete only when the
