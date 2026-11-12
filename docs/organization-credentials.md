@@ -198,6 +198,10 @@ alone, whatever Git consumers name it; an encrypted Secret file holding another
 key is refused. In apply mode it refuses a Secret whose consumer Flux applies.
 Creating a consumer whose file already exists in Git is refused until Flux
 applies it, so a create cannot replace configuration awaiting reconciliation.
+The file is checked again on the pull request's branch once it is cut from the
+base: a file another commit added after the first check is refused there too
+(`already_exists` with `create`, else `conflict`), before anything is committed.
+The branch stays, without a commit, and the next write brings it up to date.
 The receipt's credential state `committed` means a PR exists, not that Flux has
 applied it. See [repository requirements](organizations-commit-mode.md).
 
