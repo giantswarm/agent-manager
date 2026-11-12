@@ -327,6 +327,31 @@ func TestCommitKeepsTheGrantRequiredApp(t *testing.T) {
 	require.Empty(t, forge.PullRequests())
 }
 
+func TestGitHubRefusalNamesWhatRenewsTheToken(t *testing.T) {
+	pinned := &identity.GitHub{Login: "alice", Token: "pinned"}
+	granted := &identity.GitHub{Login: "alice", Token: "granted", App: "manager-app"}
+
+	err := GitHubRefusal(pinned, &commit.AuthError{Op: "create branch", Status: 401})
+	require.ErrorIs(t, err, ErrAuthRequired)
+	require.ErrorContains(t, err, "core_auth_login server=agent-manager")
+	_, isGrant := errors.AsType[*GrantRequiredError](err)
+	require.False(t, isGrant)
+
+	err = GitHubRefusal(granted, &commit.AuthError{Op: "create branch", Status: 401})
+	grant, isGrant := errors.AsType[*GrantRequiredError](err)
+	require.True(t, isGrant)
+	require.Equal(t, "manager-app", grant.App)
+	require.Contains(t, grant.Reason, "core_auth_login app=manager-app")
+	require.NotContains(t, err.Error(), "server=agent-manager")
+
+	err = GitHubRefusal(granted, &commit.AuthError{Op: "open pull request", Status: 403})
+	require.ErrorIs(t, err, ErrForbidden)
+	require.NotErrorIs(t, err, ErrAuthRequired)
+	require.ErrorContains(t, err, "manager-app")
+	require.ErrorContains(t, err, "installed on the repository")
+	require.NotContains(t, err.Error(), "server=agent-manager")
+}
+
 func TestCommitResolvesProviderAuthorizationWithoutAnMCPProviderBearer(t *testing.T) {
 	for _, authorized := range []bool{true, false} {
 		t.Run(fmt.Sprintf("authorized=%v", authorized), func(t *testing.T) {

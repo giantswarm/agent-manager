@@ -34,6 +34,9 @@ type GitHubExchangeConfig struct {
 	CAFile        string
 	APIURL        string
 	SubjectIssuer string
+	// Logger receives the authorization service's refusals; nil discards
+	// them.
+	Logger *slog.Logger
 }
 
 func (c GitHubExchangeConfig) Validate() error {
@@ -93,14 +96,23 @@ func newGitHubExchange(configuration GitHubExchangeConfig, client *http.Client) 
 	// in-cluster broker resolves to a private address: the client checks
 	// only that it is HTTPS.
 	exchanger := oidc.NewTokenExchangeClientWithOptions(oidc.TokenExchangeClientOptions{HTTPClient: client, Logger: slog.New(slog.DiscardHandler), AllowPrivateIP: true})
+	logger := configuration.Logger
+	if logger == nil {
+		logger = slog.New(slog.DiscardHandler)
+	}
 	grantRequired := func(reason string) error {
 		return &agents.GrantRequiredError{App: configuration.Audience, Reason: fmt.Sprintf(reason, configuration.Audience, configuration.Audience)}
 	}
 	return func(ctx context.Context) (*identity.GitHub, error) {
 		person, ok := identity.FromContext(ctx)
 		subjectToken, hasToken := identity.TokenFromContext(ctx)
-		if !ok || !hasToken || person.Delegated || person.Issuer != configuration.SubjectIssuer || person.Subject == "" {
+		if !ok || !hasToken || subjectToken == "" || person.Issuer != configuration.SubjectIssuer || person.Subject == "" {
 			return nil, fmt.Errorf("%w: a verified platform identity is required for GitHub authorization", agents.ErrUnauthenticated)
+		}
+		// A delegated caller, or one whose token cannot show it is not,
+		// never receives the person's GitHub grant.
+		if claims, err := oidc.ParseUnverifiedClaims(subjectToken); err != nil || claims["act"] != nil || person.Delegated {
+			return nil, fmt.Errorf("%w: commit mode opens the pull request as you, and only you, not an agent acting for you, can authorize it", agents.ErrForbidden)
 		}
 		secret, err := os.ReadFile(configuration.ClientSecretFile)
 		if err != nil || len(strings.TrimSpace(string(secret))) == 0 {
@@ -117,11 +129,13 @@ func newGitHubExchange(configuration GitHubExchangeConfig, client *http.Client) 
 		})
 		if err != nil {
 			if refusal, ok := errors.AsType[*oidc.TokenExchangeError](err); ok {
+				logger.Warn("GitHub token exchange refused", "audience", configuration.Audience, "status", refusal.StatusCode, "error", refusal.Code, "description", refusal.Description)
 				if refusal.StatusCode == http.StatusBadRequest && refusal.Code == "invalid_target" {
 					return nil, grantRequired("this call opens a pull request as you with your grant of the GitHub App %s in muster, which you have not given: grant it (core_auth_login app=%s), then call again")
 				}
 				return nil, errors.New("GitHub authorization service refused the exchange")
 			}
+			logger.Warn("GitHub token exchange failed", "audience", configuration.Audience, "error", err)
 			return nil, errors.New("GitHub authorization service is unavailable")
 		}
 		if !strings.EqualFold(result.TokenType, "Bearer") || result.IssuedTokenType != oidc.TokenTypeAccessToken || result.ExpiresIn <= 0 || result.RefreshToken != "" {
@@ -136,17 +150,21 @@ func newGitHubExchange(configuration GitHubExchangeConfig, client *http.Client) 
 			return nil, errors.New("GitHub API URL is invalid")
 		}
 		request.Header.Set("Authorization", "Bearer "+result.AccessToken)
+		request.Header.Set("Accept", "application/vnd.github+json")
 		response, err := client.Do(request)
 		if err != nil {
 			return nil, errors.New("GitHub user verification is unavailable")
 		}
 		defer func() { _ = response.Body.Close() }()
+		if response.StatusCode == http.StatusUnauthorized {
+			return nil, grantRequired("GitHub refused your grant of the GitHub App %s: grant it again in muster (core_auth_login app=%s), then call again")
+		}
 		var user struct {
 			Login string `json:"login"`
 		}
 		if response.StatusCode != http.StatusOK || json.NewDecoder(io.LimitReader(response.Body, 16*1024)).Decode(&user) != nil || user.Login == "" {
-			return nil, grantRequired("GitHub refused your grant of the GitHub App %s: grant it again in muster (core_auth_login app=%s), then call again")
+			return nil, fmt.Errorf("GitHub user verification is unavailable (status %d)", response.StatusCode)
 		}
-		return &identity.GitHub{Login: user.Login, Token: result.AccessToken}, nil
+		return &identity.GitHub{Login: user.Login, Token: result.AccessToken, App: configuration.Audience}, nil
 	}
 }

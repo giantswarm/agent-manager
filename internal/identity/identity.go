@@ -150,13 +150,18 @@ func TokenExpiry(token string) time.Time {
 	return time.Unix(exp, 0)
 }
 
-// GitHub is the caller's GitHub identity on the App-pinned registration: the
-// login GET /user answered for the bearer muster put on the call — the
-// person's user token of the App giantswarm-agent-manager — and that token,
-// which commit mode opens the pull request with.
+// GitHub is the caller's GitHub identity: the login GET /user answered for
+// the person's user token of the GitHub App, and that token, which commit
+// mode opens the pull request with. The token is the bearer muster put on
+// the call on the App-pinned registration, else the grant the token
+// exchange fetched.
 type GitHub struct {
 	Login string
 	Token string
+	// App names the provider App in muster whose grant Token is, as
+	// grant_required answers name it; empty on the App-pinned
+	// registration.
+	App string
 }
 
 // ContextWithGitHub returns ctx carrying the caller's GitHub identity.

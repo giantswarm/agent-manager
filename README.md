@@ -525,10 +525,14 @@ Commit mode needs `github.enabled`, with `github.tokenExchange`
 or the deprecated GitHub App pin (below), and reports itself in `get_info` as
 `capabilities.commit`; without it `mode: commit` answers `unsupported`. With
 `github.tokenExchange` only the commit asks for GitHub: without the person's
-grant it answers `grant_required` naming the App (`github.tokenExchange.audience`),
-and muster answers with the App's sign-in. With the pin, a call that carries
-no GitHub authorization answers `auth_required`, naming the one-time consent
-(`core_auth_login server=agent-manager`).
+grant, or when GitHub refuses it (401), it answers `grant_required` naming the
+App (`github.tokenExchange.audience`), and muster answers with the App's
+sign-in (`core_auth_login app=<audience>`). GitHub refusing the commit with
+the grant (403) answers `forbidden`: the App must be installed on the
+repository and the person allowed to push to it. An agent acting for the
+person (a token with `act`) is refused with `forbidden`. With the pin, a call
+that carries no GitHub authorization answers `auth_required`, naming the
+one-time consent (`core_auth_login server=agent-manager`).
 
 ## Identity
 

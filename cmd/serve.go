@@ -381,7 +381,7 @@ func runServe(ctx context.Context, o *serveOptions) error {
 	var orgs *organizations.Service
 	var resolveGitHub func(context.Context) (*identity.GitHub, error)
 	if o.githubExchangeEndpoint != "" {
-		resolveGitHub, err = server.NewGitHubExchange(server.GitHubExchangeConfig{TokenEndpoint: o.githubExchangeEndpoint, ClientID: o.githubExchangeClient, ClientIDFile: o.githubExchangeClientFile, ClientSecretFile: o.githubExchangeSecretFile, Audience: o.githubExchangeAudience, CAFile: o.githubExchangeCAFile, APIURL: o.githubAPIURL, SubjectIssuer: o.dexIssuerURL})
+		resolveGitHub, err = server.NewGitHubExchange(server.GitHubExchangeConfig{TokenEndpoint: o.githubExchangeEndpoint, ClientID: o.githubExchangeClient, ClientIDFile: o.githubExchangeClientFile, ClientSecretFile: o.githubExchangeSecretFile, Audience: o.githubExchangeAudience, CAFile: o.githubExchangeCAFile, APIURL: o.githubAPIURL, SubjectIssuer: o.dexIssuerURL, Logger: log})
 		if err != nil {
 			return err
 		}
