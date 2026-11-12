@@ -650,6 +650,10 @@ func TestErrResultNamesTheMissingGrant(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal(raw, &wire))
 	require.Equal(t, map[string]any{"status": "grant_required", "apps": []any{"github"}, "message": "grant it"}, wire.StructuredContent)
+	require.Len(t, res.Content, 2)
+	var serialized map[string]any
+	require.NoError(t, json.Unmarshal([]byte(res.Content[1].(mcp.TextContent).Text), &serialized))
+	require.Equal(t, wire.StructuredContent, serialized, "the second text block is the structured content serialized")
 
 	_, code := statusFor(&agents.GrantRequiredError{App: "github", Reason: "grant it"})
 	require.Equal(t, "auth_required", code, "REST keeps answering auth_required")
