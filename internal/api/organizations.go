@@ -254,7 +254,7 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service, l
 
 	s.AddTool(mcp.NewTool(ToolListOrganizationMembers,
 		tooldesc.Describe("List an organization's members: the groups and people bound to agent-platform:admin, editor or user, groups first.",
-			"Read as you; every member may read them."),
+			"Read as you: needs list on RoleBindings there, which every member role holds from agent-platform chart 4.179.0 on, only admin before."),
 		orgNSProp,
 		mcp.WithReadOnlyHintAnnotation(true),
 		mcp.WithDestructiveHintAnnotation(false),
