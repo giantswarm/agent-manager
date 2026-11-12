@@ -15,9 +15,13 @@ since the read. Without `create` each tool creates or changes the object as
 before, with the same answers. When the new object waits for its key, the
 operation creates it at the save: a save of any operation that creates a model, connector or egress policy
 answers `already_exists` when that object exists by then, live or in git. The
-save checks before it writes; only an object made in the moment between its
-dry run and its create can find the Secret already written, and the operation
-is then uncertain. The person prepares again.
+save checks before it writes; an object made in the moment between its dry
+run and its create finds the Secret already written. In apply mode the save
+then deletes the Secret it created, if nothing changed it since its write; it
+never deletes a Secret that existed before the save. A refused delete leaves
+the Secret (and is logged), and the other object can read the value in the
+moment before the delete. The operation is uncertain; the person prepares
+again.
 
 `replace_organization_credential` takes the organization namespace, the Secret
 and the key, and prepares an operation that writes that Secret and no consumer:
