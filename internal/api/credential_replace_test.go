@@ -20,7 +20,12 @@ import (
 	"github.com/giantswarm/agent-manager/internal/organizations"
 )
 
-const sharedSecret = "tenant-credential-shared" // #nosec G101 -- a Secret's name
+// Secret names, no credentials.
+const (
+	sharedSecret = "tenant-credential-shared" // #nosec G101 -- a Secret's name
+	claudeSecret = "tenant-credential-claude" // #nosec G101 -- a Secret's name
+	ghSecret     = "tenant-credential-gh"     // #nosec G101 -- a Secret's name
+)
 
 func sharedModel(key string) *unstructured.Unstructured {
 	consumer := model("claude", true)
@@ -256,8 +261,7 @@ func TestReplaceCredentialCommitRefusesALiveConsumer(t *testing.T) {
 func TestCredentialConfirmationListsLiveReferences(t *testing.T) {
 	t.Run("planned write replaces its live object", func(t *testing.T) {
 		fixture := newOrgFixture(t, model("claude", true))
-		seedSecret(t, fixture, "tenant-credential-claude", "apiKey")
-		result := prepareModelOperation(t, fixture, map[string]any{"replaceCredential": true, "provider": "OpenAI"})
+		result := prepareModelOperation(t, fixture, map[string]any{"provider": "OpenAI"})
 		confirmation := confirmOperation(t, fixture, result.CredentialOperation)
 		require.Equal(t, []organizations.CredentialReference{{Kind: "ModelConfig", Name: "claude", Key: "apiKey", Provider: "OpenAI"}}, confirmation.References)
 	})

@@ -127,9 +127,7 @@ type ModelRequest struct {
 	// Create only creates: a model of that name, live or in git, is refused
 	// with ErrAlreadyExists instead of changed.
 	Create bool
-	// ReplaceCredential answers with the credential form for a new value.
-	ReplaceCredential bool
-	DryRun            bool
+	DryRun bool
 	// Mode is apply (default) or commit.
 	Mode string
 }
@@ -245,7 +243,7 @@ func (s *Service) SetModel(ctx context.Context, req ModelRequest) (*ResourceResu
 	case len(marks) > 1:
 		res.Note = fmt.Sprintf("the namespace has %d models marked as its default (%s), so it has none: set_organization_model with default true on one of them", len(marks), strings.Join(marks, ", "))
 	}
-	cred, err := s.credential(ctx, c, org, "ModelConfig", req.Name, secret, key, req.ReplaceCredential)
+	cred, err := s.credential(ctx, c, org, "ModelConfig", req.Name, secret, key)
 	if err != nil {
 		return nil, err
 	}
@@ -254,7 +252,7 @@ func (s *Service) SetModel(ctx context.Context, req ModelRequest) (*ResourceResu
 		cred.Next = s.next(cred, "ModelConfig "+req.Name)
 	}
 	res.Credentials = []Credential{cred}
-	if err = s.landResource(ctx, w, writes, res, req.ReplaceCredential, "model-"+req.Name, "chore(organizations): set model "+req.Name); err != nil {
+	if err = s.landResource(ctx, w, writes, res, "model-"+req.Name, "chore(organizations): set model "+req.Name); err != nil {
 		// With create, a model made since the read, live (the create itself
 		// refuses it) or as its file in git, answers ErrAlreadyExists too.
 		if req.Create && errors.As(err, new(nameTaken)) {
@@ -321,9 +319,8 @@ type ConnectorRequest struct {
 	CredentialSecret string
 	CredentialKey    string
 	// NoCredential removes the Secret-backed headers.
-	NoCredential      bool
-	ReplaceCredential bool
-	DryRun            bool
+	NoCredential bool
+	DryRun       bool
 	// Mode is apply (default) or commit.
 	Mode string
 }
@@ -495,13 +492,13 @@ func (s *Service) SetConnector(ctx context.Context, req ConnectorRequest) (*Reso
 			continue
 		}
 		seenCredentials[pair] = true
-		cred, err := s.credential(ctx, c, org, "RemoteMCPServer", req.Name, cc.Secret, cc.Key, req.ReplaceCredential)
+		cred, err := s.credential(ctx, c, org, "RemoteMCPServer", req.Name, cc.Secret, cc.Key)
 		if err != nil {
 			return nil, err
 		}
 		res.Credentials = append(res.Credentials, cred)
 	}
-	if err = s.landResource(ctx, w, []write{wr}, res, req.ReplaceCredential, "connector-"+req.Name, "chore(organizations): set connector "+req.Name); err != nil {
+	if err = s.landResource(ctx, w, []write{wr}, res, "connector-"+req.Name, "chore(organizations): set connector "+req.Name); err != nil {
 		return nil, err
 	}
 	if !req.DryRun && res.Commit == nil && res.CredentialOperation == "" {
@@ -550,11 +547,10 @@ func egressDestinations(u *unstructured.Unstructured) []EgressDestination {
 // EgressRequest is set_organization_egress_policy's arguments: the whole
 // destination list.
 type EgressRequest struct {
-	Namespace         string
-	Name              string
-	Destinations      []EgressDestination
-	ReplaceCredential bool
-	DryRun            bool
+	Namespace    string
+	Name         string
+	Destinations []EgressDestination
+	DryRun       bool
 	// Mode is apply (default) or commit.
 	Mode string
 }
@@ -629,13 +625,13 @@ func (s *Service) SetEgressPolicy(ctx context.Context, req EgressRequest) (*Reso
 			continue
 		}
 		seen[d.CredentialSecret+"/"+d.CredentialKey] = true
-		cred, err := s.credential(ctx, c, org, "EgressPolicy", req.Name, d.CredentialSecret, d.CredentialKey, req.ReplaceCredential)
+		cred, err := s.credential(ctx, c, org, "EgressPolicy", req.Name, d.CredentialSecret, d.CredentialKey)
 		if err != nil {
 			return nil, err
 		}
 		res.Credentials = append(res.Credentials, cred)
 	}
-	if err = s.landResource(ctx, w, []write{wr}, res, req.ReplaceCredential, "egress-"+req.Name, "chore(organizations): set egress policy "+req.Name); err != nil {
+	if err = s.landResource(ctx, w, []write{wr}, res, "egress-"+req.Name, "chore(organizations): set egress policy "+req.Name); err != nil {
 		return nil, err
 	}
 	if !req.DryRun && res.Commit == nil && res.CredentialOperation == "" {

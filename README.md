@@ -674,11 +674,10 @@ of them, so RBAC, schemas and admission refuse before anything changes; a
 refusal names the role that is missing and who can grant it. No tool takes or
 returns a secret value: a model's key, a connector's and an egress policy's
 credential are Secrets named by reference (`tenant-credential-…`). When one is
-missing, or `replaceCredential` asks for a new value, `set_organization_model`,
-`set_organization_connector` and `set_organization_egress_policy` answer with
-an MCP URL elicitation of a client-owned credential UI; so does
-`replace_organization_credential`, which takes the Secret and key and changes
-no object. The server prepares
+missing, `set_organization_model`, `set_organization_connector` and
+`set_organization_egress_policy` answer with an MCP URL elicitation of a
+client-owned credential UI; `replace_organization_credential`, which takes the
+Secret and key and changes no object, answers with one for a new value. The server prepares
 the intended change without writing consumers, and supplies a user-bound
 operation ID through the configured `credentials.uiURL` RFC 6570 template. A client
 without `elicitation.url` receives the result as `structuredContent`, declared

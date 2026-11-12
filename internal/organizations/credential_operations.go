@@ -250,7 +250,7 @@ func (s *Service) CredentialReceipt(ctx context.Context) (*ResourceResult, error
 	return &operation.Result, nil
 }
 
-func (s *Service) landResource(ctx context.Context, writer *contentWriter, writes []write, result *ResourceResult, replace bool, verb, title string) error {
+func (s *Service) landResource(ctx context.Context, writer *contentWriter, writes []write, result *ResourceResult, verb, title string) error {
 	needsCredential := slices.ContainsFunc(result.Credentials, func(credential Credential) bool {
 		return credential.State == CredentialMissing || credential.State == CredentialReplace
 	})
@@ -333,7 +333,7 @@ func (s *Service) landResource(ctx context.Context, writer *contentWriter, write
 		}
 		// A missing key of an existing Secret is written as a replacement:
 		// the Secret is written whole, holding that one key.
-		operation.Credentials = append(operation.Credentials, operationCredential{Secret: credential.Secret, Key: credential.Key, Replace: replace || credential.exists, Exists: credential.exists})
+		operation.Credentials = append(operation.Credentials, operationCredential{Secret: credential.Secret, Key: credential.Key, Replace: credential.State == CredentialReplace || credential.exists, Exists: credential.exists})
 	}
 	// A replacement writes no consumer, so no consumer version guards it: the
 	// operation keeps the consumers and where they send the value, and the

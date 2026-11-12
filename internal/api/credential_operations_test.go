@@ -351,9 +351,11 @@ func TestConnectorCredentialOperationDeduplicatesSharedHeaderReferences(t *testi
 				if replace {
 					seedSecret(t, fixture, "tenant-credential-gh", "token")
 				}
-				answer, failed := fixture.call(t, ToolSetOrganizationConnector, map[string]any{
-					"namespace": orgNS, "name": "gh", "replaceCredential": replace, "mode": mode,
-				})
+				tool, arguments := ToolSetOrganizationConnector, map[string]any{"namespace": orgNS, "name": "gh", "mode": mode}
+				if replace {
+					tool, arguments = ToolReplaceOrganizationCredential, map[string]any{"namespace": orgNS, "secret": ghSecret, "key": "token", "mode": mode}
+				}
+				answer, failed := fixture.call(t, tool, arguments)
 				require.False(t, failed, answer)
 				var result organizations.ResourceResult
 				require.NoError(t, json.Unmarshal([]byte(answer), &result))
@@ -477,7 +479,7 @@ func TestCredentialCommitReplacesAnEncryptedSecret(t *testing.T) {
 	consumer.SetLabels(fromGitLabels("payments"))
 	fixture, forge = commitFixture(t, base, consumer)
 	seedSecret(t, fixture, "tenant-credential-claude", "apiKey")
-	replacement := prepareModelOperation(t, fixture, map[string]any{"mode": "commit", "replaceCredential": true})
+	replacement := replaceCredential(t, fixture, map[string]any{"secret": claudeSecret, "key": "apiKey", "mode": "commit"})
 	confirmation = confirmOperation(t, fixture, replacement.CredentialOperation)
 	status, answer, _ = operationHTTP(t, fixture, http.MethodPost, replacement.CredentialOperation, confirmation.Version, valuesBody(t, replacement, "replacement-synthetic-value"), nil)
 	require.Equal(t, http.StatusOK, status, answer)
@@ -569,7 +571,7 @@ func TestCredentialReplacementKeepsOrdinaryEditsSeparate(t *testing.T) {
 		}
 		require.NotContains(t, []string{"create", "update", "patch", "delete"}, action.GetVerb())
 	}
-	result := prepareModelOperation(t, fixture, map[string]any{"replaceCredential": true, "requestId": "rotation"})
+	result := replaceCredential(t, fixture, map[string]any{"secret": claudeSecret, "key": "apiKey", "requestId": "rotation"})
 	confirmation := confirmOperation(t, fixture, result.CredentialOperation)
 	status, answer, _ := operationHTTP(t, fixture, http.MethodPost, result.CredentialOperation, confirmation.Version, valuesBody(t, result, "replacement-value"), nil)
 	require.Equal(t, http.StatusOK, status, answer)
@@ -667,7 +669,7 @@ func TestCredentialReplacementAdmissionRefusesBeforeAValueIsEntered(t *testing.T
 		return nil
 	}
 
-	text, failed := fixture.call(t, ToolSetOrganizationModel, map[string]any{"namespace": orgNS, "name": "claude", "provider": "Anthropic", "model": "claude-sonnet-4-6", "replaceCredential": true})
+	text, failed := fixture.call(t, ToolReplaceOrganizationCredential, map[string]any{"namespace": orgNS, "secret": claudeSecret, "key": "apiKey"})
 	require.True(t, failed, text)
 	require.Contains(t, text, "changed in git")
 	require.NotContains(t, text, "credentialOperation")
@@ -685,7 +687,7 @@ func TestCredentialReplacementWritesTheSecretWhole(t *testing.T) {
 	require.NoError(t, unstructured.SetNestedField(stored.Object, base64.StdEncoding.EncodeToString([]byte(liveValue)), "data", "other"))
 	require.NoError(t, fixture.dyn.Tracker().Update(secretGVR, stored, orgNS))
 
-	result := prepareModelOperation(t, fixture, map[string]any{"replaceCredential": true})
+	result := replaceCredential(t, fixture, map[string]any{"secret": claudeSecret, "key": "apiKey"})
 	confirmation := confirmOperation(t, fixture, result.CredentialOperation)
 	status, answer, _ := operationHTTP(t, fixture, http.MethodPost, result.CredentialOperation, confirmation.Version, valuesBody(t, result, "replacement-value"), nil)
 	require.Equal(t, http.StatusOK, status, answer)

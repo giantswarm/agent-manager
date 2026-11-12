@@ -1155,10 +1155,6 @@ A credential field sets the Secret-backed header it names (default: the only one
       "description": "Remove the credential header (default false)",
       "type": "boolean"
     },
-    "replaceCredential": {
-      "description": "Answer with a URL elicitation of the credential UI to enter a new value (default false)",
-      "type": "boolean"
-    },
     "requestId": {
       "description": "Idempotency key, at most 128 characters. Reuse on retries; use a fresh key for another save or a refreshed confirmation.",
       "type": "string"
@@ -1239,10 +1235,6 @@ destinations replaces the whole list. A credentialHeader makes the egress gatewa
       "description": "The organization namespace, e.g. agents-payments-x7k2q (list_organizations, get_organization)",
       "type": "string"
     },
-    "replaceCredential": {
-      "description": "Answer with a URL elicitation of the credential UI to enter a new value (default false)",
-      "type": "boolean"
-    },
     "requestId": {
       "description": "Idempotency key, at most 128 characters. Reuse on retries; use a fresh key for another save or a refreshed confirmation.",
       "type": "string"
@@ -1311,10 +1303,6 @@ The first model of an organization without a default becomes its default (annota
     "provider": {
       "description": "Provider as kagent's ModelConfig takes it, e.g. Anthropic, OpenAI; required to create",
       "type": "string"
-    },
-    "replaceCredential": {
-      "description": "Answer with a URL elicitation of the credential UI to enter a new value (default false)",
-      "type": "boolean"
     },
     "requestId": {
       "description": "Idempotency key, at most 128 characters. Reuse on retries; use a fresh key for another save or a refreshed confirmation.",

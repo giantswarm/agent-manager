@@ -53,28 +53,27 @@ func OrganizationToolNames() []string {
 }
 
 const (
-	argAdminGroups       = "adminGroups"
-	argAdminUsers        = "adminUsers"
-	argHarnesses         = "harnesses"
-	argWorkerReplicas    = "workerReplicas"
-	argConfirm           = "confirm"
-	argRole              = "role"
-	argGroup             = "group"
-	argUser              = "user"
-	argProvider          = "provider"
-	argModel             = "model"
-	argDefault           = "default"
-	argCreate            = "create"
-	argCredentialSecret  = "credentialSecret" // #nosec G101 -- an argument name, not a credential
-	argCredentialKey     = "credentialKey"    // #nosec G101 -- an argument name, not a credential
-	argCredentialHeader  = "credentialHeader" // #nosec G101 -- an argument name, not a credential
-	argNoCredential      = "noCredential"     // #nosec G101 -- an argument name, not a credential
-	argReplaceCredential = "replaceCredential"
-	argURL               = "url"
-	argDestinations      = "destinations"
-	argKind              = "kind"
-	argSecret            = "secret"
-	argKey               = "key"
+	argAdminGroups      = "adminGroups"
+	argAdminUsers       = "adminUsers"
+	argHarnesses        = "harnesses"
+	argWorkerReplicas   = "workerReplicas"
+	argConfirm          = "confirm"
+	argRole             = "role"
+	argGroup            = "group"
+	argUser             = "user"
+	argProvider         = "provider"
+	argModel            = "model"
+	argDefault          = "default"
+	argCreate           = "create"
+	argCredentialSecret = "credentialSecret" // #nosec G101 -- an argument name, not a credential
+	argCredentialKey    = "credentialKey"    // #nosec G101 -- an argument name, not a credential
+	argCredentialHeader = "credentialHeader" // #nosec G101 -- an argument name, not a credential
+	argNoCredential     = "noCredential"     // #nosec G101 -- an argument name, not a credential
+	argURL              = "url"
+	argDestinations     = "destinations"
+	argKind             = "kind"
+	argSecret           = "secret"
+	argKey              = "key"
 )
 
 // JSON Schema keys of the destinations item.
@@ -148,7 +147,6 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service, l
 	orgNSProp := mcp.WithString(argNamespace, mcp.Required(), mcp.Description("The organization namespace, e.g. agents-payments-x7k2q (list_organizations, get_organization)"))
 	dryRun := mcp.WithBoolean(argDryRun, mcp.Description("Check every write with the API server as you and write nothing (default false)"))
 	modeProp := mcp.WithString(argMode, mcp.Enum(agents.ModeApply, agents.ModeCommit), mcp.Description("apply (default): write live as you; refused with gitops_owned for what git applies. commit: dry-run as you, then open a pull request as you"))
-	replaceCred := mcp.WithBoolean(argReplaceCredential, mcp.Description("Answer with a URL elicitation of the credential UI to enter a new value (default false)"))
 	credentialRequestID := mcp.WithString(argRequestID, mcp.Description("Idempotency key, at most 128 characters. Reuse on retries; use a fresh key for another save or a refreshed confirmation."))
 	stringList := map[string]any{"type": "string"}
 	credSecretDesc := "Secret in the organization namespace that holds the credential, by name (tenant-credential-...); never a value"
@@ -311,7 +309,7 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service, l
 		mcp.WithString(argCredentialKey, mcp.Description("Key of that Secret; default apiKey")),
 		mcp.WithBoolean(argDefault, mcp.Description("Make this the organization's default model, moving the mark (default false)")),
 		mcp.WithBoolean(argCreate, mcp.Description("Only create: a model of that name, live or in git, is refused with already_exists, not changed (default false: create or change)")),
-		replaceCred, credentialRequestID, dryRun, modeProp,
+		credentialRequestID, dryRun, modeProp,
 		mcp.WithOutputSchema[organizations.ResourceResult](),
 		mcp.WithReadOnlyHintAnnotation(false),
 		mcp.WithDestructiveHintAnnotation(true),
@@ -319,17 +317,16 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service, l
 		mcp.WithOpenWorldHintAnnotation(false),
 	), t.runWrite(func(ctx context.Context, req mcp.CallToolRequest) (*organizations.ResourceResult, error) {
 		var in struct {
-			Namespace         string `json:"namespace"`
-			Name              string `json:"name"`
-			Provider          string `json:"provider"`
-			Model             string `json:"model"`
-			CredentialSecret  string `json:"credentialSecret"`
-			CredentialKey     string `json:"credentialKey"`
-			Default           bool   `json:"default"`
-			Create            bool   `json:"create"`
-			ReplaceCredential bool   `json:"replaceCredential"`
-			DryRun            bool   `json:"dryRun"`
-			Mode              string `json:"mode"`
+			Namespace        string `json:"namespace"`
+			Name             string `json:"name"`
+			Provider         string `json:"provider"`
+			Model            string `json:"model"`
+			CredentialSecret string `json:"credentialSecret"`
+			CredentialKey    string `json:"credentialKey"`
+			Default          bool   `json:"default"`
+			Create           bool   `json:"create"`
+			DryRun           bool   `json:"dryRun"`
+			Mode             string `json:"mode"`
 		}
 		if err := bindArgs(req, &in); err != nil {
 			return nil, err
@@ -361,7 +358,7 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service, l
 		mcp.WithString(argCredentialSecret, mcp.Description(credSecretDesc)),
 		mcp.WithString(argCredentialKey, mcp.Description("Key of that Secret; default token")),
 		mcp.WithBoolean(argNoCredential, mcp.Description("Remove the credential header (default false)")),
-		replaceCred, credentialRequestID, dryRun, modeProp,
+		credentialRequestID, dryRun, modeProp,
 		mcp.WithOutputSchema[organizations.ResourceResult](),
 		mcp.WithReadOnlyHintAnnotation(false),
 		mcp.WithDestructiveHintAnnotation(true),
@@ -369,17 +366,16 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service, l
 		mcp.WithOpenWorldHintAnnotation(false),
 	), t.runWrite(func(ctx context.Context, req mcp.CallToolRequest) (*organizations.ResourceResult, error) {
 		var in struct {
-			Namespace         string `json:"namespace"`
-			Name              string `json:"name"`
-			URL               string `json:"url"`
-			Description       string `json:"description"`
-			CredentialHeader  string `json:"credentialHeader"`
-			CredentialSecret  string `json:"credentialSecret"`
-			CredentialKey     string `json:"credentialKey"`
-			NoCredential      bool   `json:"noCredential"`
-			ReplaceCredential bool   `json:"replaceCredential"`
-			DryRun            bool   `json:"dryRun"`
-			Mode              string `json:"mode"`
+			Namespace        string `json:"namespace"`
+			Name             string `json:"name"`
+			URL              string `json:"url"`
+			Description      string `json:"description"`
+			CredentialHeader string `json:"credentialHeader"`
+			CredentialSecret string `json:"credentialSecret"`
+			CredentialKey    string `json:"credentialKey"`
+			NoCredential     bool   `json:"noCredential"`
+			DryRun           bool   `json:"dryRun"`
+			Mode             string `json:"mode"`
 		}
 		if err := bindArgs(req, &in); err != nil {
 			return nil, err
@@ -403,7 +399,7 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service, l
 			},
 			"required": []string{"origin"},
 		})),
-		replaceCred, credentialRequestID, dryRun, modeProp,
+		credentialRequestID, dryRun, modeProp,
 		mcp.WithOutputSchema[organizations.ResourceResult](),
 		mcp.WithReadOnlyHintAnnotation(false),
 		mcp.WithDestructiveHintAnnotation(true),
@@ -411,12 +407,11 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service, l
 		mcp.WithOpenWorldHintAnnotation(false),
 	), t.runWrite(func(ctx context.Context, req mcp.CallToolRequest) (*organizations.ResourceResult, error) {
 		var in struct {
-			Namespace         string                            `json:"namespace"`
-			Name              string                            `json:"name"`
-			Destinations      []organizations.EgressDestination `json:"destinations"`
-			ReplaceCredential bool                              `json:"replaceCredential"`
-			DryRun            bool                              `json:"dryRun"`
-			Mode              string                            `json:"mode"`
+			Namespace    string                            `json:"namespace"`
+			Name         string                            `json:"name"`
+			Destinations []organizations.EgressDestination `json:"destinations"`
+			DryRun       bool                              `json:"dryRun"`
+			Mode         string                            `json:"mode"`
 		}
 		if err := bindArgs(req, &in); err != nil {
 			return nil, err
