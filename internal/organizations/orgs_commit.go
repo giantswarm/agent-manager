@@ -221,7 +221,11 @@ func (s *Service) deleteCommit(ctx context.Context, c kube.Client, u *unstructur
 	}
 
 	if file != nil {
-		if listErr != nil {
+		// While the file is in git, merged only words the answer: a
+		// listing that fails leaves it false, so restoring the file and
+		// opening the delete again recovers from a listing that keeps
+		// failing. A refused token is still answered.
+		if _, refused := errors.AsType[*commit.AuthError](listErr); refused {
 			return false, commitError(cm.gh, listErr)
 		}
 		if req.Confirm != "" {
@@ -358,9 +362,6 @@ func (s *Service) markDelete(ctx context.Context, c kube.Client, parent, name, u
 	return apply(ctx, c.Dynamic(), []write{{gvr: GVR, kind: orgKind, op: opUpdate, obj: u.Object, ns: parent, name: name, what: what + " (" + DeletePullRequestAnnotation + ")", reason: way}}, dryRun)
 }
 
-// pullRequest reads a pull request URL of the organizations repository:
-// https://github.com/<owner>/<name>/pull/<number>. Any other URL is not
-// agent-manager's delete.
 // mergedFiles reads whether pr is merged and, when it is, the files it
 // changed, with the pull request reads alone (commit.MergedFilesLister):
 // never its reviews or the statuses and check runs of its head, which the
@@ -376,6 +377,9 @@ func (c *orgCommit) mergedFiles(ctx context.Context, pr commit.PullRequest) (boo
 	return true, changes, nil
 }
 
+// pullRequest reads a pull request URL of the organizations repository:
+// https://github.com/<owner>/<name>/pull/<number>. Any other URL is not
+// agent-manager's delete.
 func (c *orgCommit) pullRequest(raw string) (commit.PullRequest, bool) {
 	u, err := url.Parse(raw)
 	if err != nil || u.Scheme != "https" {

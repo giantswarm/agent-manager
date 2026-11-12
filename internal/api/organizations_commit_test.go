@@ -303,6 +303,31 @@ func TestTheDeleteInCommitModeReadsNoStatusesOrChecks(t *testing.T) {
 	assert.Nil(t, f.get(t, orgGVR, "org-acme", "payments"))
 }
 
+// The recovery from a listing that keeps failing: restore the file and open
+// the delete again. While the file is in git the earlier pull request's
+// files are not needed, so a listing that fails does not stop the new delete
+// pull request.
+func TestARestoredFileOpensANewDeleteWhenTheListingKeepsFailing(t *testing.T) {
+	ctx := context.Background()
+	f, fake := gitOrganization(t)
+	file := fake.Files(mcRepo, "main")[paymentsFile]
+	del := map[string]any{"namespace": "org-acme", "name": "payments", "mode": "commit"}
+	text, isErr := f.call(t, ToolDeleteOrganization, del)
+	require.False(t, isErr, text)
+	require.Len(t, fake.PullRequests(), 1)
+	first := fake.PullRequests()[0]
+	require.NoError(t, fake.Merge(ctx, first.PullRequest))
+	fake.Fail[commit.OpMergedFiles] = errors.New("GitHub listed 3000 of 3001 changed files")
+
+	require.NoError(t, fake.Commit(ctx, mcRepo, "main", "restore", map[string][]byte{paymentsFile: file}))
+	text, isErr = f.call(t, ToolDeleteOrganization, del)
+	require.False(t, isErr, text)
+	require.Len(t, fake.PullRequests(), 2)
+	second := fake.PullRequests()[1]
+	assert.NotContains(t, fake.Files(mcRepo, second.Head), paymentsFile)
+	assert.Equal(t, second.URL, f.get(t, orgGVR, "org-acme", "payments").GetAnnotations()[organizations.DeletePullRequestAnnotation])
+}
+
 // A merged pull request counts as the organization's delete only when the
 // file is gone from git: one that left it, or a file gone without one, is
 // no reason to erase.
