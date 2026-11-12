@@ -108,6 +108,8 @@ func (s *Service) saveCredentialOperation(ctx context.Context, id, version strin
 		return nil, err
 	}
 	seen := map[string]bool{}
+	// created are the Secrets this save creates: only those it may take back.
+	var created []string
 	for _, credential := range operation.Credentials {
 		index := slices.IndexFunc(values, func(value CredentialValue) bool {
 			return value.Secret == credential.Secret && value.Key == credential.Key
@@ -171,6 +173,9 @@ func (s *Service) saveCredentialOperation(ctx context.Context, id, version strin
 				action = opUpdate
 			}
 		}
+		if action == opCreate {
+			created = append(created, credential.Secret)
+		}
 		data := map[string]any{credential.Key: base64.StdEncoding.EncodeToString([]byte(values[index].Value))}
 		writes = append([]write{credentialSecretWrite(operation.Namespace.Name, credential.Secret, action, data)}, writes...)
 	}
@@ -193,6 +198,9 @@ func (s *Service) saveCredentialOperation(ctx context.Context, id, version strin
 		}
 	} else {
 		err = s.applyCredentialOperation(ctx, caller, operation, writes)
+		if errors.As(err, new(nameTaken)) {
+			removeCreatedSecrets(ctx, caller, operation, created)
+		}
 	}
 	if err != nil {
 		operation.State = operationUncertain
@@ -204,6 +212,29 @@ func (s *Service) saveCredentialOperation(ctx context.Context, id, version strin
 		return nil, err
 	}
 	return &operation.Result, nil
+}
+
+// removeCreatedSecrets takes back, as the caller, the Secrets of created that
+// this save wrote before a consumer create was refused because its object
+// exists by then (nameTaken): that object may name the Secret, and the value
+// the person typed for their own new object must not stay for it to send. A
+// Secret is deleted only at the version this save wrote (a precondition), so
+// one changed since is left, and never one that existed before the save,
+// which is updated, not created. The delete sends no propagation policy:
+// the API server answers it with a Status, never the Secret. A refused
+// delete leaves the Secret and its recorded version for the uncertain
+// operation.
+func removeCreatedSecrets(ctx context.Context, caller kube.Client, operation *credentialOperation, created []string) {
+	for _, name := range created {
+		version := operation.AppliedVersions[kindSecret+"/"+name]
+		if version == "" {
+			continue
+		}
+		err := caller.Dynamic().Resource(secretGVR).Namespace(operation.Namespace.Name).Delete(ctx, name, metav1.DeleteOptions{Preconditions: &metav1.Preconditions{ResourceVersion: &version}})
+		if err == nil || apierrors.IsNotFound(err) {
+			delete(operation.AppliedVersions, kindSecret+"/"+name)
+		}
+	}
 }
 
 func operationVersionMatches(operation *credentialOperation, object *unstructured.Unstructured) bool {
