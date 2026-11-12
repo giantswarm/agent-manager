@@ -175,6 +175,11 @@ func (s *Service) SetModel(ctx context.Context, req ModelRequest) (*ResourceResu
 		obj = newObject(s.apiVersion(), "ModelConfig", ns, req.Name)
 		res.Created = true
 	}
+	if !res.Created {
+		if err := refuseProviderChangeOnSameSecret(obj, req); err != nil {
+			return nil, err
+		}
+	}
 	if req.Provider != "" {
 		_ = unstructured.SetNestedField(obj.Object, req.Provider, "spec", "provider")
 	}
@@ -251,6 +256,26 @@ func (s *Service) SetModel(ctx context.Context, req ModelRequest) (*ResourceResu
 		s.log.Info("organization model written", identity.LogAttr(ctx), "namespace", ns, "name", req.Name, "created", res.Created, "default", agents.IsMarkedDefault(obj))
 	}
 	return res, nil
+}
+
+// refuseProviderChangeOnSameSecret refuses a change of the provider of the
+// existing model obj (live, or its file in git in commit mode) that keeps its
+// credential Secret: the Secret holds the old provider's key, and no order of
+// a provider write and a key write is safe, as one of the two providers
+// receives the other's key for a time. A new Secret is safe: when it does not
+// exist, the save writes it first and then the provider and the reference in
+// one write of the model.
+func refuseProviderChangeOnSameSecret(obj *unstructured.Unstructured, req ModelRequest) error {
+	current, _, _ := unstructured.NestedString(obj.Object, "spec", "provider")
+	if req.Provider == "" || current == "" || strings.EqualFold(req.Provider, current) {
+		return nil
+	}
+	secret, _, _ := unstructured.NestedString(obj.Object, "spec", "apiKeySecret")
+	if secret == "" || firstOf(req.CredentialSecret, secret) != secret {
+		return nil
+	}
+	return fmt.Errorf("%w: ModelConfig %s/%s sends the key in credential Secret %s to %s; a change of its provider to %s that keeps that Secret sends one provider's key to the other for a time, whatever the order of the provider and the key. Give a new credentialSecret that does not exist yet (you enter the %s key, and the save writes the Secret before it changes the provider and the reference), or create a new model",
+		agents.ErrConflict, req.Namespace, req.Name, secret, current, req.Provider, req.Provider)
 }
 
 // ErrAlreadyExists refuses a create of an object that exists by then, live or

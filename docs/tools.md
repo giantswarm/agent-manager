@@ -1309,7 +1309,7 @@ The first model of an organization without a default becomes its default (annota
       "type": "string"
     },
     "provider": {
-      "description": "Provider as kagent's ModelConfig takes it, e.g. Anthropic, OpenAI; required to create",
+      "description": "Provider as kagent's ModelConfig takes it, e.g. Anthropic, OpenAI; required to create; a change needs a new credentialSecret too",
       "type": "string"
     },
     "requestId": {

@@ -36,7 +36,8 @@ func liveModelSpec(t *testing.T, fixture *orgFixture) string {
 }
 
 // With create, a model that exists live is refused with already_exists and
-// left as it is; without it, the same call changes the model as before.
+// left as it is; without it, the same call (with the model's provider)
+// changes the model as before.
 func TestSetModelCreateRefusesAnExistingModel(t *testing.T) {
 	fixture := newOrgFixture(t, model("claude", true))
 	seedSecret(t, fixture, "tenant-credential-claude", "apiKey")
@@ -47,7 +48,7 @@ func TestSetModelCreateRefusesAnExistingModel(t *testing.T) {
 	require.Equal(t, "m", liveModelSpec(t, fixture))
 	require.Zero(t, consumerWrites(fixture))
 
-	text, failed = createModel(t, fixture, map[string]any{"create": false})
+	text, failed = createModel(t, fixture, map[string]any{"create": false, "provider": "Anthropic"})
 	require.False(t, failed, text)
 	require.Equal(t, "gpt-5", liveModelSpec(t, fixture))
 }
