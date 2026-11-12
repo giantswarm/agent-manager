@@ -648,8 +648,12 @@ The organization tools (every name holds `organization`):
   admission policy requires) and deletes it; the operator erases it. An
   organization Flux applies from git is refused live (commit mode is
   giantswarm/agent-manager#292).
+- for an organization's members: `list_organization_members`, which needs
+  `list` on RoleBindings in the organization namespace; every member role
+  (`agent-platform:user`, `editor` or `admin`) holds it from agent-platform
+  chart 4.179.0 on, `agent-platform:admin` alone before.
 - for an organization's admins (`agent-platform:admin` in its namespace):
-  `list_organization_members`, `add_organization_member` and
+  `add_organization_member` and
   `remove_organization_member` (a group offered before a person; members
   of a role go into the RoleBinding `organization-<role>s`, and
   `organization-admins` is never emptied); `set_organization_model`
