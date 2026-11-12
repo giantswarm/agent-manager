@@ -447,6 +447,34 @@ muster:
     auth:
       forwardToken: true
       requiredAudiences: []
+      tokenExchange:
+        # -- muster exchanges the session's token at the installation's Dex
+        # (RFC 8693) for a token of this server instead of forwarding it
+        # (`forwardToken` is then rendered false): MCP forbids a server to
+        # pass through the token it received. The exchanged token carries
+        # `requiredAudiences`. Needs `oauth.enabled`; excludes `github.enabled`,
+        # whose pin is an authorization server of its own.
+        enabled: false
+        # -- Dex token endpoint. Empty: `<oauth.dex.issuerURL>/token`.
+        dexTokenEndpoint: ""
+        # -- Issuer the exchanged token must carry. Empty: muster derives it
+        # from `dexTokenEndpoint`.
+        expectedIssuer: ""
+        # -- Dex connector that verifies the session's token for the
+        # exchange: one that trusts the installation's own Dex. Dex issues
+        # the exchanged token's `sub` under this connector, so it differs
+        # from the `sub` of the person's login: credential operations
+        # started here and completed in the portal, and GitHub grants
+        # filed under the login `sub`, do not match it.
+        connectorId: ""
+        # -- Scopes requested on the exchange.
+        scopes: openid profile email groups
+        clientCredentialsSecretRef:
+          # -- Secret with muster's Dex client under `client-id` and
+          # `client-secret`.
+          name: ""
+          # -- Namespace of that Secret; empty is the release namespace.
+          namespace: ""
 
 httpRoute:
   # -- Expose the service through a Gateway API HTTPRoute.

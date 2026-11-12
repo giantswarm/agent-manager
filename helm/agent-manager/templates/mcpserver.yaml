@@ -1,6 +1,13 @@
 {{- if and .Values.github.enabled (not .Values.oauth.enabled) }}
 {{- fail "github.enabled pins the MCPServer to the GitHub App and forwards the person's ID token next to its user token, which the server validates as an OAuth resource server: set oauth.enabled" }}
 {{- end }}
+{{- $exchange := .Values.muster.mcpServer.auth.tokenExchange }}
+{{- if and $exchange.enabled .Values.github.enabled }}
+{{- fail "muster.mcpServer.auth.tokenExchange and github.enabled are two ways for muster to authenticate to this server: set one" }}
+{{- end }}
+{{- if and $exchange.enabled (not .Values.oauth.enabled) }}
+{{- fail "muster.mcpServer.auth.tokenExchange makes muster present a Dex token, which the server validates as an OAuth resource server: set oauth.enabled" }}
+{{- end }}
 {{- if .Values.muster.mcpServer.enabled }}
 {{- /*
 Registers this server with muster. Tools appear as x_<name>_<tool>. With
@@ -10,7 +17,9 @@ oauth.trustedAudiences, and requests the requiredAudiences at login. Without
 OAuth muster connects anonymously. With github.enabled the auth pins the
 GitHub App giantswarm-agent-manager instead: the bearer is the person's App
 user token (commit mode's pull request) and forwardIdentity puts the ID token
-in X-Muster-Id-Token next to it.
+in X-Muster-Id-Token next to it. With muster.mcpServer.auth.tokenExchange
+muster exchanges the session's token at Dex for one carrying the
+requiredAudiences instead of forwarding it.
 */}}
 apiVersion: muster.giantswarm.io/v1alpha1
 kind: MCPServer
@@ -62,6 +71,27 @@ spec:
       {{- toYaml . | nindent 6 }}
     {{- end }}
   {{- end }}
+  {{- else if $exchange.enabled }}
+  auth:
+    type: oauth
+    forwardToken: false
+    tokenExchange:
+      enabled: true
+      dexTokenEndpoint: {{ $exchange.dexTokenEndpoint | default (printf "%s/token" (include "agent-manager.oauthDexIssuerURL" . | trimSuffix "/")) | quote }}
+      {{- with $exchange.expectedIssuer }}
+      expectedIssuer: {{ . | quote }}
+      {{- end }}
+      connectorId: {{ required "muster.mcpServer.auth.tokenExchange.connectorId is required: the Dex connector that verifies the session's token" $exchange.connectorId | quote }}
+      {{- with $exchange.scopes }}
+      scopes: {{ . | quote }}
+      {{- end }}
+      clientCredentialsSecretRef:
+        name: {{ required "muster.mcpServer.auth.tokenExchange.clientCredentialsSecretRef.name is required: the Secret with muster's Dex client" $exchange.clientCredentialsSecretRef.name | quote }}
+        namespace: {{ $exchange.clientCredentialsSecretRef.namespace | default .Release.Namespace | quote }}
+    {{- with .Values.muster.mcpServer.auth.requiredAudiences }}
+    requiredAudiences:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
   {{- else if .Values.oauth.enabled }}
   auth:
     type: oauth
