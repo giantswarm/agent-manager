@@ -96,10 +96,14 @@ func pinError(err error, skillAt, pluginAt func(int) string, nSkills, nPlugins i
 }
 
 // sourceError marks a failed lookup of a skill or plugin source, named at:
-// a repository the caller cannot read is forbidden, skill-manager refusing
-// the bearer unauthenticated, skill-manager or GitHub behind it failing a
-// backend error; anything else is an invalid reference.
+// a repository the caller cannot read is forbidden, one that needs the
+// person's grant of skill-manager's App a grant_required naming it,
+// skill-manager refusing the bearer unauthenticated, skill-manager or GitHub
+// behind it failing a backend error; anything else is an invalid reference.
 func sourceError(at string, err error) error {
+	if grant, ok := errors.AsType[*skillmanager.GrantRequiredError](err); ok {
+		return &GrantRequiredError{App: grant.App, Reason: at + ": " + grant.Error()}
+	}
 	switch {
 	case errors.Is(err, skills.ErrNotReadable):
 		return fmt.Errorf("%w: %s: %w", ErrForbidden, at, err)
@@ -113,6 +117,9 @@ func sourceError(at string, err error) error {
 
 // skillManagerError maps a failed catalogue read of skill-manager.
 func skillManagerError(err error) error {
+	if grant, ok := errors.AsType[*skillmanager.GrantRequiredError](err); ok {
+		return &GrantRequiredError{App: grant.App, Reason: grant.Error()}
+	}
 	switch {
 	case errors.Is(err, skillmanager.ErrInvalid):
 		return fmt.Errorf("%w: %w", ErrInvalid, err)

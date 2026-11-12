@@ -53,7 +53,7 @@ func (c *orgCommit) credentialSnapshot(ctx context.Context, operation *credentia
 	}
 	files, err := c.remote.ListFiles(ctx, c.cfg.Objects.Repository, c.cfg.Objects.Branch, directory.Path())
 	if err != nil {
-		return nil, commitError(err)
+		return nil, commitError(c.gh, err)
 	}
 	paths = append(paths, files...)
 	snapshot := map[string]string{}
@@ -66,7 +66,7 @@ func (c *orgCommit) credentialSnapshot(ctx context.Context, operation *credentia
 			continue
 		}
 		if err != nil {
-			return nil, commitError(err)
+			return nil, commitError(c.gh, err)
 		}
 		snapshot[file] = fileDigest(raw)
 		for _, credential := range operation.Credentials {
@@ -168,7 +168,7 @@ func (s *Service) commitCredentialOperation(ctx context.Context, operation *cred
 	}
 	plan, err := layout.Build(ctx, writer.commit.remote, change.dir, change.write, nil, options...)
 	if err != nil {
-		return nil, commitError(err)
+		return nil, commitError(writer.commit.gh, err)
 	}
 	landed := plan.Change()
 	for _, credential := range operation.Credentials {
@@ -202,7 +202,7 @@ func (s *Service) commitCredentialOperation(ctx context.Context, operation *cred
 	}
 	err = writer.commit.remote.CreateBranch(ctx, writer.commit.cfg.Objects.Repository, result.Branch, result.Base)
 	if err != nil {
-		return nil, commitError(err)
+		return nil, commitError(writer.commit.gh, err)
 	}
 	branchConfiguration := *writer.commit.cfg
 	branchConfiguration.Objects.Branch = result.Branch
@@ -217,11 +217,11 @@ func (s *Service) commitCredentialOperation(ctx context.Context, operation *cred
 	}
 	err = writer.commit.remote.Commit(ctx, writer.commit.cfg.Objects.Repository, result.Branch, "chore(organizations): save credential operation", landed.Files)
 	if err != nil {
-		return nil, commitError(err)
+		return nil, commitError(writer.commit.gh, err)
 	}
 	pullRequest, err := writer.commit.remote.OpenPullRequest(ctx, writer.commit.cfg.Objects.Repository, result.Branch, result.Base, "chore(organizations): save credential operation", "Updates the confirmed organization resources and their encrypted credentials. Operation: "+operation.ElicitationID+".\n\nThe platform team reviews the change through CODEOWNERS.")
 	if err != nil {
-		return nil, commitError(err)
+		return nil, commitError(writer.commit.gh, err)
 	}
 	result.PullRequest, result.Number = pullRequest.URL, pullRequest.Number
 	return result, nil
@@ -244,7 +244,7 @@ func (s *Service) recoverCredentialCommit(ctx context.Context, operation *creden
 	}
 	pullRequest, err := writer.commit.remote.OpenPullRequest(ctx, writer.commit.cfg.Objects.Repository, result.Branch, result.Base, "chore(organizations): save credential operation", "Completes credential operation "+operation.ElicitationID+". The platform team reviews the change through CODEOWNERS.")
 	if err != nil {
-		return nil, commitError(err)
+		return nil, commitError(writer.commit.gh, err)
 	}
 	result.PullRequest, result.Number = pullRequest.URL, pullRequest.Number
 	completeCredentialOperation(operation)

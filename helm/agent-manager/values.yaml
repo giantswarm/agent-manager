@@ -318,60 +318,70 @@ oauth:
     # organization namespaces.
     enabled: false
 
-githubTokenExchange:
-  # -- RFC 8693 token endpoint. Empty retains the existing GitHub pin mode.
-  endpoint: ""
-  # -- Confidential broker client ID, allowed to retrieve only the manager App grant.
-  clientID: ""
-  # -- Fixed broker target for the manager App user grant.
-  audience: ""
-  # -- Existing Secret in the release namespace, containing client-secret.
-  secretName: ""
-  # -- Optional existing Secret with ca.crt for the broker's private CA.
-  caSecretName: ""
-
 github:
-  # -- Register with muster pinned to the GitHub App
-  # `giantswarm-agent-manager` and offer commit mode (`mode: commit` on
-  # `create_agent`, `update_agent` and `delete_agent`: the manifests land as
-  # a pull request opened as the person in the repository that owns the
-  # namespace). The MCPServer's auth then pins the App as the authorization
-  # server: muster runs the App's consent once per person and puts their user
-  # token on every call, which this server verifies with `GET /user` and opens
-  # the pull request with, and sets `forwardIdentity: true`, so muster
-  # forwards the person's IdP ID token in `X-Muster-Id-Token` next to it and
-  # apply mode keeps acting on Kubernetes as the person. Needs
-  # `oauth.enabled`, and the App installed with contents and pull-request
-  # write on every repository a commit may target. Off: muster forwards the
-  # ID token as the bearer (`muster.mcpServer.auth.forwardToken`); commit
-  # mode then requires githubTokenExchange.
+  # -- Offer commit mode (`mode: commit` on `create_agent`, `update_agent`
+  # and `delete_agent`: the manifests land as a pull request opened as the
+  # person in the repository that owns the namespace), with the person's user
+  # token of the GitHub App, which this server verifies with `GET /user`.
+  # Needs `oauth.enabled`, and the App installed with contents and
+  # pull-request write on every repository a commit may target. With
+  # `tokenExchange.tokenEndpoint` the server fetches that token per commit
+  # (RFC 8693) and muster forwards the ID token as the bearer
+  # (`muster.mcpServer.auth.forwardToken`); without it the MCPServer is
+  # pinned to the App through `authorizationServer` (deprecated).
   enabled: false
   # -- GitHub's REST API, for `GET /user` and the pull request.
   apiURL: https://api.github.com
+  tokenExchange:
+    # -- RFC 8693 token endpoint the server fetches the person's grant of the
+    # App from, for each call that needs it. Empty uses the deprecated
+    # `authorizationServer` pin. Needs `enabled`, Dex OAuth and
+    # `oauth.downstream.enabled`.
+    tokenEndpoint: ""
+    # -- RFC 8693 audience of the grant, also the App a commit without the
+    # person's grant names in its `grant_required` answer and the MCPServer
+    # lists under `auth.providerApps` (muster's `aggregator.providerApps`
+    # key): lowercase letters, digits and hyphens, at most 63 characters.
+    # Required with `tokenEndpoint`.
+    audience: ""  # @schema pattern: ^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)?$
+    # -- Confidential client ID. Empty reads the Secret's `client-id` key.
+    clientID: ""
+    # -- Confidential client secret, rendered into a Secret
+    # `<fullname>-github-token-exchange`. Prefer `existingSecret`.
+    clientSecret: ""
+    # -- Existing Secret in the release namespace with `client-secret` (and
+    # `client-id` when `clientID` is empty). Required with `tokenEndpoint`
+    # unless `clientSecret` is set.
+    existingSecret: ""
+    # -- Optional existing Secret with `ca.crt` for the token endpoint's
+    # private CA.
+    caSecretName: ""
+  # -- Deprecated: use `tokenExchange`. Ignored with
+  # `tokenExchange.tokenEndpoint`.
   authorizationServer:
-    # -- The issuer identity the person's grant is filed under: the App's
+    # -- Deprecated. The issuer identity the person's grant is filed under: the App's
     # own, so the login App's GitHub grant stays separate. Also passed to the
     # server, which names it in its refusals.
     issuer: https://github.com/apps/giantswarm-agent-manager
-    # -- The issuer GitHub puts in the RFC 9207 `iss` parameter of its
+    # -- Deprecated. The issuer GitHub puts in the RFC 9207 `iss` parameter of its
     # authorization response, `https://github.com/login/oauth` for every App.
     # Empty omits the field.
     expectedIssuer: https://github.com/login/oauth
-    # -- GitHub's authorize endpoint (GitHub publishes no discovery document).
+    # -- Deprecated. GitHub's authorize endpoint (GitHub publishes no discovery document).
     authorizationEndpoint: https://github.com/login/oauth/authorize
-    # -- GitHub's token endpoint.
+    # -- Deprecated. GitHub's token endpoint.
     tokenEndpoint: https://github.com/login/oauth/access_token
-    # -- The OAuth `scope` parameter, only for an authorization server that
+    # -- Deprecated. The OAuth `scope` parameter, only for an authorization server that
     # needs one (a lab's stand-in); empty for GitHub, whose App permissions
     # are the App's. Empty omits the field.
     scopes: ""
     clientCredentialsSecretRef:
-      # -- Secret with the App's OAuth client under `client-id` and
+      # -- Deprecated. Secret with the App's OAuth client under `client-id` and
       # `client-secret`.
       name: giantswarm-agent-manager-oauth-client
-      # -- Namespace of that Secret; empty is the release namespace.
+      # -- Deprecated. Namespace of that Secret; empty is the release namespace.
       namespace: ""
-    # -- `subject`: the grant belongs to the person, not to one login session.
+    # -- Deprecated. `subject`: the grant belongs to the person, not to one login session.
     grantScope: subject
 
 muster:
@@ -531,7 +541,7 @@ tenants:
     # -- The installation's repository (`owner/name`) the organization
     # tools' `mode: commit` opens its pull requests in, as the person.
     # Empty: `mode: commit` is not offered for organizations. Needs
-    # `github.authorizationServer.issuer`. The repository's CODEOWNERS must
+    # `github.enabled`. The repository's CODEOWNERS must
     # name the platform team for `objectsPath` and `contentPrefix`, and its
     # `.sops.yaml` must cover `contentPrefix` (docs/organizations-commit-mode.md).
     repository: ""

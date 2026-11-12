@@ -114,6 +114,7 @@ type serveOptions struct {
 	githubAPIURL                  string
 	githubExchangeEndpoint        string
 	githubExchangeClient          string
+	githubExchangeClientFile      string
 	githubExchangeSecretFile      string
 	githubExchangeAudience        string
 	githubExchangeCAFile          string
@@ -198,9 +199,10 @@ environment variable named next to it; flags win over the environment.`,
 	f.StringVar(&o.githubAuthorizationServer, "github-authorization-server", envOr("AGENT_MANAGER_GITHUB_AUTHORIZATION_SERVER", ""), "Issuer identity of the GitHub App muster pins this server's MCP registration to (https://github.com/apps/giantswarm-agent-manager): the bearer of every MCP call is then the person's App user token, verified with GET /user and used for commit mode's pull request, and the person's IdP ID token arrives in X-Muster-Id-Token (MCPServer auth.forwardIdentity). Empty: commit mode is not offered. Needs --enable-oauth (AGENT_MANAGER_GITHUB_AUTHORIZATION_SERVER)")
 	f.StringVar(&o.githubAPIURL, "github-api-url", envOr("AGENT_MANAGER_GITHUB_API_URL", server.DefaultGitHubAPIURL), "GitHub REST API base URL for GET /user and commit mode (AGENT_MANAGER_GITHUB_API_URL)")
 	f.StringVar(&o.githubExchangeEndpoint, "github-token-exchange-endpoint", envOr("AGENT_MANAGER_GITHUB_TOKEN_EXCHANGE_ENDPOINT", ""), "RFC 8693 endpoint for obtaining the manager App user grant (AGENT_MANAGER_GITHUB_TOKEN_EXCHANGE_ENDPOINT)")
-	f.StringVar(&o.githubExchangeClient, "github-token-exchange-client-id", envOr("AGENT_MANAGER_GITHUB_TOKEN_EXCHANGE_CLIENT_ID", ""), "Confidential token exchange client ID (AGENT_MANAGER_GITHUB_TOKEN_EXCHANGE_CLIENT_ID)")
+	f.StringVar(&o.githubExchangeClient, "github-token-exchange-client-id", envOr("AGENT_MANAGER_GITHUB_TOKEN_EXCHANGE_CLIENT_ID", ""), "Confidential token exchange client ID; empty reads --github-token-exchange-client-id-file (AGENT_MANAGER_GITHUB_TOKEN_EXCHANGE_CLIENT_ID)")
+	f.StringVar(&o.githubExchangeClientFile, "github-token-exchange-client-id-file", envOr("AGENT_MANAGER_GITHUB_TOKEN_EXCHANGE_CLIENT_ID_FILE", ""), "Mounted confidential client ID file, read at startup when --github-token-exchange-client-id is empty (AGENT_MANAGER_GITHUB_TOKEN_EXCHANGE_CLIENT_ID_FILE)")
 	f.StringVar(&o.githubExchangeSecretFile, "github-token-exchange-client-secret-file", envOr("AGENT_MANAGER_GITHUB_TOKEN_EXCHANGE_CLIENT_SECRET_FILE", ""), "Mounted confidential client secret file (AGENT_MANAGER_GITHUB_TOKEN_EXCHANGE_CLIENT_SECRET_FILE)")
-	f.StringVar(&o.githubExchangeAudience, "github-token-exchange-audience", envOr("AGENT_MANAGER_GITHUB_TOKEN_EXCHANGE_AUDIENCE", ""), "Fixed target of the manager App user grant (AGENT_MANAGER_GITHUB_TOKEN_EXCHANGE_AUDIENCE)")
+	f.StringVar(&o.githubExchangeAudience, "github-token-exchange-audience", envOr("AGENT_MANAGER_GITHUB_TOKEN_EXCHANGE_AUDIENCE", ""), "RFC 8693 audience of the manager App user grant, also the App named in grant_required answers (AGENT_MANAGER_GITHUB_TOKEN_EXCHANGE_AUDIENCE)")
 	f.StringVar(&o.githubExchangeCAFile, "github-token-exchange-ca-file", envOr("AGENT_MANAGER_GITHUB_TOKEN_EXCHANGE_CA_FILE", ""), "Additional CA bundle for token exchange (AGENT_MANAGER_GITHUB_TOKEN_EXCHANGE_CA_FILE)")
 	f.StringVar(&o.credentialUIURL, "credential-ui-url", envOr("AGENT_MANAGER_CREDENTIAL_UI_URL", ""), "HTTPS credential UI URL template containing {operation}; the URL grants no authority (AGENT_MANAGER_CREDENTIAL_UI_URL)")
 	f.StringVar(&o.credentialOperationsNamespace, "credential-operations-namespace", envOr("AGENT_MANAGER_CREDENTIAL_OPERATIONS_NAMESPACE", ""), "Dedicated namespace for nonsecret credential operation metadata (AGENT_MANAGER_CREDENTIAL_OPERATIONS_NAMESPACE)")
@@ -379,7 +381,7 @@ func runServe(ctx context.Context, o *serveOptions) error {
 	var orgs *organizations.Service
 	var resolveGitHub func(context.Context) (*identity.GitHub, error)
 	if o.githubExchangeEndpoint != "" {
-		resolveGitHub, err = server.NewGitHubExchange(server.GitHubExchangeConfig{TokenEndpoint: o.githubExchangeEndpoint, ClientID: o.githubExchangeClient, ClientSecretFile: o.githubExchangeSecretFile, Audience: o.githubExchangeAudience, CAFile: o.githubExchangeCAFile, APIURL: o.githubAPIURL, SubjectIssuer: o.dexIssuerURL})
+		resolveGitHub, err = server.NewGitHubExchange(server.GitHubExchangeConfig{TokenEndpoint: o.githubExchangeEndpoint, ClientID: o.githubExchangeClient, ClientIDFile: o.githubExchangeClientFile, ClientSecretFile: o.githubExchangeSecretFile, Audience: o.githubExchangeAudience, CAFile: o.githubExchangeCAFile, APIURL: o.githubAPIURL, SubjectIssuer: o.dexIssuerURL, Logger: log})
 		if err != nil {
 			return err
 		}
@@ -665,9 +667,9 @@ func validateCredentialOptions(options *serveOptions) error {
 		if !options.oauthEnabled || !options.downstreamOAuth || options.oauthProvider != server.ProviderDex || options.githubAuthorizationServer != "" {
 			return errors.New("GitHub token exchange requires Dex OAuth and downstream OAuth, and replaces the GitHub-pinned MCP registration")
 		}
-		return (server.GitHubExchangeConfig{TokenEndpoint: options.githubExchangeEndpoint, ClientID: options.githubExchangeClient, ClientSecretFile: options.githubExchangeSecretFile, Audience: options.githubExchangeAudience, CAFile: options.githubExchangeCAFile, APIURL: options.githubAPIURL, SubjectIssuer: options.dexIssuerURL}).Validate()
+		return (server.GitHubExchangeConfig{TokenEndpoint: options.githubExchangeEndpoint, ClientID: options.githubExchangeClient, ClientIDFile: options.githubExchangeClientFile, ClientSecretFile: options.githubExchangeSecretFile, Audience: options.githubExchangeAudience, CAFile: options.githubExchangeCAFile, APIURL: options.githubAPIURL, SubjectIssuer: options.dexIssuerURL}).Validate()
 	}
-	if options.githubExchangeClient != "" || options.githubExchangeSecretFile != "" || options.githubExchangeAudience != "" || options.githubExchangeCAFile != "" {
+	if options.githubExchangeClient != "" || options.githubExchangeClientFile != "" || options.githubExchangeSecretFile != "" || options.githubExchangeAudience != "" || options.githubExchangeCAFile != "" {
 		return errors.New("GitHub token exchange options require --github-token-exchange-endpoint")
 	}
 	return nil

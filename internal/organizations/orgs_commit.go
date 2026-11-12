@@ -213,7 +213,7 @@ func (s *Service) deleteCommit(ctx context.Context, c kube.Client, u *unstructur
 		if pr, ok = cm.pullRequest(prURL); ok {
 			st, err := cm.remote.Status(ctx, pr)
 			if err != nil {
-				return false, commitError(err)
+				return false, commitError(cm.gh, err)
 			}
 			merged = st.Merged
 		}
@@ -232,7 +232,7 @@ func (s *Service) deleteCommit(ctx context.Context, c kube.Client, u *unstructur
 		// written now.
 		open, has, err := cm.remote.FindPullRequest(ctx, cm.cfg.Objects.Repository, head)
 		if err != nil {
-			return false, commitError(err)
+			return false, commitError(cm.gh, err)
 		}
 		if has {
 			if prURL != open.URL && !req.DryRun {
@@ -277,7 +277,7 @@ func (s *Service) deleteCommit(ctx context.Context, c kube.Client, u *unstructur
 func (s *Service) removedBy(ctx context.Context, cm *orgCommit, pr commit.PullRequest, what, p string) error {
 	changes, err := cm.remote.MergedFiles(ctx, pr)
 	if err != nil {
-		return fmt.Errorf("%w (nothing was erased: the files of the delete pull request %s could not be listed, so whether it removed %s is unknown; call delete_organization again with mode commit and confirm to retry, and if the listing keeps failing, restore %s and open a new delete with mode commit and no confirm)", commitError(err), pr.URL, p, p)
+		return fmt.Errorf("%w (nothing was erased: the files of the delete pull request %s could not be listed, so whether it removed %s is unknown; call delete_organization again with mode commit and confirm to retry, and if the listing keeps failing, restore %s and open a new delete with mode commit and no confirm)", commitError(cm.gh, err), pr.URL, p, p)
 	}
 	const next = "then call delete_organization again with mode commit and no confirm to open a new delete pull request"
 	for _, c := range changes {

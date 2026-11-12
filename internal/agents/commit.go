@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"slices"
 	"strings"
 
@@ -251,16 +252,31 @@ func (s *Service) gitHubFor(ctx context.Context) (GitHubRemote, *identity.GitHub
 	}
 	remote, err := s.cfg.GitHub(gh.Token)
 	if err != nil {
-		return nil, nil, commitError(err)
+		return nil, nil, commitError(gh, err)
 	}
 	return remote, gh, nil
 }
 
-// commitError answers a token GitHub refused with the consent to renew.
-func commitError(err error) error {
+// GitHubRefusal answers GitHub refusing gh's token on an operation of
+// commit mode with what renews it: on the App-pinned registration the
+// consent to agent-manager; for a grant of a provider App (gh.App) a 401
+// asks for that grant again, and a 403 names what the App and the person
+// lack, which no new grant gives.
+func GitHubRefusal(gh *identity.GitHub, auth *commit.AuthError) error {
+	switch {
+	case gh == nil || gh.App == "":
+		return authRequiredf("GitHub refused your token on %s (status %d): reconnect agent-manager in muster (core_auth_login server=agent-manager); the App must be installed on the repository and your account allowed to push to it", auth.Op, auth.Status)
+	case auth.Status == http.StatusUnauthorized:
+		return &GrantRequiredError{App: gh.App, Reason: fmt.Sprintf("GitHub refused your grant of the GitHub App %s on %s: grant it again in muster (core_auth_login app=%s), then call again", gh.App, auth.Op, gh.App)}
+	}
+	return fmt.Errorf("%w: GitHub refused %s (status %d) with your grant of the GitHub App %s: the App must be installed on the repository and your account allowed to push to it", ErrForbidden, auth.Op, auth.Status, gh.App)
+}
+
+// commitError answers a token GitHub refused with what renews it.
+func commitError(gh *identity.GitHub, err error) error {
 	var auth *commit.AuthError
 	if errors.As(err, &auth) {
-		return authRequiredf("GitHub refused your token on %s (status %d): reconnect agent-manager in muster (core_auth_login server=agent-manager); the App must be installed on the repository and your account allowed to push to it", auth.Op, auth.Status)
+		return GitHubRefusal(gh, auth)
 	}
 	var secret *layout.SecretError
 	if errors.As(err, &secret) {
@@ -295,7 +311,7 @@ func (c *agentCommit) exists(ctx context.Context, p string) (bool, error) {
 		return false, nil
 	}
 	if err != nil {
-		return false, commitError(err)
+		return false, commitError(c.gh, err)
 	}
 	return true, nil
 }
@@ -321,7 +337,7 @@ func (c *agentCommit) requireReleaseFile(ctx context.Context, hr *unstructured.U
 func (c *agentCommit) open(ctx context.Context, write map[string][]byte, remove []string, branch, title, body string, dryRun bool) (*CommitResult, error) {
 	plan, err := layout.Build(ctx, c.remote, c.loc.directory(), write, remove)
 	if err != nil {
-		return nil, commitError(err)
+		return nil, commitError(c.gh, err)
 	}
 	out := &CommitResult{
 		Repository: c.loc.Repository.String(), Base: c.loc.Branch, Directory: c.loc.directory().Path(),
@@ -339,7 +355,7 @@ func (c *agentCommit) open(ctx context.Context, write map[string][]byte, remove 
 	}
 	prs, err := commit.Open(ctx, c.remote, commit.Request{Branch: branch, Title: title, Body: body + "\n\nOpened by agent-manager as @" + c.gh.Login + "."}, []commit.Change{plan.Change()})
 	if err != nil {
-		return nil, commitError(err)
+		return nil, commitError(c.gh, err)
 	}
 	out.PullRequest, out.Number = prs[0].URL, prs[0].Number
 	return out, nil

@@ -135,4 +135,105 @@ tests:
         enabled: true
     asserts:
       - failedTemplate:
-          errorMessage: "github.enabled pins the MCPServer to the GitHub App and forwards the person's ID token next to its user token, which the server validates as an OAuth resource server: set oauth.enabled"
+          errorMessage: "github.enabled verifies the person's GitHub user token next to their ID token, which the server validates as an OAuth resource server: set oauth.enabled"
+
+  - it: forwards the token and names the GitHub App with github.tokenExchange
+    set:
+      oauth:
+        downstream:
+          enabled: true
+      github:
+        enabled: true
+        tokenExchange:
+          tokenEndpoint: https://muster.example.com/oauth/token
+          audience: github
+          existingSecret: agent-manager-github-exchange
+    asserts:
+      - equal:
+          path: spec.auth.forwardToken
+          value: true
+      - equal:
+          path: spec.auth.providerApps
+          value:
+            - github
+      - notExists:
+          path: spec.auth.authorizationServer
+      - notExists:
+          path: spec.auth.forwardIdentity
+
+  - it: names no grant App without github.tokenExchange
+    asserts:
+      - notExists:
+          path: spec.auth.providerApps
+
+  - it: refuses github.tokenExchange without github.enabled
+    set:
+      github:
+        tokenExchange:
+          tokenEndpoint: https://muster.example.com/oauth/token
+          audience: github
+          existingSecret: agent-manager-github-exchange
+    asserts:
+      - failedTemplate:
+          errorMessage: "github.tokenExchange needs github.enabled: set github.enabled to true, or unset github.tokenExchange.tokenEndpoint"
+
+  - it: refuses github.tokenExchange without forwardToken
+    set:
+      oauth:
+        downstream:
+          enabled: true
+      github:
+        enabled: true
+        tokenExchange:
+          tokenEndpoint: https://muster.example.com/oauth/token
+          audience: github
+          existingSecret: agent-manager-github-exchange
+      muster:
+        mcpServer:
+          auth:
+            forwardToken: false
+    asserts:
+      - failedTemplate:
+          errorMessage: "github.tokenExchange lists its App under the MCPServer's providerApps, which muster serves only on a forwarded token: set muster.mcpServer.auth.forwardToken"
+
+  - it: refuses github.tokenExchange without downstream OAuth
+    set:
+      github:
+        enabled: true
+        tokenExchange:
+          tokenEndpoint: https://muster.example.com/oauth/token
+          audience: github
+          existingSecret: agent-manager-github-exchange
+    asserts:
+      - failedTemplate:
+          errorMessage: "github.tokenExchange exchanges the person's Dex ID token: set oauth.enabled with oauth.provider dex and oauth.downstream.enabled"
+
+  - it: refuses github.tokenExchange with the Google provider
+    set:
+      oauth:
+        provider: google
+        downstream:
+          enabled: true
+      github:
+        enabled: true
+        tokenExchange:
+          tokenEndpoint: https://muster.example.com/oauth/token
+          audience: github
+          existingSecret: agent-manager-github-exchange
+    asserts:
+      - failedTemplate:
+          errorMessage: "github.tokenExchange exchanges the person's Dex ID token: set oauth.enabled with oauth.provider dex and oauth.downstream.enabled"
+
+  - it: refuses an audience muster cannot name as a provider App
+    set:
+      oauth:
+        downstream:
+          enabled: true
+      github:
+        enabled: true
+        tokenExchange:
+          tokenEndpoint: https://muster.example.com/oauth/token
+          audience: https://github.com/apps/giantswarm-agent-manager
+          existingSecret: agent-manager-github-exchange
+    asserts:
+      - failedTemplate: {}

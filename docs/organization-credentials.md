@@ -114,20 +114,26 @@ platform identity. Configure a confidential [RFC 8693 client](https://www.rfc-ed
 
 ```yaml
 github:
-  enabled: false
-githubTokenExchange:
-  endpoint: https://muster.example.com/oauth/token
-  clientID: agent-manager
-  audience: agent-manager-github
-  secretName: agent-manager-broker-client
-  caSecretName: ""
+  enabled: true
+  tokenExchange:
+    tokenEndpoint: https://muster.example.com/oauth/token
+    audience: <muster provider App>
+    clientID: ""
+    existingSecret: agent-manager-github-token-exchange
+    caSecretName: ""
 ```
 
-The existing Secret contains `client-secret`. An optional CA Secret contains
-`ca.crt`. The endpoint and output audience are operator-controlled; requests
-cannot change them. This mode requires Dex OAuth and downstream authorization,
-and replaces the App-pinned MCP registration. It also supplies ordinary agent
-and organization commits with the person's grant.
+`audience` is the RFC 8693 target and muster's provider App (its
+`aggregator.providerApps` key) whose grant it releases: a GitHub App
+installed with contents and pull-request write on every repository a commit
+targets. The Secret contains `client-secret`, and `client-id` when `clientID`
+is empty; the chart mounts the whole Secret. With `clientSecret` instead of
+`existingSecret` the chart renders `<fullname>-github-token-exchange`. An
+optional CA Secret contains `ca.crt`. The endpoint and audience are
+operator-controlled; requests cannot change them. This mode requires
+`github.enabled`, Dex OAuth and downstream authorization, and replaces the
+App-pinned MCP registration (`github.authorizationServer`, deprecated). It
+also supplies ordinary agent and organization commits with the person's grant.
 
 The authorization server must independently validate the subject ID token and
 confidential client, allow that client only the manager App's target audience,
@@ -145,14 +151,17 @@ subject-token issuer must be the same canonical platform issuer under which the
 person's App consent is stored. Where grant ownership is keyed by raw `sub`, do
 not enable this profile with multiple independent identity issuers or ambiguous
 existing grants. Verify this deployment condition before enabling credential
-commits; this feature performs no grant migration. Missing consent returns
-`auth_required`; the client owns the provider authorization UX.
+commits; this feature performs no grant migration. Missing consent answers
+the MCP tool with `{"status": "grant_required", "apps": ["<audience>"]}` in
+`structuredContent`; the MCPServer lists `github.tokenExchange.audience`
+under `auth.providerApps`, so muster answers it with the App's sign-in link.
+REST returns `auth_required`; the client owns the provider authorization UX.
 
 The App must be installed with contents and pull-request write on the target
 repository. GitHub documents the distinction between [user authorization and
 installation authorization](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/authenticating-with-a-github-app-on-behalf-of-a-user).
-The existing App-pinned mode remains available for MCP commits, but alone cannot
-authorize the credential HTTPS save.
+The deprecated App-pinned mode remains available for MCP commits, but alone
+cannot authorize the credential HTTPS save.
 
 ## Storage and write boundaries
 

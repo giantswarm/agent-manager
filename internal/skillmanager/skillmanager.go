@@ -25,7 +25,8 @@ import (
 
 // The errors of a call beyond skill-manager's 400, 403 and 404, which wrap
 // skills.ErrUnresolvable (400 and 404 on a resolve), skills.ErrNotReadable
-// (403) and ErrInvalid (400 and 404 on a list).
+// (403), *GrantRequiredError (a 403 with code grant_required) and
+// ErrInvalid (400 and 404 on a list).
 var (
 	// ErrUnavailable: skill-manager, or GitHub or a registry behind it,
 	// could not answer (5xx, unreachable, or an answer that is not the API's).
@@ -36,6 +37,18 @@ var (
 	// source it does not serve.
 	ErrInvalid = errors.New("skill-manager refused the request")
 )
+
+// GrantRequiredError is skill-manager refusing a call that needs the
+// person's grant of its GitHub App, which they have not given in muster: a
+// 403 whose body is {"code": "grant_required", "apps": [<app>], ...}.
+type GrantRequiredError struct {
+	// App is the provider App, by muster's name for it.
+	App string
+}
+
+func (e *GrantRequiredError) Error() string {
+	return fmt.Sprintf("skill-manager reads this private repository with your grant of the GitHub App %s, which you have not given: grant it in muster (core_auth_login app=%s), then call again", e.App, e.App)
+}
 
 // resolvePath is skill-manager's pinning call.
 const resolvePath = "/v1/resolve"
@@ -294,9 +307,11 @@ func (c *Client) authorize(ctx context.Context, req *http.Request, p string) err
 // ({"error": "...", "item": n, "list": "skills" | "plugins"}).
 func answerError(method, p string, status int, raw []byte) error {
 	var body struct {
-		Error string `json:"error"`
-		Item  *int   `json:"item"`
-		List  string `json:"list"`
+		Error string   `json:"error"`
+		Item  *int     `json:"item"`
+		List  string   `json:"list"`
+		Code  string   `json:"code"`
+		Apps  []string `json:"apps"`
 	}
 	msg := strings.TrimSpace(string(raw))
 	if json.Unmarshal(raw, &body) == nil && body.Error != "" {
@@ -308,6 +323,8 @@ func answerError(method, p string, status int, raw []byte) error {
 	resolve := p == resolvePath
 	var kind error
 	switch {
+	case status == http.StatusForbidden && body.Code == "grant_required" && len(body.Apps) > 0 && body.Apps[0] != "":
+		kind = &GrantRequiredError{App: body.Apps[0]}
 	case status == http.StatusForbidden:
 		kind = skills.ErrNotReadable
 	case status == http.StatusUnauthorized:

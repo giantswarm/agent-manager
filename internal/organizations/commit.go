@@ -172,17 +172,17 @@ func (s *Service) newCommit(ctx context.Context) (*orgCommit, error) {
 	}
 	remote, err := s.cfg.Commit.GitHub(gh.Token)
 	if err != nil {
-		return nil, commitError(err)
+		return nil, commitError(gh, err)
 	}
 	return &orgCommit{cfg: s.cfg.Commit, remote: remote, gh: gh}, nil
 }
 
-// commitError answers a token GitHub refused with the consent to renew, and
+// commitError answers a token GitHub refused with what renews it, and
 // a secret file the repository cannot encrypt with what it lacks.
-func commitError(err error) error {
+func commitError(gh *identity.GitHub, err error) error {
 	var auth *commit.AuthError
 	if errors.As(err, &auth) {
-		return fmt.Errorf("%w: GitHub refused your token on %s (status %d): reconnect agent-manager in muster (core_auth_login server=agent-manager); the App must be installed on the repository and your account allowed to push to it", agents.ErrAuthRequired, auth.Op, auth.Status)
+		return agents.GitHubRefusal(gh, auth)
 	}
 	var secret *layout.SecretError
 	if errors.As(err, &secret) {
@@ -239,7 +239,7 @@ func (c *orgCommit) read(ctx context.Context, p string) (*unstructured.Unstructu
 		return nil, nil
 	}
 	if err != nil {
-		return nil, commitError(err)
+		return nil, commitError(c.gh, err)
 	}
 	obj := map[string]any{}
 	if err := yaml.Unmarshal(raw, &obj); err != nil {
@@ -255,7 +255,7 @@ func (c *orgCommit) exists(ctx context.Context, p string) (bool, error) {
 		return false, nil
 	}
 	if err != nil {
-		return false, commitError(err)
+		return false, commitError(c.gh, err)
 	}
 	return true, nil
 }
@@ -264,7 +264,7 @@ func (c *orgCommit) exists(ctx context.Context, p string) (bool, error) {
 func (c *orgCommit) list(ctx context.Context, dir string) ([]string, error) {
 	files, err := c.remote.ListFiles(ctx, c.cfg.Objects.Repository, c.cfg.Objects.Branch, dir)
 	if err != nil {
-		return nil, commitError(err)
+		return nil, commitError(c.gh, err)
 	}
 	return files, nil
 }
@@ -296,7 +296,7 @@ func (c *orgCommit) open(ctx context.Context, changes []fileChange, branch, titl
 		}
 		plan, err := layout.Build(ctx, c.remote, ch.dir, ch.write, ch.remove, opts...)
 		if err != nil {
-			return nil, commitError(err)
+			return nil, commitError(c.gh, err)
 		}
 		for _, f := range plan.Files {
 			file := agents.CommitFile{Path: f.Path, Action: string(f.Action)}
@@ -330,7 +330,7 @@ func (c *orgCommit) open(ctx context.Context, changes []fileChange, branch, titl
 	// branch of an open pull request would undo the first in it.
 	if open, has, err := c.remote.FindPullRequest(ctx, c.cfg.Objects.Repository, branch); err != nil || has {
 		if err != nil {
-			return nil, commitError(err)
+			return nil, commitError(c.gh, err)
 		}
 		return nil, fmt.Errorf("%w: the pull request %s for this object is open: merge or close it first, then call again", agents.ErrConflict, open.URL)
 	}
@@ -360,17 +360,17 @@ func (c *orgCommit) land(ctx context.Context, changes []commit.Change, creates [
 	files := map[string][]byte{}
 	for _, ch := range changes {
 		if ch.Location.Repository != repo || ch.Location.Branch != base {
-			return commit.PullRequest{}, commitError(fmt.Errorf("%w: %s", commit.ErrConflictingBase, ch.Location.Repository))
+			return commit.PullRequest{}, commitError(c.gh, fmt.Errorf("%w: %s", commit.ErrConflictingBase, ch.Location.Repository))
 		}
 		for p, content := range ch.Files {
 			if _, dup := files[p]; dup {
-				return commit.PullRequest{}, commitError(fmt.Errorf("%w: %s %s", commit.ErrDuplicatePath, repo, p))
+				return commit.PullRequest{}, commitError(c.gh, fmt.Errorf("%w: %s %s", commit.ErrDuplicatePath, repo, p))
 			}
 			files[p] = content
 		}
 	}
 	if err := c.remote.CreateBranch(ctx, repo, branch, base); err != nil {
-		return commit.PullRequest{}, commitError(err)
+		return commit.PullRequest{}, commitError(c.gh, err)
 	}
 	for _, p := range creates {
 		taken, err := c.exists(ctx, p)
@@ -382,11 +382,11 @@ func (c *orgCommit) land(ctx context.Context, changes []commit.Change, creates [
 		}
 	}
 	if err := c.remote.Commit(ctx, repo, branch, title, files); err != nil {
-		return commit.PullRequest{}, commitError(err)
+		return commit.PullRequest{}, commitError(c.gh, err)
 	}
 	pr, err := c.remote.OpenPullRequest(ctx, repo, branch, base, title, body)
 	if err != nil {
-		return commit.PullRequest{}, commitError(err)
+		return commit.PullRequest{}, commitError(c.gh, err)
 	}
 	return pr, nil
 }
@@ -568,7 +568,7 @@ func (c *orgCommit) secretFiles(ctx context.Context) (func(string) bool, error) 
 		return sopsenc.IsSecretFile, nil
 	}
 	if err != nil {
-		return nil, commitError(err)
+		return nil, commitError(c.gh, err)
 	}
 	enc, err := sopsenc.New(raw)
 	if err != nil {
