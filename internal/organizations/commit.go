@@ -347,12 +347,14 @@ func (c *orgCommit) open(ctx context.Context, changes []fileChange, branch, titl
 }
 
 // land is commit.Open for the one repository and base of c, with the files
-// creates must still be absent once the branch is cut: the branch fixes the
-// base, so a file another commit added after the plan was decided is seen
-// there and refused (nameTaken) before anything is committed, as the
-// credential save reads its snapshot again on its branch. A refused branch
-// stays as cut, without a commit: the remote deletes no branch, and the next
-// write of the object brings it up to date with the base.
+// creates must still be absent from the base once the branch is cut: a file
+// another commit added to the base after the plan was decided, and so before
+// the cut, is seen and refused (nameTaken) before anything is committed. The
+// base is read, not the branch: a branch of an earlier closed or merged pull
+// request of the same object keeps its own files when CreateBranch brings it
+// up to date, and the commit replaces them. A refused branch stays as cut,
+// without a commit: the remote deletes no branch, and the next write of the
+// object brings it up to date with the base.
 func (c *orgCommit) land(ctx context.Context, changes []commit.Change, creates []string, branch, title, body string) (commit.PullRequest, error) {
 	repo, base := c.cfg.Objects.Repository, c.cfg.Objects.Branch
 	files := map[string][]byte{}
@@ -371,13 +373,12 @@ func (c *orgCommit) land(ctx context.Context, changes []commit.Change, creates [
 		return commit.PullRequest{}, commitError(err)
 	}
 	for _, p := range creates {
-		_, err := c.remote.ReadFile(ctx, repo, branch, p)
-		switch {
-		case errors.Is(err, commit.ErrFileNotFound):
-		case err != nil:
-			return commit.PullRequest{}, commitError(err)
-		default:
-			return commit.PullRequest{}, nameTaken{fmt.Errorf("%w: %s is in %s already and not applied yet: wait for the organization's Kustomization to apply it, then change it", agents.ErrConflict, p, repo)}
+		taken, err := c.exists(ctx, p)
+		if err != nil {
+			return commit.PullRequest{}, err
+		}
+		if taken {
+			return commit.PullRequest{}, nameTaken{fmt.Errorf("%w: %s is in %s already and not applied yet: wait for Flux to apply it, then change it", agents.ErrConflict, p, repo)}
 		}
 	}
 	if err := c.remote.Commit(ctx, repo, branch, title, files); err != nil {

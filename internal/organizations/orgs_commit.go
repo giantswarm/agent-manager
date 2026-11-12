@@ -85,9 +85,10 @@ func (s *Service) createCommit(ctx context.Context, c kube.Client, req CreateReq
 		return nil, err
 	}
 
+	bindingFile := contentFile(content, kindRoleBinding, FirstAdminsBinding)
 	changes := []fileChange{
-		{dir: cm.objectDir(req.Parent), write: map[string][]byte{objFile: manifest(obj, true)}},
-		{dir: content, write: map[string][]byte{contentFile(content, kindRoleBinding, FirstAdminsBinding): manifest(binding, false)}},
+		{dir: cm.objectDir(req.Parent), write: map[string][]byte{objFile: manifest(obj, true)}, create: []string{objFile}},
+		{dir: content, write: map[string][]byte{bindingFile: manifest(binding, false)}, create: []string{bindingFile}},
 	}
 	title := fmt.Sprintf("feat(organizations): add organization %s/%s", req.Parent, req.Name)
 	body := fmt.Sprintf("Adds the Agent Platform organization %s/%s: its object under its parent, and its first admins (%s, bound to %s) in its content path %s, which its own Flux Kustomization applies.", req.Parent, req.Name, FirstAdminsBinding, RoleAdmin, content.Path())
