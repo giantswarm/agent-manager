@@ -1116,7 +1116,7 @@ A credential field sets the Secret-backed header it names (default: the only one
 {
   "properties": {
     "create": {
-      "description": "Only create: a connector of that name, live or in git, is refused with already_exists, not changed (default false)",
+      "description": "Only create: a connector of that name, live or in git, is refused with already_exists, not changed (default false: create or change)",
       "type": "boolean"
     },
     "credentialHeader": {
@@ -1188,7 +1188,7 @@ destinations replaces the whole list. A credentialHeader makes the egress gatewa
 {
   "properties": {
     "create": {
-      "description": "Only create: a policy of that name, live or in git, is refused with already_exists, not replaced (default false)",
+      "description": "Only create: a policy of that name, live or in git, is refused with already_exists, not replaced (default false: create or replace)",
       "type": "boolean"
     },
     "destinations": {

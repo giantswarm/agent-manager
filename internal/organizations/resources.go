@@ -269,7 +269,7 @@ func (e nameTaken) Unwrap() error { return e.err }
 
 // alreadyExists refuses a create-only write of kind ns/name.
 func alreadyExists(kind, ns, name string) error {
-	return fmt.Errorf("%w: %s %s/%s exists already: pick another name, or call without create to change it", ErrAlreadyExists, kind, ns, name)
+	return fmt.Errorf("%w: %s %s/%s exists already: pick another name, or call without create to change or replace it", ErrAlreadyExists, kind, ns, name)
 }
 
 // refuseTaken refuses a create-only write of kind ns/name when an object of
