@@ -159,16 +159,8 @@ func (s *Service) SetModel(ctx context.Context, req ModelRequest) (*ResourceResu
 		return nil, err
 	}
 	if req.Create {
-		// Only create: a model of that name live, or as its file in git
-		// (in commit mode), is refused here, a dry run included.
-		taken := find(items, req.Name) != nil
-		if !taken && w.commit != nil {
-			if taken, err = w.commit.exists(ctx, contentFile(w.dir, "ModelConfig", req.Name)); err != nil {
-				return nil, err
-			}
-		}
-		if taken {
-			return nil, modelExists(ns, req.Name)
+		if err := refuseTaken(ctx, w, items, "ModelConfig", ns, req.Name); err != nil {
+			return nil, err
 		}
 	}
 	obj, err := w.source(ctx, find(items, req.Name), "ModelConfig")
@@ -253,12 +245,7 @@ func (s *Service) SetModel(ctx context.Context, req ModelRequest) (*ResourceResu
 	}
 	res.Credentials = []Credential{cred}
 	if err = s.landResource(ctx, w, writes, res, "model-"+req.Name, "chore(organizations): set model "+req.Name); err != nil {
-		// With create, a model made since the read, live (the create itself
-		// refuses it) or as its file in git, answers ErrAlreadyExists too.
-		if req.Create && errors.As(err, new(nameTaken)) {
-			return nil, modelExists(ns, req.Name)
-		}
-		return nil, err
+		return nil, createOnly(err, req.Create, "ModelConfig", ns, req.Name)
 	}
 	if !req.DryRun && res.Commit == nil && res.CredentialOperation == "" {
 		s.log.Info("organization model written", identity.LogAttr(ctx), "namespace", ns, "name", req.Name, "created", res.Created, "default", agents.IsMarkedDefault(obj))
@@ -280,8 +267,36 @@ type nameTaken struct{ err error }
 func (e nameTaken) Error() string { return e.err.Error() }
 func (e nameTaken) Unwrap() error { return e.err }
 
-func modelExists(ns, name string) error {
-	return fmt.Errorf("%w: ModelConfig %s/%s exists already: pick another name, or call without create to change it", ErrAlreadyExists, ns, name)
+// alreadyExists refuses a create-only write of kind ns/name.
+func alreadyExists(kind, ns, name string) error {
+	return fmt.Errorf("%w: %s %s/%s exists already: pick another name, or call without create to change or replace it", ErrAlreadyExists, kind, ns, name)
+}
+
+// refuseTaken refuses a create-only write of kind ns/name when an object of
+// that name is live (items) or, in commit mode, its file is in git, a dry run
+// included.
+func refuseTaken(ctx context.Context, w *contentWriter, items []unstructured.Unstructured, kind, ns, name string) error {
+	taken := find(items, name) != nil
+	if !taken && w.commit != nil {
+		var err error
+		if taken, err = w.commit.exists(ctx, contentFile(w.dir, kind, name)); err != nil {
+			return err
+		}
+	}
+	if taken {
+		return alreadyExists(kind, ns, name)
+	}
+	return nil
+}
+
+// createOnly is err of a write of kind ns/name; with create, an object of
+// that name made since the read, live (the create itself refuses it) or as
+// its file in git, answers ErrAlreadyExists too.
+func createOnly(err error, create bool, kind, ns, name string) error {
+	if create && errors.As(err, new(nameTaken)) {
+		return alreadyExists(kind, ns, name)
+	}
+	return err
 }
 
 func setMark(obj *unstructured.Unstructured) {
@@ -320,7 +335,10 @@ type ConnectorRequest struct {
 	CredentialKey    string
 	// NoCredential removes the Secret-backed headers.
 	NoCredential bool
-	DryRun       bool
+	// Create only creates: a connector of that name, live or in git, is
+	// refused with ErrAlreadyExists instead of changed.
+	Create bool
+	DryRun bool
 	// Mode is apply (default) or commit.
 	Mode string
 }
@@ -417,6 +435,11 @@ func (s *Service) SetConnector(ctx context.Context, req ConnectorRequest) (*Reso
 	if err != nil {
 		return nil, err
 	}
+	if req.Create {
+		if err := refuseTaken(ctx, w, items, "RemoteMCPServer", ns, req.Name); err != nil {
+			return nil, err
+		}
+	}
 	obj, err := w.source(ctx, find(items, req.Name), "RemoteMCPServer")
 	if err != nil {
 		return nil, err
@@ -499,7 +522,7 @@ func (s *Service) SetConnector(ctx context.Context, req ConnectorRequest) (*Reso
 		res.Credentials = append(res.Credentials, cred)
 	}
 	if err = s.landResource(ctx, w, []write{wr}, res, "connector-"+req.Name, "chore(organizations): set connector "+req.Name); err != nil {
-		return nil, err
+		return nil, createOnly(err, req.Create, "RemoteMCPServer", ns, req.Name)
 	}
 	if !req.DryRun && res.Commit == nil && res.CredentialOperation == "" {
 		s.log.Info("organization connector written", identity.LogAttr(ctx), "namespace", ns, "name", req.Name, "created", res.Created)
@@ -550,7 +573,10 @@ type EgressRequest struct {
 	Namespace    string
 	Name         string
 	Destinations []EgressDestination
-	DryRun       bool
+	// Create only creates: an egress policy of that name, live or in git, is
+	// refused with ErrAlreadyExists instead of replaced.
+	Create bool
+	DryRun bool
 	// Mode is apply (default) or commit.
 	Mode string
 }
@@ -581,6 +607,11 @@ func (s *Service) SetEgressPolicy(ctx context.Context, req EgressRequest) (*Reso
 	w, err := s.contentWriter(ctx, org, req.Mode)
 	if err != nil {
 		return nil, err
+	}
+	if req.Create {
+		if err := refuseTaken(ctx, w, items, "EgressPolicy", ns, req.Name); err != nil {
+			return nil, err
+		}
 	}
 	obj, err := w.source(ctx, find(items, req.Name), "EgressPolicy")
 	if err != nil {
@@ -632,7 +663,7 @@ func (s *Service) SetEgressPolicy(ctx context.Context, req EgressRequest) (*Reso
 		res.Credentials = append(res.Credentials, cred)
 	}
 	if err = s.landResource(ctx, w, []write{wr}, res, "egress-"+req.Name, "chore(organizations): set egress policy "+req.Name); err != nil {
-		return nil, err
+		return nil, createOnly(err, req.Create, "EgressPolicy", ns, req.Name)
 	}
 	if !req.DryRun && res.Commit == nil && res.CredentialOperation == "" {
 		s.log.Info("organization egress policy written", identity.LogAttr(ctx), "namespace", ns, "name", req.Name, "created", res.Created)

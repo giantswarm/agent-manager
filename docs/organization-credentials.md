@@ -6,13 +6,14 @@ an operation before writing any consumer. Ordinary edits with existing
 credentials do not prepare an operation or change the Secret; a new value for
 an existing credential goes through `replace_organization_credential`.
 
-`set_organization_model` with `create: true` only creates: a model of that name
-that is live, or whose file is in git, is refused with error code
-`already_exists` (`409`) and nothing is written, at the call (a dry run
-included) and when the create itself meets a model made since the read.
-Without `create` the tool creates or changes the model as before, with the same
-answers. When the new model waits for its key, the operation creates it at the
-save: a save of any operation that creates a model, connector or egress policy
+`set_organization_model`, `set_organization_connector` and
+`set_organization_egress_policy` with `create: true` only create: a model,
+connector or egress policy of that name that is live, or whose file is in git,
+is refused with error code `already_exists` (`409`) and nothing is written, at
+the call (a dry run included) and when the create itself meets an object made
+since the read. Without `create` each tool creates or changes the object as
+before, with the same answers. When the new object waits for its key, the
+operation creates it at the save: a save of any operation that creates a model, connector or egress policy
 answers `already_exists` when that object exists by then, live or in git. The
 save checks before it writes; only an object made in the moment between its
 dry run and its create can find the Secret already written, and the operation

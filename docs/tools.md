@@ -1115,6 +1115,10 @@ A credential field sets the Secret-backed header it names (default: the only one
 ```json
 {
   "properties": {
+    "create": {
+      "description": "Only create: a connector of that name, live or in git, is refused with already_exists, not changed (default false: create or change)",
+      "type": "boolean"
+    },
     "credentialHeader": {
       "description": "Header the credential goes in; default Authorization",
       "type": "string"
@@ -1183,6 +1187,10 @@ destinations replaces the whole list. A credentialHeader makes the egress gatewa
 ```json
 {
   "properties": {
+    "create": {
+      "description": "Only create: a policy of that name, live or in git, is refused with already_exists, not replaced (default false: create or replace)",
+      "type": "boolean"
+    },
     "destinations": {
       "description": "Origins, each {origin, credentialHeader, credentialPrefix, credentialSecret, credentialKey}",
       "items": {
