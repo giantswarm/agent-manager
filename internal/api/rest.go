@@ -441,6 +441,7 @@ var errorCodes = []struct {
 }{
 	{organizations.ErrCredentialOperationChanged, http.StatusPreconditionFailed, "precondition_failed"},
 	{organizations.ErrCredentialConsumersChanged, http.StatusConflict, "credential_consumers_changed"},
+	{organizations.ErrAlreadyExists, http.StatusConflict, "already_exists"},
 	{errIfMatchRequired, http.StatusPreconditionRequired, "precondition_required"},
 	{agents.ErrNotFound, http.StatusNotFound, "not_found"},
 	{agents.ErrInvalid, http.StatusBadRequest, "invalid_request"},

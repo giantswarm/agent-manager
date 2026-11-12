@@ -580,7 +580,7 @@ func (w *contentWriter) land(ctx context.Context, s *Service, writes []write, dr
 				return nil, err
 			}
 			if ok {
-				return nil, fmt.Errorf("%w: %s is in %s already and not applied yet: wait for the organization's Kustomization to apply it, then change it", agents.ErrConflict, p, w.commit.cfg.Objects.Repository)
+				return nil, nameTaken{fmt.Errorf("%w: %s is in %s already and not applied yet: wait for the organization's Kustomization to apply it, then change it", agents.ErrConflict, p, w.commit.cfg.Objects.Repository)}
 			}
 			ch.write[p] = manifest(unstructuredOf(wr.obj), false)
 		default:

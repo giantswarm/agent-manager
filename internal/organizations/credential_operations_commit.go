@@ -126,7 +126,7 @@ func (c *orgCommit) credentialSnapshot(ctx context.Context, operation *credentia
 	for _, planned := range operation.Writes {
 		file := contentFile(directory, planned.Kind, planned.Name)
 		if planned.Action == opCreate && snapshot[file] != "absent" {
-			return nil, fmt.Errorf("%w: %s is in %s already and not applied yet: wait for the organization's Kustomization to apply it, then change it", agents.ErrConflict, file, c.cfg.Objects.Repository)
+			return nil, nameTaken{fmt.Errorf("%w: %s is in %s already and not applied yet: wait for the organization's Kustomization to apply it, then change it", agents.ErrConflict, file, c.cfg.Objects.Repository)}
 		}
 	}
 	snapshot["directory-entries"] = fileDigest([]byte(strings.Join(files, "\n")))

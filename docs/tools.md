@@ -1268,6 +1268,10 @@ The first model of an organization without a default becomes its default (annota
 ```json
 {
   "properties": {
+    "create": {
+      "description": "Only create: a model of that name, live or in git, is refused with already_exists, not changed (default false: create or change)",
+      "type": "boolean"
+    },
     "credentialKey": {
       "description": "Key of that Secret; default apiKey",
       "type": "string"

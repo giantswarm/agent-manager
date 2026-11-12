@@ -6,6 +6,18 @@ organization tools accept no credential values. Missing credentials and explicit
 Ordinary edits with existing credentials do not prepare an operation or change
 the Secret.
 
+`set_organization_model` with `create: true` only creates: a model of that name
+that is live, or whose file is in git, is refused with error code
+`already_exists` (`409`) and nothing is written, at the call (a dry run
+included) and when the create itself meets a model made since the read.
+Without `create` the tool creates or changes the model as before, with the same
+answers. When the new model waits for its key, the operation creates it at the
+save: a save of any operation that creates a model, connector or egress policy
+answers `already_exists` when that object exists by then, live or in git. The
+save checks before it writes; only an object made in the moment between its
+dry run and its create can find the Secret already written, and the operation
+is then uncertain. The person prepares again.
+
 `replace_organization_credential` takes the organization namespace, the Secret
 and the key, and prepares an operation that writes that Secret and no consumer:
 a rotation resends no model, connector or egress policy. At least one
