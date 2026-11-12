@@ -155,11 +155,12 @@
                 },
                 "authorizationServer": {
                     "type": "object",
+                    "description": "Deprecated: use `tokenExchange`. Ignored with `tokenExchange.tokenEndpoint`.",
                     "additionalProperties": false,
                     "properties": {
                         "authorizationEndpoint": {
                             "type": "string",
-                            "description": "GitHub's authorize endpoint (GitHub publishes no discovery document)."
+                            "description": "Deprecated. GitHub's authorize endpoint (GitHub publishes no discovery document)."
                         },
                         "clientCredentialsSecretRef": {
                             "type": "object",
@@ -167,69 +168,69 @@
                             "properties": {
                                 "name": {
                                     "type": "string",
-                                    "description": "Secret with the App's OAuth client under `client-id` and `client-secret`."
+                                    "description": "Deprecated. Secret with the App's OAuth client under `client-id` and `client-secret`."
                                 },
                                 "namespace": {
                                     "type": "string",
-                                    "description": "Namespace of that Secret; empty is the release namespace."
+                                    "description": "Deprecated. Namespace of that Secret; empty is the release namespace."
                                 }
                             }
                         },
                         "expectedIssuer": {
                             "type": "string",
-                            "description": "The issuer GitHub puts in the RFC 9207 `iss` parameter of its authorization response, `https://github.com/login/oauth` for every App. Empty omits the field."
+                            "description": "Deprecated. The issuer GitHub puts in the RFC 9207 `iss` parameter of its authorization response, `https://github.com/login/oauth` for every App. Empty omits the field."
                         },
                         "grantScope": {
                             "type": "string",
-                            "description": "`subject`: the grant belongs to the person, not to one login session."
+                            "description": "Deprecated. `subject`: the grant belongs to the person, not to one login session."
                         },
                         "issuer": {
                             "type": "string",
-                            "description": "The issuer identity the person's grant is filed under: the App's own, so the login App's GitHub grant stays separate. Also passed to the server, which names it in its refusals."
+                            "description": "Deprecated. The issuer identity the person's grant is filed under: the App's own, so the login App's GitHub grant stays separate. Also passed to the server, which names it in its refusals."
                         },
                         "scopes": {
                             "type": "string",
-                            "description": "The OAuth `scope` parameter, only for an authorization server that needs one (a lab's stand-in); empty for GitHub, whose App permissions are the App's. Empty omits the field."
+                            "description": "Deprecated. The OAuth `scope` parameter, only for an authorization server that needs one (a lab's stand-in); empty for GitHub, whose App permissions are the App's. Empty omits the field."
                         },
                         "tokenEndpoint": {
                             "type": "string",
-                            "description": "GitHub's token endpoint."
+                            "description": "Deprecated. GitHub's token endpoint."
                         }
                     }
                 },
                 "enabled": {
                     "type": "boolean",
-                    "description": "Register with muster pinned to the GitHub App `giantswarm-agent-manager` and offer commit mode (`mode: commit` on `create_agent`, `update_agent` and `delete_agent`: the manifests land as a pull request opened as the person in the repository that owns the namespace). The MCPServer's auth then pins the App as the authorization server: muster runs the App's consent once per person and puts their user token on every call, which this server verifies with `GET /user` and opens the pull request with, and sets `forwardIdentity: true`, so muster forwards the person's IdP ID token in `X-Muster-Id-Token` next to it and apply mode keeps acting on Kubernetes as the person. Needs `oauth.enabled`, and the App installed with contents and pull-request write on every repository a commit may target. Off: muster forwards the ID token as the bearer (`muster.mcpServer.auth.forwardToken`); commit mode then requires githubTokenExchange."
-                }
-            }
-        },
-        "githubTokenExchange": {
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-                "audience": {
-                    "type": "string",
-                    "description": "Fixed broker target for the manager App user grant."
+                    "description": "Offer commit mode (`mode: commit` on `create_agent`, `update_agent` and `delete_agent`: the manifests land as a pull request opened as the person in the repository that owns the namespace), with the person's user token of the GitHub App, which this server verifies with `GET /user`. Needs `oauth.enabled`, and the App installed with contents and pull-request write on every repository a commit may target. With `tokenExchange.tokenEndpoint` the server fetches that token per commit (RFC 8693) and muster forwards the ID token as the bearer (`muster.mcpServer.auth.forwardToken`); without it the MCPServer is pinned to the App through `authorizationServer` (deprecated)."
                 },
-                "caSecretName": {
-                    "type": "string",
-                    "description": "Optional existing Secret with ca.crt for the broker's private CA."
-                },
-                "clientID": {
-                    "type": "string",
-                    "description": "Confidential broker client ID, allowed to retrieve only the manager App grant."
-                },
-                "endpoint": {
-                    "type": "string",
-                    "description": "RFC 8693 token endpoint. Empty retains the existing GitHub pin mode."
-                },
-                "grantApp": {
-                    "type": "string",
-                    "description": "muster's name for the provider App (its `aggregator.providerApps` key) whose grant `audience` releases: the same GitHub App, installed with contents and pull-request write on every repository a commit targets. A commit without the person's grant answers `grant_required` naming it, and the MCPServer lists it under `auth.providerApps`, so muster answers with that App's sign-in link. Required with `endpoint`."
-                },
-                "secretName": {
-                    "type": "string",
-                    "description": "Existing Secret in the release namespace, containing client-secret."
+                "tokenExchange": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "audience": {
+                            "type": "string",
+                            "description": "RFC 8693 audience of the grant, also the App a commit without the person's grant names in its `grant_required` answer and the MCPServer lists under `auth.providerApps` (muster's `aggregator.providerApps` key). Required with `tokenEndpoint`."
+                        },
+                        "caSecretName": {
+                            "type": "string",
+                            "description": "Optional existing Secret with `ca.crt` for the token endpoint's private CA."
+                        },
+                        "clientID": {
+                            "type": "string",
+                            "description": "Confidential client ID. Empty reads the Secret's `client-id` key."
+                        },
+                        "clientSecret": {
+                            "type": "string",
+                            "description": "Confidential client secret, rendered into a Secret `<fullname>-github-token-exchange`. Prefer `existingSecret`."
+                        },
+                        "existingSecret": {
+                            "type": "string",
+                            "description": "Existing Secret in the release namespace with `client-secret` (and `client-id` when `clientID` is empty). Required with `tokenEndpoint` unless `clientSecret` is set."
+                        },
+                        "tokenEndpoint": {
+                            "type": "string",
+                            "description": "RFC 8693 token endpoint the server fetches the person's grant of the App from, for each call that needs it. Empty uses the deprecated `authorizationServer` pin. Needs `enabled`, Dex OAuth and `oauth.downstream.enabled`."
+                        }
+                    }
                 }
             }
         },
@@ -459,7 +460,7 @@
                                                 },
                                                 "namespace": {
                                                     "type": "string",
-                                                    "description": "Namespace of that Secret; empty is the release namespace."
+                                                    "description": "Deprecated. Namespace of that Secret; empty is the release namespace."
                                                 }
                                             }
                                         },
@@ -473,7 +474,7 @@
                                         },
                                         "enabled": {
                                             "type": "boolean",
-                                            "description": "muster exchanges the session's token at the installation's Dex (RFC 8693) for a token of this server instead of forwarding it (`forwardToken` is then rendered false): MCP forbids a server to pass through the token it received. The exchanged token carries `requiredAudiences`. Needs `oauth.enabled`; excludes `github.enabled`, whose pin is an authorization server of its own."
+                                            "description": "muster exchanges the session's token at the installation's Dex (RFC 8693) for a token of this server instead of forwarding it (`forwardToken` is then rendered false): MCP forbids a server to pass through the token it received. The exchanged token carries `requiredAudiences`. Needs `oauth.enabled`; excludes the `github.authorizationServer` pin (`github.enabled` without `github.tokenExchange`), an authorization server of its own."
                                         },
                                         "expectedIssuer": {
                                             "type": "string",
@@ -1020,7 +1021,7 @@
                         },
                         "repository": {
                             "type": "string",
-                            "description": "The installation's repository (`owner/name`) the organization tools' `mode: commit` opens its pull requests in, as the person. Empty: `mode: commit` is not offered for organizations. Needs `github.authorizationServer.issuer`. The repository's CODEOWNERS must name the platform team for `objectsPath` and `contentPrefix`, and its `.sops.yaml` must cover `contentPrefix` (docs/organizations-commit-mode.md)."
+                            "description": "The installation's repository (`owner/name`) the organization tools' `mode: commit` opens its pull requests in, as the person. Empty: `mode: commit` is not offered for organizations. Needs `github.enabled`. The repository's CODEOWNERS must name the platform team for `objectsPath` and `contentPrefix`, and its `.sops.yaml` must cover `contentPrefix` (docs/organizations-commit-mode.md)."
                         }
                     }
                 },

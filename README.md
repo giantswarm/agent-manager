@@ -520,14 +520,15 @@ standard manifests a kubectl or GitOps user would apply, returns them on
   `commit: {repository, base, directory, kustomization, prune, branch, files:
   [{path, action, content (dry run)}], pullRequest, number, author}`.
 
-Commit mode needs the GitHub App pin (`github.enabled`, below) or
-`githubTokenExchange` ([GitHub authorization](docs/organization-credentials.md#github-authorization)),
-and reports itself in `get_info` as `capabilities.commit`; without either
-`mode: commit` answers `unsupported`. With the pin, a call that carries no
-GitHub authorization answers `auth_required`, naming the one-time consent
-(`core_auth_login server=agent-manager`). With `githubTokenExchange` only the
-commit asks for GitHub: without the person's grant it answers
-`grant_required` naming the App, and muster answers with the App's sign-in.
+Commit mode needs `github.enabled`, with `github.tokenExchange`
+([GitHub authorization](docs/organization-credentials.md#github-authorization))
+or the deprecated GitHub App pin (below), and reports itself in `get_info` as
+`capabilities.commit`; without it `mode: commit` answers `unsupported`. With
+`github.tokenExchange` only the commit asks for GitHub: without the person's
+grant it answers `grant_required` naming the App (`github.tokenExchange.audience`),
+and muster answers with the App's sign-in. With the pin, a call that carries
+no GitHub authorization answers `auth_required`, naming the one-time consent
+(`core_auth_login server=agent-manager`).
 
 ## Identity
 
@@ -573,9 +574,16 @@ audience it trusts (`dex-k8s-authenticator` on Giant Swarm clusters,
 client id *is* the apiserver's `--oidc-client-id` (`requiredAudiences: []`).
 `get_info` reports `identity: caller` and `capabilities.writesAsCaller: true`.
 
-With `--github-authorization-server` (chart `github.enabled`) the MCP
-registration is pinned to agent-manager's own user-to-server GitHub App,
-`giantswarm-agent-manager`: the MCPServer's auth names the App as the
+`github.tokenExchange` (chart `github.enabled` with
+`github.tokenExchange.tokenEndpoint`) configures a confidential RFC 8693
+client that retrieves the person's App user grant per call that needs it.
+MCP keeps its platform identity registration (`forwardToken`) and lists the
+App under `auth.providerApps`. The trust policy and prerequisites are in
+[Credential operations](docs/organization-credentials.md#github-authorization).
+
+Deprecated: with `--github-authorization-server` (chart `github.enabled`
+without `github.tokenExchange`) the MCP registration is pinned to
+agent-manager's own user-to-server GitHub App, `giantswarm-agent-manager`: the MCPServer's auth names the App as the
 authorization server with `forwardIdentity: true`, so muster runs the App's
 consent once per person and puts the person's App user token on every MCP call
 as the bearer, and the person's IdP ID token in `X-Muster-Id-Token`. The server
@@ -586,13 +594,6 @@ person. The REST API keeps taking the ID token as its bearer. No GitHub
 credential other than the App's OAuth client (read by muster) exists in the
 pod or the chart in this mode. Operator precondition: the App installed with contents and
 pull-request write on every repository a commit may target.
-
-Alternatively, `githubTokenExchange` configures a confidential RFC 8693 client
-that retrieves the person's manager App user grant on demand. This supports
-REST commit mode with the person's verified ID token and keeps MCP on its
-platform identity registration. It replaces `github.enabled`; it does not
-require an App-pinned MCP call. The trust policy and prerequisites are in
-[Credential operations](docs/organization-credentials.md#github-authorization).
 
 Without `--enable-oauth` the service checks no identity and acts as its
 ServiceAccount (the Role per managed namespace: HelmReleases and

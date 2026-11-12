@@ -1,3 +1,4 @@
+{{- $githubTokenExchange := include "agent-manager.githubTokenExchange" . }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -88,15 +89,18 @@ spec:
             - {{ printf "--credential-ui-url=%s" . | quote }}
             - --credential-operations-namespace={{ include "agent-manager.credentialOperationsNamespace" $ }}
             {{- end }}
-            {{- if .Values.githubTokenExchange.endpoint }}
-            - --github-token-exchange-endpoint={{ .Values.githubTokenExchange.endpoint }}
-            - --github-token-exchange-client-id={{ required "githubTokenExchange.clientID is required" .Values.githubTokenExchange.clientID }}
-            - --github-token-exchange-audience={{ required "githubTokenExchange.audience is required" .Values.githubTokenExchange.audience }}
+            {{- if $githubTokenExchange }}
+            {{- with .Values.github.tokenExchange }}
+            - --github-token-exchange-endpoint={{ .tokenEndpoint }}
+            - --github-token-exchange-audience={{ .audience }}
+            {{- with .clientID }}
+            - --github-token-exchange-client-id={{ . }}
+            {{- end }}
+            - --github-token-exchange-client-id-file=/etc/agent-manager/github-token-exchange/client-id
             - --github-token-exchange-client-secret-file=/etc/agent-manager/github-token-exchange/client-secret
-            - --github-grant-app={{ required "githubTokenExchange.grantApp is required" .Values.githubTokenExchange.grantApp }}
-            - --github-api-url={{ .Values.github.apiURL }}
-            {{- if .Values.githubTokenExchange.caSecretName }}
+            {{- if .caSecretName }}
             - --github-token-exchange-ca-file=/etc/agent-manager/github-token-exchange-ca/ca.crt
+            {{- end }}
             {{- end }}
             {{- end }}
             {{- with .Values.installation }}
@@ -173,7 +177,9 @@ spec:
             {{- end }}
             {{- end }}
             {{- if .Values.github.enabled }}
+            {{- if not $githubTokenExchange }}
             - --github-authorization-server={{ .Values.github.authorizationServer.issuer }}
+            {{- end }}
             - --github-api-url={{ .Values.github.apiURL }}
             {{- end }}
             {{- if eq .Values.oauth.provider "dex" }}
@@ -347,15 +353,15 @@ spec:
               mountPath: /etc/agent-manager/toolchain-registry
               readOnly: true
             {{- end }}
-            {{- if .Values.githubTokenExchange.endpoint }}
+            {{- if $githubTokenExchange }}
             - name: github-token-exchange
               mountPath: /etc/agent-manager/github-token-exchange
               readOnly: true
-            {{- end }}
-            {{- if .Values.githubTokenExchange.caSecretName }}
+            {{- if .Values.github.tokenExchange.caSecretName }}
             - name: github-token-exchange-ca
               mountPath: /etc/agent-manager/github-token-exchange-ca
               readOnly: true
+            {{- end }}
             {{- end }}
       volumes:
         - name: tmp
@@ -385,22 +391,19 @@ spec:
               - key: .dockerconfigjson
                 path: config.json
         {{- end }}
-        {{- if .Values.githubTokenExchange.endpoint }}
+        {{- if $githubTokenExchange }}
         - name: github-token-exchange
           secret:
-            secretName: {{ required "githubTokenExchange.secretName is required" .Values.githubTokenExchange.secretName }}
+            secretName: {{ include "agent-manager.githubTokenExchangeSecretName" . }}
             defaultMode: 0440
-            items:
-              - key: client-secret
-                path: client-secret
-        {{- end }}
-        {{- if .Values.githubTokenExchange.caSecretName }}
+        {{- with .Values.github.tokenExchange.caSecretName }}
         - name: github-token-exchange-ca
           secret:
-            secretName: {{ .Values.githubTokenExchange.caSecretName }}
+            secretName: {{ . }}
             items:
               - key: ca.crt
                 path: ca.crt
+        {{- end }}
         {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
