@@ -17,6 +17,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/giantswarm/agent-manager/internal/agents"
+	"github.com/giantswarm/agent-manager/internal/identity"
 	"github.com/giantswarm/agent-manager/internal/kube"
 )
 
@@ -199,7 +200,7 @@ func (s *Service) saveCredentialOperation(ctx context.Context, id, version strin
 	} else {
 		err = s.applyCredentialOperation(ctx, caller, operation, writes)
 		if errors.As(err, new(nameTaken)) {
-			removeCreatedSecrets(ctx, caller, operation, created)
+			s.removeCreatedSecrets(ctx, caller, operation, created)
 		}
 	}
 	if err != nil {
@@ -221,19 +222,24 @@ func (s *Service) saveCredentialOperation(ctx context.Context, id, version strin
 // Secret is deleted only at the version this save wrote (a precondition), so
 // one changed since is left, and never one that existed before the save,
 // which is updated, not created. The delete sends no propagation policy:
-// the API server answers it with a Status, never the Secret. A refused
-// delete leaves the Secret and its recorded version for the uncertain
-// operation.
-func removeCreatedSecrets(ctx context.Context, caller kube.Client, operation *credentialOperation, created []string) {
+// the API server answers it with a Status, never the Secret. A clear
+// refusal (the Secret changed since, Conflict; or no delete right,
+// Forbidden) leaves the Secret and its recorded version for the uncertain
+// operation and is logged; any other result forgets the recorded version,
+// so a retry checks whether the Secret exists and writes it whole instead
+// of trusting a write that may be gone.
+func (s *Service) removeCreatedSecrets(ctx context.Context, caller kube.Client, operation *credentialOperation, created []string) {
 	for _, name := range created {
 		version := operation.AppliedVersions[kindSecret+"/"+name]
 		if version == "" {
 			continue
 		}
 		err := caller.Dynamic().Resource(secretGVR).Namespace(operation.Namespace.Name).Delete(ctx, name, metav1.DeleteOptions{Preconditions: &metav1.Preconditions{ResourceVersion: &version}})
-		if err == nil || apierrors.IsNotFound(err) {
-			delete(operation.AppliedVersions, kindSecret+"/"+name)
+		if apierrors.IsConflict(err) || apierrors.IsForbidden(err) {
+			s.log.Warn("a credential save could not take back the Secret it created; it stays", identity.LogAttr(ctx), "namespace", operation.Namespace.Name, "secret", name, "reason", string(apierrors.ReasonForError(err)))
+			continue
 		}
+		delete(operation.AppliedVersions, kindSecret+"/"+name)
 	}
 }
 

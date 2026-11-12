@@ -17,9 +17,11 @@ operation creates it at the save: a save of any operation that creates a model, 
 answers `already_exists` when that object exists by then, live or in git. The
 save checks before it writes; an object made in the moment between its dry
 run and its create finds the Secret already written. In apply mode the save
-then deletes the Secret it created (at the version it wrote, never one that
-existed before), so the value does not stay for that object, and the operation
-is uncertain. The person prepares again.
+then deletes the Secret it created, if nothing changed it since its write; it
+never deletes a Secret that existed before the save. A refused delete leaves
+the Secret (and is logged), and the other object can read the value in the
+moment before the delete. The operation is uncertain; the person prepares
+again.
 
 `replace_organization_credential` takes the organization namespace, the Secret
 and the key, and prepares an operation that writes that Secret and no consumer:
