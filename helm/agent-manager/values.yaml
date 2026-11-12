@@ -341,8 +341,9 @@ github:
     # -- RFC 8693 audience of the grant, also the App a commit without the
     # person's grant names in its `grant_required` answer and the MCPServer
     # lists under `auth.providerApps` (muster's `aggregator.providerApps`
-    # key). Required with `tokenEndpoint`.
-    audience: ""
+    # key): lowercase letters, digits and hyphens, at most 63 characters.
+    # Required with `tokenEndpoint`.
+    audience: ""  # @schema pattern: ^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)?$
     # -- Confidential client ID. Empty reads the Secret's `client-id` key.
     clientID: ""
     # -- Confidential client secret, rendered into a Secret
@@ -456,35 +457,6 @@ muster:
     auth:
       forwardToken: true
       requiredAudiences: []
-      tokenExchange:
-        # -- muster exchanges the session's token at the installation's Dex
-        # (RFC 8693) for a token of this server instead of forwarding it
-        # (`forwardToken` is then rendered false): MCP forbids a server to
-        # pass through the token it received. The exchanged token carries
-        # `requiredAudiences`. Needs `oauth.enabled`; excludes the
-        # `github.authorizationServer` pin (`github.enabled` without
-        # `github.tokenExchange`), an authorization server of its own.
-        enabled: false
-        # -- Dex token endpoint. Empty: `<oauth.dex.issuerURL>/token`.
-        dexTokenEndpoint: ""
-        # -- Issuer the exchanged token must carry. Empty: muster derives it
-        # from `dexTokenEndpoint`.
-        expectedIssuer: ""
-        # -- Dex connector that verifies the session's token for the
-        # exchange: one that trusts the installation's own Dex. Dex issues
-        # the exchanged token's `sub` under this connector, so it differs
-        # from the `sub` of the person's login: credential operations
-        # started here and completed in the portal, and GitHub grants
-        # filed under the login `sub`, do not match it.
-        connectorId: ""
-        # -- Scopes requested on the exchange.
-        scopes: openid profile email groups
-        clientCredentialsSecretRef:
-          # -- Secret with muster's Dex client under `client-id` and
-          # `client-secret`.
-          name: ""
-          # -- Deprecated. Namespace of that Secret; empty is the release namespace.
-          namespace: ""
 
 httpRoute:
   # -- Expose the service through a Gateway API HTTPRoute.

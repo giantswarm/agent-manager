@@ -192,6 +192,9 @@ tests:
 
   - it: refuses github.tokenExchange without an audience
     set:
+      oauth:
+        downstream:
+          enabled: true
       github:
         enabled: true
         tokenExchange:
@@ -203,6 +206,9 @@ tests:
 
   - it: refuses github.tokenExchange without a client secret
     set:
+      oauth:
+        downstream:
+          enabled: true
       github:
         enabled: true
         tokenExchange:

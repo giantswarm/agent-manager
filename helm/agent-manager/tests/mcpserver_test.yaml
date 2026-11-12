@@ -137,104 +137,11 @@ tests:
       - failedTemplate:
           errorMessage: "github.enabled verifies the person's GitHub user token next to their ID token, which the server validates as an OAuth resource server: set oauth.enabled"
 
-  - it: exchanges the session token at Dex with tokenExchange
-    set:
-      muster:
-        mcpServer:
-          auth:
-            tokenExchange:
-              enabled: true
-              connectorId: dex-self
-              clientCredentialsSecretRef:
-                name: muster-token-exchange
-    asserts:
-      - equal:
-          path: spec.auth
-          value:
-            type: oauth
-            forwardToken: false
-            tokenExchange:
-              enabled: true
-              dexTokenEndpoint: https://dex.example.com/token
-              connectorId: dex-self
-              scopes: openid profile email groups
-              clientCredentialsSecretRef:
-                name: muster-token-exchange
-                namespace: NAMESPACE
-            requiredAudiences:
-              - dex-k8s-authenticator
-
-  - it: takes the token endpoint and issuer from the tokenExchange values
-    set:
-      muster:
-        mcpServer:
-          auth:
-            tokenExchange:
-              enabled: true
-              dexTokenEndpoint: https://dex.other.example.com/token
-              expectedIssuer: https://dex.other.example.com
-              connectorId: dex-self
-              clientCredentialsSecretRef:
-                name: muster-token-exchange
-                namespace: muster
-    asserts:
-      - equal:
-          path: spec.auth.tokenExchange.dexTokenEndpoint
-          value: https://dex.other.example.com/token
-      - equal:
-          path: spec.auth.tokenExchange.expectedIssuer
-          value: https://dex.other.example.com
-      - equal:
-          path: spec.auth.tokenExchange.clientCredentialsSecretRef.namespace
-          value: muster
-
-  - it: refuses tokenExchange without a connector
-    set:
-      muster:
-        mcpServer:
-          auth:
-            tokenExchange:
-              enabled: true
-              clientCredentialsSecretRef:
-                name: muster-token-exchange
-    asserts:
-      - failedTemplate:
-          errorMessage: "muster.mcpServer.auth.tokenExchange.connectorId is required: the Dex connector that verifies the session's token"
-
-  - it: refuses tokenExchange next to the GitHub pin
-    set:
-      github:
-        enabled: true
-      muster:
-        mcpServer:
-          auth:
-            tokenExchange:
-              enabled: true
-              connectorId: dex-self
-              clientCredentialsSecretRef:
-                name: muster-token-exchange
-    asserts:
-      - failedTemplate:
-          errorMessage: "muster.mcpServer.auth.tokenExchange and github.enabled are two ways for muster to authenticate to this server: set one"
-
-  - it: refuses tokenExchange without OAuth
-    set:
-      oauth:
-        enabled: false
-      muster:
-        mcpServer:
-          auth:
-            tokenExchange:
-              enabled: true
-              connectorId: dex-self
-              clientCredentialsSecretRef:
-                name: muster-token-exchange
-    asserts:
-      - failedTemplate:
-          errorMessage: "muster.mcpServer.auth.tokenExchange makes muster present a Dex token, which the server validates as an OAuth resource server: set oauth.enabled"
-
   - it: forwards the token and names the GitHub App with github.tokenExchange
     set:
+      oauth:
+        downstream:
+          enabled: true
       github:
         enabled: true
         tokenExchange:
@@ -259,29 +166,6 @@ tests:
       - notExists:
           path: spec.auth.providerApps
 
-  - it: registers through muster's token exchange next to github.tokenExchange
-    set:
-      github:
-        enabled: true
-        tokenExchange:
-          tokenEndpoint: https://muster.example.com/oauth/token
-          audience: github
-          existingSecret: agent-manager-github-exchange
-      muster:
-        mcpServer:
-          auth:
-            tokenExchange:
-              enabled: true
-              connectorId: dex-self
-              clientCredentialsSecretRef:
-                name: muster-token-exchange
-    asserts:
-      - equal:
-          path: spec.auth.tokenExchange.connectorId
-          value: dex-self
-      - notExists:
-          path: spec.auth.providerApps
-
   - it: refuses github.tokenExchange without github.enabled
     set:
       github:
@@ -292,3 +176,64 @@ tests:
     asserts:
       - failedTemplate:
           errorMessage: "github.tokenExchange needs github.enabled: set github.enabled to true, or unset github.tokenExchange.tokenEndpoint"
+
+  - it: refuses github.tokenExchange without forwardToken
+    set:
+      oauth:
+        downstream:
+          enabled: true
+      github:
+        enabled: true
+        tokenExchange:
+          tokenEndpoint: https://muster.example.com/oauth/token
+          audience: github
+          existingSecret: agent-manager-github-exchange
+      muster:
+        mcpServer:
+          auth:
+            forwardToken: false
+    asserts:
+      - failedTemplate:
+          errorMessage: "github.tokenExchange lists its App under the MCPServer's providerApps, which muster serves only on a forwarded token: set muster.mcpServer.auth.forwardToken"
+
+  - it: refuses github.tokenExchange without downstream OAuth
+    set:
+      github:
+        enabled: true
+        tokenExchange:
+          tokenEndpoint: https://muster.example.com/oauth/token
+          audience: github
+          existingSecret: agent-manager-github-exchange
+    asserts:
+      - failedTemplate:
+          errorMessage: "github.tokenExchange exchanges the person's Dex ID token: set oauth.enabled with oauth.provider dex and oauth.downstream.enabled"
+
+  - it: refuses github.tokenExchange with the Google provider
+    set:
+      oauth:
+        provider: google
+        downstream:
+          enabled: true
+      github:
+        enabled: true
+        tokenExchange:
+          tokenEndpoint: https://muster.example.com/oauth/token
+          audience: github
+          existingSecret: agent-manager-github-exchange
+    asserts:
+      - failedTemplate:
+          errorMessage: "github.tokenExchange exchanges the person's Dex ID token: set oauth.enabled with oauth.provider dex and oauth.downstream.enabled"
+
+  - it: refuses an audience muster cannot name as a provider App
+    set:
+      oauth:
+        downstream:
+          enabled: true
+      github:
+        enabled: true
+        tokenExchange:
+          tokenEndpoint: https://muster.example.com/oauth/token
+          audience: https://github.com/apps/giantswarm-agent-manager
+          existingSecret: agent-manager-github-exchange
+    asserts:
+      - failedTemplate: {}

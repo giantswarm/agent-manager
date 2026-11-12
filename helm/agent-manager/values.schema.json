@@ -208,7 +208,8 @@
                     "properties": {
                         "audience": {
                             "type": "string",
-                            "description": "RFC 8693 audience of the grant, also the App a commit without the person's grant names in its `grant_required` answer and the MCPServer lists under `auth.providerApps` (muster's `aggregator.providerApps` key). Required with `tokenEndpoint`."
+                            "description": "RFC 8693 audience of the grant, also the App a commit without the person's grant names in its `grant_required` answer and the MCPServer lists under `auth.providerApps` (muster's `aggregator.providerApps` key): lowercase letters, digits and hyphens, at most 63 characters. Required with `tokenEndpoint`.",
+                            "pattern": "^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)?$"
                         },
                         "caSecretName": {
                             "type": "string",
@@ -445,46 +446,6 @@
                                 },
                                 "requiredAudiences": {
                                     "type": "array"
-                                },
-                                "tokenExchange": {
-                                    "type": "object",
-                                    "additionalProperties": false,
-                                    "properties": {
-                                        "clientCredentialsSecretRef": {
-                                            "type": "object",
-                                            "additionalProperties": false,
-                                            "properties": {
-                                                "name": {
-                                                    "type": "string",
-                                                    "description": "Secret with muster's Dex client under `client-id` and `client-secret`."
-                                                },
-                                                "namespace": {
-                                                    "type": "string",
-                                                    "description": "Deprecated. Namespace of that Secret; empty is the release namespace."
-                                                }
-                                            }
-                                        },
-                                        "connectorId": {
-                                            "type": "string",
-                                            "description": "Dex connector that verifies the session's token for the exchange: one that trusts the installation's own Dex. Dex issues the exchanged token's `sub` under this connector, so it differs from the `sub` of the person's login: credential operations started here and completed in the portal, and GitHub grants filed under the login `sub`, do not match it."
-                                        },
-                                        "dexTokenEndpoint": {
-                                            "type": "string",
-                                            "description": "Dex token endpoint. Empty: `<oauth.dex.issuerURL>/token`."
-                                        },
-                                        "enabled": {
-                                            "type": "boolean",
-                                            "description": "muster exchanges the session's token at the installation's Dex (RFC 8693) for a token of this server instead of forwarding it (`forwardToken` is then rendered false): MCP forbids a server to pass through the token it received. The exchanged token carries `requiredAudiences`. Needs `oauth.enabled`; excludes the `github.authorizationServer` pin (`github.enabled` without `github.tokenExchange`), an authorization server of its own."
-                                        },
-                                        "expectedIssuer": {
-                                            "type": "string",
-                                            "description": "Issuer the exchanged token must carry. Empty: muster derives it from `dexTokenEndpoint`."
-                                        },
-                                        "scopes": {
-                                            "type": "string",
-                                            "description": "Scopes requested on the exchange."
-                                        }
-                                    }
                                 }
                             }
                         },
