@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"net/http"
 	"strings"
 	"testing"
 
@@ -241,6 +242,61 @@ func TestDeleteOrganizationInCommitModeTakesTwoSteps(t *testing.T) {
 	assert.Contains(t, decode(t, text)["next"], "pending erase")
 	assert.NotNil(t, f.get(t, orgGVR, "org-acme", "payments"))
 
+	text, isErr = del("org-acme/payments")
+	require.False(t, isErr, text)
+	assert.Equal(t, true, decode(t, text)["deleted"])
+	assert.Nil(t, f.get(t, orgGVR, "org-acme", "payments"))
+}
+
+// agent-manager's GitHub App has no permission for the commit statuses and
+// check runs of a pull request's head, and GitHub refuses them with 403. The
+// delete reads its pull request with the pull request reads alone (merged,
+// and its files), so every step, the erase too, works without them; a read
+// refused with 403 names the step and the App's permissions, not a new
+// sign-in.
+func TestTheDeleteInCommitModeReadsNoStatusesOrChecks(t *testing.T) {
+	f, fake := gitOrganization(t)
+	fake.Fail[commit.OpStatus] = &commit.AuthError{Op: commit.OpStatus, Status: http.StatusForbidden}
+	del := func(confirm string) (string, bool) {
+		args := map[string]any{"namespace": "org-acme", "name": "payments", "mode": "commit"}
+		if confirm != "" {
+			args["confirm"] = confirm
+		}
+		return f.call(t, ToolDeleteOrganization, args)
+	}
+
+	text, isErr := del("")
+	require.False(t, isErr, text)
+	require.Len(t, fake.PullRequests(), 1)
+	pr := fake.PullRequests()[0]
+
+	text, isErr = del("")
+	require.False(t, isErr, text)
+	assert.Contains(t, decode(t, text)["next"], "is open")
+
+	text, isErr = del("org-acme/payments")
+	require.True(t, isErr)
+	assert.Contains(t, text, "still in git")
+
+	require.NoError(t, fake.Merge(context.Background(), pr.PullRequest))
+	text, isErr = del("")
+	require.False(t, isErr, text)
+	assert.Contains(t, decode(t, text)["next"], "pending erase")
+
+	// A refused read of the merged files names the step and the App's
+	// permissions, erases nothing and asks for no new sign-in.
+	fake.Fail[commit.OpMergedFiles] = &commit.AuthError{Op: commit.OpMergedFiles, Status: http.StatusForbidden}
+	text, isErr = del("org-acme/payments")
+	require.True(t, isErr)
+	assert.True(t, strings.HasPrefix(text, "forbidden:"), text)
+	assert.Contains(t, text, commit.OpMergedFiles)
+	assert.Contains(t, text, "permissions")
+	assert.Contains(t, text, "nothing was erased")
+	assert.NotContains(t, text, "core_auth_login")
+	assert.NotContains(t, text, "push")
+	assert.NotNil(t, f.get(t, orgGVR, "org-acme", "payments"))
+
+	delete(fake.Fail, commit.OpMergedFiles)
 	text, isErr = del("org-acme/payments")
 	require.False(t, isErr, text)
 	assert.Equal(t, true, decode(t, text)["deleted"])

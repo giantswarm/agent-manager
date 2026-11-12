@@ -2,6 +2,7 @@ package organizations
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"path"
@@ -202,24 +203,27 @@ func (s *Service) deleteCommit(ctx context.Context, c kube.Client, u *unstructur
 	head := branch("delete", req.Parent, req.Name)
 	prURL := org.Annotations[DeletePullRequestAnnotation]
 	// merged tells only that the pull request the object names merged;
-	// whether that merge removed the file is asked of its files once the
-	// file is gone from the base.
+	// whether that merge removed the file is asked of its files (changes)
+	// once the file is gone from the base. Both come from the pull request
+	// reads alone: its reviews, statuses and check runs are not read, which
+	// the App's permissions do not cover. listErr is a listing that failed.
 	var (
-		pr     commit.PullRequest
-		merged bool
+		pr      commit.PullRequest
+		merged  bool
+		changes []commit.FileChange
+		listErr error
 	)
 	if prURL != "" {
 		var ok bool
 		if pr, ok = cm.pullRequest(prURL); ok {
-			st, err := cm.remote.Status(ctx, pr)
-			if err != nil {
-				return false, commitError(cm.gh, err)
-			}
-			merged = st.Merged
+			merged, changes, listErr = cm.mergedFiles(ctx, pr)
 		}
 	}
 
 	if file != nil {
+		if listErr != nil {
+			return false, commitError(cm.gh, listErr)
+		}
 		if req.Confirm != "" {
 			msg := fmt.Sprintf("%s is still in git (%s in %s): a live delete is refused while it is, since Flux would re-create it", what, p, cm.cfg.Objects.Repository)
 			if merged {
@@ -251,10 +255,12 @@ func (s *Service) deleteCommit(ctx context.Context, c kube.Client, u *unstructur
 	switch {
 	case prURL == "":
 		return false, fmt.Errorf("%w: %s is gone from git (%s) but no delete pull request of agent-manager removed it: it is Missing from git, not pending erase, and is not erased; restore its file, or open the delete with mode commit once it is back", agents.ErrConflict, what, p)
+	case listErr != nil:
+		return false, fmt.Errorf("%w (nothing was erased: the files of the delete pull request %s could not be listed, so whether it removed %s is unknown; call delete_organization again with mode commit and confirm to retry, and if the listing keeps failing, restore %s and open a new delete with mode commit and no confirm)", commitError(cm.gh, listErr), pr.URL, p, p)
 	case !merged:
 		return false, fmt.Errorf("%w: %s is gone from git (%s), but its delete pull request %s is not merged: it is Missing from git, not pending erase, and is not erased; restore its file", agents.ErrConflict, what, p, prURL)
 	}
-	if err := s.removedBy(ctx, cm, pr, what, p); err != nil {
+	if err := removedBy(changes, pr, what, p); err != nil {
 		return false, err
 	}
 	if req.Confirm != req.Parent+"/"+req.Name {
@@ -273,12 +279,9 @@ func (s *Service) deleteCommit(ctx context.Context, c kube.Client, u *unstructur
 // addition is not detected. The object's file alone decides: the content
 // path is applied by the organization's own Kustomization, which the erase
 // removes, and a create refuses a content path an earlier organization
-// left. A listing that fails erases nothing.
-func (s *Service) removedBy(ctx context.Context, cm *orgCommit, pr commit.PullRequest, what, p string) error {
-	changes, err := cm.remote.MergedFiles(ctx, pr)
-	if err != nil {
-		return fmt.Errorf("%w (nothing was erased: the files of the delete pull request %s could not be listed, so whether it removed %s is unknown; call delete_organization again with mode commit and confirm to retry, and if the listing keeps failing, restore %s and open a new delete with mode commit and no confirm)", commitError(cm.gh, err), pr.URL, p, p)
-	}
+// left. changes are the merged pull request's files; the caller erases
+// nothing when they could not be listed.
+func removedBy(changes []commit.FileChange, pr commit.PullRequest, what, p string) error {
 	const next = "then call delete_organization again with mode commit and no confirm to open a new delete pull request"
 	for _, c := range changes {
 		if c.Kind == commit.FileRenamed && c.PreviousPath == p {
@@ -358,6 +361,21 @@ func (s *Service) markDelete(ctx context.Context, c kube.Client, parent, name, u
 // pullRequest reads a pull request URL of the organizations repository:
 // https://github.com/<owner>/<name>/pull/<number>. Any other URL is not
 // agent-manager's delete.
+// mergedFiles reads whether pr is merged and, when it is, the files it
+// changed, with the pull request reads alone (commit.MergedFilesLister):
+// never its reviews or the statuses and check runs of its head, which the
+// App's permissions do not cover. One not merged is merged false, no error.
+func (c *orgCommit) mergedFiles(ctx context.Context, pr commit.PullRequest) (bool, []commit.FileChange, error) {
+	changes, err := c.remote.MergedFiles(ctx, pr)
+	switch {
+	case errors.Is(err, commit.ErrNotMerged):
+		return false, nil, nil
+	case err != nil:
+		return false, nil, err
+	}
+	return true, changes, nil
+}
+
 func (c *orgCommit) pullRequest(raw string) (commit.PullRequest, bool) {
 	u, err := url.Parse(raw)
 	if err != nil || u.Scheme != "https" {

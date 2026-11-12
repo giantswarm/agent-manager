@@ -257,13 +257,25 @@ func (s *Service) gitHubFor(ctx context.Context) (GitHubRemote, *identity.GitHub
 	return remote, gh, nil
 }
 
+// readOps are the remote operations that only read: GitHub refusing one with
+// 403 is the App's permissions or installation, never the person's push
+// access, and no new sign-in or grant changes it.
+var readOps = []string{commit.OpStatus, commit.OpReadFile, commit.OpListFiles, commit.OpFindPullRequest, commit.OpMergedFiles}
+
 // GitHubRefusal answers GitHub refusing gh's token on an operation of
 // commit mode with what renews it: on the App-pinned registration the
 // consent to agent-manager; for a grant of a provider App (gh.App) a 401
 // asks for that grant again, and a 403 names what the App and the person
-// lack, which no new grant gives.
+// lack, which no new grant gives. A 403 on a read names the step and the
+// App's permissions, on either registration.
 func GitHubRefusal(gh *identity.GitHub, auth *commit.AuthError) error {
 	switch {
+	case auth.Status == http.StatusForbidden && slices.Contains(readOps, auth.Op):
+		app := "agent-manager's GitHub App"
+		if gh != nil && gh.App != "" {
+			app = "the GitHub App " + gh.App
+		}
+		return fmt.Errorf("%w: GitHub refused the step %q (status %d) for the permissions of %s: the App lacks the permission for this read or is not installed on the repository, which a new sign-in does not change", ErrForbidden, auth.Op, auth.Status, app)
 	case gh == nil || gh.App == "":
 		return authRequiredf("GitHub refused your token on %s (status %d): reconnect agent-manager in muster (core_auth_login server=agent-manager); the App must be installed on the repository and your account allowed to push to it", auth.Op, auth.Status)
 	case auth.Status == http.StatusUnauthorized:
