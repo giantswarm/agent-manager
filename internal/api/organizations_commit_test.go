@@ -49,7 +49,18 @@ func sopsCovering(t *testing.T, pathRegex string) []byte {
 // seeds the repository's main branch.
 func commitFixture(t *testing.T, base map[string][]byte, objs ...runtime.Object) (*orgFixture, *commit.Fake) {
 	t.Helper()
+	return commitFixtureWith(t, base, nil, objs...)
+}
+
+// commitFixtureWith is commitFixture whose remote is wrap of the fake forge,
+// when wrap is given: a test steps in between the remote's calls.
+func commitFixtureWith(t *testing.T, base map[string][]byte, wrap func(*commit.Fake) organizations.GitHubRemote, objs ...runtime.Object) (*orgFixture, *commit.Fake) {
+	t.Helper()
 	fake := commit.NewFake()
+	var remoteOf organizations.GitHubRemote = fake
+	if wrap != nil {
+		remoteOf = wrap(fake)
+	}
 	files := map[string][]byte{
 		objectsPath + "/kustomization.yaml": []byte("resources: []\n"),
 		".sops.yaml":                        sopsCovering(t, `^agent-platform/organizations/.*\.enc\.yaml$`),
@@ -61,7 +72,7 @@ func commitFixture(t *testing.T, base map[string][]byte, objs ...runtime.Object)
 	f := newOrgFixtureWith(t, func(cfg *organizations.Config) {
 		remote := func(token string) (organizations.GitHubRemote, error) {
 			require.Equal(t, "ghu_person", token)
-			return fake, nil
+			return remoteOf, nil
 		}
 		var err error
 		cfg.Commit, err = organizations.NewCommitConfig(remote, mcRepo.String(), "main", objectsPath, "")
