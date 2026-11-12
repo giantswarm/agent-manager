@@ -667,13 +667,16 @@ The organization tools (every name holds `organization`):
   Secret, for every object that reads it, writing the Secret only).
 - for everyone: `list_organizations`, the organizations the caller manages
   or belongs to. agent-manager's ServiceAccount lists the
-  AgentPlatformOrganizations; two SelfSubjectAccessReviews as the caller
-  decide each one's `permissions`: `manage` (update it in its parent) and
-  `member` (list the Agents of its namespace, which every organization role
-  grants). An organization with neither is not listed; one the caller only
-  belongs to carries its status alone (namespace, `orphaned`, `deleting`), and
-  one the caller manages also its summary (`organization`). The New agent
-  picker keeps those with `member`.
+  AgentPlatformOrganizations; SelfSubjectAccessReviews as the caller decide
+  each one's `permissions`: `manage` (update it in its parent), `member`
+  (list the Agents of its namespace, which every organization role grants)
+  and `createAgents` (create Agents in its namespace, which
+  `agent-platform:editor` and `agent-platform:admin` grant and
+  `agent-platform:user` does not; false while it has no namespace). An
+  organization with neither `manage` nor `member` is not listed; one the
+  caller only belongs to carries its status alone (namespace, `orphaned`,
+  `deleting`), and one the caller manages also its summary (`organization`).
+  A New agent can be created where `createAgents` is true.
 
 Every write is dry-run as the caller first, all of a call's writes before any
 of them, so RBAC, schemas and admission refuse before anything changes; a

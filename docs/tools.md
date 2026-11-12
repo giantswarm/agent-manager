@@ -915,7 +915,7 @@ Read as you; every member role (user, editor or admin) may read them, from agent
 ```text
 List the organizations you manage or belong to, of one parent namespace or of all.
 
-Each with its organization namespace, Orphaned condition, deleting, and permissions (manage, member), asked with your own token; a New agent goes where member is true. Where you manage it, organization is its summary: harnesses, workers, Ready, DefaultModelConfigured, the last revision Flux applied (lastAppliedRevision) and in mode commit its commit and the organization's file (lastAppliedRevisionUrl, lastAppliedFile, lastAppliedFileUrl). none says who can add you when there is none.
+Each with its organization namespace, Orphaned condition, deleting, and permissions (manage, member, createAgents), asked with your own token; a New agent goes where createAgents is true. Where you manage it, organization is its summary: harnesses, workers, Ready, DefaultModelConfigured, the last revision Flux applied (lastAppliedRevision) and in mode commit its commit and the organization's file (lastAppliedRevisionUrl, lastAppliedFile, lastAppliedFileUrl). none says who can add you when there is none.
 ```
 
 ```json
