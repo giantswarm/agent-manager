@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
@@ -71,6 +72,13 @@ func NewGitHubExchange(configuration GitHubExchangeConfig) (func(context.Context
 }
 
 func newGitHubExchange(configuration GitHubExchangeConfig, client *http.Client) func(context.Context) (*identity.GitHub, error) {
+	// The endpoint is operator configuration, never a caller's, and an
+	// in-cluster broker resolves to a private address: the client checks
+	// only that it is HTTPS.
+	exchanger := oidc.NewTokenExchangeClientWithOptions(oidc.TokenExchangeClientOptions{HTTPClient: client, Logger: slog.New(slog.DiscardHandler), AllowPrivateIP: true})
+	grantRequired := func(reason string) error {
+		return &agents.GrantRequiredError{App: configuration.GrantApp, Reason: fmt.Sprintf(reason, configuration.GrantApp, configuration.GrantApp)}
+	}
 	return func(ctx context.Context) (*identity.GitHub, error) {
 		person, ok := identity.FromContext(ctx)
 		subjectToken, hasToken := identity.TokenFromContext(ctx)
@@ -81,42 +89,37 @@ func newGitHubExchange(configuration GitHubExchangeConfig, client *http.Client) 
 		if err != nil || len(strings.TrimSpace(string(secret))) == 0 {
 			return nil, errors.New("GitHub token exchange credentials are unavailable")
 		}
-		form := url.Values{"grant_type": {oidc.GrantTypeTokenExchange}, "subject_token": {subjectToken}, "subject_token_type": {oidc.TokenTypeIDToken}, "requested_token_type": {oidc.TokenTypeAccessToken}, "audience": {configuration.Audience}}
-		request, err := http.NewRequestWithContext(ctx, http.MethodPost, configuration.TokenEndpoint, strings.NewReader(form.Encode()))
+		result, err := exchanger.Exchange(ctx, oidc.TokenExchangeRequest{
+			TokenEndpoint:      configuration.TokenEndpoint,
+			SubjectToken:       subjectToken,
+			SubjectTokenType:   oidc.TokenTypeIDToken,
+			RequestedTokenType: oidc.TokenTypeAccessToken,
+			Audience:           configuration.Audience,
+			ClientID:           configuration.ClientID,
+			ClientSecret:       strings.TrimSpace(string(secret)),
+		})
 		if err != nil {
-			return nil, errors.New("GitHub token exchange request is invalid")
-		}
-		request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-		request.SetBasicAuth(url.QueryEscape(configuration.ClientID), url.QueryEscape(strings.TrimSpace(string(secret))))
-		response, err := client.Do(request)
-		if err != nil {
+			if refusal, ok := errors.AsType[*oidc.TokenExchangeError](err); ok {
+				if refusal.StatusCode == http.StatusBadRequest && refusal.Code == "invalid_target" {
+					return nil, grantRequired("this call opens a pull request as you with your grant of the GitHub App %s in muster, which you have not given: grant it (core_auth_login app=%s), then call again")
+				}
+				return nil, errors.New("GitHub authorization service refused the exchange")
+			}
 			return nil, errors.New("GitHub authorization service is unavailable")
 		}
-		defer func() { _ = response.Body.Close() }()
-		if response.StatusCode != http.StatusOK {
-			var refusal struct {
-				Error string `json:"error"`
-			}
-			_ = json.NewDecoder(io.LimitReader(response.Body, 16*1024)).Decode(&refusal)
-			if response.StatusCode == http.StatusBadRequest && refusal.Error == "invalid_target" {
-				return nil, &agents.GrantRequiredError{App: configuration.GrantApp, Reason: fmt.Sprintf("this call opens a pull request as you with your grant of the GitHub App %s in muster, which you have not given: grant it (core_auth_login app=%s), then call again", configuration.GrantApp, configuration.GrantApp)}
-			}
-			return nil, errors.New("GitHub authorization service refused the exchange")
-		}
-		var result oidc.TokenExchangeResponse
-		if err := json.NewDecoder(io.LimitReader(response.Body, 64*1024)).Decode(&result); err != nil || result.AccessToken == "" || !strings.EqualFold(result.TokenType, "Bearer") || result.IssuedTokenType != oidc.TokenTypeAccessToken || result.ExpiresIn <= 0 || result.RefreshToken != "" {
+		if !strings.EqualFold(result.TokenType, "Bearer") || result.IssuedTokenType != oidc.TokenTypeAccessToken || result.ExpiresIn <= 0 || result.RefreshToken != "" {
 			return nil, errors.New("GitHub authorization service returned an invalid access token response")
 		}
 		apiURL := strings.TrimRight(configuration.APIURL, "/")
 		if apiURL == "" {
 			apiURL = DefaultGitHubAPIURL
 		}
-		request, err = http.NewRequestWithContext(ctx, http.MethodGet, apiURL+"/user", nil)
+		request, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL+"/user", nil)
 		if err != nil {
 			return nil, errors.New("GitHub API URL is invalid")
 		}
 		request.Header.Set("Authorization", "Bearer "+result.AccessToken)
-		response, err = client.Do(request)
+		response, err := client.Do(request)
 		if err != nil {
 			return nil, errors.New("GitHub user verification is unavailable")
 		}
@@ -125,7 +128,7 @@ func newGitHubExchange(configuration GitHubExchangeConfig, client *http.Client) 
 			Login string `json:"login"`
 		}
 		if response.StatusCode != http.StatusOK || json.NewDecoder(io.LimitReader(response.Body, 16*1024)).Decode(&user) != nil || user.Login == "" {
-			return nil, &agents.GrantRequiredError{App: configuration.GrantApp, Reason: fmt.Sprintf("GitHub refused your grant of the GitHub App %s: grant it again in muster (core_auth_login app=%s), then call again", configuration.GrantApp, configuration.GrantApp)}
+			return nil, grantRequired("GitHub refused your grant of the GitHub App %s: grant it again in muster (core_auth_login app=%s), then call again")
 		}
 		return &identity.GitHub{Login: user.Login, Token: result.AccessToken}, nil
 	}
