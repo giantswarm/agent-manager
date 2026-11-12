@@ -261,9 +261,9 @@ func TestReplaceCredentialCommitRefusesALiveConsumer(t *testing.T) {
 func TestCredentialConfirmationListsLiveReferences(t *testing.T) {
 	t.Run("planned write replaces its live object", func(t *testing.T) {
 		fixture := newOrgFixture(t, model("claude", true))
-		result := prepareModelOperation(t, fixture, map[string]any{"provider": "OpenAI"})
+		result := prepareModelOperation(t, fixture, map[string]any{"credentialKey": "token"})
 		confirmation := confirmOperation(t, fixture, result.CredentialOperation)
-		require.Equal(t, []organizations.CredentialReference{{Kind: "ModelConfig", Name: "claude", Key: "apiKey", Provider: "OpenAI"}}, confirmation.References)
+		require.Equal(t, []organizations.CredentialReference{{Kind: "ModelConfig", Name: "claude", Key: "token", Provider: "Anthropic"}}, confirmation.References)
 	})
 	t.Run("a consumer added since the preparation", func(t *testing.T) {
 		fixture := newOrgFixture(t)

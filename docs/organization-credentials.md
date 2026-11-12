@@ -23,6 +23,19 @@ the Secret (and is logged), and the other object can read the value in the
 moment before the delete. The operation is uncertain; the person prepares
 again.
 
+`set_organization_model` refuses a change of the provider of an existing model
+that keeps the model's credential Secret, with error code `conflict` (`409`),
+in apply and commit mode (in commit mode the provider in the model's file in
+git is compared), a dry run included; nothing is written. The Secret holds the
+old provider's key, so either order of a provider change and a key change
+sends one provider's key to the other for a time. To change the provider, give
+a new `credentialSecret` that does not exist yet: the call prepares an
+operation, and its save writes the new Secret first, then the provider and the
+reference in one write of the model. A different `credentialSecret` that
+exists already is used as it is: it must hold the new provider's key. Or create
+a new model. A change of the
+model id alone, with the same provider, is not affected.
+
 `replace_organization_credential` takes the organization namespace, the Secret
 and the key, and prepares an operation that writes that Secret and no consumer:
 a rotation resends no model, connector or egress policy. At least one
