@@ -64,6 +64,7 @@ const (
 	argProvider         = "provider"
 	argModel            = "model"
 	argDefault          = "default"
+	argCreate           = "create"
 	argCredentialSecret = "credentialSecret" // #nosec G101 -- an argument name, not a credential
 	argCredentialKey    = "credentialKey"    // #nosec G101 -- an argument name, not a credential
 	argCredentialHeader = "credentialHeader" // #nosec G101 -- an argument name, not a credential
@@ -307,6 +308,7 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service, l
 		mcp.WithString(argCredentialSecret, mcp.Description(credSecretDesc+"; default tenant-credential-<name>")),
 		mcp.WithString(argCredentialKey, mcp.Description("Key of that Secret; default apiKey")),
 		mcp.WithBoolean(argDefault, mcp.Description("Make this the organization's default model, moving the mark (default false)")),
+		mcp.WithBoolean(argCreate, mcp.Description("Only create: a model of that name, live or in git, is refused with already_exists, not changed (default false: create or change)")),
 		credentialRequestID, dryRun, modeProp,
 		mcp.WithOutputSchema[organizations.ResourceResult](),
 		mcp.WithReadOnlyHintAnnotation(false),
@@ -322,6 +324,7 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service, l
 			CredentialSecret string `json:"credentialSecret"`
 			CredentialKey    string `json:"credentialKey"`
 			Default          bool   `json:"default"`
+			Create           bool   `json:"create"`
 			DryRun           bool   `json:"dryRun"`
 			Mode             string `json:"mode"`
 		}

@@ -24,6 +24,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"time"
 
 	apov1alpha1 "github.com/giantswarm/agent-platform-operator/api/v1alpha1"
@@ -302,6 +303,11 @@ func do(ctx context.Context, dyn dynamic.Interface, w write, dryRun []string) (*
 	what := w.op + " " + w.what
 	if dryRun != nil {
 		what = "dry run of " + what
+	}
+	if w.op == opCreate && apierrors.IsAlreadyExists(err) && slices.Contains(credentialKinds, w.kind) {
+		// A model, connector or egress policy made since the read: the
+		// create refuses it, marked so a create-only call and a save say so.
+		return object, nameTaken{kubeErr(err, what, w.reason)}
 	}
 	return object, kubeErr(err, what, w.reason)
 }
