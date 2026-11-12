@@ -237,6 +237,7 @@ tests:
     set:
       githubTokenExchange:
         endpoint: https://muster.example.com/oauth/token
+        grantApp: github
     asserts:
       - equal:
           path: spec.auth.forwardToken

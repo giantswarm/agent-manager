@@ -121,10 +121,13 @@ githubTokenExchange:
   audience: agent-manager-github
   secretName: agent-manager-broker-client
   caSecretName: ""
-  grantApp: github
+  grantApp: <muster provider App>
 ```
 
-The existing Secret contains `client-secret`. An optional CA Secret contains
+`grantApp` names muster's provider App (its `aggregator.providerApps` key)
+whose grant the broker target `audience` releases. Both must be the same
+GitHub App, installed with contents and pull-request write on every
+repository a commit targets. The existing Secret contains `client-secret`. An optional CA Secret contains
 `ca.crt`. The endpoint and output audience are operator-controlled; requests
 cannot change them. This mode requires Dex OAuth and downstream authorization,
 and replaces the App-pinned MCP registration. It also supplies ordinary agent

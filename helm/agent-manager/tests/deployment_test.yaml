@@ -111,6 +111,7 @@ tests:
           enabled: true
       githubTokenExchange:
         endpoint: https://muster.example.com/oauth/token
+        grantApp: github
         clientID: agent-manager
         audience: github-app
         secretName: agent-manager-github-exchange
@@ -118,3 +119,17 @@ tests:
       - contains:
           path: spec.template.spec.containers[0].args
           content: --github-grant-app=github
+
+  - it: refuses githubTokenExchange without the grant App
+    set:
+      oauth:
+        downstream:
+          enabled: true
+      githubTokenExchange:
+        endpoint: https://muster.example.com/oauth/token
+        clientID: agent-manager
+        audience: github-app
+        secretName: agent-manager-github-exchange
+    asserts:
+      - failedTemplate:
+          errorMessage: githubTokenExchange.grantApp is required

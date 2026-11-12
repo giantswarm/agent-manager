@@ -225,7 +225,7 @@
                 },
                 "grantApp": {
                     "type": "string",
-                    "description": "muster's name for the provider App the grant is kept under (its `aggregator.providerApps` key). A commit without the person's grant answers `grant_required` naming it, and the MCPServer lists it under `auth.providerApps`, so muster answers with the App's sign-in link."
+                    "description": "muster's name for the provider App (its `aggregator.providerApps` key) whose grant `audience` releases: the same GitHub App, installed with contents and pull-request write on every repository a commit targets. A commit without the person's grant answers `grant_required` naming it, and the MCPServer lists it under `auth.providerApps`, so muster answers with that App's sign-in link. Required with `endpoint`."
                 },
                 "secretName": {
                     "type": "string",
