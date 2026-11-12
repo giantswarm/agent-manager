@@ -96,6 +96,10 @@ spec:
   auth:
     type: oauth
     forwardToken: {{ .Values.muster.mcpServer.auth.forwardToken }}
+    {{- if and .Values.githubTokenExchange.endpoint .Values.muster.mcpServer.auth.forwardToken }}
+    providerApps:
+      - {{ .Values.githubTokenExchange.grantApp | quote }}
+    {{- end }}
     {{- with .Values.muster.mcpServer.auth.requiredAudiences }}
     requiredAudiences:
       {{- toYaml . | nindent 6 }}

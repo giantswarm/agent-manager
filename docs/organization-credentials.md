@@ -121,6 +121,7 @@ githubTokenExchange:
   audience: agent-manager-github
   secretName: agent-manager-broker-client
   caSecretName: ""
+  grantApp: github
 ```
 
 The existing Secret contains `client-secret`. An optional CA Secret contains
@@ -145,8 +146,11 @@ subject-token issuer must be the same canonical platform issuer under which the
 person's App consent is stored. Where grant ownership is keyed by raw `sub`, do
 not enable this profile with multiple independent identity issuers or ambiguous
 existing grants. Verify this deployment condition before enabling credential
-commits; this feature performs no grant migration. Missing consent returns
-`auth_required`; the client owns the provider authorization UX.
+commits; this feature performs no grant migration. Missing consent answers
+the MCP tool with `{"status": "grant_required", "apps": ["<grantApp>"]}` in
+`structuredContent`; the MCPServer lists `githubTokenExchange.grantApp`
+under `auth.providerApps`, so muster answers it with the App's sign-in link.
+REST returns `auth_required`; the client owns the provider authorization UX.
 
 The App must be installed with contents and pull-request write on the target
 repository. GitHub documents the distinction between [user authorization and

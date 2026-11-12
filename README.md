@@ -520,11 +520,14 @@ standard manifests a kubectl or GitOps user would apply, returns them on
   `commit: {repository, base, directory, kustomization, prune, branch, files:
   [{path, action, content (dry run)}], pullRequest, number, author}`.
 
-Commit mode needs the GitHub App pin (`github.enabled`, below) and reports
-itself in `get_info` as `capabilities.commit`; without it `mode: commit`
-answers `unsupported`. A call that carries no GitHub authorization answers
-`auth_required`, naming the one-time consent (`core_auth_login
-server=agent-manager`).
+Commit mode needs the GitHub App pin (`github.enabled`, below) or
+`githubTokenExchange` ([GitHub authorization](docs/organization-credentials.md#github-authorization)),
+and reports itself in `get_info` as `capabilities.commit`; without either
+`mode: commit` answers `unsupported`. With the pin, a call that carries no
+GitHub authorization answers `auth_required`, naming the one-time consent
+(`core_auth_login server=agent-manager`). With `githubTokenExchange` only the
+commit asks for GitHub: without the person's grant it answers
+`grant_required` naming the App, and muster answers with the App's sign-in.
 
 ## Identity
 

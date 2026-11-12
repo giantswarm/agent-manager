@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync/atomic"
@@ -789,8 +790,19 @@ func jsonResult(v any) (*mcp.CallToolResult, error) {
 
 // errResult answers "<code>: <message>". A domain error's message leads with
 // its sentinel ("forbidden: create HelmRelease …"); that lead is dropped so
-// the code stands once.
+// the code stands once. A missing provider App grant also carries
+// {"status": "grant_required", "apps": [<app>]} as structured content, which
+// muster answers with the App's sign-in.
+// statusGrantRequired is muster's provider App contract: a tool result whose
+// structured status it is names, under apps, the Apps the call needs.
+const statusGrantRequired = "grant_required"
+
 func errResult(err error) *mcp.CallToolResult {
+	if grant, ok := errors.AsType[*agents.GrantRequiredError](err); ok {
+		res := mcp.NewToolResultError(statusGrantRequired + ": " + grant.Reason)
+		res.StructuredContent = map[string]any{"status": statusGrantRequired, "apps": []string{grant.App}, "message": grant.Reason}
+		return res
+	}
 	_, code, sentinel := classify(err)
 	msg := err.Error()
 	if sentinel != nil {

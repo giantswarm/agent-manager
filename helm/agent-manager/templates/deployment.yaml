@@ -93,6 +93,7 @@ spec:
             - --github-token-exchange-client-id={{ required "githubTokenExchange.clientID is required" .Values.githubTokenExchange.clientID }}
             - --github-token-exchange-audience={{ required "githubTokenExchange.audience is required" .Values.githubTokenExchange.audience }}
             - --github-token-exchange-client-secret-file=/etc/agent-manager/github-token-exchange/client-secret
+            - --github-grant-app={{ required "githubTokenExchange.grantApp is required" .Values.githubTokenExchange.grantApp }}
             - --github-api-url={{ .Values.github.apiURL }}
             {{- if .Values.githubTokenExchange.caSecretName }}
             - --github-token-exchange-ca-file=/etc/agent-manager/github-token-exchange-ca/ca.crt

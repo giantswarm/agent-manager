@@ -329,6 +329,11 @@ githubTokenExchange:
   secretName: ""
   # -- Optional existing Secret with ca.crt for the broker's private CA.
   caSecretName: ""
+  # -- muster's name for the provider App the grant is kept under (its
+  # `aggregator.providerApps` key). A commit without the person's grant
+  # answers `grant_required` naming it, and the MCPServer lists it under
+  # `auth.providerApps`, so muster answers with the App's sign-in link.
+  grantApp: github
 
 github:
   # -- Register with muster pinned to the GitHub App

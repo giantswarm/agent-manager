@@ -232,3 +232,21 @@ tests:
     asserts:
       - failedTemplate:
           errorMessage: "muster.mcpServer.auth.tokenExchange makes muster present a Dex token, which the server validates as an OAuth resource server: set oauth.enabled"
+
+  - it: names the GitHub grant App with githubTokenExchange
+    set:
+      githubTokenExchange:
+        endpoint: https://muster.example.com/oauth/token
+    asserts:
+      - equal:
+          path: spec.auth.forwardToken
+          value: true
+      - equal:
+          path: spec.auth.providerApps
+          value:
+            - github
+
+  - it: names no grant App without githubTokenExchange
+    asserts:
+      - notExists:
+          path: spec.auth.providerApps

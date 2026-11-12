@@ -771,6 +771,21 @@ func gitOpsOwnedf(format string, args ...any) error {
 	return fmt.Errorf("%w: %s", ErrGitOpsOwned, fmt.Sprintf(format, args...))
 }
 
+// GrantRequiredError is an ErrAuthRequired a provider App grant answers:
+// the call needs the person's grant of App, which muster keeps, and they have
+// not given it. The MCP answer names App so muster turns it into the App's
+// sign-in.
+type GrantRequiredError struct {
+	// App is the provider App, by muster's name for it.
+	App string
+	// Reason says what the grant is for.
+	Reason string
+}
+
+func (e *GrantRequiredError) Error() string { return ErrAuthRequired.Error() + ": " + e.Reason }
+
+func (e *GrantRequiredError) Unwrap() error { return ErrAuthRequired }
+
 func authRequiredf(format string, args ...any) error {
 	return fmt.Errorf("%w: %s", ErrAuthRequired, fmt.Sprintf(format, args...))
 }

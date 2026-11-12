@@ -223,6 +223,10 @@
                     "type": "string",
                     "description": "RFC 8693 token endpoint. Empty retains the existing GitHub pin mode."
                 },
+                "grantApp": {
+                    "type": "string",
+                    "description": "muster's name for the provider App the grant is kept under (its `aggregator.providerApps` key). A commit without the person's grant answers `grant_required` naming it, and the MCPServer lists it under `auth.providerApps`, so muster answers with the App's sign-in link."
+                },
                 "secretName": {
                     "type": "string",
                     "description": "Existing Secret in the release namespace, containing client-secret."

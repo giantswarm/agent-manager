@@ -103,3 +103,18 @@ tests:
       - equal:
           path: spec.template.spec.containers[0].startupProbe.periodSeconds
           value: 10
+
+  - it: names the GitHub grant App with githubTokenExchange
+    set:
+      oauth:
+        downstream:
+          enabled: true
+      githubTokenExchange:
+        endpoint: https://muster.example.com/oauth/token
+        clientID: agent-manager
+        audience: github-app
+        secretName: agent-manager-github-exchange
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --github-grant-app=github

@@ -29,6 +29,9 @@ type GitHubExchangeConfig struct {
 	CAFile           string
 	APIURL           string
 	SubjectIssuer    string
+	// GrantApp is the provider App muster keeps the person's grant under,
+	// named in the grant_required answer.
+	GrantApp string
 }
 
 func (c GitHubExchangeConfig) Validate() error {
@@ -36,8 +39,8 @@ func (c GitHubExchangeConfig) Validate() error {
 	if err != nil || endpoint.Scheme != "https" || endpoint.Host == "" || endpoint.User != nil || endpoint.RawQuery != "" || endpoint.Fragment != "" {
 		return errors.New("GitHub token exchange requires an HTTPS token endpoint without credentials, query or fragment")
 	}
-	if c.ClientID == "" || c.ClientSecretFile == "" || c.Audience == "" || c.SubjectIssuer == "" {
-		return errors.New("GitHub token exchange requires a client ID, client secret file, target audience and identity issuer")
+	if c.ClientID == "" || c.ClientSecretFile == "" || c.Audience == "" || c.SubjectIssuer == "" || c.GrantApp == "" {
+		return errors.New("GitHub token exchange requires a client ID, client secret file, target audience, identity issuer and grant App")
 	}
 	if c.APIURL != "" {
 		apiURL, err := url.Parse(c.APIURL)
@@ -96,7 +99,7 @@ func newGitHubExchange(configuration GitHubExchangeConfig, client *http.Client) 
 			}
 			_ = json.NewDecoder(io.LimitReader(response.Body, 16*1024)).Decode(&refusal)
 			if response.StatusCode == http.StatusBadRequest && refusal.Error == "invalid_target" {
-				return nil, fmt.Errorf("%w: GitHub authorization is required for this operation", agents.ErrAuthRequired)
+				return nil, &agents.GrantRequiredError{App: configuration.GrantApp, Reason: fmt.Sprintf("this call opens a pull request as you with your grant of the GitHub App %s in muster, which you have not given: grant it (core_auth_login app=%s), then call again", configuration.GrantApp, configuration.GrantApp)}
 			}
 			return nil, errors.New("GitHub authorization service refused the exchange")
 		}
@@ -122,7 +125,7 @@ func newGitHubExchange(configuration GitHubExchangeConfig, client *http.Client) 
 			Login string `json:"login"`
 		}
 		if response.StatusCode != http.StatusOK || json.NewDecoder(io.LimitReader(response.Body, 16*1024)).Decode(&user) != nil || user.Login == "" {
-			return nil, fmt.Errorf("%w: GitHub refused the user grant", agents.ErrAuthRequired)
+			return nil, &agents.GrantRequiredError{App: configuration.GrantApp, Reason: fmt.Sprintf("GitHub refused your grant of the GitHub App %s: grant it again in muster (core_auth_login app=%s), then call again", configuration.GrantApp, configuration.GrantApp)}
 		}
 		return &identity.GitHub{Login: user.Login, Token: result.AccessToken}, nil
 	}
