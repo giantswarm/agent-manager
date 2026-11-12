@@ -60,6 +60,16 @@ kagent:
   # every address otherwise.
   controllerTarget: grpc://agentgateway.agent-platform.svc.cluster.local:8080
 
+defaultAgentModel:
+  # -- An Agent of `kagent.namespace` whose empty modelConfig is filled with
+  # the namespace's default model (the ModelConfig annotated
+  # `agent-platform.giantswarm.io/is-default-model-config: "true"`); once set,
+  # by anyone, it is never changed. None marked: nothing; several: a warning,
+  # nothing. Checked at start and
+  # every 30s as the ServiceAccount, with a Role that may get and patch that
+  # Agent and list the ModelConfigs. Empty: off.
+  agent: ""
+
 toolchains:
   # -- The OCI repository the installation's toolchains are published under:
   # toolchain `<name>` is the image `<repository>/<name>`, its versions its
@@ -153,11 +163,21 @@ flux:
   # `auto` discovers it.
   ociRepositoryApiVersion: auto
 
+skillManager:
+  # -- skill-manager's base URL (`http://skill-manager.agent-platform.svc:8080`):
+  # skills and plugins are pinned through it, `list_skills` proxies its
+  # catalogue (deprecated), as the caller; `skills.repositories` is unused.
+  # Empty: in-process discovery and pinning (deprecated). An outside host
+  # with one or two labels is written with a trailing dot (`example.com.`):
+  # otherwise the egress rule reads it as `<service>.<namespace>`.
+  url: ""  # @schema pattern: ^(https?://[^\s/]+(/\S*)?)?$
+
 skills:
   # -- GitHub repositories whose SKILL.md files list_skills offers (the same
   # list the portal's create flow reads), each with the head commit an agent
   # pins. Empty turns the skills capability off; skills given by URL are still
-  # resolved through the GitHub API.
+  # resolved through the GitHub API. Unused when `skillManager.url` is set.
+  # Deprecated: skill-manager's sources replace it.
   repositories:
     - https://github.com/giantswarm/agent-skills
   github:
@@ -533,6 +553,11 @@ credentials:
   # a namespace from the release. Do not share it with application config.
   operationsNamespace: ""
 
+
+# -- The installation's name in the Dev Portal, reported by `get_info` as
+# `installation`: a portal agent id is `<installation>/<namespace>/<name>`.
+# Empty: not reported.
+installation: ""
 
 # -- Annotations on the pod.
 podAnnotations: {}  # @schema additionalProperties: true

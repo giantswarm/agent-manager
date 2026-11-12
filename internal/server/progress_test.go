@@ -11,13 +11,12 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"k8s.io/apimachinery/pkg/runtime"
-	dynamicfake "k8s.io/client-go/dynamic/fake"
 	kubefake "k8s.io/client-go/kubernetes/fake"
 
 	"github.com/giantswarm/agent-manager/internal/agents"
 	"github.com/giantswarm/agent-manager/internal/api"
 	"github.com/giantswarm/agent-manager/internal/kube"
+	"github.com/giantswarm/agent-manager/internal/kube/kubetest"
 )
 
 // A tool's progress reaches a caller that passed a progress token as
@@ -29,7 +28,7 @@ func TestToolProgressReachesTheCaller(t *testing.T) {
 	// seconds. A notification sent at the very end of a call may lose the race
 	// with the result, which is harmless: the call has answered.
 	delivered := make(chan struct{}, 2)
-	dyn := dynamicfake.NewSimpleDynamicClient(runtime.NewScheme())
+	dyn := kubetest.NewDynamicClient()
 	typed := kubefake.NewClientset()
 	svc := agents.New(kube.NewServiceAccountProvider(kube.FromInterfaces(dyn, typed, typed.Discovery())), embeddedChart{}, nil, nil, agents.Config{Version: "test"}, nil)
 	mcpSrv := api.NewMCPServer(svc, "test")

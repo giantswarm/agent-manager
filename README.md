@@ -70,7 +70,14 @@ The three writes take `dryRun` and `mode` (`apply` | `commit`, see
 column is files of a pull request, nothing live. `validate_agent` takes
 `mode` too and answers as the write would.
 
-Errors are `{"error":{"code":"not_found|invalid_request|conflict|gitops_owned|forbidden|unauthenticated|auth_required|unsupported|backend_error","message":"…"}}`;
+Errors are `{"error":{"code":"not_found|invalid_request|conflict|gitops_owned|forbidden|unauthenticated|auth_required|unsupported|precondition_failed|precondition_required|credential_consumers_changed|backend_error","message":"…"}}`;
+`unsupported` (501) is something this installation is not configured for,
+`backend_error` (502) a failure of the API server, Git or a store behind it;
+`precondition_failed` (412) and `precondition_required` (428) answer a
+credential save or cancellation whose `If-Match` is stale or missing;
+`credential_consumers_changed` (409) a credential save of
+`replace_organization_credential` whose consumers changed since the
+preparation (see [organization credentials](docs/organization-credentials.md));
 `conflict` (409) covers "exists already", "suspended" and "bare
 Agent", the cases `force` overrides where documented;
 `gitops_owned` (409) is an apply-mode write to a release applied from git,
@@ -164,6 +171,10 @@ conditions.
 - `validate_agent` reports in `modelConfig` the model a create would write,
   and adds a `notes` entry when that ModelConfig is not `ResolvedRefs=True`
   (its key Secret missing, say). The create is not refused for it.
+- `--default-model-agent` (chart: `defaultAgentModel.agent`) names one Agent
+  of `--kagent-namespace` whose empty `modelConfig` is filled with the default,
+  checked every 30s, like a default StorageClass fills a PVC. Once set, by
+  anyone, it is never changed. Several marked: a warning, nothing.
 
 ## The Harness and plugins
 
@@ -272,6 +283,11 @@ ref's head) and changes nothing else on the release — the way to pick up new
 skill and plugin commits. `name`
 defaults to the last path segment (else the repository or image name) and
 must be unique per agent; `path` is relative without `..`.
+
+### Through skill-manager
+
+With `--skill-manager-url` (chart `skillManager.url`) every pin goes through
+skill-manager: see [docs/skill-manager.md](docs/skill-manager.md).
 
 ## Private skills
 
@@ -1084,7 +1100,7 @@ and to the GitHub API on 0.x → 1.x.
 the [`giantswarm/agent-platform`](https://github.com/giantswarm/agent-platform)
 meta chart sets for its `agent-manager` component: `kagent.namespace`,
 `harness.name`, `agentChart.*`, `muster.url`, `mcp.enabled`, `oauth.*`,
-`muster.mcpServer.*`, `skills.repositories`, and
+`muster.mcpServer.*`, `skillManager.url`, `skills.repositories`, and
 `flux.helmReleaseServiceAccount` (derived from `kagent.fluxServiceAccountName`).
 Optional, off by default: `muster.mcpServer.enabled` (renders an
 `mcpservers.muster.giantswarm.io` CR), `httpRoute.enabled`,

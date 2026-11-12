@@ -16,8 +16,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
-	"k8s.io/apimachinery/pkg/runtime"
-	dynamicfake "k8s.io/client-go/dynamic/fake"
 	kubefake "k8s.io/client-go/kubernetes/fake"
 
 	"github.com/giantswarm/agent-manager/internal/agents"
@@ -26,6 +24,7 @@ import (
 	apiv1alpha1 "github.com/giantswarm/agent-manager/internal/kagent/gen/kagent/api/v1alpha1"
 	"github.com/giantswarm/agent-manager/internal/kagent/kagenttest"
 	"github.com/giantswarm/agent-manager/internal/kube"
+	"github.com/giantswarm/agent-manager/internal/kube/kubetest"
 	"github.com/giantswarm/agent-manager/internal/muster"
 )
 
@@ -34,14 +33,14 @@ const callerToken = "caller-id-token"
 func newSessionService(t *testing.T) (*agents.Service, *kagenttest.Controller) {
 	t.Helper()
 	ctrl, conn := kagenttest.New(t)
-	dyn := dynamicfake.NewSimpleDynamicClient(runtime.NewScheme())
+	dyn := kubetest.NewDynamicClient()
 	typed := kubefake.NewClientset()
 	// muster's session bindings, accepting every bind and unbind.
 	bindings := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }))
 	t.Cleanup(bindings.Close)
 	binder, err := muster.New(bindings.URL+"/session-bindings", nil)
 	require.NoError(t, err)
-	svc := agents.New(kube.NewServiceAccountProvider(kube.FromInterfaces(dyn, typed, typed.Discovery())), embeddedChart{}, nil, pinner{}, agents.Config{
+	svc := agents.New(kube.NewServiceAccountProvider(kube.FromInterfaces(dyn, typed, typed.Discovery())), embeddedChart{}, nil, agents.InProcessPinner(pinner{}), agents.Config{
 		DefaultNamespace: "kagent", Version: "test", Sessions: kagent.NewClient(conn), Bindings: binder,
 	}, nil)
 	return svc, ctrl

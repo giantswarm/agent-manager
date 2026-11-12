@@ -1,0 +1,114 @@
+# skill-manager: agent-manager pins skills and lists them through it when
+# skillManager.url is set, and may reach it past the NetworkPolicy.
+#
+# Run with: make helm-test (helm unittest helm/agent-manager)
+suite: skill-manager
+templates:
+  - templates/deployment.yaml
+  - templates/networkpolicy.yaml
+tests:
+  - it: passes skillManager.url
+    template: templates/deployment.yaml
+    set:
+      skillManager:
+        url: http://skill-manager.agent-platform.svc:8080
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --skill-manager-url=http://skill-manager.agent-platform.svc:8080
+
+  - it: passes no URL when unset
+    template: templates/deployment.yaml
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --skill-manager-url=
+          any: true
+
+  - it: lets the pod reach skill-manager in its namespace
+    template: templates/networkpolicy.yaml
+    set:
+      networkPolicy:
+        enabled: true
+      skillManager:
+        url: http://skill-manager.agent-platform.svc:8080
+    asserts:
+      - contains:
+          path: spec.egress
+          content:
+            to:
+              - namespaceSelector:
+                  matchLabels:
+                    kubernetes.io/metadata.name: agent-platform
+            ports:
+              - protocol: TCP
+                port: 8080
+
+  - it: takes <svc>.<namespace> as in-cluster
+    template: templates/networkpolicy.yaml
+    set:
+      networkPolicy:
+        enabled: true
+      skillManager:
+        url: http://skill-manager.agent-platform:8080
+    asserts:
+      - contains:
+          path: spec.egress
+          content:
+            to:
+              - namespaceSelector:
+                  matchLabels:
+                    kubernetes.io/metadata.name: agent-platform
+            ports:
+              - protocol: TCP
+                port: 8080
+
+  - it: takes a bare <svc> as the release's namespace
+    template: templates/networkpolicy.yaml
+    release:
+      namespace: agent-platform
+    set:
+      networkPolicy:
+        enabled: true
+      skillManager:
+        url: http://skill-manager:8080
+    asserts:
+      - contains:
+          path: spec.egress
+          content:
+            to:
+              - namespaceSelector:
+                  matchLabels:
+                    kubernetes.io/metadata.name: agent-platform
+            ports:
+              - protocol: TCP
+                port: 8080
+
+  - it: refuses a URL that is not http(s)
+    template: templates/networkpolicy.yaml
+    set:
+      networkPolicy:
+        enabled: true
+      skillManager:
+        url: skill-manager:8080
+    asserts:
+      - failedTemplate:
+          errorPattern: skillManager.url
+
+  - it: takes an absolute name (trailing dot) as outside the cluster
+    template: templates/networkpolicy.yaml
+    set:
+      networkPolicy:
+        enabled: true
+      skillManager:
+        url: https://skills.example.:443
+    asserts:
+      - contains:
+          path: spec.egress
+          content:
+            to:
+              - ipBlock:
+                  cidr: 0.0.0.0/0
+            ports:
+              - protocol: TCP
+                port: 443
