@@ -2,6 +2,7 @@ package skillmanager
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"path"
@@ -279,6 +280,26 @@ func TestResolveErrorsAreMapped(t *testing.T) {
 			assert.Equal(t, tc.list, refused.List)
 			assert.Equal(t, tc.item, refused.Item)
 			assert.Contains(t, err.Error(), "skill-manager")
+		})
+	}
+}
+
+func TestAMissingGrantNamesSkillManagersApp(t *testing.T) {
+	for _, status := range []int{http.StatusForbidden, http.StatusUnauthorized} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			f := &fakeSkillManager{fail: status, failBody: `{"error":"grant required","item":0,"list":"skills","grantRequired":{"app":"skill-manager-app"}}`}
+			c := newClient(t, f, "t")
+			_, _, err := c.Resolve(t.Context(), []Item{{Git: &Git{URL: repo}}}, nil)
+			grant, ok := errors.AsType[*GrantRequiredError](err)
+			require.True(t, ok, "%v", err)
+			require.Equal(t, "skill-manager-app", grant.App)
+			require.ErrorContains(t, err, "core_auth_login app=skill-manager-app")
+			require.NotErrorIs(t, err, ErrUnauthenticated)
+			require.NotErrorIs(t, err, skills.ErrNotReadable)
+			var refused *ResolveError
+			require.ErrorAs(t, err, &refused)
+			require.Equal(t, ListSkills, refused.List)
+			require.Equal(t, 0, refused.Item)
 		})
 	}
 }
