@@ -643,7 +643,10 @@ paths:
         operation whose consumers, or where they send the value, changed since its
         preparation (live, or in git in commit mode) answers 409 with error code
         credential_consumers_changed and does not write the credential: prepare it again with a
-        fresh requestId. Other refusals keep their generic code and a sanitized message.
+        fresh requestId. An operation that creates an object (a new model,
+        connector or egress policy) whose object exists by then, live or as its
+        file in git, answers 409 with error code already_exists and writes nothing.
+        Other refusals keep their generic code and a sanitized message.
       operationId: saveCredentialOperation
       parameters:
         - name: If-Match
@@ -893,8 +896,8 @@ components:
           properties:
             code:
               type: string
-              enum: [not_found, invalid_request, conflict, gitops_owned, forbidden, unauthenticated, auth_required, unsupported, precondition_failed, precondition_required, credential_consumers_changed, backend_error]
-              description: "A stable code to switch on. credential_consumers_changed (409, saveCredentialOperation): the objects that use the credential, or where they send it, changed since the replacement was prepared, live or in git; the credential was not written; prepare the replacement again with a fresh requestId"
+              enum: [not_found, invalid_request, conflict, gitops_owned, forbidden, unauthenticated, auth_required, unsupported, precondition_failed, precondition_required, credential_consumers_changed, already_exists, backend_error]
+              description: "A stable code to switch on. credential_consumers_changed (409, saveCredentialOperation): the objects that use the credential, or where they send it, changed since the replacement was prepared, live or in git; the credential was not written; prepare the replacement again with a fresh requestId. already_exists (409): a create whose object exists by then, live or as its file in git: set_organization_model with create, and a saveCredentialOperation whose operation creates an object; nothing was written"
             message: { type: string }
     Info:
       type: object

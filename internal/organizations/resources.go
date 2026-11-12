@@ -2,6 +2,7 @@ package organizations
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"regexp"
@@ -9,6 +10,7 @@ import (
 	"strings"
 
 	apov1alpha1 "github.com/giantswarm/agent-platform-operator/api/v1alpha1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -123,6 +125,9 @@ type ModelRequest struct {
 	CredentialKey    string
 	// Default moves the organization's default mark to this model.
 	Default bool
+	// Create only creates: a model of that name, live or in git, is refused
+	// with ErrAlreadyExists instead of changed.
+	Create bool
 	// ReplaceCredential answers with the credential form for a new value.
 	ReplaceCredential bool
 	DryRun            bool
@@ -151,6 +156,9 @@ func (s *Service) SetModel(ctx context.Context, req ModelRequest) (*ResourceResu
 	items, err := s.existing(ctx, c, ns, gvr, "ModelConfigs")
 	if err != nil {
 		return nil, err
+	}
+	if req.Create && find(items, req.Name) != nil {
+		return nil, modelExists(ns, req.Name)
 	}
 	w, err := s.contentWriter(ctx, org, req.Mode)
 	if err != nil {
@@ -238,12 +246,34 @@ func (s *Service) SetModel(ctx context.Context, req ModelRequest) (*ResourceResu
 	}
 	res.Credentials = []Credential{cred}
 	if err = s.landResource(ctx, w, writes, res, req.ReplaceCredential, "model-"+req.Name, "chore(organizations): set model "+req.Name); err != nil {
+		// With create, a model made since the read, live (the create itself
+		// refuses it) or as its file in git, answers ErrAlreadyExists too.
+		if req.Create && (errors.As(err, new(nameTaken)) || res.Created && apierrors.IsAlreadyExists(err)) {
+			return nil, modelExists(ns, req.Name)
+		}
 		return nil, err
 	}
 	if !req.DryRun && res.Commit == nil && res.CredentialOperation == "" {
 		s.log.Info("organization model written", identity.LogAttr(ctx), "namespace", ns, "name", req.Name, "created", res.Created, "default", agents.IsMarkedDefault(obj))
 	}
 	return res, nil
+}
+
+// ErrAlreadyExists refuses a create of an object that exists by then, live or
+// as its file in git: the name is taken. It is not ErrConflict, so a client
+// tells it from the other refusals by its code.
+var ErrAlreadyExists = errors.New("already exists")
+
+// nameTaken marks a refusal, keeping its text and code, because the object a
+// write creates exists by then: its file is in git, or it is live at a save.
+// A tool call with create, and a save, answer ErrAlreadyExists for it.
+type nameTaken struct{ err error }
+
+func (e nameTaken) Error() string { return e.err.Error() }
+func (e nameTaken) Unwrap() error { return e.err }
+
+func modelExists(ns, name string) error {
+	return fmt.Errorf("%w: ModelConfig %s/%s exists already: pick another name, or call without create to change it", ErrAlreadyExists, ns, name)
 }
 
 func setMark(obj *unstructured.Unstructured) {

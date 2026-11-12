@@ -44,6 +44,11 @@ func credentialSaveError(err error) error {
 	if errors.As(err, new(consumersDiffer)) {
 		return ErrCredentialConsumersChanged
 	}
+	// The object the operation creates exists by then: the name the person
+	// confirmed is taken. The message names nothing the confirmation did not.
+	if errors.As(err, new(nameTaken)) {
+		return fmt.Errorf("%w: the object this operation creates exists now, live or in git; prepare it again with another name", ErrAlreadyExists)
+	}
 	for _, sentinel := range []error{agents.ErrUnauthenticated, agents.ErrAuthRequired, agents.ErrForbidden, agents.ErrNotFound, agents.ErrConflict, agents.ErrInvalid, agents.ErrUnsupported, agents.ErrGitOpsOwned} {
 		if errors.Is(err, sentinel) {
 			return fmt.Errorf("%w: credential save was refused; refresh the operation before retrying", sentinel)
@@ -240,7 +245,10 @@ func remainingOperationWrites(ctx context.Context, caller kube.Client, operation
 			continue
 		}
 		expected := unstructuredOf(planned.obj)
-		if (planned.op == opCreate && !apierrors.IsNotFound(err)) || (planned.op != opCreate && (current == nil || current.GetResourceVersion() != expected.GetResourceVersion())) {
+		if planned.op == opCreate && !apierrors.IsNotFound(err) {
+			return nil, nameTaken{fmt.Errorf("%w: %s exists now; prepare it again", agents.ErrConflict, planned.what)}
+		}
+		if planned.op != opCreate && (current == nil || current.GetResourceVersion() != expected.GetResourceVersion()) {
 			return nil, fmt.Errorf("%w: credential consumer changed; prepare it again", agents.ErrConflict)
 		}
 		planned.obj = expected.DeepCopy().Object
