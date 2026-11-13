@@ -834,6 +834,7 @@ func (s *Service) readModelConfigs(ctx context.Context, st *site) (namespaceMode
 		}
 		mc.ManagedBy = item.GetLabels()[ManagedByLabel]
 		mc.Default = len(models.marked) == 1 && item.GetName() == models.marked[0]
+		modelSettings(&item, &mc)
 		models.configs = append(models.configs, mc)
 	}
 	sort.Slice(models.configs, func(i, j int) bool { return models.configs[i].Name < models.configs[j].Name })

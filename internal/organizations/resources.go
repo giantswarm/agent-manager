@@ -130,6 +130,18 @@ type ModelRequest struct {
 	DryRun bool
 	// Mode is apply (default) or commit.
 	Mode string
+	// DisplayName is the name people see (annotation
+	// agents.DisplayNameAnnotation); nil keeps it, "" removes it.
+	DisplayName *string
+	// MaxTokens is the token limit of an answer, the provider block's
+	// maxTokens; nil keeps it, 0 removes it (the provider's default).
+	MaxTokens *int64
+	// PromptCaching and CacheTTL are the provider block's prompt caching
+	// (Anthropic, Bedrock); nil and "" keep the stored values. A new
+	// Anthropic model caches, with cacheTTL agents.DefaultCacheTTL, unless
+	// PromptCaching is false.
+	PromptCaching *bool
+	CacheTTL      string
 }
 
 // SetModel creates or changes a ModelConfig as the caller, dry run first. The
@@ -175,10 +187,18 @@ func (s *Service) SetModel(ctx context.Context, req ModelRequest) (*ResourceResu
 		obj = newObject(s.apiVersion(), "ModelConfig", ns, req.Name)
 		res.Created = true
 	}
+	// The provider before the write: a file in git may leave it out, and then
+	// the live object says what the API server defaulted it to.
+	previous := storedProvider(obj, find(items, req.Name))
 	if !res.Created {
-		if err := refuseProviderChangeOnSameSecret(obj, req); err != nil {
+		if err := refuseProviderChangeOnSameSecret(obj, previous, req); err != nil {
 			return nil, err
 		}
+	}
+	providerChanged := !res.Created && req.Provider != "" && !strings.EqualFold(req.Provider, previous)
+	var carried map[string]any
+	if providerChanged {
+		carried = dropProviderBlocks(obj, previous, req.Provider)
 	}
 	if req.Provider != "" {
 		_ = unstructured.SetNestedField(obj.Object, req.Provider, "spec", "provider")
@@ -195,6 +215,10 @@ func (s *Service) SetModel(ctx context.Context, req ModelRequest) (*ResourceResu
 	}
 	_ = unstructured.SetNestedField(obj.Object, secret, "spec", "apiKeySecret")
 	_ = unstructured.SetNestedField(obj.Object, key, "spec", "apiKeySecretKey")
+	provider := firstOf(req.Provider, previous)
+	if err := setModelSettings(obj, req, provider, res.Created || providerChanged, carried); err != nil {
+		return nil, err
+	}
 
 	var marks []string
 	for i := range items {
@@ -266,9 +290,10 @@ func (s *Service) SetModel(ctx context.Context, req ModelRequest) (*ResourceResu
 // exist, the save writes it first and then the provider and the reference in
 // one write of the model. A model that names no Secret has no key to send to
 // another provider, so its change is not refused; a provider that differs only
-// in case is no change here, and admission judges its spelling.
-func refuseProviderChangeOnSameSecret(obj *unstructured.Unstructured, req ModelRequest) error {
-	current, _, _ := unstructured.NestedString(obj.Object, "spec", "provider")
+// in case is no change here, and admission judges its spelling. current is
+// the stored provider (storedProvider): a file in git that leaves it out has
+// the one the API server defaulted live.
+func refuseProviderChangeOnSameSecret(obj *unstructured.Unstructured, current string, req ModelRequest) error {
 	if req.Provider == "" || current == "" || strings.EqualFold(req.Provider, current) {
 		return nil
 	}
@@ -278,6 +303,103 @@ func refuseProviderChangeOnSameSecret(obj *unstructured.Unstructured, req ModelR
 	}
 	return fmt.Errorf("%w: ModelConfig %s/%s sends the key in credential Secret %s to %s; a change of its provider to %s that keeps that Secret sends one provider's key to the other for a time, whatever the order of the provider and the key. Give a new credentialSecret that does not exist yet (you enter the %s key, and the save writes the Secret before it changes the provider and the reference), or create a new model",
 		agents.ErrConflict, req.Namespace, req.Name, secret, current, req.Provider, req.Provider)
+}
+
+// setModelSettings writes the display name, the token limit and the prompt
+// caching of req into the model obj, in the block of its provider (after
+// the write). A setting req omits keeps its stored value. fresh says the
+// provider's block is new (a new model, or a provider change): a new
+// Anthropic block caches by default, as the platform's models do, and the
+// token limit of the old block, carried, moves into it when req gives none.
+// Caching that is on gets agents.DefaultCacheTTL when no cache time is
+// stored or given. A setting the provider's block does not have is refused:
+// the API server would prune it and the model would run without it in
+// silence. The values themselves (the cacheTTL enum, a minimum) are judged
+// by the API server's dry run.
+func setModelSettings(obj *unstructured.Unstructured, req ModelRequest, provider string, fresh bool, carried map[string]any) error {
+	if req.DisplayName != nil {
+		annotations := obj.GetAnnotations()
+		if *req.DisplayName == "" {
+			delete(annotations, agents.DisplayNameAnnotation)
+		} else {
+			if annotations == nil {
+				annotations = map[string]string{}
+			}
+			annotations[agents.DisplayNameAnnotation] = *req.DisplayName
+		}
+		obj.SetAnnotations(annotations)
+	}
+	block, _ := agents.SettingsBlockOf(provider)
+	if limit := agents.IntValue(carried["maxTokens"]); limit > 0 && req.MaxTokens == nil && block.MaxTokens {
+		_ = unstructured.SetNestedField(obj.Object, limit, "spec", block.Key, "maxTokens")
+	}
+	if req.MaxTokens != nil {
+		switch {
+		case *req.MaxTokens < 0:
+			return invalidf("maxTokens must be 0 (the provider's default) or more, not %d", *req.MaxTokens)
+		case !block.MaxTokens:
+			return invalidf("provider %s has no maxTokens in kagent's ModelConfig (Anthropic, AnthropicVertexAI, AzureOpenAI, Mistral and OpenAI have one): leave maxTokens out", provider)
+		case *req.MaxTokens == 0:
+			removeBlockField(obj, block.Key, "maxTokens")
+		default:
+			_ = unstructured.SetNestedField(obj.Object, *req.MaxTokens, "spec", block.Key, "maxTokens")
+		}
+	}
+	caching := req.PromptCaching
+	if caching == nil && fresh && agents.IsAnthropic(provider) {
+		on := true
+		caching = &on
+	}
+	if (caching != nil || req.CacheTTL != "") && !block.Caching {
+		return invalidf("provider %s has no promptCaching or cacheTTL in kagent's ModelConfig (Anthropic and Bedrock have them): leave them out", provider)
+	}
+	if caching != nil {
+		_ = unstructured.SetNestedField(obj.Object, *caching, "spec", block.Key, "promptCaching")
+	}
+	ttl := req.CacheTTL
+	if stored, _, _ := unstructured.NestedString(obj.Object, "spec", block.Key, "cacheTTL"); ttl == "" && stored == "" && caching != nil && *caching {
+		ttl = agents.DefaultCacheTTL
+	}
+	if ttl != "" {
+		_ = unstructured.SetNestedField(obj.Object, ttl, "spec", block.Key, "cacheTTL")
+	}
+	return nil
+}
+
+// storedProvider is the provider of the model obj (live, or its file in git)
+// before the write; a file that leaves it out has the one the API server
+// defaulted on the live object, live.
+func storedProvider(obj, live *unstructured.Unstructured) string {
+	provider, _, _ := unstructured.NestedString(obj.Object, "spec", "provider")
+	if provider == "" && live != nil {
+		provider, _, _ = unstructured.NestedString(live.Object, "spec", "provider")
+	}
+	return provider
+}
+
+// dropProviderBlocks removes from the model obj every provider block but
+// the one of provider: kagent's ModelConfig refuses a block of another
+// provider than spec.provider, so the old provider's block goes with a
+// provider change. It answers the old provider's block, whose settings the
+// new block may take.
+func dropProviderBlocks(obj *unstructured.Unstructured, previous, provider string) map[string]any {
+	old, _, _ := unstructured.NestedMap(obj.Object, "spec", agents.ProviderBlockKey(previous))
+	keep := agents.ProviderBlockKey(provider)
+	for _, key := range agents.ProviderBlockKeys() {
+		if key != keep {
+			unstructured.RemoveNestedField(obj.Object, "spec", key)
+		}
+	}
+	return old
+}
+
+// removeBlockField removes field from the provider block key of obj, and the
+// block when nothing is left in it.
+func removeBlockField(obj *unstructured.Unstructured, key, field string) {
+	unstructured.RemoveNestedField(obj.Object, "spec", key, field)
+	if rest, found, _ := unstructured.NestedMap(obj.Object, "spec", key); found && len(rest) == 0 {
+		unstructured.RemoveNestedField(obj.Object, "spec", key)
+	}
 }
 
 // ErrAlreadyExists refuses a create of an object that exists by then, live or
