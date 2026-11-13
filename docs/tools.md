@@ -840,7 +840,7 @@ Each with its origins and, where the egress gateway adds a credential, the heade
 ```text
 List the ModelConfigs of a namespace: the values create_agent accepts for modelConfig.
 
-Each with provider, model, its Accepted and ResolvedRefs conditions, who manages it, and default: the one create_agent writes when modelConfig is omitted (the single ModelConfig annotated agent-platform.giantswarm.io/is-default-model-config=true; none or several is no default). Organization admins write them with set_organization_model.
+Each with provider, model, its Accepted and ResolvedRefs conditions, who manages it, and default: the one create_agent writes when modelConfig is omitted (the single ModelConfig annotated agent-platform.giantswarm.io/is-default-model-config=true; none or several is no default), and its settings: displayName, maxTokens, promptCaching (with cacheTTL while on; omitted for a provider without it). Organization admins write them with set_organization_model.
 ```
 
 ```json
@@ -1262,12 +1262,16 @@ destinations replaces the whole list. A credentialHeader makes the egress gatewa
 ```text
 Create or change an organization's model (a ModelConfig) as you; its API key is a Secret named by reference.
 
-The first model of an organization without a default becomes its default (annotation agent-platform.giantswarm.io/is-default-model-config); default true moves the mark here. Never pass a key: a missing one is a URL elicitation of the credential UI, link in credentials[].next. list_model_configs lists the models. Needs agent-platform:admin.
+The first model of an organization without a default becomes its default (annotation agent-platform.giantswarm.io/is-default-model-config); default true moves the mark here. A new Anthropic model caches prompts (5m) unless promptCaching is false; an omitted argument keeps the stored value. Never pass a key: a missing one is a URL elicitation of the credential UI, link in credentials[].next. list_model_configs lists the models and settings. Needs agent-platform:admin.
 ```
 
 ```json
 {
   "properties": {
+    "cacheTTL": {
+      "description": "How long a cached prompt stays while caching is on: 5m or 1h (1h costs more per write)",
+      "type": "string"
+    },
     "create": {
       "description": "Only create: a model of that name, live or in git, is refused with already_exists, not changed (default false: create or change)",
       "type": "boolean"
@@ -1284,9 +1288,17 @@ The first model of an organization without a default becomes its default (annota
       "description": "Make this the organization's default model, moving the mark (default false)",
       "type": "boolean"
     },
+    "displayName": {
+      "description": "Name people see; \"\" removes it",
+      "type": "string"
+    },
     "dryRun": {
       "description": "Check every write with the API server as you and write nothing (default false)",
       "type": "boolean"
+    },
+    "maxTokens": {
+      "description": "Token limit of an answer (Anthropic, AnthropicVertexAI, AzureOpenAI, Mistral, OpenAI); 0 removes it: the provider's default",
+      "type": "number"
     },
     "mode": {
       "description": "apply (default): write live as you; refused with gitops_owned for what git applies. commit: dry-run as you, then open a pull request as you",
@@ -1307,6 +1319,10 @@ The first model of an organization without a default becomes its default (annota
     "namespace": {
       "description": "The organization namespace, e.g. agents-payments-x7k2q (list_organizations, get_organization)",
       "type": "string"
+    },
+    "promptCaching": {
+      "description": "Prompt caching (Anthropic, Bedrock); a new Anthropic model has it on, false turns it off",
+      "type": "boolean"
     },
     "provider": {
       "description": "Provider as kagent's ModelConfig takes it, e.g. Anthropic, OpenAI; required to create; a change needs a new credentialSecret too",

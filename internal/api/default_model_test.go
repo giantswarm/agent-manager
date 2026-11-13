@@ -81,8 +81,8 @@ func TestListModelConfigsReportsTheDefault(t *testing.T) {
 	_, err := dyn.Resource(mcGVR).Namespace("kagent").Create(t.Context(), markedModelConfig("claude"), metav1.CreateOptions{})
 	require.NoError(t, err)
 	want := []any{
-		map[string]any{"name": "claude", "namespace": "kagent", "provider": "Anthropic", "model": "claude-sonnet-4-6", "default": true, "accepted": nil, "resolvedRefs": nil},
-		map[string]any{"name": "default-model-config", "namespace": "kagent", "provider": "Anthropic", "model": "claude-sonnet-4-6", "default": false, "accepted": nil, "resolvedRefs": nil},
+		map[string]any{"name": "claude", "namespace": "kagent", "provider": "Anthropic", "model": "claude-sonnet-4-6", "default": true, "accepted": nil, "resolvedRefs": nil, "promptCaching": false},
+		map[string]any{"name": "default-model-config", "namespace": "kagent", "provider": "Anthropic", "model": "claude-sonnet-4-6", "default": false, "accepted": nil, "resolvedRefs": nil, "promptCaching": false},
 	}
 
 	text, isErr := callTool(t, NewMCPServer(svc, "test"), ToolListModelConfigs, nil)

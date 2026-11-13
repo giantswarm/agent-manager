@@ -74,6 +74,9 @@ const (
 	argKind             = "kind"
 	argSecret           = "secret"
 	argKey              = "key"
+	argMaxTokens        = "maxTokens"
+	argPromptCaching    = "promptCaching"
+	argCacheTTL         = "cacheTTL"
 )
 
 // JSON Schema keys of the destinations item.
@@ -300,7 +303,7 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service, l
 
 	s.AddTool(mcp.NewTool(ToolSetOrganizationModel,
 		tooldesc.Describe("Create or change an organization's model (a ModelConfig) as you; its API key is a Secret named by reference.",
-			"The first model of an organization without a default becomes its default (annotation "+apov1alpha1.DefaultModelConfigAnnotation+"); default true moves the mark here. Never pass a key: a missing one is a URL elicitation of the credential UI, link in credentials[].next. list_model_configs lists the models. Needs agent-platform:admin."),
+			"The first model of an organization without a default becomes its default (annotation "+apov1alpha1.DefaultModelConfigAnnotation+"); default true moves the mark here. A new Anthropic model caches prompts ("+agents.DefaultCacheTTL+") unless promptCaching is false; an omitted argument keeps the stored value. Never pass a key: a missing one is a URL elicitation of the credential UI, link in credentials[].next. list_model_configs lists the models and settings. Needs agent-platform:admin."),
 		orgNSProp,
 		mcp.WithString(argName, mcp.Required(), mcp.Description("ModelConfig name")),
 		mcp.WithString(argProvider, mcp.Description("Provider as kagent's ModelConfig takes it, e.g. Anthropic, OpenAI; required to create; a change needs a new credentialSecret too")),
@@ -309,6 +312,10 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service, l
 		mcp.WithString(argCredentialKey, mcp.Description("Key of that Secret; default apiKey")),
 		mcp.WithBoolean(argDefault, mcp.Description("Make this the organization's default model, moving the mark (default false)")),
 		mcp.WithBoolean(argCreate, mcp.Description("Only create: a model of that name, live or in git, is refused with already_exists, not changed (default false: create or change)")),
+		mcp.WithString(argDisplayName, mcp.Description("Name people see; \"\" removes it")),
+		mcp.WithNumber(argMaxTokens, mcp.Description("Token limit of an answer (Anthropic, AnthropicVertexAI, AzureOpenAI, Mistral, OpenAI); 0 removes it: the provider's default")),
+		mcp.WithBoolean(argPromptCaching, mcp.Description("Prompt caching (Anthropic, Bedrock); a new Anthropic model has it on, false turns it off")),
+		mcp.WithString(argCacheTTL, mcp.Description("How long a cached prompt stays while caching is on: 5m or 1h (1h costs more per write)")),
 		credentialRequestID, dryRun, modeProp,
 		mcp.WithOutputSchema[organizations.ResourceResult](),
 		mcp.WithReadOnlyHintAnnotation(false),
@@ -317,16 +324,20 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service, l
 		mcp.WithOpenWorldHintAnnotation(false),
 	), t.runWrite(func(ctx context.Context, req mcp.CallToolRequest) (*organizations.ResourceResult, error) {
 		var in struct {
-			Namespace        string `json:"namespace"`
-			Name             string `json:"name"`
-			Provider         string `json:"provider"`
-			Model            string `json:"model"`
-			CredentialSecret string `json:"credentialSecret"`
-			CredentialKey    string `json:"credentialKey"`
-			Default          bool   `json:"default"`
-			Create           bool   `json:"create"`
-			DryRun           bool   `json:"dryRun"`
-			Mode             string `json:"mode"`
+			Namespace        string  `json:"namespace"`
+			Name             string  `json:"name"`
+			Provider         string  `json:"provider"`
+			Model            string  `json:"model"`
+			CredentialSecret string  `json:"credentialSecret"`
+			CredentialKey    string  `json:"credentialKey"`
+			Default          bool    `json:"default"`
+			Create           bool    `json:"create"`
+			DryRun           bool    `json:"dryRun"`
+			Mode             string  `json:"mode"`
+			DisplayName      *string `json:"displayName"`
+			MaxTokens        *int64  `json:"maxTokens"`
+			PromptCaching    *bool   `json:"promptCaching"`
+			CacheTTL         string  `json:"cacheTTL"`
 		}
 		if err := bindArgs(req, &in); err != nil {
 			return nil, err

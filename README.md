@@ -53,7 +53,7 @@ MCP-server-writer half.
 | Delete: the HelmRelease; the OCIRepository only when nothing else references it | `DELETE /api/v1/agents/{ns}/{name}[?force=true&mode=&dryRun=]` | `delete_agent` | HelmRelease, OCIRepository, (bare Agent with force) |
 | Status verdict: the Agent's conditions, HelmRelease conditions/history, Warning events | `GET /api/v1/agents/{ns}/{name}/status` | `get_agent_status` | no |
 | Dry run of create/update: pinned skills, composed manifests + every violation | `POST /api/v1/agents/validate` | `validate_agent` | no |
-| kagent ModelConfigs of a namespace, with the namespace default (`default`) and their `accepted` and `resolvedRefs` conditions | `GET /api/v1/modelconfigs?namespace=` | `list_model_configs` | no |
+| kagent ModelConfigs of a namespace, with the namespace default (`default`), their `accepted` and `resolvedRefs` conditions and their `displayName`, `maxTokens`, `promptCaching` and `cacheTTL` | `GET /api/v1/modelconfigs?namespace=` | `list_model_configs` | no |
 | kagent EgressPolicies of a namespace, read as the caller: each origin and its credential header's name, never the Secret | `GET /api/v1/egresspolicies?namespace=` | `list_egress_policies` | no |
 | Skills (`SKILL.md`) of the configured GitHub repositories, grouped by repository with its head commit, tags from `metadata.tags`; `tags` keeps those with any of them | `GET /api/v1/skills[?repository=&ref=&refresh=&tags=]` | `list_skills` | no |
 | Sessions of an agent, as the caller (`SessionService/ListSessions`; `allCreators` when the controller grants it) | `GET /api/v1/agents/{ns}/{name}/sessions[?allCreators=true][&pageToken=…]` | `list_sessions` | no |
@@ -677,7 +677,10 @@ The organization tools (every name holds `organization`):
   (a ModelConfig; the first model of an organization without a default
   carries `agent-platform.giantswarm.io/is-default-model-config: "true"`,
   `default: true` moves the mark, and a namespace with two marks takes no
-  new model until one is chosen); `list_organization_connectors` and
+  new model until one is chosen; its display name, token limit and prompt
+  caching, on by default for a new Anthropic model, are in
+  [docs/organization-models.md](docs/organization-models.md));
+  `list_organization_connectors` and
   `set_organization_connector` (RemoteMCPServers);
   `set_organization_egress_policy`; `delete_organization_object`; and
   `replace_organization_credential` (a new value for one key of a credential

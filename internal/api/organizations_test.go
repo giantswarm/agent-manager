@@ -481,10 +481,15 @@ func TestCredentialsAreReferencesOnly(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal(out, &listed))
 	valueLike := regexp.MustCompile(`(?i)(value|password|token|apikey|plaintext)`)
+	// A number of model tokens, kagent's maxTokens: no credential.
+	notASecret := map[string]bool{ToolSetOrganizationModel + "." + argMaxTokens: true}
 	var walk func(tool, path string, schema map[string]any)
 	walk = func(tool, path string, schema map[string]any) {
 		props, _ := schema["properties"].(map[string]any)
 		for name, p := range props {
+			if notASecret[tool+"."+path+name] {
+				continue
+			}
 			assert.False(t, valueLike.MatchString(name), "%s takes %s%s, a secret value", tool, path, name)
 			if sub, ok := p.(map[string]any); ok {
 				walk(tool, path+name+".", sub)

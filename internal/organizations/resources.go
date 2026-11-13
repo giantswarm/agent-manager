@@ -130,6 +130,18 @@ type ModelRequest struct {
 	DryRun bool
 	// Mode is apply (default) or commit.
 	Mode string
+	// DisplayName is the name people see (annotation
+	// agents.DisplayNameAnnotation); nil keeps it, "" removes it.
+	DisplayName *string
+	// MaxTokens is the token limit of an answer, the provider block's
+	// maxTokens; nil keeps it, 0 removes it (the provider's default).
+	MaxTokens *int64
+	// PromptCaching and CacheTTL are the provider block's prompt caching
+	// (Anthropic, Bedrock); nil and "" keep the stored values. A new
+	// Anthropic model caches, with cacheTTL agents.DefaultCacheTTL, unless
+	// PromptCaching is false.
+	PromptCaching *bool
+	CacheTTL      string
 }
 
 // SetModel creates or changes a ModelConfig as the caller, dry run first. The
@@ -195,6 +207,9 @@ func (s *Service) SetModel(ctx context.Context, req ModelRequest) (*ResourceResu
 	}
 	_ = unstructured.SetNestedField(obj.Object, secret, "spec", "apiKeySecret")
 	_ = unstructured.SetNestedField(obj.Object, key, "spec", "apiKeySecretKey")
+	if err := setModelSettings(obj, req, res.Created); err != nil {
+		return nil, err
+	}
 
 	var marks []string
 	for i := range items {
@@ -278,6 +293,70 @@ func refuseProviderChangeOnSameSecret(obj *unstructured.Unstructured, req ModelR
 	}
 	return fmt.Errorf("%w: ModelConfig %s/%s sends the key in credential Secret %s to %s; a change of its provider to %s that keeps that Secret sends one provider's key to the other for a time, whatever the order of the provider and the key. Give a new credentialSecret that does not exist yet (you enter the %s key, and the save writes the Secret before it changes the provider and the reference), or create a new model",
 		agents.ErrConflict, req.Namespace, req.Name, secret, current, req.Provider, req.Provider)
+}
+
+// setModelSettings writes the display name, the token limit and the prompt
+// caching of req into the model obj, in the block of its provider (after
+// the write). A setting req omits keeps its stored value; a new Anthropic
+// model caches by default, as the platform's models do. A setting the
+// provider's block does not have is refused: the API server would prune it
+// and the model would run without it in silence. The values themselves (the
+// cacheTTL enum, a minimum) are judged by the API server's dry run.
+func setModelSettings(obj *unstructured.Unstructured, req ModelRequest, created bool) error {
+	if req.DisplayName != nil {
+		annotations := obj.GetAnnotations()
+		if *req.DisplayName == "" {
+			delete(annotations, agents.DisplayNameAnnotation)
+		} else {
+			if annotations == nil {
+				annotations = map[string]string{}
+			}
+			annotations[agents.DisplayNameAnnotation] = *req.DisplayName
+		}
+		obj.SetAnnotations(annotations)
+	}
+	provider, _, _ := unstructured.NestedString(obj.Object, "spec", "provider")
+	block, _ := agents.SettingsBlockOf(provider)
+	if req.MaxTokens != nil {
+		switch {
+		case *req.MaxTokens < 0:
+			return invalidf("maxTokens must be 0 (the provider's default) or more, not %d", *req.MaxTokens)
+		case !block.MaxTokens:
+			return invalidf("provider %s has no maxTokens in kagent's ModelConfig (Anthropic, AnthropicVertexAI, AzureOpenAI, Mistral and OpenAI have one): leave maxTokens out", provider)
+		case *req.MaxTokens == 0:
+			removeBlockField(obj, block.Key, "maxTokens")
+		default:
+			_ = unstructured.SetNestedField(obj.Object, *req.MaxTokens, "spec", block.Key, "maxTokens")
+		}
+	}
+	caching := req.PromptCaching
+	if caching == nil && created && agents.IsAnthropic(provider) {
+		on := true
+		caching = &on
+	}
+	if (caching != nil || req.CacheTTL != "") && !block.Caching {
+		return invalidf("provider %s has no promptCaching or cacheTTL in kagent's ModelConfig (Anthropic and Bedrock have them): leave them out", provider)
+	}
+	if caching != nil {
+		_ = unstructured.SetNestedField(obj.Object, *caching, "spec", block.Key, "promptCaching")
+	}
+	ttl := req.CacheTTL
+	if ttl == "" && created && caching != nil && *caching {
+		ttl = agents.DefaultCacheTTL
+	}
+	if ttl != "" {
+		_ = unstructured.SetNestedField(obj.Object, ttl, "spec", block.Key, "cacheTTL")
+	}
+	return nil
+}
+
+// removeBlockField removes field from the provider block key of obj, and the
+// block when nothing is left in it.
+func removeBlockField(obj *unstructured.Unstructured, key, field string) {
+	unstructured.RemoveNestedField(obj.Object, "spec", key, field)
+	if rest, found, _ := unstructured.NestedMap(obj.Object, "spec", key); found && len(rest) == 0 {
+		unstructured.RemoveNestedField(obj.Object, "spec", key)
+	}
 }
 
 // ErrAlreadyExists refuses a create of an object that exists by then, live or
