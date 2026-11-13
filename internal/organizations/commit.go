@@ -172,17 +172,17 @@ func (s *Service) newCommit(ctx context.Context) (*orgCommit, error) {
 	}
 	remote, err := s.cfg.Commit.GitHub(gh.Token)
 	if err != nil {
-		return nil, commitError(err)
+		return nil, commitError(gh, err)
 	}
 	return &orgCommit{cfg: s.cfg.Commit, remote: remote, gh: gh}, nil
 }
 
-// commitError answers a token GitHub refused with the consent to renew, and
+// commitError answers a token GitHub refused with what renews it, and
 // a secret file the repository cannot encrypt with what it lacks.
-func commitError(err error) error {
+func commitError(gh *identity.GitHub, err error) error {
 	var auth *commit.AuthError
 	if errors.As(err, &auth) {
-		return fmt.Errorf("%w: GitHub refused your token on %s (status %d): reconnect agent-manager in muster (core_auth_login server=agent-manager); the App must be installed on the repository and your account allowed to push to it", agents.ErrAuthRequired, auth.Op, auth.Status)
+		return agents.GitHubRefusal(gh, auth)
 	}
 	var secret *layout.SecretError
 	if errors.As(err, &secret) {
@@ -239,7 +239,7 @@ func (c *orgCommit) read(ctx context.Context, p string) (*unstructured.Unstructu
 		return nil, nil
 	}
 	if err != nil {
-		return nil, commitError(err)
+		return nil, commitError(c.gh, err)
 	}
 	obj := map[string]any{}
 	if err := yaml.Unmarshal(raw, &obj); err != nil {
@@ -255,7 +255,7 @@ func (c *orgCommit) exists(ctx context.Context, p string) (bool, error) {
 		return false, nil
 	}
 	if err != nil {
-		return false, commitError(err)
+		return false, commitError(c.gh, err)
 	}
 	return true, nil
 }
@@ -264,7 +264,7 @@ func (c *orgCommit) exists(ctx context.Context, p string) (bool, error) {
 func (c *orgCommit) list(ctx context.Context, dir string) ([]string, error) {
 	files, err := c.remote.ListFiles(ctx, c.cfg.Objects.Repository, c.cfg.Objects.Branch, dir)
 	if err != nil {
-		return nil, commitError(err)
+		return nil, commitError(c.gh, err)
 	}
 	return files, nil
 }
@@ -278,6 +278,9 @@ type fileChange struct {
 	// drop are files removed beside layout.Build: the kustomization.yaml
 	// files of the directory's subdirectories, which Build does not take.
 	drop []string
+	// create are files the change creates: each must still be absent on the
+	// pull request's branch once it is cut from the base.
+	create []string
 }
 
 // open decides every change against the base (layout.Build) and lands them
@@ -293,7 +296,7 @@ func (c *orgCommit) open(ctx context.Context, changes []fileChange, branch, titl
 		}
 		plan, err := layout.Build(ctx, c.remote, ch.dir, ch.write, ch.remove, opts...)
 		if err != nil {
-			return nil, commitError(err)
+			return nil, commitError(c.gh, err)
 		}
 		for _, f := range plan.Files {
 			file := agents.CommitFile{Path: f.Path, Action: string(f.Action)}
@@ -327,16 +330,65 @@ func (c *orgCommit) open(ctx context.Context, changes []fileChange, branch, titl
 	// branch of an open pull request would undo the first in it.
 	if open, has, err := c.remote.FindPullRequest(ctx, c.cfg.Objects.Repository, branch); err != nil || has {
 		if err != nil {
-			return nil, commitError(err)
+			return nil, commitError(c.gh, err)
 		}
 		return nil, fmt.Errorf("%w: the pull request %s for this object is open: merge or close it first, then call again", agents.ErrConflict, open.URL)
 	}
-	prs, err := commit.Open(ctx, c.remote, commit.Request{Branch: branch, Title: title, Body: body + "\n\nThe platform team reviews this pull request (CODEOWNERS of the organization paths).\n\nOpened by agent-manager as @" + c.gh.Login + "."}, landed)
-	if err != nil {
-		return nil, commitError(err)
+	var creates []string
+	for _, ch := range changes {
+		creates = append(creates, ch.create...)
 	}
-	out.PullRequest, out.Number = prs[0].URL, prs[0].Number
+	pr, err := c.land(ctx, landed, creates, branch, title, body+"\n\nThe platform team reviews this pull request (CODEOWNERS of the organization paths).\n\nOpened by agent-manager as @"+c.gh.Login+".")
+	if err != nil {
+		return nil, err
+	}
+	out.PullRequest, out.Number = pr.URL, pr.Number
 	return out, nil
+}
+
+// land is commit.Open for the one repository and base of c, with the files
+// creates must still be absent from the base once the branch is cut: a file
+// another commit added to the base after the plan was decided, and so before
+// the cut, is seen and refused (nameTaken) before anything is committed. The
+// base is read, not the branch: a branch of an earlier closed or merged pull
+// request of the same object keeps its own files when CreateBranch brings it
+// up to date, and the commit replaces them. A refused branch stays as cut,
+// without a commit: the remote deletes no branch, and the next write of the
+// object brings it up to date with the base.
+func (c *orgCommit) land(ctx context.Context, changes []commit.Change, creates []string, branch, title, body string) (commit.PullRequest, error) {
+	repo, base := c.cfg.Objects.Repository, c.cfg.Objects.Branch
+	files := map[string][]byte{}
+	for _, ch := range changes {
+		if ch.Location.Repository != repo || ch.Location.Branch != base {
+			return commit.PullRequest{}, commitError(c.gh, fmt.Errorf("%w: %s", commit.ErrConflictingBase, ch.Location.Repository))
+		}
+		for p, content := range ch.Files {
+			if _, dup := files[p]; dup {
+				return commit.PullRequest{}, commitError(c.gh, fmt.Errorf("%w: %s %s", commit.ErrDuplicatePath, repo, p))
+			}
+			files[p] = content
+		}
+	}
+	if err := c.remote.CreateBranch(ctx, repo, branch, base); err != nil {
+		return commit.PullRequest{}, commitError(c.gh, err)
+	}
+	for _, p := range creates {
+		taken, err := c.exists(ctx, p)
+		if err != nil {
+			return commit.PullRequest{}, err
+		}
+		if taken {
+			return commit.PullRequest{}, nameTaken{fmt.Errorf("%w: %s is in %s already and not applied yet: wait for Flux to apply it, then change it", agents.ErrConflict, p, repo)}
+		}
+	}
+	if err := c.remote.Commit(ctx, repo, branch, title, files); err != nil {
+		return commit.PullRequest{}, commitError(c.gh, err)
+	}
+	pr, err := c.remote.OpenPullRequest(ctx, repo, branch, base, title, body)
+	if err != nil {
+		return commit.PullRequest{}, commitError(c.gh, err)
+	}
+	return pr, nil
 }
 
 // branch is a pull request's head branch for a verb on an organization.
@@ -516,7 +568,7 @@ func (c *orgCommit) secretFiles(ctx context.Context) (func(string) bool, error) 
 		return sopsenc.IsSecretFile, nil
 	}
 	if err != nil {
-		return nil, commitError(err)
+		return nil, commitError(c.gh, err)
 	}
 	enc, err := sopsenc.New(raw)
 	if err != nil {
@@ -580,9 +632,10 @@ func (w *contentWriter) land(ctx context.Context, s *Service, writes []write, dr
 				return nil, err
 			}
 			if ok {
-				return nil, fmt.Errorf("%w: %s is in %s already and not applied yet: wait for the organization's Kustomization to apply it, then change it", agents.ErrConflict, p, w.commit.cfg.Objects.Repository)
+				return nil, nameTaken{fmt.Errorf("%w: %s is in %s already and not applied yet: wait for the organization's Kustomization to apply it, then change it", agents.ErrConflict, p, w.commit.cfg.Objects.Repository)}
 			}
 			ch.write[p] = manifest(unstructuredOf(wr.obj), false)
+			ch.create = append(ch.create, p)
 		default:
 			ch.write[p] = manifest(unstructuredOf(wr.obj), false)
 		}

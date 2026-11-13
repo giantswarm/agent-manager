@@ -7,6 +7,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"time"
 
 	"golang.org/x/sync/errgroup"
 	authenticationv1 "k8s.io/api/authentication/v1"
@@ -16,6 +17,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/cache"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/util/retry"
 
@@ -94,6 +96,26 @@ type Config struct {
 	// (chart.EmbeddedSchema().Tags). Nil: the chart takes no tags; agents
 	// are read without them and capabilities.tags is false.
 	Tags *tags.Rule
+	// SkillManager is skill-manager, whose catalogue list_skills proxies as
+	// the caller; the service's pinner is then skill-manager's too. Nil:
+	// skills are discovered in process (deprecated).
+	SkillManager SkillCatalog
+	// Installation is the installation's Dev Portal name, which get_info
+	// reports: a portal agent id is <installation>/<namespace>/<name>.
+	Installation string
+	// DefaultAgentTTL is how long a caller's default agent is reused
+	// (get_info, list_agents and get_agent each report it); zero reads it
+	// on every call.
+	DefaultAgentTTL time.Duration
+}
+
+// SkillCatalog is skill-manager's catalogue (GET /v1/skills).
+type SkillCatalog interface {
+	// URL is skill-manager's base URL, which get_info reports.
+	URL() string
+	// Skills lists the skills of every configured source, or of source
+	// alone, as the caller; refresh bypasses skill-manager's cache.
+	Skills(ctx context.Context, source string, refresh bool) (map[string]any, error)
 }
 
 // TenantSet finds the organization namespaces agent-platform-operator keeps,
@@ -113,6 +135,9 @@ type Service struct {
 	pinner SkillPinner
 	cfg    Config
 	log    *slog.Logger
+
+	// defaults keeps each caller's default agent (Config.DefaultAgentTTL).
+	defaults *cache.LRUExpireCache
 }
 
 // KagentAPIGroup is the API group of the Agent, Harness, RemoteMCPServer and
@@ -124,7 +149,8 @@ const (
 )
 
 // New builds the service. skills may be nil (list_skills then reports
-// unsupported); pinner may be nil (skills must then come pinned).
+// unsupported); pinner may be nil (a git skill then needs its commit, and
+// no private repository is readable).
 func New(k kube.Provider, c ChartSource, s *skills.Discoverer, p SkillPinner, cfg Config, log *slog.Logger) *Service {
 	if log == nil {
 		log = slog.Default()
@@ -138,7 +164,10 @@ func New(k kube.Provider, c ChartSource, s *skills.Discoverer, p SkillPinner, cf
 	cfg.Compose.HelmReleaseAPIVersion = orDefault(cfg.Compose.HelmReleaseAPIVersion, DefaultHelmReleaseAPIVersion)
 	cfg.Compose.OCIRepositoryAPIVersion = orDefault(cfg.Compose.OCIRepositoryAPIVersion, DefaultOCIRepositoryAPIVersion)
 	cfg.ManagedNamespaces = ManagedNamespaces(cfg.DefaultNamespace, cfg.ManagedNamespaces)
-	return &Service{kube: k, chart: c, skills: s, pinner: p, cfg: cfg, log: log}
+	if p == nil {
+		p = InProcessPinner(nil)
+	}
+	return &Service{kube: k, chart: c, skills: s, pinner: p, cfg: cfg, log: log, defaults: cache.NewLRUExpireCache(maxDefaultAgentEntries)}
 }
 
 // ManagedNamespaces are the default namespace followed by the additional
@@ -237,8 +266,18 @@ type InfoResponse struct {
 		// clusters; empty: target clusters are refused.
 		TargetURL string `json:"targetUrl,omitempty"`
 	} `json:"muster"`
-	// SkillsRepositories are the configured skill repositories.
+	// Installation is the installation's Dev Portal name: a portal agent
+	// id is <installation>/<namespace>/<name>. Empty when unset.
+	Installation string `json:"installation"`
+	// DefaultAgent is the installation's default agent, namespace/name,
+	// which clients preselect; empty when none is labelled.
+	DefaultAgent string `json:"defaultAgent"`
+	// SkillsRepositories are the configured skill repositories; empty when
+	// skill-manager serves the skills.
 	SkillsRepositories []string `json:"skillsRepositories"`
+	// SkillManager is skill-manager's URL when it serves the skills: its
+	// tools list the sources and skills, and every pin goes through it.
+	SkillManager string `json:"skillManager,omitempty"`
 	// SkillsGitAuthSecretName is the installation's skills credential Secret
 	// (key token) an agent with a git skill fetches with unless it names its
 	// own; empty: anonymous fetches.
@@ -259,7 +298,7 @@ func (s *Service) Info(ctx context.Context) InfoResponse {
 	out.Capabilities = map[string]bool{
 		"list": true, "get": true, "create": true, "update": true, "delete": true,
 		"status": true, "validate": true, "modelConfigs": true,
-		"skills":         s.skills != nil,
+		"skills":         s.skills != nil || s.cfg.SkillManager != nil,
 		"writesAsCaller": s.kube.Identity() == kube.IdentityCaller,
 		// mode commit: the manifests land as a pull request, opened as the
 		// person, in the repository that owns the namespace.
@@ -304,9 +343,15 @@ func (s *Service) Info(ctx context.Context) InfoResponse {
 	out.Harness.Name = s.cfg.Compose.HarnessName
 	out.Muster.URL = s.cfg.Compose.MusterURL
 	out.Muster.TargetURL = s.cfg.Compose.TargetMusterURL
-	if s.skills != nil {
+	out.DefaultAgent = s.defaultAgent(ctx)
+	out.Installation = s.cfg.Installation
+	switch {
+	case s.cfg.SkillManager != nil:
+		out.SkillsRepositories = []string{}
+		out.SkillManager = s.cfg.SkillManager.URL()
+	case s.skills != nil:
 		out.SkillsRepositories = s.skills.Repositories()
-	} else {
+	default:
 		out.SkillsRepositories = []string{}
 	}
 	out.SkillsGitAuthSecretName = s.cfg.Compose.SkillsGitAuthSecretName
@@ -511,9 +556,11 @@ func (s *Service) List(ctx context.Context, loc Location, filter tags.Filter) ([
 			out = append(out, *a)
 		}
 	}
+	def := s.defaultAgentAt(ctx, st)
 	for i := range out {
 		s.markToolsetBound(&out[i])
 		s.effectiveDefaultToolchains(&out[i])
+		out[i].Default = def != "" && def == out[i].Namespace+"/"+out[i].Name
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, nil
@@ -549,6 +596,9 @@ func (s *Service) get(ctx context.Context, st *site, name string) (*Agent, error
 	}
 	s.markToolsetBound(&a)
 	s.effectiveDefaultToolchains(&a)
+	if def := s.defaultAgentAt(ctx, st); def != "" {
+		a.Default = def == a.Namespace+"/"+a.Name
+	}
 	return &a, nil
 }
 
@@ -734,10 +784,14 @@ func (s *Service) harnessFor(ctx context.Context, dyn dynamic.Interface, ns, nam
 
 // ---- skills -------------------------------------------------------------------
 
-// ListSkills discovers skills in the configured (or the given) repository.
-// With a filter, every repository stays with only the skills that carry any
-// of its tags.
-func (s *Service) ListSkills(ctx context.Context, repository, ref string, refresh bool, filter tags.Filter) (*skills.Result, error) {
+// ListSkills discovers skills in the configured (or the given) repository,
+// or lists skill-manager's catalogue as the caller when it serves the skills
+// (deprecated: skill-manager's own tools list them). With a filter, every
+// repository stays with only the skills that carry any of its tags.
+func (s *Service) ListSkills(ctx context.Context, repository, ref string, refresh bool, filter tags.Filter) (any, error) {
+	if s.cfg.SkillManager != nil {
+		return s.listSkillManagerSkills(ctx, repository, ref, refresh, filter)
+	}
 	if s.skills == nil {
 		return nil, fmt.Errorf("%w: no skill repositories are configured", ErrUnsupported)
 	}
@@ -749,7 +803,11 @@ func (s *Service) ListSkills(ctx context.Context, repository, ref string, refres
 	out := &skills.Result{Repositories: []skills.Repository{}}
 	for _, repo := range res.Repositories {
 		if repo.Private {
-			if err := s.pinner.RequireReadable(ctx, repo.RepoURL, gitHubLogin(ctx)); err != nil {
+			err := fmt.Errorf("%w: %s: no check of who can read it", skills.ErrNotReadable, repo.RepoURL)
+			if rc, ok := s.pinner.(ReadChecker); ok {
+				err = rc.RequireReadable(ctx, repo.RepoURL, gitHubLogin(ctx))
+			}
+			if err != nil {
 				repo = skills.Repository{RepoURL: repo.RepoURL, Private: true, Skills: []skills.Skill{}, Error: err.Error(), FetchedAt: repo.FetchedAt}
 			}
 		}
@@ -757,6 +815,45 @@ func (s *Service) ListSkills(ctx context.Context, repository, ref string, refres
 		out.Repositories = append(out.Repositories, repo)
 	}
 	return out, nil
+}
+
+// listSkillManagerSkills is skill-manager's GET /v1/skills, filtered.
+func (s *Service) listSkillManagerSkills(ctx context.Context, repository, ref string, refresh bool, filter tags.Filter) (map[string]any, error) {
+	if ref != "" {
+		return nil, invalidf("ref is not taken here: skill-manager (%s) reads each source at its configured ref", s.cfg.SkillManager.URL())
+	}
+	res, err := s.cfg.SkillManager.Skills(ctx, repository, refresh)
+	if err != nil {
+		return nil, skillManagerError(err)
+	}
+	if len(filter) == 0 {
+		return res, nil
+	}
+	repos, _ := res["repositories"].([]any)
+	for _, raw := range repos {
+		repo, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		list, _ := repo["skills"].([]any)
+		kept := []any{}
+		for _, item := range list {
+			sk, _ := item.(map[string]any)
+			var have []string
+			if raw, ok := sk["tags"].([]any); ok {
+				for _, t := range raw {
+					if t, ok := t.(string); ok {
+						have = append(have, t)
+					}
+				}
+			}
+			if filter.Matches(tags.Normalize(have)) {
+				kept = append(kept, item)
+			}
+		}
+		repo["skills"] = kept
+	}
+	return res, nil
 }
 
 // skillsTagged keeps the skills that carry any tag of filter, in a new
@@ -812,6 +909,9 @@ func checkSpec(spec Spec) []error {
 		}
 	}
 	if err := refuseDefaultWorkspaceAnnotation(spec.Annotations, ""); err != nil {
+		errs = append(errs, err)
+	}
+	if err := refusePlatformLabels(spec.Labels, nil); err != nil {
 		errs = append(errs, err)
 	}
 	if err := ValidateDefaultWorkspace(spec.DefaultWorkspace, spec.Namespace, spec.Target); err != nil {
@@ -996,18 +1096,13 @@ func (s *Service) ValidateCreate(ctx context.Context, spec Spec) (*ValidateResul
 	if err := requireReadableSkills(ctx, s.pinner, spec.Skills); err != nil {
 		res.addError(err)
 	}
-	if pinned, err := pinSkills(ctx, s.pinner, spec.Skills, false); err != nil {
-		res.addError(err)
-	} else {
-		spec.Skills = pinned
-	}
 	if err := requireReadablePlugins(ctx, s.pinner, spec.Plugins); err != nil {
 		res.addError(err)
 	}
-	if pinned, err := pinPlugins(ctx, s.pinner, spec.Plugins, false); err != nil {
+	if sk, pl, err := pinSources(ctx, s.pinner, spec.Skills, spec.Plugins, false); err != nil {
 		res.addError(err)
 	} else {
-		spec.Plugins = pinned
+		spec.Skills, spec.Plugins = sk, pl
 	}
 	values := BuildValues(spec, st.compose)
 	setCreator(values, identity.Caller(ctx), identity.CallerName(ctx))
@@ -1079,8 +1174,10 @@ func (s *Service) apiserverUser(ctx context.Context, st *site) string {
 	return fmt.Sprintf("User %q", review.Status.UserInfo.Username)
 }
 
-// requireFreeName fails when a HelmRelease or an Agent object of that name
-// exists.
+// requireFreeName fails when a HelmRelease of that name exists, or an Agent
+// of that name exists or a HelmRelease renders one, whatever its name: two
+// releases rendering one Agent overwrite each other. A name the platform
+// ships an agent under (default-agent) is taken in every namespace.
 func (s *Service) requireFreeName(ctx context.Context, st *site, name string) error {
 	if name == "" {
 		return nil
@@ -1093,9 +1190,83 @@ func (s *Service) requireFreeName(ctx context.Context, st *site, name string) er
 	if obj, err := s.getAgentObject(ctx, st.agent, st.ns(), name); err != nil {
 		return err
 	} else if obj != nil {
+		if owner, ownerNS := ownerOf(obj); owner != "" {
+			return conflictf("Agent %s already exists, rendered by HelmRelease %s/%s; pick another name", st.describe(name), ownerNS, owner)
+		}
 		return conflictf("Agent %s already exists without a HelmRelease (a bare Agent); delete it first (delete_agent with force) or pick another name", st.describe(name))
 	}
+	// The platform's releases live in its own namespace and target this one:
+	// every namespace, else (refused) the site's.
+	list, err := st.flux.Resource(s.helmReleaseGVR()).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		if list, err = st.flux.Resource(s.helmReleaseGVR()).Namespace(st.fluxNS).List(ctx, metav1.ListOptions{}); err != nil {
+			return wrapKube(err, "list helmreleases in "+st.fluxNS)
+		}
+	}
+	for i := range list.Items {
+		hr := &list.Items[i]
+		secret, ns, agent := renderedAgent(hr)
+		// On a workload cluster, a release of the site's namespace with its
+		// kubeconfig; on this cluster, one without.
+		here := secret == "" && !st.loc.IsSet() || st.loc.IsSet() && secret == st.loc.KubeconfigSecret() && hr.GetNamespace() == st.fluxNS
+		if here && ns == st.ns() && agent == name {
+			return conflictf("Agent %s is rendered by HelmRelease %s/%s; pick another name", st.describe(name), hr.GetNamespace(), hr.GetName())
+		}
+		if agent == name && PlatformOwnedRelease(hr) {
+			return platformNameTaken(name, ns)
+		}
+	}
+	return s.requireNotPlatformName(ctx, st, name)
+}
+
+// platformNameTaken refuses a name the platform ships an agent under.
+func platformNameTaken(name, ns string) error {
+	return conflictf("the name %q is taken by the Agent Platform's agent %s/%s; pick another name", name, ns, name)
+}
+
+// requireNotPlatformName fails when an Agent the platform ships has that
+// name in any namespace of the installation: the platform's agents come
+// first, and a namesake elsewhere reads as theirs. It lists the labelled
+// Agents once across all namespaces, else (refused) once per managed one.
+func (s *Service) requireNotPlatformName(ctx context.Context, st *site, name string) error {
+	selector := metav1.ListOptions{LabelSelector: PlatformManagedByLabel + "=" + PlatformManagedByValue}
+	var found []unstructured.Unstructured
+	if list, err := st.flux.Resource(s.agentGVR()).List(ctx, selector); err == nil {
+		found = list.Items
+	} else {
+		for _, ns := range s.Managed(ctx) {
+			if list, err := st.flux.Resource(s.agentGVR()).Namespace(ns).List(ctx, selector); err == nil {
+				found = append(found, list.Items...)
+			}
+		}
+	}
+	for _, obj := range found {
+		if obj.GetName() == name {
+			return platformNameTaken(name, obj.GetNamespace())
+		}
+	}
 	return nil
+}
+
+// renderedAgent is the Agent a release of the agent chart renders: the
+// kubeconfig Secret of its cluster (empty for this one), its namespace and
+// its name (values agent.name, else the Helm release name).
+func renderedAgent(hr *unstructured.Unstructured) (secret, ns, name string) {
+	secret, ns = placedOn(hr)
+	if ns == "" {
+		ns = hr.GetNamespace()
+	}
+	if name, _, _ = unstructured.NestedString(hr.Object, "spec", "values", "agent", "name"); name != "" {
+		return secret, ns, name
+	}
+	if name, _, _ = unstructured.NestedString(hr.Object, "spec", "releaseName"); name != "" {
+		return secret, ns, name
+	}
+	// helm-controller's default release name: [<targetNamespace>-]<name>.
+	if target, _, _ := unstructured.NestedString(hr.Object, "spec", "targetNamespace"); target != "" {
+		return secret, ns, target + "-" + hr.GetName()
+	}
+	return secret, ns, hr.GetName()
 }
 
 // requireTargetMuster refuses an agent on a workload cluster when the
@@ -1226,13 +1397,10 @@ func (s *Service) Create(ctx context.Context, spec Spec) (*CreateResult, error) 
 	if err := requireReadableSkills(ctx, s.pinner, spec.Skills); err != nil {
 		return nil, err
 	}
-	if spec.Skills, err = pinSkills(ctx, s.pinner, spec.Skills, false); err != nil {
-		return nil, err
-	}
 	if err := requireReadablePlugins(ctx, s.pinner, spec.Plugins); err != nil {
 		return nil, err
 	}
-	if spec.Plugins, err = pinPlugins(ctx, s.pinner, spec.Plugins, false); err != nil {
+	if spec.Skills, spec.Plugins, err = pinSources(ctx, s.pinner, spec.Skills, spec.Plugins, false); err != nil {
 		return nil, err
 	}
 	values := BuildValues(spec, st.compose)
@@ -1365,7 +1533,7 @@ func (s *Service) createCommit(ctx context.Context, st *site, spec Spec, values 
 // applies the ownership rules: a bare Agent object has nothing to write to; a
 // suspended release is refused unless force; a GitOps-owned one is refused
 // with gitops_owned, naming mode commit, unless allowGitOps (commit mode,
-// which changes it in git).
+// which changes it in git). A platform-owned one is refused in every mode.
 func (s *Service) writableHelmRelease(ctx context.Context, st *site, name string, force, allowGitOps bool) (*unstructured.Unstructured, *unstructured.Unstructured, error) {
 	obj, hr, err := s.agentObjects(ctx, st, name)
 	if errorsIs(err, ErrNotFound) {
@@ -1373,6 +1541,11 @@ func (s *Service) writableHelmRelease(ctx context.Context, st *site, name string
 	}
 	if err != nil {
 		return nil, nil, err
+	}
+	if PlatformOwnedRelease(hr) || PlatformOwned(obj) {
+		// The release is returned with the refusal: a forced delete removes
+		// a bare Agent only, never one the platform ships.
+		return hr, obj, platformRefusal(st, name)
 	}
 	if hr == nil {
 		return nil, obj, conflictf("Agent %s is a bare Agent with no HelmRelease behind it; agent-manager only writes HelmRelease values (recreate it with create_agent, or delete it with force)", st.describe(name))
@@ -1459,46 +1632,52 @@ func (s *Service) mergedValues(ctx context.Context, st *site, upd Update, hr *un
 		}
 		after["modelConfig"] = map[string]any{"name": *upd.ModelConfig}
 	}
-	if upd.Skills != nil || upd.RefreshSkills {
-		list := skillsFromValues(after)
+	repinSkills := upd.Skills != nil || upd.RefreshSkills
+	repinPlugins := upd.Plugins != nil || upd.RefreshSkills
+	var skillList Skills
+	var pluginList Plugins
+	if repinSkills {
+		skillList = skillsFromValues(after)
 		if upd.Skills != nil {
-			list = *upd.Skills
-			if err := ValidateSkills(list); err != nil {
+			skillList = *upd.Skills
+			if err := ValidateSkills(skillList); err != nil {
 				return after, before, err
 			}
-			if err := requireReadableSkills(ctx, s.pinner, list); err != nil {
+			if err := requireReadableSkills(ctx, s.pinner, skillList); err != nil {
 				return after, before, err
 			}
-		}
-		pinned, err := pinSkills(ctx, s.pinner, list, upd.RefreshSkills)
-		if err != nil {
-			return after, before, err
-		}
-		if sk := skillsValues(pinned); sk != nil {
-			after["skills"] = sk
-		} else {
-			delete(after, "skills")
 		}
 	}
-	if upd.Plugins != nil || upd.RefreshSkills {
-		list := pluginsFromValues(after)
+	if repinPlugins {
+		pluginList = pluginsFromValues(after)
 		if upd.Plugins != nil {
-			list = *upd.Plugins
-			if err := ValidatePlugins(list); err != nil {
+			pluginList = *upd.Plugins
+			if err := ValidatePlugins(pluginList); err != nil {
 				return after, before, err
 			}
-			if err := requireReadablePlugins(ctx, s.pinner, list); err != nil {
+			if err := requireReadablePlugins(ctx, s.pinner, pluginList); err != nil {
 				return after, before, err
 			}
 		}
-		pinned, err := pinPlugins(ctx, s.pinner, list, upd.RefreshSkills)
+	}
+	if repinSkills || repinPlugins {
+		pinnedSkills, pinnedPlugins, err := pinSources(ctx, s.pinner, skillList, pluginList, upd.RefreshSkills)
 		if err != nil {
 			return after, before, err
 		}
-		if pl := pluginsValues(pinned); pl != nil {
-			after["plugins"] = pl
-		} else {
-			delete(after, "plugins")
+		if repinSkills {
+			if sk := skillsValues(pinnedSkills); sk != nil {
+				after["skills"] = sk
+			} else {
+				delete(after, "skills")
+			}
+		}
+		if repinPlugins {
+			if pl := pluginsValues(pinnedPlugins); pl != nil {
+				after["plugins"] = pl
+			} else {
+				delete(after, "plugins")
+			}
 		}
 	}
 	if upd.Skills != nil || upd.Plugins != nil {
@@ -1517,6 +1696,10 @@ func (s *Service) mergedValues(ctx context.Context, st *site, upd Update, hr *un
 		after[ToolsetValuesKey] = toAnySlice(*upd.Toolset)
 	}
 	if upd.Labels != nil {
+		currentLabels, _ := before["labels"].(map[string]any)
+		if err := refusePlatformLabels(*upd.Labels, currentLabels); err != nil {
+			return after, before, err
+		}
 		if len(*upd.Labels) > 0 {
 			after["labels"] = toAnyMap(*upd.Labels)
 		} else {
@@ -1749,8 +1932,10 @@ func (s *Service) Delete(ctx context.Context, loc Location, name string, force b
 	res := &DeleteResult{Name: name, Namespace: ns, Target: st.loc.Target, RequestedBy: identity.Caller(ctx), WriteOutcome: WriteOutcome{Mode: mode, DryRun: w.DryRun}}
 	hr, obj, err := s.writableHelmRelease(ctx, st, name, force, mode == ModeCommit)
 	if err != nil {
-		if mode == ModeApply && hr == nil && obj != nil && force && errorsIs(err, ErrConflict) {
-			// A bare Agent, forced: delete the object itself.
+		if mode == ModeApply && hr == nil && obj != nil && force && errorsIs(err, ErrConflict) && !PlatformOwned(obj) {
+			// A bare Agent, forced: delete the object itself (also the
+			// leftover of a deleted release). One the platform ships —
+			// labelled on the Agent too — never goes this way.
 			if err := s.deleteRendered(ctx, st.agent, ns, name, res, false, w.DryRun); err != nil {
 				return nil, err
 			}
@@ -1929,6 +2114,47 @@ func ownerOf(obj *unstructured.Unstructured) (name, namespace string) {
 	return labels[HelmReleaseNameLabel], labels[HelmReleaseNamespaceLabel]
 }
 
+// platformRefusal answers a write to an agent the platform ships.
+func platformRefusal(st *site, name string) error {
+	return conflictf("agent %s ships with the Agent Platform and is read-only here: change it through the platform's configuration", st.describe(name))
+}
+
+// refusePlatformLabels refuses requested labels that set or change the
+// platform's marks (PlatformManagedByLabel, DefaultAgentLabel) against
+// current: only the platform ships its agents and names the default.
+func refusePlatformLabels(requested map[string]string, current map[string]any) error {
+	for _, key := range []string{PlatformManagedByLabel, DefaultAgentLabel} {
+		v, ok := requested[key]
+		if !ok {
+			continue
+		}
+		if have, _ := current[key].(string); have != v {
+			return invalidf("label %s is set by the Agent Platform only", key)
+		}
+	}
+	return nil
+}
+
+// PlatformOwned reports an object the Agent Platform ships (a HelmRelease,
+// its Agent or its chart source): agent-manager reports it and never
+// writes it; it changes through the platform's configuration.
+func PlatformOwned(obj *unstructured.Unstructured) bool {
+	return obj != nil && obj.GetLabels()[PlatformManagedByLabel] == PlatformManagedByValue
+}
+
+// PlatformOwnedRelease is PlatformOwned for a HelmRelease, which also holds
+// when the release renders the label onto its Agent (values.labels).
+func PlatformOwnedRelease(hr *unstructured.Unstructured) bool {
+	if hr == nil {
+		return false
+	}
+	if PlatformOwned(hr) {
+		return true
+	}
+	v, _, _ := unstructured.NestedString(hr.Object, "spec", "values", "labels", PlatformManagedByLabel)
+	return v == PlatformManagedByValue
+}
+
 func gitOpsOwnedHR(hr *unstructured.Unstructured) bool {
 	_, ok := hr.GetLabels()[KustomizationNameLabel]
 	return ok
@@ -1951,6 +2177,9 @@ func chartRefOf(hr *unstructured.Unstructured) *ChartRef {
 // into the view.
 func agentFromObject(obj, server *unstructured.Unstructured, rule *tags.Rule) Agent {
 	a := Agent{Name: obj.GetName(), Namespace: obj.GetNamespace(), Exists: true, Managed: ManagedNone}
+	if PlatformOwned(obj) {
+		a.Managed = ManagedPlatform
+	}
 	a.DisplayName = obj.GetAnnotations()[DisplayNameAnnotation]
 	a.Tags = rule.Parse(obj.GetAnnotations()[TagsAnnotation])
 	a.IconURL = obj.GetAnnotations()[IconURLAnnotation]
@@ -2056,9 +2285,14 @@ func applyHelmRelease(a *Agent, hr *unstructured.Unstructured, rule *tags.Rule) 
 		a.CreatedBy = hr.GetAnnotations()[CreatedByAnnotation]
 		a.CreatedByName = hr.GetAnnotations()[CreatedByNameAnnotation]
 	}
-	if ref.GitOpsOwned {
+	switch {
+	case PlatformOwnedRelease(hr) || a.Managed == ManagedPlatform:
+		// The label on the HelmRelease or on its Agent: both are refused
+		// alike (writableHelmRelease).
+		a.Managed = ManagedPlatform
+	case ref.GitOpsOwned:
 		a.Managed = ManagedGitOps
-	} else {
+	default:
 		a.Managed = ManagedHelmRelease
 	}
 	values, _, _ := unstructured.NestedMap(hr.Object, "spec", "values")

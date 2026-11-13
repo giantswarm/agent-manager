@@ -115,6 +115,13 @@ func elicitationAction(response *mcp.ElicitationResult) mcp.ElicitationResponseA
 }
 
 func credentialInputMessage(res *organizations.ResourceResult, c organizations.Credential) string {
+	if res.Kind == organizations.KindCredential {
+		what := "a new value"
+		if c.State == organizations.CredentialMissing {
+			what = "the value"
+		}
+		return fmt.Sprintf("Enter %s of key %s of Secret %s in the credential UI, which lists every object that uses it.", what, c.Key, c.Secret)
+	}
 	return fmt.Sprintf("Enter the value of key %s of Secret %s, which %s %s uses, in the credential UI.", c.Key, c.Secret, res.Kind, res.Name)
 }
 

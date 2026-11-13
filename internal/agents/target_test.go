@@ -58,7 +58,7 @@ func newTargetFixture(t *testing.T, targetMusterURL string) *targetFixture {
 		f.kubeconfigs = append(f.kubeconfigs, string(kubeconfig))
 		return wc, nil
 	})
-	f.svc = New(provider, embeddedChart{}, nil, &fakePinner{}, Config{
+	f.svc = New(provider, embeddedChart{}, nil, InProcessPinner(&fakePinner{}), Config{
 		DefaultNamespace: "kagent", Version: "test",
 		Compose: ComposeConfig{ // #nosec G101 -- test fixture, Secret names only
 			MusterURL:               "http://muster.agent-platform.svc.cluster.local:8090/mcp",

@@ -65,7 +65,7 @@ func (s *Service) ListMembers(ctx context.Context, ns string) (*Members, error) 
 	if err != nil {
 		return nil, err
 	}
-	bindings, err := s.roleBindings(ctx, c, ns)
+	bindings, err := s.roleBindings(ctx, c, ns, wayMemberRead(ns))
 	if err != nil {
 		return nil, err
 	}
@@ -99,11 +99,20 @@ type roleBindingOf struct {
 	role string
 }
 
-// roleBindings are the RoleBindings of ns to the organization's roles.
-func (s *Service) roleBindings(ctx context.Context, c kube.Client, ns string) ([]roleBindingOf, error) {
+// wayMemberRead is the way to read the members of ns: the list right on
+// RoleBindings there. Every member role holds it from agent-platform chart
+// 4.179.0 on (giantswarm/agent-platform#1369); before, agent-platform:admin
+// alone did.
+func wayMemberRead(ns string) string {
+	return fmt.Sprintf("reading the members needs the right to list RoleBindings in organization namespace %s. Every member role (%s, %s or %s) has it from agent-platform chart 4.179.0 on; before that chart, %s alone. An admin of the organization adds you with one of these roles (add_organization_member), or an organizations-admin (%s) does", ns, RoleUser, RoleEditor, RoleAdmin, RoleAdmin, RoleOrganizationsAdmin)
+}
+
+// roleBindings are the RoleBindings of ns to the organization's roles; way
+// is the way out of a refused read.
+func (s *Service) roleBindings(ctx context.Context, c kube.Client, ns, way string) ([]roleBindingOf, error) {
 	list, err := c.Dynamic().Resource(rbacGVR).Namespace(ns).List(ctx, metav1.ListOptions{})
 	if err != nil {
-		return nil, kubeErr(err, "list RoleBindings in "+ns, fmt.Sprintf("every member of the organization may read its members; %s", wayOrganizationAdmin(ns)))
+		return nil, kubeErr(err, "list RoleBindings in "+ns, way)
 	}
 	var out []roleBindingOf
 	for _, item := range list.Items {
@@ -213,7 +222,7 @@ func (s *Service) AddMember(ctx context.Context, req MemberRequest) (*MemberResu
 	ns := req.Namespace
 	name := memberBinding(req.Role)
 	res := &MemberResult{Namespace: ns, Member: Member{Kind: sub.Kind, Name: sub.Name, Role: req.Role, Binding: name}, DryRun: req.DryRun, RequestedBy: identity.Caller(ctx)}
-	bindings, err := s.roleBindings(ctx, c, ns)
+	bindings, err := s.roleBindings(ctx, c, ns, wayOrganizationAdmin(ns))
 	if err != nil {
 		return nil, err
 	}
@@ -291,7 +300,7 @@ func (s *Service) RemoveMember(ctx context.Context, req MemberRequest) (*MemberR
 	}
 	ns := req.Namespace
 	res := &MemberResult{Namespace: ns, Member: Member{Kind: sub.Kind, Name: sub.Name, Role: req.Role}, DryRun: req.DryRun, RequestedBy: identity.Caller(ctx)}
-	bindings, err := s.roleBindings(ctx, c, ns)
+	bindings, err := s.roleBindings(ctx, c, ns, wayOrganizationAdmin(ns))
 	if err != nil {
 		return nil, err
 	}

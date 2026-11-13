@@ -1,10 +1,62 @@
 # Organization credential operations
 
 Models, connectors and EgressPolicies name credential Secrets by reference. The
-organization tools accept no credential values. Missing credentials and explicit
-`replaceCredential: true` prepare an operation before writing any consumer.
-Ordinary edits with existing credentials do not prepare an operation or change
-the Secret.
+organization tools accept no credential values. A missing credential prepares
+an operation before writing any consumer. Ordinary edits with existing
+credentials do not prepare an operation or change the Secret; a new value for
+an existing credential goes through `replace_organization_credential`.
+
+`set_organization_model`, `set_organization_connector` and
+`set_organization_egress_policy` with `create: true` only create: a model,
+connector or egress policy of that name that is live, or whose file is in git,
+is refused with error code `already_exists` (`409`) and nothing is written, at
+the call (a dry run included) and when the create itself meets an object made
+since the read. Without `create` each tool creates or changes the object as
+before, with the same answers. When the new object waits for its key, the
+operation creates it at the save: a save of any operation that creates a model, connector or egress policy
+answers `already_exists` when that object exists by then, live or in git. The
+save checks before it writes; an object made in the moment between its dry
+run and its create finds the Secret already written. In apply mode the save
+then deletes the Secret it created, if nothing changed it since its write; it
+never deletes a Secret that existed before the save. A refused delete leaves
+the Secret (and is logged), and the other object can read the value in the
+moment before the delete. The operation is uncertain; the person prepares
+again.
+
+`set_organization_model` refuses a change of the provider of an existing model
+that keeps the model's credential Secret, with error code `conflict` (`409`),
+in apply and commit mode (in commit mode the provider in the model's file in
+git is compared), a dry run included; nothing is written. The Secret holds the
+old provider's key, so either order of a provider change and a key change
+sends one provider's key to the other for a time. To change the provider, give
+a new `credentialSecret` that does not exist yet: the call prepares an
+operation, and its save writes the new Secret first, then the provider and the
+reference in one write of the model. A different `credentialSecret` that
+exists already is used as it is: it must hold the new provider's key. Or create
+a new model. A change of the
+model id alone, with the same provider, is not affected.
+
+`replace_organization_credential` takes the organization namespace, the Secret
+and the key, and prepares an operation that writes that Secret and no consumer:
+a rotation resends no model, connector or egress policy. At least one
+ModelConfig, RemoteMCPServer or EgressPolicy of the namespace must read that key
+of the Secret, else it answers `not_found`. An object reading another key of the
+same Secret is refused with `409` naming that key: the Secret is written whole,
+holding the one key, so the other key would be lost. Its result has `kind`
+`credential` and `name` the Secret; the credential's state is `missing` when the
+Secret does not exist yet, else `replace`. The operation keeps the objects that
+read the Secret and where they send the value, as prepared, and its
+confirmation lists those. At the preparation, in commit mode, the objects in
+git must be the same as the live ones, else it answers `409` until Flux applies
+git. The save checks the consumers again, live and, in commit mode, in git:
+when they or where they send the value differ from the prepared ones (one
+changed, was added, reads another key or is gone), it answers `409` with error
+code `credential_consumers_changed` and does not write the credential. The
+message names no object; the person starts the replacement again, and the
+tool call that prepares it uses a fresh `requestId`. The save also refuses a
+consumer written live in commit mode, or applied by Flux in apply mode, as the
+preparation does. A dry run asks admission about the Secret write, as the real
+call does.
 
 ## Client-owned UI
 
@@ -35,6 +87,10 @@ authentication profile and Kubernetes downstream authorization.
    person independently and calls `GET /api/v1/credential-operations/{operation}`.
    It displays the organization, intended consumer change, requested Secret/key
    pairs, references and, in commit mode, repository, base and directory.
+   `references` lists every object of the namespace that names a requested
+   Secret, read as the person when the confirmation is read, each planned
+   consumer in place of its live object: the key it reads, a ModelConfig's
+   `provider`, a RemoteMCPServer's URL and an EgressPolicy's origins.
 3. Submit `POST` to that same path with `Content-Type: application/json`, the
    confirmation's strong `ETag` in `If-Match`, and
    `{"values":[{"secret":"tenant-credential-example","key":"apiKey","value":"<entered value>"}]}`.
@@ -58,20 +114,26 @@ platform identity. Configure a confidential [RFC 8693 client](https://www.rfc-ed
 
 ```yaml
 github:
-  enabled: false
-githubTokenExchange:
-  endpoint: https://muster.example.com/oauth/token
-  clientID: agent-manager
-  audience: agent-manager-github
-  secretName: agent-manager-broker-client
-  caSecretName: ""
+  enabled: true
+  tokenExchange:
+    tokenEndpoint: https://muster.example.com/oauth/token
+    audience: <muster provider App>
+    clientID: ""
+    existingSecret: agent-manager-github-token-exchange
+    caSecretName: ""
 ```
 
-The existing Secret contains `client-secret`. An optional CA Secret contains
-`ca.crt`. The endpoint and output audience are operator-controlled; requests
-cannot change them. This mode requires Dex OAuth and downstream authorization,
-and replaces the App-pinned MCP registration. It also supplies ordinary agent
-and organization commits with the person's grant.
+`audience` is the RFC 8693 target and muster's provider App (its
+`aggregator.providerApps` key) whose grant it releases: a GitHub App
+installed with contents and pull-request write on every repository a commit
+targets. The Secret contains `client-secret`, and `client-id` when `clientID`
+is empty; the chart mounts the whole Secret. With `clientSecret` instead of
+`existingSecret` the chart renders `<fullname>-github-token-exchange`. An
+optional CA Secret contains `ca.crt`. The endpoint and audience are
+operator-controlled; requests cannot change them. This mode requires
+`github.enabled`, Dex OAuth and downstream authorization, and replaces the
+App-pinned MCP registration (`github.authorizationServer`, deprecated). It
+also supplies ordinary agent and organization commits with the person's grant.
 
 The authorization server must independently validate the subject ID token and
 confidential client, allow that client only the manager App's target audience,
@@ -89,14 +151,17 @@ subject-token issuer must be the same canonical platform issuer under which the
 person's App consent is stored. Where grant ownership is keyed by raw `sub`, do
 not enable this profile with multiple independent identity issuers or ambiguous
 existing grants. Verify this deployment condition before enabling credential
-commits; this feature performs no grant migration. Missing consent returns
-`auth_required`; the client owns the provider authorization UX.
+commits; this feature performs no grant migration. Missing consent answers
+the MCP tool with `{"status": "grant_required", "apps": ["<audience>"]}` in
+`structuredContent`; the MCPServer lists `github.tokenExchange.audience`
+under `auth.providerApps`, so muster answers it with the App's sign-in link.
+REST returns `auth_required`; the client owns the provider authorization UX.
 
 The App must be installed with contents and pull-request write on the target
 repository. GitHub documents the distinction between [user authorization and
 installation authorization](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/authenticating-with-a-github-app-on-behalf-of-a-user).
-The existing App-pinned mode remains available for MCP commits, but alone cannot
-authorize the credential HTTPS save.
+The deprecated App-pinned mode remains available for MCP commits, but alone
+cannot authorize the credential HTTPS save.
 
 ## Storage and write boundaries
 
@@ -112,7 +177,11 @@ current organization permissions. Saves recheck consumers, Git destination,
 file hashes and encryption policy, then server-side dry-run all intended writes
 as the person. Stale operation versions return `412`, a save or cancellation
 without `If-Match` returns `428`, and changed resources or Git inputs return
-`409`. Shared Secrets are refused. Backend refusals are sanitized before
+`409`: code `credential_consumers_changed` for the consumers of a replacement,
+`conflict` otherwise. A consumer tool refuses a Secret another object names;
+`replace_organization_credential` lists every consumer and replaces a shared
+Secret for all of them, and refuses at preparation and at save an object that
+reads another key of it. Backend refusals are sanitized before
 entering errors or logs.
 
 Credentials are write-only. Neither the person nor agent-manager reads a
@@ -150,8 +219,18 @@ across those objects. Commit mode uses gitops-commit's SOPS layout and
 encrypted Secrets. Encryption must cover `data` and `stringData`, with the
 Secret's kind and name inspectable without decryption. Consumer files contain
 one named Kubernetes object each; lists and multiple YAML documents are refused.
+`replace_organization_credential` in commit mode commits the encrypted Secret
+alone, whatever Git consumers name it; an encrypted Secret file holding another
+key is refused. In apply mode it refuses a Secret whose consumer Flux applies.
 Creating a consumer whose file already exists in Git is refused until Flux
 applies it, so a create cannot replace configuration awaiting reconciliation.
+The base is checked again once the pull request's branch is cut from it: a
+file another commit added after the first check is refused there too
+(`already_exists` with `create`, else `conflict`), before anything is
+committed. The branch stays, without a commit, and the next write brings it up
+to date. This holds for every commit-mode create, the organization's own
+object and first admins included (see
+[repository requirements](organizations-commit-mode.md)).
 The receipt's credential state `committed` means a PR exists, not that Flux has
 applied it. See [repository requirements](organizations-commit-mode.md).
 

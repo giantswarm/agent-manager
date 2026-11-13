@@ -260,8 +260,11 @@ type source struct {
 	ns, name, semver string
 	semverFilter     string
 	gitops, external bool
-	report           *SourceReport
-	releases         []*release
+	// platform: the source, or a release it serves, ships with the Agent
+	// Platform.
+	platform bool
+	report   *SourceReport
+	releases []*release
 }
 
 type release struct {
@@ -269,7 +272,9 @@ type release struct {
 	ns, name         string
 	source           *source
 	gitops, external bool
-	report           *ReleaseReport
+	// platform: the release ships with the Agent Platform.
+	platform bool
+	report   *ReleaseReport
 	// values are spec.values as read, rewritten what they become; write is
 	// true while the rewrite is planned for a write this run.
 	values, rewritten map[string]any
@@ -305,6 +310,8 @@ func (rel *release) renderedName() string {
 
 func (rel *release) ownership() string {
 	switch {
+	case rel.platform:
+		return OwnershipPlatform
 	case rel.external:
 		return OwnershipExternal
 	case rel.gitops:
@@ -472,14 +479,17 @@ func (r *Runner) sourceOf(obj *unstructured.Unstructured, external bool) *source
 	if url != r.opts.ChartOCIURL {
 		return nil
 	}
-	s := &source{obj: obj, ns: obj.GetNamespace(), name: obj.GetName(), gitops: gitOpsOwned(obj), external: external}
+	s := &source{obj: obj, ns: obj.GetNamespace(), name: obj.GetName(), gitops: gitOpsOwned(obj), external: external, platform: agents.PlatformOwned(obj)}
 	s.semver, _, _ = unstructured.NestedString(obj.Object, "spec", "ref", "semver")
 	s.semverFilter, _, _ = unstructured.NestedString(obj.Object, "spec", "ref", "semverFilter")
 	return s
 }
 
 func (st *nsState) addRelease(hr *unstructured.Unstructured, src *source, external bool) *release {
-	rel := &release{obj: hr, ns: hr.GetNamespace(), name: hr.GetName(), source: src, gitops: gitOpsOwned(hr), external: external}
+	rel := &release{obj: hr, ns: hr.GetNamespace(), name: hr.GetName(), source: src, gitops: gitOpsOwned(hr), external: external, platform: agents.PlatformOwnedRelease(hr)}
+	if rel.platform {
+		src.platform = true // moving it would move the platform's chart
+	}
 	src.releases = append(src.releases, rel)
 	st.releases = append(st.releases, rel)
 	return rel
@@ -619,11 +629,13 @@ func (r *Runner) planRelease(ctx context.Context, st *nsState, rel *release, cha
 		return rep
 	}
 	rep.Changes = changes
-	if rel.gitops || rel.external {
+	if rel.gitops || rel.external || rel.platform {
 		rep.Action = ActionDiff
 		rep.Diff = manifestDiff(rel.obj, rewrittenHR)
 		rep.Reason = "never written by this command: its desired state lives in git — apply the diff in the owning repository"
-		if rel.gitops && !rel.external {
+		if rel.platform {
+			rep.Reason = "ships with the Agent Platform, never written by this command: it moves with the platform release"
+		} else if rel.gitops && !rel.external {
 			rep.Reason = fmt.Sprintf("applied by Flux Kustomization %q, never written by this command: apply the diff in the owning repository", rel.obj.GetLabels()[agents.KustomizationNameLabel])
 		}
 		return rep
@@ -661,15 +673,19 @@ func (r *Runner) subAgentWarnings(st *nsState, rel *release, values map[string]a
 }
 
 // holdSiblings keeps the releases of a source together: when one release of
-// a source is failed or pending, none of its writable siblings is written,
-// since the source cannot move and target values under the source's current
-// chart would fail their render.
+// a source is failed or pending, or ships with the Agent Platform (which
+// moves it, and the source, with the platform release), none of its
+// writable siblings is written, since the source cannot move and target
+// values under the source's current chart would fail their render.
 func holdSiblings(st *nsState) {
 	for _, src := range st.sources {
 		var blockers []string
 		for _, rel := range src.releases {
-			if a := rel.report.Action; a == ActionFailed || a == ActionPending {
+			switch a := rel.report.Action; {
+			case a == ActionFailed || a == ActionPending:
 				blockers = append(blockers, fmt.Sprintf("%s (%s)", rel.id(), a))
+			case rel.platform:
+				blockers = append(blockers, fmt.Sprintf("%s (%s)", rel.id(), OwnershipPlatform))
 			}
 		}
 		if len(blockers) == 0 {
@@ -726,6 +742,8 @@ func (r *Runner) moveSource(ctx context.Context, st *nsState, dyn dynamic.Interf
 	rep := &SourceReport{Name: src.name, Namespace: src.ns, From: src.semver, To: r.opts.TargetSemver,
 		FromSemverFilter: src.semverFilter, ToSemverFilter: r.targetFilter(src)}
 	switch {
+	case src.platform:
+		rep.Ownership = OwnershipPlatform
 	case src.external:
 		rep.Ownership = OwnershipExternal
 	case src.gitops:
@@ -739,9 +757,12 @@ func (r *Runner) moveSource(ctx context.Context, st *nsState, dyn dynamic.Interf
 	}
 	moved := &unstructured.Unstructured{Object: runtime.DeepCopyJSON(src.obj.Object)}
 	r.setTargetRef(moved, rep.ToSemverFilter)
-	if src.gitops || src.external {
+	if src.gitops || src.external || src.platform {
 		rep.Action, rep.Diff = ActionDiff, manifestDiff(src.obj, moved)
 		rep.Reason = "never written by this command: move the range in the owning repository together with its releases' values"
+		if src.platform {
+			rep.Reason = "never written by this command: it, or a release it serves, ships with the Agent Platform and moves with the platform release"
+		}
 		return rep
 	}
 	if src.semver == "" {
@@ -844,11 +865,15 @@ func (r *Runner) wait(ctx context.Context, st *nsState) {
 		case ActionPending, ActionFailed:
 			pending = append(pending, fmt.Sprintf("release %s: %s", rel.id(), rel.report.Reason))
 		case ActionDiff:
+			if rel.platform {
+				pending = append(pending, fmt.Sprintf("release %s: ships with the Agent Platform; its rewrite (the diff in this report) comes with the platform release", rel.id()))
+				continue
+			}
 			pending = append(pending, fmt.Sprintf("release %s: its rewrite (the diff in this report) is not applied in the owning repository yet", rel.id()))
 		}
 	}
 	for _, src := range st.sources {
-		if src.report.Action == SourceNotMoved || (src.report.Action == ActionDiff && !src.external) {
+		if src.report.Action == SourceNotMoved || (src.report.Action == ActionDiff && !src.external && !src.platform) {
 			pending = append(pending, fmt.Sprintf("chart source %s/%s: %s", src.ns, src.name, src.report.Reason))
 		}
 	}

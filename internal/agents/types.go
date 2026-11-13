@@ -100,6 +100,15 @@ const (
 	// git (applied by a Flux Kustomization): a live write would be undone on
 	// the next reconciliation.
 	KustomizationNameLabel = "kustomize.toolkit.fluxcd.io/name"
+	// PlatformManagedByLabel / PlatformManagedByValue mark a HelmRelease or
+	// an Agent the Agent Platform ships: no write of agent-manager reaches it.
+	PlatformManagedByLabel = "agent-platform.giantswarm.io/managed-by"
+	PlatformManagedByValue = "agent-platform"
+	// DefaultAgentLabel ("true") on an Agent marks the installation's
+	// default agent, which clients preselect, reported as the Agent's
+	// namespace/name. One is reported: a platform-owned one first, then the
+	// first by namespace/name.
+	DefaultAgentLabel = "agent-platform.giantswarm.io/default"
 	// ManagedByLabel / ManagedByValue mark the HelmReleases and
 	// OCIRepositories agent-manager created.
 	ManagedByLabel = "app.kubernetes.io/managed-by"
@@ -127,6 +136,10 @@ const (
 	ManagedGitOps = "gitops"
 	// ManagedNone: a bare Agent object with no HelmRelease behind it.
 	ManagedNone = "none"
+	// ManagedPlatform: the agent ships with the Agent Platform (its
+	// HelmRelease or Agent carries PlatformManagedByLabel); it is read-only here and
+	// changes go through the platform's configuration.
+	ManagedPlatform = "platform"
 )
 
 // GitSkill is a skill in a git repository. A write takes the repository and,
@@ -477,8 +490,10 @@ type Agent struct {
 	Ready *bool `json:"ready"`
 	// Status is the Agent object's status, when it exists.
 	Status *ObjectStatus `json:"status,omitempty"`
-	// Managed is helmrelease, gitops or none.
-	Managed     string          `json:"managed"`
+	// Managed is helmrelease, gitops, platform or none.
+	Managed string `json:"managed"`
+	// Default: the installation's default agent, which clients preselect.
+	Default     bool            `json:"default,omitempty"`
 	HelmRelease *HelmReleaseRef `json:"helmRelease,omitempty"`
 	// Values are the HelmRelease's inline values (the chart contract), when a
 	// HelmRelease owns the agent.
@@ -508,6 +523,7 @@ type AgentSummary struct {
 	ToolsetBound              bool     `json:"toolsetBound,omitempty"`
 	Ready                     *bool    `json:"ready"`
 	Managed                   string   `json:"managed"`
+	Default                   bool     `json:"default,omitempty"`
 	// The owning HelmRelease's state, when it needs attention: suspended,
 	// being uninstalled, or not Ready (its reason and message).
 	Suspended      bool   `json:"suspended,omitempty"`
@@ -538,6 +554,7 @@ func (a Agent) Summary() AgentSummary {
 		ToolsetBound:              a.ToolsetBound,
 		Ready:                     a.Ready,
 		Managed:                   a.Managed,
+		Default:                   a.Default,
 	}
 	if hr := a.HelmRelease; hr != nil {
 		s.Suspended = hr.Suspended
@@ -753,6 +770,21 @@ func forbiddenf(format string, args ...any) error {
 func gitOpsOwnedf(format string, args ...any) error {
 	return fmt.Errorf("%w: %s", ErrGitOpsOwned, fmt.Sprintf(format, args...))
 }
+
+// GrantRequiredError is an ErrAuthRequired a provider App grant answers:
+// the call needs the person's grant of App, which muster keeps, and they have
+// not given it. The MCP answer names App so muster turns it into the App's
+// sign-in.
+type GrantRequiredError struct {
+	// App is the provider App, by muster's name for it.
+	App string
+	// Reason says what the grant is for.
+	Reason string
+}
+
+func (e *GrantRequiredError) Error() string { return ErrAuthRequired.Error() + ": " + e.Reason }
+
+func (e *GrantRequiredError) Unwrap() error { return ErrAuthRequired }
 
 func authRequiredf(format string, args ...any) error {
 	return fmt.Errorf("%w: %s", ErrAuthRequired, fmt.Sprintf(format, args...))

@@ -84,6 +84,9 @@ const (
 	// OwnershipExternal: the object lives outside the managed namespaces
 	// (reached through provenance labels); read-only for this command.
 	OwnershipExternal = "external"
+	// OwnershipPlatform: the Agent Platform ships the object (or, for a
+	// source, a release it serves); read-only for this command.
+	OwnershipPlatform = agents.ManagedPlatform
 )
 
 // Actions on a CRD in the contract phase.

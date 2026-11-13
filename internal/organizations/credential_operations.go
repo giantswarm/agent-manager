@@ -116,6 +116,10 @@ type credentialOperation struct {
 	WrittenFiles    map[string]string     `json:"writtenFiles,omitempty"`
 	GitTarget       *CredentialGitTarget  `json:"gitTarget,omitempty"`
 	AppliedVersions map[string]string     `json:"appliedVersions,omitempty"`
+	// Consumers are, for a replace_organization_credential operation, the
+	// objects that read its Secret and where they send the value, as
+	// prepared.
+	Consumers []CredentialReference `json:"consumers,omitempty"`
 }
 
 type CredentialGitTarget struct {
@@ -204,13 +208,13 @@ func (s *Service) ReadCredentialOperation(ctx context.Context, id string) (*Cred
 	if err != nil {
 		return nil, err
 	}
-	var references []CredentialReference
 	changes := make([]CredentialChange, 0, len(operation.Writes))
 	for _, planned := range operation.Writes {
 		changes = append(changes, CredentialChange{Action: planned.Action, Object: unstructuredOf(planned.Object).DeepCopy().Object})
-		for _, credential := range operation.Credentials {
-			references = append(references, referencesOf(planned.Kind, unstructuredOf(planned.Object), credential.Secret)...)
-		}
+	}
+	references, err := s.operationReferences(ctx, operation)
+	if err != nil {
+		return nil, err
 	}
 	return &CredentialOperation{ID: operation.ID, Version: operation.Version, ElicitationID: operation.ElicitationID, ExpiresAt: operation.ExpiresAt, State: operation.State, Mode: operation.Mode, Result: operation.Result, References: references, GitTarget: operation.GitTarget, Organization: operation.Namespace, Changes: changes}, nil
 }
@@ -246,7 +250,7 @@ func (s *Service) CredentialReceipt(ctx context.Context) (*ResourceResult, error
 	return &operation.Result, nil
 }
 
-func (s *Service) landResource(ctx context.Context, writer *contentWriter, writes []write, result *ResourceResult, replace bool, verb, title string) error {
+func (s *Service) landResource(ctx context.Context, writer *contentWriter, writes []write, result *ResourceResult, verb, title string) error {
 	needsCredential := slices.ContainsFunc(result.Credentials, func(credential Credential) bool {
 		return credential.State == CredentialMissing || credential.State == CredentialReplace
 	})
@@ -273,6 +277,35 @@ func (s *Service) landResource(ctx context.Context, writer *contentWriter, write
 			}
 		}
 	}
+	seenSecrets := map[string]bool{}
+	var consumers []CredentialReference
+	for _, credential := range result.Credentials {
+		if credential.State != CredentialMissing && credential.State != CredentialReplace {
+			continue
+		}
+		if seenSecrets[credential.Secret] {
+			return invalidf("each credential Secret must contain one credential key")
+		}
+		seenSecrets[credential.Secret] = true
+		references, _, err := s.references(ctx, caller, writer.org.Name, credential.Secret)
+		if err != nil {
+			return err
+		}
+		consumers = append(consumers, references...)
+		for _, reference := range references {
+			if !writesFor(*result, reference) {
+				return fmt.Errorf("%w: another consumer references the credential Secret", agents.ErrConflict)
+			}
+		}
+		// Admission judges the replacement before the person enters a value,
+		// in a dry run too: it sees the stored Secret the caller may not read,
+		// and refuses one git applied in an apply-mode write.
+		if credential.exists && writer.mode == agents.ModeApply {
+			if _, err := do(ctx, caller.Dynamic(), credentialSecretWrite(writer.org.Name, credential.Secret, opUpdate, map[string]any{credential.Key: ""}), dryRunAll); err != nil {
+				return err
+			}
+		}
+	}
 	if result.DryRun {
 		return nil
 	}
@@ -294,35 +327,19 @@ func (s *Service) landResource(ctx context.Context, writer *contentWriter, write
 		object := unstructuredOf(planned.obj)
 		operation.Writes = append(operation.Writes, operationWrite{Resource: planned.gvr, Kind: planned.kind, Action: planned.op, Object: object.DeepCopy().Object, Name: planned.name, Version: object.GetResourceVersion()})
 	}
-	seenSecrets := map[string]bool{}
 	for _, credential := range result.Credentials {
 		if credential.State != CredentialMissing && credential.State != CredentialReplace {
 			continue
 		}
-		if seenSecrets[credential.Secret] {
-			return invalidf("each credential Secret must contain one credential key")
-		}
-		seenSecrets[credential.Secret] = true
-		references, _, err := s.references(ctx, caller, writer.org.Name, credential.Secret)
-		if err != nil {
-			return err
-		}
-		for _, reference := range references {
-			if reference.Kind != kinds[result.Kind].kubeKind || reference.Name != result.Name {
-				return fmt.Errorf("%w: another consumer references the credential Secret", agents.ErrConflict)
-			}
-		}
-		// Admission judges the replacement before the person enters a value:
-		// it sees the stored Secret the caller may not read, and refuses one
-		// git applied in an apply-mode write.
-		if credential.exists && writer.mode == agents.ModeApply {
-			if _, err := do(ctx, caller.Dynamic(), credentialSecretWrite(writer.org.Name, credential.Secret, opUpdate, map[string]any{credential.Key: ""}), dryRunAll); err != nil {
-				return err
-			}
-		}
 		// A missing key of an existing Secret is written as a replacement:
 		// the Secret is written whole, holding that one key.
-		operation.Credentials = append(operation.Credentials, operationCredential{Secret: credential.Secret, Key: credential.Key, Replace: replace || credential.exists, Exists: credential.exists})
+		operation.Credentials = append(operation.Credentials, operationCredential{Secret: credential.Secret, Key: credential.Key, Replace: credential.State == CredentialReplace || credential.exists, Exists: credential.exists})
+	}
+	// A replacement writes no consumer, so no consumer version guards it: the
+	// operation keeps the consumers and where they send the value, and the
+	// save and the Git snapshot refuse any other.
+	if result.Kind == KindCredential {
+		operation.Consumers = consumers
 	}
 	if writer.commit != nil {
 		operation.GitTarget = &CredentialGitTarget{Repository: writer.commit.cfg.Objects.Repository.String(), Base: writer.commit.cfg.Objects.Branch, Directory: writer.dir.Path()}

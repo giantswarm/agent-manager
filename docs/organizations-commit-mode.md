@@ -122,3 +122,9 @@ The erase is refused:
   the call fails): whether it removed the file is unknown, so nothing is erased. Call
   again to retry; if the listing keeps failing, restore the file and open the delete
   again.
+
+agent-manager reads the delete pull request with pull request reads only: whether it is
+merged, and its files. It does not read its reviews, or the commit statuses and check
+runs of its head, so the GitHub App needs no permission beyond contents and pull
+requests. When GitHub refuses a step that only reads with 403, the answer names the
+step and the App's permissions: a new sign-in does not change them.

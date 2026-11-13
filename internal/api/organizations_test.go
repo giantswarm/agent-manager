@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -541,7 +542,7 @@ func TestListOrganizationsByTheCallersAccess(t *testing.T) {
 	// neither.
 	f.deny = func(ns, verb, resource, name string) bool {
 		switch {
-		case verb == "list" && resource == "agents":
+		case resource == "agents":
 			return ns != orgNS
 		case verb == "update" && resource == "agentplatformorganizations":
 			return ns != "org-acme" || name != "billing"
@@ -555,13 +556,13 @@ func TestListOrganizationsByTheCallersAccess(t *testing.T) {
 
 	billingListed := listed[0].(map[string]any)
 	assert.Equal(t, "billing", billingListed["name"])
-	assert.Equal(t, map[string]any{"manage": true, "member": false}, billingListed["permissions"])
+	assert.Equal(t, map[string]any{"manage": true, "member": false, "createAgents": false}, billingListed["permissions"])
 	assert.Equal(t, "s3://bucket/uid", billingListed["organization"].(map[string]any)["snapshotPrefix"], "a manager reads the summary")
 
 	member := listed[1].(map[string]any)
 	assert.Equal(t, map[string]any{"name": "payments", "parent": "org-acme", "namespace": orgNS,
 		"orphaned":    map[string]any{"status": "True", "reason": "MissingFromGit", "message": "gone from git"},
-		"permissions": map[string]any{"manage": false, "member": true}}, member, "a member reads the status only")
+		"permissions": map[string]any{"manage": false, "member": true, "createAgents": true}}, member, "a member reads the status only")
 	assert.NotContains(t, text, "treasury", "an organization the caller neither manages nor belongs to is not listed")
 
 	text, isErr = f.call(t, ToolListOrganizations, map[string]any{"namespace": "org-other"})
@@ -578,6 +579,81 @@ func TestListOrganizationsByTheCallersAccess(t *testing.T) {
 	require.True(t, isErr)
 	assert.True(t, strings.HasPrefix(text, "unauthenticated:"), text)
 	assert.NotContains(t, text, "agents-", "a refused token learns no organization namespace")
+}
+
+// createAgents is the caller's right to create Agents in the organization
+// namespace, asked as the caller, whatever role grants it: a user is a member
+// who may not create agents, an editor creates them and does not manage the
+// organization, and an admin who also manages it may do all three. An
+// organization without a namespace yet has no namespace to create in.
+func TestListOrganizationsSaysWhoMayCreateAgents(t *testing.T) {
+	roles := map[string]func(ns, verb, resource, name string) bool{
+		// agent-platform:user reads and runs the agents of its organization.
+		"user": func(_, verb, resource, _ string) bool {
+			return resource == "agentplatformorganizations" || (resource == "agents" && verb != "list")
+		},
+		// agent-platform:editor also writes them.
+		"editor": func(_, _, resource, _ string) bool { return resource == "agentplatformorganizations" },
+		// agent-platform:admin of the organization and organizations-admin of
+		// its parent.
+		"admin": func(string, string, string, string) bool { return false },
+	}
+	for _, tc := range []struct {
+		role string
+		want map[string]any
+	}{
+		{"user", map[string]any{"manage": false, "member": true, "createAgents": false}},
+		{"editor", map[string]any{"manage": false, "member": true, "createAgents": true}},
+		{"admin", map[string]any{"manage": true, "member": true, "createAgents": true}},
+	} {
+		t.Run(tc.role, func(t *testing.T) {
+			f := newOrgFixture(t, organization("org-acme", "payments", nil))
+			f.deny = roles[tc.role]
+			reviews := recordAccessReviews(f)
+			text, isErr := f.call(t, ToolListOrganizations, nil)
+			require.False(t, isErr, text)
+			listed := decode(t, text)["organizations"].([]any)
+			require.Len(t, listed, 1, text)
+			assert.Equal(t, tc.want, listed[0].(map[string]any)["permissions"])
+			assert.Contains(t, reviews(), authorizationv1.ResourceAttributes{
+				Namespace: orgNS, Verb: "create", Group: orgAgentGV.Group, Resource: orgAgentGV.Resource,
+			}, "createAgents asks for the kagent Agents of the organization namespace")
+		})
+	}
+
+	t.Run("no namespace yet", func(t *testing.T) {
+		pending := organization("org-acme", "payments", nil)
+		unstructured.RemoveNestedField(pending.Object, "status", "namespace")
+		f := newOrgFixture(t, pending)
+		reviews := recordAccessReviews(f)
+		text, isErr := f.call(t, ToolListOrganizations, nil)
+		require.False(t, isErr, text)
+		listed := decode(t, text)["organizations"].([]any)
+		require.Len(t, listed, 1, text)
+		assert.Equal(t, map[string]any{"manage": true, "member": false, "createAgents": false}, listed[0].(map[string]any)["permissions"])
+		for _, r := range reviews() {
+			assert.NotEmpty(t, r.Namespace, "no review is asked across every namespace: %+v", r)
+		}
+	})
+}
+
+// recordAccessReviews records the attributes of every
+// SelfSubjectAccessReview the caller asks, and leaves the answer to the
+// fixture.
+func recordAccessReviews(f *orgFixture) func() []authorizationv1.ResourceAttributes {
+	var mu sync.Mutex
+	var reviews []authorizationv1.ResourceAttributes
+	f.typed.PrependReactor("create", "selfsubjectaccessreviews", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		reviews = append(reviews, *a.(k8stesting.CreateAction).GetObject().(*authorizationv1.SelfSubjectAccessReview).Spec.ResourceAttributes)
+		return false, nil, nil
+	})
+	return func() []authorizationv1.ResourceAttributes {
+		mu.Lock()
+		defer mu.Unlock()
+		return slices.Clone(reviews)
+	}
 }
 
 // Members are added into their role's binding and removed from it; when

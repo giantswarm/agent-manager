@@ -20,19 +20,20 @@ import (
 // toolset preset excludes them all with OrganizationToolPattern: the curated
 // agent-manager-assistant carries the agent tools and not these.
 const (
-	ToolListOrganizations         = "list_organizations"
-	ToolGetOrganization           = "get_organization"
-	ToolCreateOrganization        = "create_organization"
-	ToolUpdateOrganization        = "update_organization"
-	ToolDeleteOrganization        = "delete_organization"
-	ToolListOrganizationMembers   = "list_organization_members"
-	ToolAddOrganizationMember     = "add_organization_member"
-	ToolRemoveOrganizationMember  = "remove_organization_member"
-	ToolSetOrganizationModel      = "set_organization_model"
-	ToolListOrganizationConnector = "list_organization_connectors"
-	ToolSetOrganizationConnector  = "set_organization_connector"
-	ToolSetOrganizationEgress     = "set_organization_egress_policy"
-	ToolDeleteOrganizationObject  = "delete_organization_object"
+	ToolListOrganizations             = "list_organizations"
+	ToolGetOrganization               = "get_organization"
+	ToolCreateOrganization            = "create_organization"
+	ToolUpdateOrganization            = "update_organization"
+	ToolDeleteOrganization            = "delete_organization"
+	ToolListOrganizationMembers       = "list_organization_members"
+	ToolAddOrganizationMember         = "add_organization_member"
+	ToolRemoveOrganizationMember      = "remove_organization_member"
+	ToolSetOrganizationModel          = "set_organization_model"
+	ToolListOrganizationConnector     = "list_organization_connectors"
+	ToolSetOrganizationConnector      = "set_organization_connector"
+	ToolSetOrganizationEgress         = "set_organization_egress_policy"
+	ToolDeleteOrganizationObject      = "delete_organization_object"
+	ToolReplaceOrganizationCredential = "replace_organization_credential"
 
 	// OrganizationToolPattern matches, as a muster toolset rule
 	// (filepath.Match on x_<server>_<tool>), every organization tool of the
@@ -47,30 +48,32 @@ func OrganizationToolNames() []string {
 		ToolListOrganizations, ToolGetOrganization, ToolCreateOrganization, ToolUpdateOrganization, ToolDeleteOrganization,
 		ToolListOrganizationMembers, ToolAddOrganizationMember, ToolRemoveOrganizationMember,
 		ToolSetOrganizationModel, ToolListOrganizationConnector, ToolSetOrganizationConnector, ToolSetOrganizationEgress,
-		ToolDeleteOrganizationObject,
+		ToolDeleteOrganizationObject, ToolReplaceOrganizationCredential,
 	}
 }
 
 const (
-	argAdminGroups       = "adminGroups"
-	argAdminUsers        = "adminUsers"
-	argHarnesses         = "harnesses"
-	argWorkerReplicas    = "workerReplicas"
-	argConfirm           = "confirm"
-	argRole              = "role"
-	argGroup             = "group"
-	argUser              = "user"
-	argProvider          = "provider"
-	argModel             = "model"
-	argDefault           = "default"
-	argCredentialSecret  = "credentialSecret" // #nosec G101 -- an argument name, not a credential
-	argCredentialKey     = "credentialKey"    // #nosec G101 -- an argument name, not a credential
-	argCredentialHeader  = "credentialHeader" // #nosec G101 -- an argument name, not a credential
-	argNoCredential      = "noCredential"     // #nosec G101 -- an argument name, not a credential
-	argReplaceCredential = "replaceCredential"
-	argURL               = "url"
-	argDestinations      = "destinations"
-	argKind              = "kind"
+	argAdminGroups      = "adminGroups"
+	argAdminUsers       = "adminUsers"
+	argHarnesses        = "harnesses"
+	argWorkerReplicas   = "workerReplicas"
+	argConfirm          = "confirm"
+	argRole             = "role"
+	argGroup            = "group"
+	argUser             = "user"
+	argProvider         = "provider"
+	argModel            = "model"
+	argDefault          = "default"
+	argCreate           = "create"
+	argCredentialSecret = "credentialSecret" // #nosec G101 -- an argument name, not a credential
+	argCredentialKey    = "credentialKey"    // #nosec G101 -- an argument name, not a credential
+	argCredentialHeader = "credentialHeader" // #nosec G101 -- an argument name, not a credential
+	argNoCredential     = "noCredential"     // #nosec G101 -- an argument name, not a credential
+	argURL              = "url"
+	argDestinations     = "destinations"
+	argKind             = "kind"
+	argSecret           = "secret"
+	argKey              = "key"
 )
 
 // JSON Schema keys of the destinations item.
@@ -144,14 +147,13 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service, l
 	orgNSProp := mcp.WithString(argNamespace, mcp.Required(), mcp.Description("The organization namespace, e.g. agents-payments-x7k2q (list_organizations, get_organization)"))
 	dryRun := mcp.WithBoolean(argDryRun, mcp.Description("Check every write with the API server as you and write nothing (default false)"))
 	modeProp := mcp.WithString(argMode, mcp.Enum(agents.ModeApply, agents.ModeCommit), mcp.Description("apply (default): write live as you; refused with gitops_owned for what git applies. commit: dry-run as you, then open a pull request as you"))
-	replaceCred := mcp.WithBoolean(argReplaceCredential, mcp.Description("Answer with a URL elicitation of the credential UI to enter a new value (default false)"))
 	credentialRequestID := mcp.WithString(argRequestID, mcp.Description("Idempotency key, at most 128 characters. Reuse on retries; use a fresh key for another save or a refreshed confirmation."))
 	stringList := map[string]any{"type": "string"}
 	credSecretDesc := "Secret in the organization namespace that holds the credential, by name (tenant-credential-...); never a value"
 
 	s.AddTool(mcp.NewTool(ToolListOrganizations,
 		tooldesc.Describe("List the organizations you manage or belong to, of one parent namespace or of all.",
-			"Each with its organization namespace, Orphaned condition, deleting, and permissions (manage, member), asked with your own token; a New agent goes where member is true. Where you manage it, organization is its summary: harnesses, workers, Ready, DefaultModelConfigured, the last revision Flux applied (lastAppliedRevision) and in mode commit its commit and the organization's file (lastAppliedRevisionUrl, lastAppliedFile, lastAppliedFileUrl). none says who can add you when there is none."),
+			"Each with its organization namespace, Orphaned condition, deleting, and permissions (manage, member, createAgents), asked with your own token; a New agent goes where createAgents is true. Where you manage it, organization is its summary: harnesses, workers, Ready, DefaultModelConfigured, the last revision Flux applied (lastAppliedRevision) and in mode commit its commit and the organization's file (lastAppliedRevisionUrl, lastAppliedFile, lastAppliedFileUrl). none says who can add you when there is none."),
 		mcp.WithString(argNamespace, mcp.Description("Parent namespace; omit for all")),
 		mcp.WithReadOnlyHintAnnotation(true),
 		mcp.WithDestructiveHintAnnotation(false),
@@ -252,7 +254,7 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service, l
 
 	s.AddTool(mcp.NewTool(ToolListOrganizationMembers,
 		tooldesc.Describe("List an organization's members: the groups and people bound to agent-platform:admin, editor or user, groups first.",
-			"Read as you; every member may read them."),
+			"Read as you; every member role (user, editor or admin) may read them, from agent-platform chart 4.179.0 on."),
 		orgNSProp,
 		mcp.WithReadOnlyHintAnnotation(true),
 		mcp.WithDestructiveHintAnnotation(false),
@@ -301,12 +303,13 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service, l
 			"The first model of an organization without a default becomes its default (annotation "+apov1alpha1.DefaultModelConfigAnnotation+"); default true moves the mark here. Never pass a key: a missing one is a URL elicitation of the credential UI, link in credentials[].next. list_model_configs lists the models. Needs agent-platform:admin."),
 		orgNSProp,
 		mcp.WithString(argName, mcp.Required(), mcp.Description("ModelConfig name")),
-		mcp.WithString(argProvider, mcp.Description("Provider as kagent's ModelConfig takes it, e.g. Anthropic, OpenAI; required to create")),
+		mcp.WithString(argProvider, mcp.Description("Provider as kagent's ModelConfig takes it, e.g. Anthropic, OpenAI; required to create; a change needs a new credentialSecret too")),
 		mcp.WithString(argModel, mcp.Description("Model id, e.g. claude-sonnet-4-6; required to create")),
 		mcp.WithString(argCredentialSecret, mcp.Description(credSecretDesc+"; default tenant-credential-<name>")),
 		mcp.WithString(argCredentialKey, mcp.Description("Key of that Secret; default apiKey")),
 		mcp.WithBoolean(argDefault, mcp.Description("Make this the organization's default model, moving the mark (default false)")),
-		replaceCred, credentialRequestID, dryRun, modeProp,
+		mcp.WithBoolean(argCreate, mcp.Description("Only create: a model of that name, live or in git, is refused with already_exists, not changed (default false: create or change)")),
+		credentialRequestID, dryRun, modeProp,
 		mcp.WithOutputSchema[organizations.ResourceResult](),
 		mcp.WithReadOnlyHintAnnotation(false),
 		mcp.WithDestructiveHintAnnotation(true),
@@ -314,16 +317,16 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service, l
 		mcp.WithOpenWorldHintAnnotation(false),
 	), t.runWrite(func(ctx context.Context, req mcp.CallToolRequest) (*organizations.ResourceResult, error) {
 		var in struct {
-			Namespace         string `json:"namespace"`
-			Name              string `json:"name"`
-			Provider          string `json:"provider"`
-			Model             string `json:"model"`
-			CredentialSecret  string `json:"credentialSecret"`
-			CredentialKey     string `json:"credentialKey"`
-			Default           bool   `json:"default"`
-			ReplaceCredential bool   `json:"replaceCredential"`
-			DryRun            bool   `json:"dryRun"`
-			Mode              string `json:"mode"`
+			Namespace        string `json:"namespace"`
+			Name             string `json:"name"`
+			Provider         string `json:"provider"`
+			Model            string `json:"model"`
+			CredentialSecret string `json:"credentialSecret"`
+			CredentialKey    string `json:"credentialKey"`
+			Default          bool   `json:"default"`
+			Create           bool   `json:"create"`
+			DryRun           bool   `json:"dryRun"`
+			Mode             string `json:"mode"`
 		}
 		if err := bindArgs(req, &in); err != nil {
 			return nil, err
@@ -355,7 +358,8 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service, l
 		mcp.WithString(argCredentialSecret, mcp.Description(credSecretDesc)),
 		mcp.WithString(argCredentialKey, mcp.Description("Key of that Secret; default token")),
 		mcp.WithBoolean(argNoCredential, mcp.Description("Remove the credential header (default false)")),
-		replaceCred, credentialRequestID, dryRun, modeProp,
+		mcp.WithBoolean(argCreate, mcp.Description("Only create: a connector of that name, live or in git, is refused with already_exists, not changed (default false: create or change)")),
+		credentialRequestID, dryRun, modeProp,
 		mcp.WithOutputSchema[organizations.ResourceResult](),
 		mcp.WithReadOnlyHintAnnotation(false),
 		mcp.WithDestructiveHintAnnotation(true),
@@ -363,17 +367,17 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service, l
 		mcp.WithOpenWorldHintAnnotation(false),
 	), t.runWrite(func(ctx context.Context, req mcp.CallToolRequest) (*organizations.ResourceResult, error) {
 		var in struct {
-			Namespace         string `json:"namespace"`
-			Name              string `json:"name"`
-			URL               string `json:"url"`
-			Description       string `json:"description"`
-			CredentialHeader  string `json:"credentialHeader"`
-			CredentialSecret  string `json:"credentialSecret"`
-			CredentialKey     string `json:"credentialKey"`
-			NoCredential      bool   `json:"noCredential"`
-			ReplaceCredential bool   `json:"replaceCredential"`
-			DryRun            bool   `json:"dryRun"`
-			Mode              string `json:"mode"`
+			Namespace        string `json:"namespace"`
+			Name             string `json:"name"`
+			URL              string `json:"url"`
+			Description      string `json:"description"`
+			CredentialHeader string `json:"credentialHeader"`
+			CredentialSecret string `json:"credentialSecret"`
+			CredentialKey    string `json:"credentialKey"`
+			NoCredential     bool   `json:"noCredential"`
+			Create           bool   `json:"create"`
+			DryRun           bool   `json:"dryRun"`
+			Mode             string `json:"mode"`
 		}
 		if err := bindArgs(req, &in); err != nil {
 			return nil, err
@@ -397,7 +401,8 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service, l
 			},
 			"required": []string{"origin"},
 		})),
-		replaceCred, credentialRequestID, dryRun, modeProp,
+		mcp.WithBoolean(argCreate, mcp.Description("Only create: a policy of that name, live or in git, is refused with already_exists, not replaced (default false: create or replace)")),
+		credentialRequestID, dryRun, modeProp,
 		mcp.WithOutputSchema[organizations.ResourceResult](),
 		mcp.WithReadOnlyHintAnnotation(false),
 		mcp.WithDestructiveHintAnnotation(true),
@@ -405,17 +410,43 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service, l
 		mcp.WithOpenWorldHintAnnotation(false),
 	), t.runWrite(func(ctx context.Context, req mcp.CallToolRequest) (*organizations.ResourceResult, error) {
 		var in struct {
-			Namespace         string                            `json:"namespace"`
-			Name              string                            `json:"name"`
-			Destinations      []organizations.EgressDestination `json:"destinations"`
-			ReplaceCredential bool                              `json:"replaceCredential"`
-			DryRun            bool                              `json:"dryRun"`
-			Mode              string                            `json:"mode"`
+			Namespace    string                            `json:"namespace"`
+			Name         string                            `json:"name"`
+			Destinations []organizations.EgressDestination `json:"destinations"`
+			Create       bool                              `json:"create"`
+			DryRun       bool                              `json:"dryRun"`
+			Mode         string                            `json:"mode"`
 		}
 		if err := bindArgs(req, &in); err != nil {
 			return nil, err
 		}
 		return t.svc.SetEgressPolicy(ctx, organizations.EgressRequest(in))
+	}))
+
+	s.AddTool(mcp.NewTool(ToolReplaceOrganizationCredential,
+		tooldesc.Describe("Replace an organization's credential by its Secret and key, as you, writing only the Secret.",
+			"No model, connector or egress policy is written. Answers with a URL elicitation of the credential UI, link in credentials[].next; the form lists every object that uses the Secret and where each sends the value. Refused when nothing uses that key of the Secret, and when an object reads another key of it: the Secret is written whole, holding the one key. A credential whose consumer git applies is replaced with mode commit. Never pass a value. Needs agent-platform:admin."),
+		orgNSProp,
+		mcp.WithString(argSecret, mcp.Required(), mcp.Description(credSecretDesc)),
+		mcp.WithString(argKey, mcp.Required(), mcp.Description("Key of that Secret the objects read, e.g. apiKey or token")),
+		credentialRequestID, dryRun, modeProp,
+		mcp.WithOutputSchema[organizations.ResourceResult](),
+		mcp.WithReadOnlyHintAnnotation(false),
+		mcp.WithDestructiveHintAnnotation(true),
+		mcp.WithIdempotentHintAnnotation(true),
+		mcp.WithOpenWorldHintAnnotation(false),
+	), t.runWrite(func(ctx context.Context, req mcp.CallToolRequest) (*organizations.ResourceResult, error) {
+		var in struct {
+			Namespace string `json:"namespace"`
+			Secret    string `json:"secret"`
+			Key       string `json:"key"`
+			DryRun    bool   `json:"dryRun"`
+			Mode      string `json:"mode"`
+		}
+		if err := bindArgs(req, &in); err != nil {
+			return nil, err
+		}
+		return t.svc.ReplaceCredential(ctx, organizations.CredentialRequest(in))
 	}))
 
 	s.AddTool(mcp.NewTool(ToolDeleteOrganizationObject,

@@ -15,6 +15,7 @@ import (
 	"github.com/giantswarm/agent-manager/internal/chart"
 	"github.com/giantswarm/agent-manager/internal/kube"
 	"github.com/giantswarm/agent-manager/internal/migrate"
+	"github.com/giantswarm/agent-manager/internal/skillmanager"
 	"github.com/giantswarm/agent-manager/internal/skills"
 )
 
@@ -46,6 +47,8 @@ type migrateOptions struct {
 	skillsGitAuth     string
 	skillsGitAuthPrev string
 	skillsGitAuthWait time.Duration
+	skillManagerURL   string
+	skillManagerToken string
 
 	reportConfigMap string
 	dryRun          bool
@@ -134,6 +137,8 @@ variable named next to it; flags win.`,
 	f.StringVar(&o.chartSemverFilter, "agent-chart-semver-filter", envOr("AGENT_CHART_SEMVER_FILTER", ""), "Regular expression the agent chart's tags must match before the range is evaluated, as the OCIRepository's ref.semverFilter; empty filters nothing; unset, each source keeps its own, set empty removes it (AGENT_CHART_SEMVER_FILTER)")
 	f.StringVar(&o.skillsGitHubAPI, "skills-github-api", envOr("AGENT_MANAGER_SKILLS_GITHUB_API", "https://api.github.com"), "GitHub API base URL for skill discovery and for resolving a skill's branch or tag to its head commit (AGENT_MANAGER_SKILLS_GITHUB_API)")
 	f.StringVar(&o.skillsToken, "skills-github-token", envOr("GITHUB_TOKEN", ""), "GitHub token for private skill repositories and a higher rate limit; prefer the environment (GITHUB_TOKEN)")
+	f.StringVar(&o.skillManagerURL, "skill-manager-url", envOr("AGENT_MANAGER_SKILL_MANAGER_URL", ""), "Base URL of skill-manager, as serve takes it: skills are pinned through its POST /v1/resolve. Empty: through the GitHub API and the registry in process, deprecated (AGENT_MANAGER_SKILL_MANAGER_URL)")
+	f.StringVar(&o.skillManagerToken, "skill-manager-token", envOr("SKILL_MANAGER_TOKEN", ""), "skill-manager's service token (its serviceToken), the bearer of the run, which has no caller; prefer the environment (SKILL_MANAGER_TOKEN)")
 	f.StringVar(&o.skillsGitAuth, "skills-git-auth-secret-name", envOr("AGENT_MANAGER_SKILLS_GIT_AUTH_SECRET_NAME", ""), "The installation's skills credential Secret, as serve takes it: every release whose skillsGitAuthSecretRef names one of --skills-git-auth-previous-secret-names is moved to it (AGENT_MANAGER_SKILLS_GIT_AUTH_SECRET_NAME)")
 	f.StringVar(&o.skillsGitAuthPrev, "skills-git-auth-previous-secret-names", envOr("AGENT_MANAGER_SKILLS_GIT_AUTH_PREVIOUS_SECRET_NAMES", ""), "Comma-separated earlier names of the installation's skills credential Secret; empty moves no release (AGENT_MANAGER_SKILLS_GIT_AUTH_PREVIOUS_SECRET_NAMES)")
 	f.DurationVar(&o.skillsGitAuthWait, "skills-git-auth-wait", envDuration("AGENT_MANAGER_SKILLS_GIT_AUTH_WAIT", 10*time.Minute), "How long the run waits, all in all, for the --skills-git-auth-secret-name Secret to appear where a release still names a previous name (agent-manager's rollout may trail the run); then such a release keeps the previous name until a later run (AGENT_MANAGER_SKILLS_GIT_AUTH_WAIT)")
@@ -163,7 +168,17 @@ func runMigrate(ctx context.Context, out io.Writer, o *migrateOptions) error {
 	if err != nil {
 		return err
 	}
-	pinner := skills.NewResolver(o.skillsGitHubAPI, skills.StaticToken(o.skillsToken), nil, nil)
+	pinner := agents.InProcessPinner(skills.NewResolver(o.skillsGitHubAPI, skills.StaticToken(o.skillsToken), nil, nil))
+	if o.skillManagerURL != "" {
+		client, err := skillmanager.New(skillmanager.Config{URL: o.skillManagerURL, Token: o.skillManagerToken})
+		if err != nil {
+			return fmt.Errorf("--skill-manager-url: %w", err)
+		}
+		pinner = client
+		if o.skillManagerToken == "" {
+			log.Warn("--skill-manager-url without --skill-manager-token: skill-manager is called with no bearer, which only a skill-manager without OAuth accepts", "skillManager", o.skillManagerURL)
+		}
+	}
 	compose := agents.ComposeConfig{
 		ChartOCIURL: o.chartOCIURL, ChartName: resolver.Name(), ChartSemver: o.chartSemver, ChartSemverFilter: o.chartSemverFilter,
 		HelmReleaseAPIVersion: helmReleaseAPI, OCIRepositoryAPIVersion: ociRepositoryAPI, HarnessName: o.harnessName,
@@ -206,7 +221,7 @@ func runMigrate(ctx context.Context, out io.Writer, o *migrateOptions) error {
 		return err
 	}
 	log.Info("agent-manager migrate starting", "version", build.Version, "commit", build.Commit, "namespaces", namespaces, "gitopsNamespaces", splitList(o.gitopsNamespaces),
-		"chart", o.chartOCIURL, "targetSemver", o.chartSemver, "targetMajor", major, "targetSemverFilter", o.chartSemverFilter, "targetSemverFilterSet", o.chartSemverFilterSet, "harness", o.harnessName, "kagentAPI", kagentVersion, "dryRun", o.dryRun, "report", o.reportConfigMap, "githubToken", o.skillsToken != "", "skillsGitAuthSecretName", o.skillsGitAuth, "skillsGitAuthPreviousSecretNames", splitList(o.skillsGitAuthPrev))
+		"chart", o.chartOCIURL, "targetSemver", o.chartSemver, "targetMajor", major, "targetSemverFilter", o.chartSemverFilter, "targetSemverFilterSet", o.chartSemverFilterSet, "harness", o.harnessName, "kagentAPI", kagentVersion, "dryRun", o.dryRun, "report", o.reportConfigMap, "githubToken", o.skillsToken != "", "skillManager", o.skillManagerURL, "skillsGitAuthSecretName", o.skillsGitAuth, "skillsGitAuthPreviousSecretNames", splitList(o.skillsGitAuthPrev))
 
 	res, runErr := runner.Run(ctx)
 	if res != nil {

@@ -25,6 +25,12 @@ type Permissions struct {
 	// Member: list the Agents of its organization namespace, which every
 	// organization role grants.
 	Member bool `json:"member"`
+	// CreateAgents: create Agents in its organization namespace, which
+	// agent-platform:editor and agent-platform:admin grant and
+	// agent-platform:user does not. False while it has no namespace. It asks
+	// for the Agent, the resource a New agent makes; create_agent writes its
+	// HelmRelease, which the same roles grant.
+	CreateAgents bool `json:"createAgents"`
 }
 
 // Listed is one organization of list_organizations: its status, what the
@@ -55,10 +61,11 @@ type Listing struct {
 
 // List lists the organizations of parent, or of every parent namespace when
 // parent is empty, that the caller manages or belongs to. agent-manager's
-// ServiceAccount reads the AgentPlatformOrganizations; for each, two
-// SelfSubjectAccessReviews with the caller's own token decide whether it is
-// listed and what of it: the API server decides on the caller's identity. An
-// organization whose reviews fail is left out.
+// ServiceAccount reads the AgentPlatformOrganizations; for each, up to three
+// SelfSubjectAccessReviews with the caller's own token, run concurrently,
+// decide its Permissions, whether it is listed (manage or member) and what of
+// it: the API server decides on the caller's identity. A review that fails
+// answers no for its flag; a refused token fails the call.
 func (s *Service) List(ctx context.Context, parent string) (*Listing, error) {
 	if s.cfg.Namespaces == nil {
 		return nil, fmt.Errorf("%w: agent-manager serves the organization tools without a ServiceAccount to list them", agents.ErrUnsupported)
@@ -74,27 +81,30 @@ func (s *Service) List(ctx context.Context, parent string) (*Listing, error) {
 	permissions := make([]Permissions, len(objects))
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(8)
-	for i := range objects {
-		org := &objects[i]
+	// ask answers one review into one flag; each flag is written by one
+	// review only.
+	ask := func(flag *bool, attributes authorizationv1.ResourceAttributes) {
 		g.Go(func() error {
-			manage, err := s.allowed(gctx, c, authorizationv1.ResourceAttributes{
-				Namespace: org.Namespace, Verb: "update", Group: GVR.Group, Resource: GVR.Resource, Name: org.Name,
-			})
-			if err != nil {
-				return err
-			}
-			member := false
-			if ns := org.Status.Namespace; ns != "" {
-				agentsGVR := s.kagentGVR("agents")
-				if member, err = s.allowed(gctx, c, authorizationv1.ResourceAttributes{
-					Namespace: ns, Verb: "list", Group: agentsGVR.Group, Resource: agentsGVR.Resource,
-				}); err != nil {
-					return err
-				}
-			}
-			permissions[i] = Permissions{Manage: manage, Member: member}
-			return nil
+			allowed, err := s.allowed(gctx, c, attributes)
+			*flag = allowed
+			return err
 		})
+	}
+	agentsGVR := s.kagentGVR("agents")
+	for i := range objects {
+		org, p := &objects[i], &permissions[i]
+		ask(&p.Manage, authorizationv1.ResourceAttributes{
+			Namespace: org.Namespace, Verb: "update", Group: GVR.Group, Resource: GVR.Resource, Name: org.Name,
+		})
+		// No namespace yet: nothing to belong to or create agents in.
+		if ns := org.Status.Namespace; ns != "" {
+			ask(&p.Member, authorizationv1.ResourceAttributes{
+				Namespace: ns, Verb: "list", Group: agentsGVR.Group, Resource: agentsGVR.Resource,
+			})
+			ask(&p.CreateAgents, authorizationv1.ResourceAttributes{
+				Namespace: ns, Verb: "create", Group: agentsGVR.Group, Resource: agentsGVR.Resource,
+			})
+		}
 	}
 	if err := g.Wait(); err != nil {
 		return nil, err

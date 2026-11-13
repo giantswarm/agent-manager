@@ -1,7 +1,6 @@
 package agents
 
 import (
-	"context"
 	"fmt"
 	"strings"
 
@@ -86,25 +85,6 @@ func validateSkillNames(list Skills, plugins Plugins) error {
 		}
 	}
 	return nil
-}
-
-// pinPlugins returns the list with every source pinned as pinSkills pins a
-// skill's: a git plugin to a full commit, an OCI plugin to its digest; with
-// refresh, every git plugin to the head of its ref or default branch.
-func pinPlugins(ctx context.Context, p SkillPinner, list Plugins, refresh bool) (Plugins, error) {
-	if len(list) == 0 {
-		return nil, nil
-	}
-	out := make(Plugins, 0, len(list))
-	for i, pl := range list {
-		pinned := Plugin{Path: pl.Path, Skills: pl.Skills}
-		var err error
-		if pinned.Git, pinned.OCI, err = pinSource(ctx, p, fmt.Sprintf("plugins[%d]", i), pl.Git, pl.OCI, refresh); err != nil {
-			return nil, err
-		}
-		out = append(out, pinned)
-	}
-	return out, nil
 }
 
 // pluginsValues renders the plugins list as chart values; nil when empty.

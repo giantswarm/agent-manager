@@ -17,6 +17,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/giantswarm/agent-manager/internal/agents"
+	"github.com/giantswarm/agent-manager/internal/identity"
 	"github.com/giantswarm/agent-manager/internal/kube"
 )
 
@@ -38,6 +39,16 @@ var secretGVR = schema.GroupVersionResource{Version: "v1", Resource: "secrets"}
 func credentialSaveError(err error) error {
 	if errors.Is(err, ErrCredentialOperationChanged) {
 		return ErrCredentialOperationChanged
+	}
+	// The consumers changed since the preparation: a stable sentinel the
+	// client switches on, naming nothing the confirmation did not show.
+	if errors.As(err, new(consumersDiffer)) {
+		return ErrCredentialConsumersChanged
+	}
+	// The object the operation creates exists by then: the name the person
+	// confirmed is taken. The message names nothing the confirmation did not.
+	if errors.As(err, new(nameTaken)) {
+		return fmt.Errorf("%w: the object this operation creates exists now, live or in git; prepare it again", ErrAlreadyExists)
 	}
 	for _, sentinel := range []error{agents.ErrUnauthenticated, agents.ErrAuthRequired, agents.ErrForbidden, agents.ErrNotFound, agents.ErrConflict, agents.ErrInvalid, agents.ErrUnsupported, agents.ErrGitOpsOwned} {
 		if errors.Is(err, sentinel) {
@@ -98,6 +109,8 @@ func (s *Service) saveCredentialOperation(ctx context.Context, id, version strin
 		return nil, err
 	}
 	seen := map[string]bool{}
+	// created are the Secrets this save creates: only those it may take back.
+	var created []string
 	for _, credential := range operation.Credentials {
 		index := slices.IndexFunc(values, func(value CredentialValue) bool {
 			return value.Secret == credential.Secret && value.Key == credential.Key
@@ -106,13 +119,35 @@ func (s *Service) saveCredentialOperation(ctx context.Context, id, version strin
 			return nil, invalidf("each credential needs one nonempty value")
 		}
 		seen[credential.Secret] = true
-		references, _, err := s.references(ctx, caller, operation.Namespace.Name, credential.Secret)
+		references, live, err := s.references(ctx, caller, operation.Namespace.Name, credential.Secret)
 		if err != nil {
 			return nil, err
 		}
+		// Consumers that differ from the prepared ones come first, whatever
+		// else is wrong with them: the person must see them again.
+		if operation.Result.Kind == KindCredential && !sameConsumers(references, operation.Consumers) {
+			return nil, errConsumersChanged(operation.Namespace.Name, credential.Secret)
+		}
+		// The preparation stored at least one consumer of the key and none of
+		// another key, so for a replacement the comparison above already
+		// answers both cases below; they stay as a defence.
+		if operation.Result.Kind == KindCredential && !slices.ContainsFunc(references, func(reference CredentialReference) bool { return reference.Key == credential.Key }) {
+			return nil, fmt.Errorf("%w: nothing in %s uses key %s of credential Secret %s any more, so there is no credential to replace", agents.ErrConflict, operation.Namespace.Name, credential.Key, credential.Secret)
+		}
 		for _, reference := range references {
-			if reference.Kind != kinds[operation.Result.Kind].kubeKind || reference.Name != operation.Result.Name {
+			if !writesFor(operation.Result, reference) {
 				return nil, fmt.Errorf("%w: another object references this Secret", agents.ErrConflict)
+			}
+			if operation.Result.Kind == KindCredential {
+				if reference.Key != credential.Key {
+					return nil, otherKey(reference, credential.Secret, credential.Key)
+				}
+				// The Secret lands where its consumers live, as at the
+				// preparation: a consumer written live since then is refused
+				// in commit mode, one Flux applies in apply mode.
+				if err := (&contentWriter{mode: operation.Mode}).owned(live[reference.Kind+"/"+reference.Name], reference.Kind); err != nil {
+					return nil, err
+				}
 			}
 			if operation.Mode == agents.ModeApply && reference.FromGit {
 				return nil, fmt.Errorf("%w: a credential whose consumer Flux applies must be changed in Git", agents.ErrGitOpsOwned)
@@ -139,6 +174,9 @@ func (s *Service) saveCredentialOperation(ctx context.Context, id, version strin
 				action = opUpdate
 			}
 		}
+		if action == opCreate {
+			created = append(created, credential.Secret)
+		}
 		data := map[string]any{credential.Key: base64.StdEncoding.EncodeToString([]byte(values[index].Value))}
 		writes = append([]write{credentialSecretWrite(operation.Namespace.Name, credential.Secret, action, data)}, writes...)
 	}
@@ -161,6 +199,9 @@ func (s *Service) saveCredentialOperation(ctx context.Context, id, version strin
 		}
 	} else {
 		err = s.applyCredentialOperation(ctx, caller, operation, writes)
+		if errors.As(err, new(nameTaken)) {
+			s.removeCreatedSecrets(ctx, caller, operation, created)
+		}
 	}
 	if err != nil {
 		operation.State = operationUncertain
@@ -172,6 +213,34 @@ func (s *Service) saveCredentialOperation(ctx context.Context, id, version strin
 		return nil, err
 	}
 	return &operation.Result, nil
+}
+
+// removeCreatedSecrets takes back, as the caller, the Secrets of created that
+// this save wrote before a consumer create was refused because its object
+// exists by then (nameTaken): that object may name the Secret, and the value
+// the person typed for their own new object must not stay for it to send. A
+// Secret is deleted only at the version this save wrote (a precondition), so
+// one changed since is left, and never one that existed before the save,
+// which is updated, not created. The delete sends no propagation policy:
+// the API server answers it with a Status, never the Secret. A clear
+// refusal (the Secret changed since, Conflict; or no delete right,
+// Forbidden) leaves the Secret and its recorded version for the uncertain
+// operation and is logged; any other result forgets the recorded version,
+// so a retry checks whether the Secret exists and writes it whole instead
+// of trusting a write that may be gone.
+func (s *Service) removeCreatedSecrets(ctx context.Context, caller kube.Client, operation *credentialOperation, created []string) {
+	for _, name := range created {
+		version := operation.AppliedVersions[kindSecret+"/"+name]
+		if version == "" {
+			continue
+		}
+		err := caller.Dynamic().Resource(secretGVR).Namespace(operation.Namespace.Name).Delete(ctx, name, metav1.DeleteOptions{Preconditions: &metav1.Preconditions{ResourceVersion: &version}})
+		if apierrors.IsConflict(err) || apierrors.IsForbidden(err) {
+			s.log.Warn("a credential save could not take back the Secret it created; it stays", identity.LogAttr(ctx), "namespace", operation.Namespace.Name, "secret", name, "reason", string(apierrors.ReasonForError(err)))
+			continue
+		}
+		delete(operation.AppliedVersions, kindSecret+"/"+name)
+	}
 }
 
 func operationVersionMatches(operation *credentialOperation, object *unstructured.Unstructured) bool {
@@ -213,7 +282,10 @@ func remainingOperationWrites(ctx context.Context, caller kube.Client, operation
 			continue
 		}
 		expected := unstructuredOf(planned.obj)
-		if (planned.op == opCreate && !apierrors.IsNotFound(err)) || (planned.op != opCreate && (current == nil || current.GetResourceVersion() != expected.GetResourceVersion())) {
+		if planned.op == opCreate && !apierrors.IsNotFound(err) {
+			return nil, nameTaken{fmt.Errorf("%w: %s exists now; prepare it again", agents.ErrConflict, planned.what)}
+		}
+		if planned.op != opCreate && (current == nil || current.GetResourceVersion() != expected.GetResourceVersion()) {
 			return nil, fmt.Errorf("%w: credential consumer changed; prepare it again", agents.ErrConflict)
 		}
 		planned.obj = expected.DeepCopy().Object
