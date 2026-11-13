@@ -525,12 +525,17 @@ func (s *Service) List(ctx context.Context, loc Location, filter tags.Filter) ([
 		return nil, err
 	}
 	byName := map[string]*Agent{}
+	hasReleaseProvenance := make(map[string]bool, len(objects.Items))
 	for i := range objects.Items {
 		obj := &objects.Items[i]
 		a := agentFromObject(obj, serverByName[obj.GetName()], s.cfg.Tags)
 		a.Target = st.loc.Target
 		hrName, releaseNamespace := ownerOf(obj)
-		releaseNamespace = orDefault(releaseNamespace, st.fluxNS)
+		if hrName == "" {
+			releaseNamespace = st.fluxNS
+		} else {
+			releaseNamespace = orDefault(releaseNamespace, st.fluxNS)
+		}
 		if fluxReadDenied {
 			withholdRelease(&a, releaseWithheld(releaseNamespace, releaseNamespace == st.fluxNS))
 		} else if hrName != "" {
@@ -551,6 +556,7 @@ func (s *Service) List(ctx context.Context, loc Location, filter tags.Filter) ([
 			}
 		}
 		byName[a.Name] = &a
+		hasReleaseProvenance[a.Name] = hrName != ""
 	}
 	for _, hr := range hrs {
 		a := Agent{Namespace: ns, Target: st.loc.Target, Managed: ManagedHelmRelease}
@@ -561,7 +567,7 @@ func (s *Service) List(ctx context.Context, loc Location, filter tags.Filter) ([
 		if existing, ok := byName[a.Name]; ok {
 			// A HelmRelease whose Agent carries no provenance labels (an
 			// older helm-controller): attach by name.
-			if existing.HelmRelease == nil && existing.ReleaseWithheld == "" {
+			if existing.HelmRelease == nil && existing.ReleaseWithheld == "" && !hasReleaseProvenance[a.Name] {
 				applyHelmRelease(existing, hr, s.cfg.Tags)
 			}
 			continue
