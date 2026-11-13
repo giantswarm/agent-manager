@@ -37,7 +37,7 @@ type GitHubPin struct {
 
 // ForwardedIdentityHeader is where muster puts the person's IdP ID token on
 // every call to a registration with auth.forwardIdentity.
-const ForwardedIdentityHeader = "X-Muster-Id-Token"
+const ForwardedIdentityHeader = identity.ForwardedIdentityHeader
 
 // DefaultGitHubAPIURL is GitHub's REST API.
 const DefaultGitHubAPIURL = "https://api.github.com"

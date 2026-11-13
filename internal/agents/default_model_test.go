@@ -110,7 +110,7 @@ func TestListModelConfigsReportsResolvedRefs(t *testing.T) {
 	list, err := f.svc.ListModelConfigs(t.Context(), In("kagent"))
 	require.NoError(t, err)
 	require.Len(t, list, 3)
-	assert.Equal(t, ModelConfig{Name: "claude", Namespace: "kagent", Provider: "Anthropic", Model: "claude-sonnet-4-6", Default: true, Accepted: new(true), ResolvedRefs: new(false)}, list[0])
+	assert.Equal(t, ModelConfig{Name: "claude", Namespace: "kagent", Provider: "Anthropic", Model: "claude-sonnet-4-6", Default: true, Accepted: new(true), ResolvedRefs: new(false), PromptCaching: new(false)}, list[0])
 	assert.Equal(t, ModelConfig{Name: "qwen", Namespace: "kagent", Provider: "OpenAI", Model: "qwen3"}, list[1])
 	assert.Equal(t, new(true), list[2].ResolvedRefs)
 	assert.False(t, list[2].Default)

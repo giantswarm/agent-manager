@@ -64,7 +64,9 @@ func isWaitingReason(reason string) bool {
 // (conditions, history) and the namespace's recent Warning events for the
 // agent, and folds them into one verdict.
 // For an agent on a workload cluster the Agent and its events are read
-// there, the HelmRelease and its events on the installation.
+// there, the HelmRelease and its events on the installation. A caller who may
+// not read the HelmRelease gets the verdict of the Agent object alone, with
+// ReleaseWithheld set.
 func (s *Service) Status(ctx context.Context, loc Location, name string) (*Status, error) {
 	if err := ValidateName(name); err != nil {
 		return nil, err
@@ -78,17 +80,23 @@ func (s *Service) Status(ctx context.Context, loc Location, name string) (*Statu
 
 func (s *Service) status(ctx context.Context, site *site, name string) (*Status, error) {
 	ns := site.ns()
-	obj, hr, err := s.agentObjects(ctx, site, name)
+	obj, hr, withheld, err := s.readAgentObjects(ctx, site, name)
 	if err != nil {
 		return nil, err
 	}
-	st := &Status{Name: name, Namespace: ns, Target: site.loc.Target, Agent: objectStatusOf(obj), HelmRelease: helmReleaseStatus(hr)}
+	st := &Status{Name: name, Namespace: ns, Target: site.loc.Target, Agent: objectStatusOf(obj), ReleaseWithheld: withheld}
+	if withheld == "" {
+		st.HelmRelease = helmReleaseStatus(hr)
+	}
 	st.Events = s.warningEvents(ctx, site.agentClient, ns, name)
 	if site.loc.IsSet() {
 		st.Events = append(st.Events, s.warningEvents(ctx, site.fluxClient, site.fluxNS, site.releaseName(name))...)
 	}
 	st.sourceFailure = s.sourceFailure(ctx, site, hr)
 	st.Verdict, st.Summary = verdict(st)
+	if withheld != "" {
+		st.Summary += "; HelmRelease state was not read (Flux access denied)"
+	}
 	return st, nil
 }
 

@@ -63,7 +63,7 @@ func newFixture(t *testing.T, dynObjs []runtime.Object, typedObjs ...runtime.Obj
 	allowCreate(typed, func(string) bool { return true })
 	client := kube.FromInterfaces(dyn, typed, typed.Discovery())
 	pinner := &fakePinner{}
-	svc := New(kube.NewServiceAccountProvider(client), embeddedChart{}, nil, pinner, Config{
+	svc := New(kube.NewServiceAccountProvider(client), embeddedChart{}, nil, InProcessPinner(pinner), Config{
 		DefaultNamespace: "kagent", ManagedNamespaces: []string{"tenant"}, Version: "test",
 		Compose:       ComposeConfig{MusterURL: "http://muster.agent-platform.svc.cluster.local:8090/mcp"},
 		HarnessEgress: map[string][]string{"claude": {"https://github.com", "https://*.githubusercontent.com"}},
@@ -420,6 +420,48 @@ func TestGitOpsOwnedReleaseInAnotherNamespace(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, VerdictReady, st.Verdict, st.Summary)
 	assert.True(t, st.HelmRelease.GitOpsOwned)
+}
+
+// TestPlatformOwnedAgentIsReadOnly is the Agent Manager the agent-platform
+// chart ships: its HelmRelease carries the platform's managed-by label, so it
+// is listed as managed by the platform and no write reaches it, forced or not.
+func TestPlatformOwnedAgentIsReadOnly(t *testing.T) {
+	f := seeded(t)
+	ctx := context.Background()
+	values := map[string]any{"agent": map[string]any{"name": "agent-manager-assistant"}, "modelConfig": map[string]any{"name": "default-model-config"}, ToolsetValuesKey: []any{"preset:agent-platform"}}
+	hr := helmRelease("kagent", "agent-manager-assistant", values, true, map[string]any{"agent-platform.giantswarm.io/managed-by": "agent-platform", KustomizationNameLabel: "flux-giantswarm"})
+	mustCreate(t, f, hrGVR, hr)
+	mustCreate(t, f, agentGVR, agentObject("kagent", "agent-manager-assistant", "agent-manager-assistant", "kagent", true, true))
+
+	got, err := f.svc.Get(ctx, In(""), "agent-manager-assistant")
+	require.NoError(t, err)
+	assert.Equal(t, "platform", got.Managed)
+
+	list, err := f.svc.List(ctx, In(""), nil)
+	require.NoError(t, err)
+	var listed *Agent
+	for i := range list {
+		if list[i].Name == "agent-manager-assistant" {
+			listed = &list[i]
+		}
+	}
+	require.NotNil(t, listed)
+	assert.Equal(t, "platform", listed.Managed)
+
+	const refusal = "ships with the Agent Platform"
+	_, err = f.svc.Update(ctx, Update{Name: "agent-manager-assistant", Description: str("x"), Force: true})
+	require.ErrorIs(t, err, ErrConflict)
+	assert.Contains(t, err.Error(), refusal)
+	_, err = f.svc.Update(ctx, Update{Name: "agent-manager-assistant", RefreshSkills: true})
+	require.ErrorIs(t, err, ErrConflict)
+	assert.Contains(t, err.Error(), refusal)
+	_, err = f.svc.ValidateUpdate(ctx, Update{Name: "agent-manager-assistant", Description: str("x")})
+	require.ErrorIs(t, err, ErrConflict)
+	_, err = f.svc.Delete(ctx, In(""), "agent-manager-assistant", true, WriteOptions{})
+	require.ErrorIs(t, err, ErrConflict)
+	assert.Contains(t, err.Error(), refusal)
+	_, err = f.svc.Get(ctx, In(""), "agent-manager-assistant")
+	require.NoError(t, err, "nothing was deleted")
 }
 
 func TestCreateValidatesPinsThenAppliesBothObjects(t *testing.T) {
@@ -801,6 +843,59 @@ func TestUpdateMergesIntoValuesAndHonorsOwnership(t *testing.T) {
 	_, err = f.svc.Update(ctx, Update{Name: "bare", DisplayName: new("x")})
 	require.ErrorIs(t, err, ErrConflict)
 	assert.Contains(t, err.Error(), "bare Agent")
+}
+
+// A forced delete removes a bare Agent, never one the platform ships, even
+// when its release cannot be read (renamed or not yet applied).
+func TestForcedDeleteKeepsAPlatformOwnedAgent(t *testing.T) {
+	f := seeded(t)
+	ctx := t.Context()
+	platform := agentObject("kagent", "agent-manager-assistant", "renamed", "agent-platform", true, true)
+	labels := platform.GetLabels()
+	labels[PlatformManagedByLabel] = PlatformManagedByValue
+	platform.SetLabels(labels)
+	mustCreate(t, f, agentGVR, platform)
+
+	_, err := f.svc.Delete(ctx, In(""), "agent-manager-assistant", true, WriteOptions{})
+	require.ErrorIs(t, err, ErrConflict)
+	assert.Contains(t, err.Error(), "ships with the Agent Platform")
+	_, err = f.svc.Update(ctx, Update{Name: "agent-manager-assistant", Description: str("x")})
+	require.ErrorIs(t, err, ErrConflict)
+	assert.Contains(t, err.Error(), "ships with the Agent Platform")
+	_, err = f.dyn.Resource(agentGVR).Namespace("kagent").Get(ctx, "agent-manager-assistant", metav1.GetOptions{})
+	require.NoError(t, err, "the Agent is kept")
+	got, err := f.svc.Get(ctx, In(""), "agent-manager-assistant")
+	require.NoError(t, err)
+	assert.Equal(t, ManagedPlatform, got.Managed, "reported as it is refused, not as a bare Agent")
+}
+
+// The label on the Agent alone makes it platform-owned, also behind an
+// unlabelled HelmRelease: reported and refused alike.
+func TestTheAgentsPlatformLabelSuffices(t *testing.T) {
+	f := seeded(t)
+	ctx := t.Context()
+	values := map[string]any{"agent": map[string]any{"name": "assistant"}, "modelConfig": map[string]any{"name": "default-model-config"}, ToolsetValuesKey: []any{"preset:full"}}
+	mustCreate(t, f, hrGVR, helmRelease("kagent", "assistant", values, true, nil))
+	obj := agentObject("kagent", "assistant", "assistant", "kagent", true, true)
+	labels := obj.GetLabels()
+	labels[PlatformManagedByLabel] = PlatformManagedByValue
+	obj.SetLabels(labels)
+	mustCreate(t, f, agentGVR, obj)
+
+	got, err := f.svc.Get(ctx, In(""), "assistant")
+	require.NoError(t, err)
+	assert.Equal(t, ManagedPlatform, got.Managed)
+	list, err := f.svc.List(ctx, In(""), nil)
+	require.NoError(t, err)
+	for _, a := range list {
+		if a.Name == "assistant" {
+			assert.Equal(t, ManagedPlatform, a.Managed)
+		}
+	}
+	_, err = f.svc.Update(ctx, Update{Name: "assistant", Description: str("x")})
+	require.ErrorIs(t, err, ErrConflict)
+	_, err = f.svc.Delete(ctx, In(""), "assistant", true, WriteOptions{})
+	require.ErrorIs(t, err, ErrConflict)
 }
 
 // A delete never takes the chart source agent-platform-operator keeps.
@@ -1442,5 +1537,101 @@ func TestStatusVerdictOfAHelmReleaseThatIsNotReady(t *testing.T) {
 			require.Equal(t, tt.wantVerdict, st.Verdict, st.Summary)
 			require.Contains(t, st.Summary, tt.wantSummary)
 		})
+	}
+}
+
+// PlatformOwnedRelease holds for the label on the release or in the labels
+// it renders onto its Agent.
+func TestPlatformOwnedRelease(t *testing.T) {
+	assert.False(t, PlatformOwnedRelease(nil))
+	assert.False(t, PlatformOwnedRelease(helmRelease("kagent", "a", map[string]any{}, true, nil)))
+	assert.True(t, PlatformOwnedRelease(helmRelease("kagent", "a", map[string]any{}, true, map[string]any{PlatformManagedByLabel: PlatformManagedByValue})))
+	assert.True(t, PlatformOwnedRelease(helmRelease("kagent", "a", map[string]any{"labels": map[string]any{PlatformManagedByLabel: PlatformManagedByValue}}, true, nil)))
+	assert.False(t, PlatformOwnedRelease(helmRelease("kagent", "a", map[string]any{"labels": map[string]any{PlatformManagedByLabel: "someone"}}, true, nil)))
+}
+
+// A name whose Agent another release renders is taken, whatever that
+// release is called: the two releases would overwrite one Agent.
+func TestCreateRefusesANameAnotherReleaseRenders(t *testing.T) {
+	ctx := context.Background()
+	readOnly := []string{"preset:read-only"}
+	// As the agent-platform chart writes it: in its own namespace, targeting
+	// kagent under another release name.
+	platform := helmRelease("agent-platform", "agent-platform-default-agent", nil, false, map[string]any{PlatformManagedByLabel: PlatformManagedByValue})
+	_ = unstructured.SetNestedField(platform.Object, "default-agent", "spec", "releaseName")
+	_ = unstructured.SetNestedField(platform.Object, "kagent", "spec", "targetNamespace")
+
+	// The release has not rendered its Agent yet (no default model, say).
+	f := newFixture(t, []runtime.Object{modelConfig("kagent", "default-model-config", "Anthropic", "claude-sonnet-4-6"), harness("kagent", "kagent", "kagent"), ociRepository("kagent", "2.x"), platform})
+	_, err := f.svc.Create(ctx, Spec{Name: "default-agent", ModelConfig: "default-model-config", Toolset: readOnly})
+	require.ErrorIs(t, err, ErrConflict)
+	assert.Contains(t, err.Error(), "Agent kagent/default-agent is rendered by HelmRelease agent-platform/agent-platform-default-agent; pick another name")
+
+	// It has.
+	mustCreate(t, f, agentGVR, agentObject("kagent", "default-agent", "agent-platform-default-agent", "agent-platform", true, false))
+	_, err = f.svc.Create(ctx, Spec{Name: "default-agent", ModelConfig: "default-model-config", Toolset: readOnly})
+	require.ErrorIs(t, err, ErrConflict)
+	assert.Contains(t, err.Error(), "Agent kagent/default-agent already exists, rendered by HelmRelease agent-platform/agent-platform-default-agent; pick another name")
+
+	// Another name is free.
+	_, err = f.svc.Create(ctx, Spec{Name: "helper", ModelConfig: "default-model-config", Toolset: readOnly})
+	require.NoError(t, err)
+}
+
+// The platform's agent names are taken in every namespace: a create of
+// default-agent in an organization namespace is refused, by the dry run too,
+// whether the platform's release or only its Agent can be read.
+func TestCreateRefusesThePlatformsAgentNameElsewhere(t *testing.T) {
+	ctx := t.Context()
+	platform := helmRelease("agent-platform", "default-agent", nil, false, map[string]any{PlatformManagedByLabel: PlatformManagedByValue})
+	_ = unstructured.SetNestedField(platform.Object, "kagent", "spec", "targetNamespace")
+	_ = unstructured.SetNestedField(platform.Object, "default-agent", "spec", "releaseName")
+	f := newFixture(t, []runtime.Object{modelConfig("org-acme", "default-model-config", "Anthropic", "claude-sonnet-4-6"), harness("org-acme", "kagent", "kagent"), ociRepository("org-acme", "2.x"), platform})
+	withTenants(f, &fakeTenants{namespaces: []string{"org-acme"}})
+	spec := Spec{Location: In("org-acme"), Name: "default-agent", ModelConfig: "default-model-config", Toolset: []string{"preset:read-only"}}
+	want := `the name "default-agent" is taken by the Agent Platform's agent kagent/default-agent; pick another name`
+
+	_, err := f.svc.Create(ctx, spec)
+	require.ErrorIs(t, err, ErrConflict)
+	assert.Contains(t, err.Error(), want)
+
+	// The caller may not list releases across namespaces; the Agent tells.
+	mustCreate(t, f, agentGVR, labelledAgent("kagent", "default-agent", platformDefault))
+	f.dyn.PrependReactor("list", "helmreleases", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		if a.GetNamespace() == "" {
+			return true, nil, apierrors.NewForbidden(hrGVR.GroupResource(), "", errors.New("no cluster-wide list"))
+		}
+		return false, nil, nil
+	})
+	_, err = f.svc.Create(ctx, spec)
+	require.ErrorIs(t, err, ErrConflict)
+	assert.Contains(t, err.Error(), want)
+
+	res, err := f.svc.ValidateCreate(ctx, spec)
+	require.NoError(t, err)
+	assert.False(t, res.Valid)
+	assert.Contains(t, res.Errors, want)
+
+	spec.Name = "helper"
+	_, err = f.svc.Create(ctx, spec)
+	require.NoError(t, err)
+}
+
+func TestRenderedAgent(t *testing.T) {
+	named := helmRelease("kagent", "platform", map[string]any{"agent": map[string]any{"name": "default-agent"}}, true, nil)
+	plain := helmRelease("kagent", "sre", nil, true, nil)
+	released := helmRelease("kagent", "x", nil, true, nil)
+	_ = unstructured.SetNestedField(released.Object, "y", "spec", "releaseName")
+	targeted := helmRelease("org-acme", "sre", nil, true, nil)
+	_ = unstructured.SetNestedField(targeted.Object, "team", "spec", "targetNamespace")
+	_ = unstructured.SetNestedField(targeted.Object, "c1-kubeconfig", "spec", "kubeConfig", "secretRef", "name")
+	for hr, want := range map[*unstructured.Unstructured][3]string{
+		named:    {"", "kagent", "default-agent"},
+		plain:    {"", "kagent", "sre"},
+		released: {"", "kagent", "y"},
+		targeted: {"c1-kubeconfig", "team", "team-sre"},
+	} {
+		secret, ns, name := renderedAgent(hr)
+		assert.Equal(t, want, [3]string{secret, ns, name}, hr.GetName())
 	}
 }

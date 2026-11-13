@@ -16,7 +16,6 @@ import (
 	"github.com/santhosh-tekuri/jsonschema/v6"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -30,21 +29,16 @@ const liveValue = "sk-live-0123456789abcdef" // #nosec G101 -- a test value
 
 var secretGVR = schema.GroupVersionResource{Version: "v1", Resource: "secrets"}
 
-// seedSecret puts a credential Secret holding liveValue in both fakes the
-// tools read: the typed client and the dynamic one.
+// seedSecret puts a credential Secret holding liveValue in the fake API
+// server, where the tools find it by a dry-run create and never read it.
 func seedSecret(t *testing.T, f *orgFixture, name, key string) {
 	t.Helper()
-	_, err := f.typed.CoreV1().Secrets(orgNS).Create(t.Context(), &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: orgNS},
-		Data:       map[string][]byte{key: []byte(liveValue)},
-	}, metav1.CreateOptions{})
-	require.NoError(t, err)
 	u := &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "v1", "kind": "Secret", "type": "Opaque",
 		"metadata": map[string]any{"name": name, "namespace": orgNS},
 		"data":     map[string]any{key: base64.StdEncoding.EncodeToString([]byte(liveValue))},
 	}}
-	_, err = f.dyn.Resource(secretGVR).Namespace(orgNS).Create(t.Context(), u, metav1.CreateOptions{})
+	_, err := f.dyn.Resource(secretGVR).Namespace(orgNS).Create(t.Context(), u, metav1.CreateOptions{})
 	require.NoError(t, err)
 }
 
@@ -61,16 +55,16 @@ func TestNoOrganizationToolAnswerCarriesASecretValue(t *testing.T) {
 		ToolCreateOrganization:        {"namespace": "org-acme", "name": "billing", "adminGroups": []any{"billing-leads"}, "dryRun": true},
 		ToolUpdateOrganization:        {"namespace": "org-acme", "name": "payments", "displayName": "Payments"},
 		ToolDeleteOrganization:        {"namespace": "org-acme", "name": "payments"},
-		ToolListMyOrganizations:       {},
 		ToolListOrganizationMembers:   {"namespace": orgNS},
 		ToolAddOrganizationMember:     {"namespace": orgNS, "group": "payments-devs", "role": "editor"},
 		ToolRemoveOrganizationMember:  {"namespace": orgNS, "group": "payments-devs"},
-		ToolSetOrganizationModel:      {"namespace": orgNS, "name": "claude", "replaceCredential": true},
+		ToolSetOrganizationModel:      {"namespace": orgNS, "name": "claude"},
 		ToolListOrganizationConnector: {"namespace": orgNS},
 		ToolSetOrganizationConnector:  {"namespace": orgNS, "name": "gh", "url": "https://mcp.github.example/mcp", "credentialHeader": "Authorization"},
 		ToolSetOrganizationEgress: {"namespace": orgNS, "name": "github", "destinations": []any{map[string]any{
 			"origin": "https://api.github.com", "credentialHeader": "Authorization", "credentialSecret": "tenant-credential-gh"}}}, // #nosec G101 -- a Secret's name
-		ToolDeleteOrganizationObject: {"namespace": orgNS, "kind": organizations.KindConnector, "name": "gh"},
+		ToolDeleteOrganizationObject:      {"namespace": orgNS, "kind": organizations.KindConnector, "name": "gh"},
+		ToolReplaceOrganizationCredential: {"namespace": orgNS, "secret": "tenant-credential-claude", "key": "apiKey"}, // #nosec G101 -- a Secret's name
 	}
 	for _, tool := range OrganizationToolNames() {
 		in, ok := args[tool]

@@ -10,6 +10,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 )
 
@@ -23,20 +24,40 @@ type Namespace struct {
 	Parent       string `json:"parent"`
 }
 
-// Namespaces finds the organization namespaces with agent-manager's own
-// ServiceAccount, which may list namespaces read-only: RBAC cannot narrow a
-// list by label, so it reads every namespace and keeps the labelled ones.
-// Nothing it answers grants anything: what a caller may do in a namespace is
-// asked as the caller.
+// Namespaces finds the organization namespaces and the
+// AgentPlatformOrganizations with agent-manager's own ServiceAccount, which
+// may list both read-only: RBAC cannot narrow a list by label or by the
+// caller, so it reads them all. Nothing it answers grants anything: what a
+// caller may see of them, and do with them, is asked as the caller.
 type Namespaces struct {
 	typed    kubernetes.Interface
+	dyn      dynamic.Interface
 	platform string
 }
 
-// NewNamespaces finds organization namespaces with typed, the
-// ServiceAccount's client. platform (kagent.namespace) is never one.
-func NewNamespaces(typed kubernetes.Interface, platform string) *Namespaces {
-	return &Namespaces{typed: typed, platform: platform}
+// NewNamespaces finds organization namespaces with typed and
+// AgentPlatformOrganizations with dyn, the ServiceAccount's clients.
+// platform (kagent.namespace) is never an organization namespace.
+func NewNamespaces(typed kubernetes.Interface, dyn dynamic.Interface, platform string) *Namespaces {
+	return &Namespaces{typed: typed, dyn: dyn, platform: platform}
+}
+
+// Organizations is every AgentPlatformOrganization of parent, or of every
+// namespace when parent is empty.
+func (n *Namespaces) Organizations(ctx context.Context, parent string) ([]apov1alpha1.AgentPlatformOrganization, error) {
+	list, err := n.dyn.Resource(GVR).Namespace(parent).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("list the AgentPlatformOrganizations: %w", err)
+	}
+	out := make([]apov1alpha1.AgentPlatformOrganization, 0, len(list.Items))
+	for i := range list.Items {
+		org, err := organizationOf(&list.Items[i])
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *org)
+	}
+	return out, nil
 }
 
 // List is every organization namespace, labelled

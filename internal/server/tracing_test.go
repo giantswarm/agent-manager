@@ -13,13 +13,12 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace"
-	"k8s.io/apimachinery/pkg/runtime"
-	dynamicfake "k8s.io/client-go/dynamic/fake"
 	kubefake "k8s.io/client-go/kubernetes/fake"
 
 	"github.com/giantswarm/agent-manager/internal/agents"
 	"github.com/giantswarm/agent-manager/internal/api"
 	"github.com/giantswarm/agent-manager/internal/kube"
+	"github.com/giantswarm/agent-manager/internal/kube/kubetest"
 )
 
 func TestTracesMCPToolCallsUnderTheInboundTrace(t *testing.T) {
@@ -33,7 +32,7 @@ func TestTracesMCPToolCallsUnderTheInboundTrace(t *testing.T) {
 		otel.SetTextMapPropagator(prevProp)
 	})
 
-	dyn := dynamicfake.NewSimpleDynamicClient(runtime.NewScheme())
+	dyn := kubetest.NewDynamicClient()
 	typed := kubefake.NewClientset()
 	svc := agents.New(kube.NewServiceAccountProvider(kube.FromInterfaces(dyn, typed, typed.Discovery())), embeddedChart{}, nil, nil, agents.Config{Version: "test"}, nil)
 	srv, err := New(Config{Addr: "127.0.0.1:0", MCPEnabled: true}, svc, api.NewMCPServer(svc, "test"), quiet())

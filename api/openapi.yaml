@@ -274,7 +274,8 @@ paths:
         request; a release defined elsewhere in the repository is `409
         conflict`). `409 gitops_owned` for a GitOps-owned release in apply
         mode; `409 conflict` for suspended releases and bare Agents
-        unless `force`; a write
+        unless `force`, and in every mode for an agent that ships with the
+        Agent Platform (`managed: platform`); a write
         that races helm-controller's status update of the release is retried
         on a fresh read, not reported. `400` for a body still carrying the
         removed `toolNames` or `runtime`.
@@ -310,7 +311,8 @@ paths:
         Agents and suspended releases need `force` (a forced delete of
         a suspended release removes the rendered objects too); a GitOps-owned
         release is `409 gitops_owned` in apply mode, and `mode: commit`
-        removes its files with a pull request.
+        removes its files with a pull request. An agent that ships with the
+        Agent Platform (`managed: platform`) is `409 conflict` in every mode.
       operationId: deleteAgent
       x-mcp-tool: delete_agent
       parameters:
@@ -405,8 +407,13 @@ paths:
   /api/v1/skills:
     get:
       tags: [skills]
-      summary: Discover skills in the configured repositories
+      summary: Discover skills in the configured repositories (deprecated)
+      deprecated: true
       description: |
+        Deprecated: skill-manager's `GET /v1/skills` lists them. With
+        skill-manager configured (`GET /info` `skillManager`) this proxies
+        it as the caller and refuses `ref`.
+
         Every `SKILL.md` of a GitHub repository is one skill (frontmatter
         `name`/`description`), listed once under its repository; the
         repository carries the ref it was read from and the head commit that
@@ -422,7 +429,7 @@ paths:
           schema: { type: string }
         - name: ref
           in: query
-          description: Git ref; default the default branch (the ref refreshSkills follows)
+          description: Git ref; default the default branch (the ref refreshSkills follows). Refused with skill-manager
           schema: { type: string }
         - name: refresh
           in: query
@@ -444,9 +451,11 @@ paths:
       tags: [sessions]
       summary: List an agent's sessions
       description: |
-        `SessionService/ListSessions` for the Agent, as the caller, walked to
-        the end. The caller's own sessions unless `allCreators=true`, which the
-        controller grants only to a caller authorized for it.
+        `SessionService/ListSessions` for the Agent, as the caller, at most
+        2000 sessions per answer. The caller's own sessions unless
+        `allCreators=true`, which the controller grants only to a caller
+        authorized for it. `nextPageToken` in the answer says more follow:
+        list again with it as `pageToken`.
       operationId: listSessions
       x-mcp-tool: list_sessions
       parameters:
@@ -454,6 +463,10 @@ paths:
           in: query
           description: Include every person's sessions of the agent
           schema: { type: boolean }
+        - name: pageToken
+          in: query
+          description: nextPageToken of the previous answer, with the same agent and allCreators; empty lists from the start
+          schema: { type: string, maxLength: 512 }
       responses:
         "200":
           description: the sessions
@@ -588,6 +601,7 @@ paths:
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
         "501": { $ref: "#/components/responses/Error" }
+        "502": { $ref: "#/components/responses/Error" }
   /api/v1/credential-operations/{operation}:
     parameters:
       - name: operation
@@ -611,6 +625,8 @@ paths:
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
+        "501": { $ref: "#/components/responses/Error" }
+        "502": { $ref: "#/components/responses/Error" }
     post:
       tags: [organizations]
       summary: Save the confirmed credentials and consumer changes once
@@ -623,7 +639,14 @@ paths:
         mode obtains the manager App user grant over RFC 8693 and opens one pull
         request containing the consumer changes and encrypted Secrets. Explicit
         replacement re-encrypts an existing one-key Secret. Completed submissions
-        return their receipt without another write.
+        return their receipt without another write. A replace_organization_credential
+        operation whose consumers, or where they send the value, changed since its
+        preparation (live, or in git in commit mode) answers 409 with error code
+        credential_consumers_changed and does not write the credential: prepare it again with a
+        fresh requestId. An operation that creates an object (a new model,
+        connector or egress policy) whose object exists by then, live or as its
+        file in git, answers 409 with error code already_exists.
+        Other refusals keep their generic code and a sanitized message.
       operationId: saveCredentialOperation
       parameters:
         - name: If-Match
@@ -662,7 +685,9 @@ paths:
         "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
         "412": { $ref: "#/components/responses/Error" }
-        "500": { $ref: "#/components/responses/Error" }
+        "428": { $ref: "#/components/responses/Error" }
+        "501": { $ref: "#/components/responses/Error" }
+        "502": { $ref: "#/components/responses/Error" }
     delete:
       tags: [organizations]
       summary: Cancel a pending credential operation
@@ -680,6 +705,9 @@ paths:
         "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
         "412": { $ref: "#/components/responses/Error" }
+        "428": { $ref: "#/components/responses/Error" }
+        "501": { $ref: "#/components/responses/Error" }
+        "502": { $ref: "#/components/responses/Error" }
   /api/v1/sessions/{id}:
     parameters:
       - name: id
@@ -868,7 +896,8 @@ components:
           properties:
             code:
               type: string
-              enum: [not_found, invalid_request, conflict, gitops_owned, forbidden, unauthenticated, auth_required, unsupported, backend_error]
+              enum: [not_found, invalid_request, conflict, gitops_owned, forbidden, unauthenticated, auth_required, unsupported, precondition_failed, precondition_required, credential_consumers_changed, already_exists, backend_error]
+              description: "A stable code to switch on. credential_consumers_changed (409, saveCredentialOperation): the objects that use the credential, or where they send it, changed since the replacement was prepared, live or in git; the credential was not written; prepare the replacement again with a fresh requestId. already_exists (409): a create whose object exists by then, live or as its file in git: set_organization_model, set_organization_connector or set_organization_egress_policy with create, and a saveCredentialOperation whose operation creates a model, connector or egress policy"
             message: { type: string }
     Info:
       type: object
@@ -928,7 +957,10 @@ components:
           type: object
           properties:
             url: { type: string, description: The muster MCP URL composed into every agent as muster.url; empty means the chart default applies }
-        skillsRepositories: { type: array, items: { type: string } }
+        skillsRepositories: { type: array, items: { type: string }, description: "The configured skill repositories; empty with skill-manager" }
+        installation: { type: string, description: "The installation's Dev Portal name; a portal agent id is <installation>/<namespace>/<name>. Empty when unset" }
+        defaultAgent: { type: string, description: "The installation's default agent, namespace/name, which clients preselect; empty when none is labelled. Of several, a platform-owned one, then the first by namespace/name" }
+        skillManager: { type: string, description: "skill-manager's URL when it serves the skills: every pin goes through it, its tools list the sources and skills; absent otherwise" }
         skillsGitAuthSecretName: { type: string, description: "The installation's skills credential Secret (key token) every agent with a git skill is fetched with unless it names its own; absent: anonymous" }
         skillsGitAuthMint:
           type: object
@@ -1054,7 +1086,7 @@ components:
         egress: { $ref: "#/components/schemas/Egress", description: "Replaces the agent's whole egress list; [] clears it" }
         egressPolicyRefs: { $ref: "#/components/schemas/EgressPolicyRefs", description: "Replaces the agent's whole list of EgressPolicies; [] clears it" }
         gitAuthSecretName: { type: string, description: "Replaces the skills credential Secret; an empty string goes back to the installation's" }
-        refreshSkills: { type: boolean, description: Re-resolve every git skill to the head of its repository's default branch (a skill in skills with a ref goes to that ref's head); nothing else changes }
+        refreshSkills: { type: boolean, description: "Re-resolve every git skill to the head of its repository's default branch (a skill in skills with a ref goes to that ref's head; with skill-manager, one with none to its skill source's ref); nothing else changes" }
         toolset: { $ref: "#/components/schemas/Toolset" }
         labels: { type: object, additionalProperties: { type: string } }
         annotations: { type: object, additionalProperties: { type: string } }
@@ -1132,11 +1164,13 @@ components:
         toolset: { $ref: "#/components/schemas/Toolset" }
         implicitFullAccess: { type: boolean }
         ready: { type: [boolean, "null"] }
-        managed: { type: string, enum: [helmrelease, gitops, none] }
+        managed: { type: string, enum: [helmrelease, gitops, platform, none, unknown] }
+        default: { type: boolean, description: "The installation's default agent (label agent-platform.giantswarm.io/default); clients preselect it. Absent when not" }
         suspended: { type: boolean, description: The HelmRelease is suspended (absent when not) }
         deleting: { type: boolean, description: helm-controller is uninstalling the release (absent when not) }
         releaseReason: { type: string, description: The HelmRelease's Ready reason, when it is not Ready }
         releaseMessage: { type: string, description: The HelmRelease's Ready message, when it is not Ready }
+        releaseWithheld: { type: string, description: "Set when a required Flux read is forbidden: release fields are absent and managed is unknown unless the Agent is platform-owned. Names the owning release's namespace and, within the site's Flux namespace, the role that grants the reads (agent-platform:editor)" }
     Agent:
       type: object
       properties:
@@ -1163,9 +1197,11 @@ components:
         tools: { type: array, items: { $ref: "#/components/schemas/ToolBinding" } }
         ready: { type: [boolean, "null"], description: The Agent's verdict (Ready and the desired revision is the latest successful one); null while unreported }
         status: { $ref: "#/components/schemas/ObjectStatus" }
-        managed: { type: string, enum: [helmrelease, gitops, none] }
+        managed: { type: string, enum: [helmrelease, gitops, platform, none, unknown] }
+        default: { type: boolean, description: "The installation's default agent (label agent-platform.giantswarm.io/default); clients preselect it. Absent when not" }
         helmRelease: { $ref: "#/components/schemas/HelmReleaseRef" }
         values: { type: object, description: The HelmRelease's inline values (the chart contract) }
+        releaseWithheld: { type: string, description: "Set when a required Flux read is forbidden: release fields are absent and managed is unknown unless the Agent is platform-owned. Names the owning release's namespace and, within the site's Flux namespace, the role that grants the reads (agent-platform:editor)" }
     Manifests:
       type: object
       properties:
@@ -1280,6 +1316,7 @@ components:
                   status: { type: string }
                   lastDeployed: { type: string }
             lastAttemptedRevision: { type: string }
+        releaseWithheld: { type: string, description: "Set when the caller may not read the agent's HelmRelease: helmRelease is absent and the verdict comes from the Agent alone. The summary states that HelmRelease state was not read. Names the release's namespace and, within the site's Flux namespace, the role that grants the read (agent-platform:editor)" }
         events:
           type: array
           description: Recent Warning events on the agent's objects (Agent, RemoteMCPServer, HelmRelease)
@@ -1304,6 +1341,10 @@ components:
         message: { type: string, description: The Accepted condition's message }
         managedBy: { type: string }
         default: { type: boolean, description: "The namespace default a create without modelConfig writes: the one ModelConfig annotated agent-platform.giantswarm.io/is-default-model-config: \"true\"; none or several annotated is no default" }
+        displayName: { type: string, description: "The name people see, annotation ui.giantswarm.io/display-name" }
+        maxTokens: { type: integer, description: "The token limit of an answer, the provider block's maxTokens; omitted when unset (the provider's default)" }
+        promptCaching: { type: boolean, description: "The provider block's promptCaching (Anthropic, Bedrock), false when unset; omitted for a provider without the setting" }
+        cacheTTL: { type: string, description: "The prompt cache time (5m or 1h), given while promptCaching is true" }
     EgressPolicy:
       type: object
       properties:
@@ -1409,6 +1450,8 @@ components:
             namespace: { type: string }
             name: { type: string }
         sessions: { type: array, items: { $ref: "#/components/schemas/Session" } }
+        nextPageToken: { type: string, description: More sessions follow; list again with it as pageToken }
+        hint: { type: string }
     SessionDetail:
       type: object
       properties:
@@ -1533,6 +1576,7 @@ components:
         kind: { type: string, enum: [ModelConfig, RemoteMCPServer, EgressPolicy] }
         name: { type: string }
         key: { type: string, description: The key of the Secret the object reads }
+        provider: { type: string, description: "ModelConfig: the provider it sends the value to" }
         url: { type: string, description: "RemoteMCPServer: where it sends the value; a credential in the URL shows as REDACTED" }
         origins: { type: array, items: { type: string }, description: "EgressPolicy: the origins it sends the value to" }
         fromGit: { type: boolean, description: A Flux Kustomization applies the object from git }
@@ -1574,13 +1618,13 @@ components:
             base: { type: string }
             directory: { type: string }
         result: { $ref: "#/components/schemas/CredentialResourceResult" }
-        references: { type: array, items: { $ref: "#/components/schemas/CredentialReference" } }
+        references: { type: array, items: { $ref: "#/components/schemas/CredentialReference" }, description: "Every object of the namespace that names a requested Secret, read live, each planned consumer in place of its live object" }
     CredentialResourceResult:
       type: object
       properties:
         namespace: { type: string }
-        kind: { type: string }
-        name: { type: string }
+        kind: { type: string, enum: [model, connector, egressPolicy, credential], description: "credential: replace_organization_credential, which writes the Secret only" }
+        name: { type: string, description: "The consumer's name; the Secret's for kind credential" }
         created: { type: boolean, description: Whether the intended consumer is new }
         defaultModel: { type: string }
         unmarked: { type: array, items: { type: string } }
@@ -1596,7 +1640,7 @@ components:
             properties:
               secret: { type: string }
               key: { type: string }
-              state: { type: string, enum: [present, committed, missing, replace, unknown] }
+              state: { type: string, enum: [present, committed, missing, replace] }
               formUrl: { type: string }
               next: { type: string }
         commit:

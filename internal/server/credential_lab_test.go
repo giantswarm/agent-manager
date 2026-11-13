@@ -115,7 +115,7 @@ func TestCredentialLab(t *testing.T) {
 	logs := &bytes.Buffer{}
 	logger := slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	operations := organizations.NewCredentialOperations(manager.Typed().CoreV1().ConfigMaps("slice14-credential-operations"))
-	organizationNamespaces := organizations.NewNamespaces(manager.Typed(), "kagent")
+	organizationNamespaces := organizations.NewNamespaces(manager.Typed(), nil, "kagent")
 	organizationService := organizations.New(provider, organizations.Config{Namespaces: organizationNamespaces, CredentialUIURL: "https://credentials.example.com/?operation={operation}", CredentialOperations: operations}, logger) // #nosec G101 -- public fixture UI URL
 	service := agents.New(provider, embeddedChart{}, nil, nil, agents.Config{}, logger)
 	oauth := OAuthConfig{BaseURL: "http://localhost:8080", Provider: ProviderDex, DexIssuerURL: issuer, DexClientID: "agent-platform", DexClientSecret: "agent-platform-lab-secret", DexCAFile: caFile, DexAllowPrivateIP: true, TrustedAudiences: []string{"agent-platform"}, SSOAllowPrivateIPs: true, DownstreamOAuth: true} // #nosec G101 -- isolated agentlab client
@@ -138,7 +138,7 @@ func TestCredentialLab(t *testing.T) {
 		if path == "/mcp" {
 			request.Header.Set("Mcp-Protocol-Version", "2026-07-28")
 			request.Header.Set("Mcp-Method", "tools/call")
-			request.Header.Set("Mcp-Name", api.ToolSetOrganizationModel)
+			request.Header.Set("Mcp-Name", body.(map[string]any)["params"].(map[string]any)["name"].(string))
 		}
 		if token != "" {
 			request.Header.Set("Authorization", "Bearer "+token)
@@ -153,8 +153,8 @@ func TestCredentialLab(t *testing.T) {
 		require.NoError(t, err)
 		return response.StatusCode, data, response.Header
 	}
-	prepare := func(name string, replace bool, requestID string) organizations.ResourceResult {
-		call := map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": map[string]any{"name": api.ToolSetOrganizationModel, "arguments": map[string]any{"namespace": namespace.Name, "name": name, "provider": "Anthropic", "model": "fixture-model", "replaceCredential": replace, "requestId": requestID}, "_meta": map[string]any{"io.modelcontextprotocol/protocolVersion": "2026-07-28", "io.modelcontextprotocol/clientInfo": map[string]any{"name": "slice14-proof", "version": "1"}, "io.modelcontextprotocol/clientCapabilities": map[string]any{}}}}
+	prepare := func(tool string, arguments map[string]any) organizations.ResourceResult {
+		call := map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": map[string]any{"name": tool, "arguments": arguments, "_meta": map[string]any{"io.modelcontextprotocol/protocolVersion": "2026-07-28", "io.modelcontextprotocol/clientInfo": map[string]any{"name": "slice14-proof", "version": "1"}, "io.modelcontextprotocol/clientCapabilities": map[string]any{}}}}
 		status, body, _ := request(http.MethodPost, "/mcp", adminToken, call, "")
 		require.Equal(t, http.StatusOK, status, string(body))
 		var response struct {
@@ -183,7 +183,7 @@ func TestCredentialLab(t *testing.T) {
 		return operationMetadata, strings.Trim(headers.Get("ETag"), `"`)
 	}
 	const credential = "slice14-synthetic-credential" // #nosec G101 -- isolated lab fixture
-	created := prepare("proof-model", false, "create")
+	created := prepare(api.ToolSetOrganizationModel, map[string]any{"namespace": namespace.Name, "name": "proof-model", "provider": "Anthropic", "model": "fixture-model", "requestId": "create"})
 	operation, version := read(created.CredentialOperation)
 	require.Equal(t, "pending", operation.State)
 	path := api.Prefix + "/credential-operations/" + created.CredentialOperation
@@ -201,7 +201,7 @@ func TestCredentialLab(t *testing.T) {
 	require.NotContains(t, string(answer), credential)
 	status, answer, _ = request(http.MethodPost, path, adminToken, body, version)
 	require.Equal(t, http.StatusOK, status, string(answer))
-	rotated := prepare("proof-model", true, "rotation")
+	rotated := prepare(api.ToolReplaceOrganizationCredential, map[string]any{"namespace": namespace.Name, "secret": created.Credentials[0].Secret, "key": created.Credentials[0].Key, "requestId": "rotation"})
 	_, version = read(rotated.CredentialOperation)
 	body = map[string]any{"values": []organizations.CredentialValue{{Secret: rotated.Credentials[0].Secret, Key: rotated.Credentials[0].Key, Value: credential + "-rotated"}}}
 	status, answer, _ = request(http.MethodPost, api.Prefix+"/credential-operations/"+rotated.CredentialOperation, adminToken, body, version)

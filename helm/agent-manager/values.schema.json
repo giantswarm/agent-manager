@@ -75,6 +75,16 @@
                 }
             }
         },
+        "defaultAgentModel": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "agent": {
+                    "type": "string",
+                    "description": "An Agent of `kagent.namespace` whose empty modelConfig is filled with the namespace's default model (the ModelConfig annotated `agent-platform.giantswarm.io/is-default-model-config: \"true\"`); once set, by anyone, it is never changed. None marked: nothing; several: a warning, nothing. Checked at start and every 30s as the ServiceAccount, with a Role that may get and patch that Agent and list the ModelConfigs. Empty: off."
+                }
+            }
+        },
         "externalDNSIP": {
             "type": "string"
         },
@@ -145,11 +155,12 @@
                 },
                 "authorizationServer": {
                     "type": "object",
+                    "description": "Deprecated: use `tokenExchange`. Ignored with `tokenExchange.tokenEndpoint`.",
                     "additionalProperties": false,
                     "properties": {
                         "authorizationEndpoint": {
                             "type": "string",
-                            "description": "GitHub's authorize endpoint (GitHub publishes no discovery document)."
+                            "description": "Deprecated. GitHub's authorize endpoint (GitHub publishes no discovery document)."
                         },
                         "clientCredentialsSecretRef": {
                             "type": "object",
@@ -157,65 +168,70 @@
                             "properties": {
                                 "name": {
                                     "type": "string",
-                                    "description": "Secret with the App's OAuth client under `client-id` and `client-secret`."
+                                    "description": "Deprecated. Secret with the App's OAuth client under `client-id` and `client-secret`."
                                 },
                                 "namespace": {
                                     "type": "string",
-                                    "description": "Namespace of that Secret; empty is the release namespace."
+                                    "description": "Deprecated. Namespace of that Secret; empty is the release namespace."
                                 }
                             }
                         },
                         "expectedIssuer": {
                             "type": "string",
-                            "description": "The issuer GitHub puts in the RFC 9207 `iss` parameter of its authorization response, `https://github.com/login/oauth` for every App. Empty omits the field."
+                            "description": "Deprecated. The issuer GitHub puts in the RFC 9207 `iss` parameter of its authorization response, `https://github.com/login/oauth` for every App. Empty omits the field."
                         },
                         "grantScope": {
                             "type": "string",
-                            "description": "`subject`: the grant belongs to the person, not to one login session."
+                            "description": "Deprecated. `subject`: the grant belongs to the person, not to one login session."
                         },
                         "issuer": {
                             "type": "string",
-                            "description": "The issuer identity the person's grant is filed under: the App's own, so the login App's GitHub grant stays separate. Also passed to the server, which names it in its refusals."
+                            "description": "Deprecated. The issuer identity the person's grant is filed under: the App's own, so the login App's GitHub grant stays separate. Also passed to the server, which names it in its refusals."
                         },
                         "scopes": {
                             "type": "string",
-                            "description": "The OAuth `scope` parameter, only for an authorization server that needs one (a lab's stand-in); empty for GitHub, whose App permissions are the App's. Empty omits the field."
+                            "description": "Deprecated. The OAuth `scope` parameter, only for an authorization server that needs one (a lab's stand-in); empty for GitHub, whose App permissions are the App's. Empty omits the field."
                         },
                         "tokenEndpoint": {
                             "type": "string",
-                            "description": "GitHub's token endpoint."
+                            "description": "Deprecated. GitHub's token endpoint."
                         }
                     }
                 },
                 "enabled": {
                     "type": "boolean",
-                    "description": "Register with muster pinned to the GitHub App `giantswarm-agent-manager` and offer commit mode (`mode: commit` on `create_agent`, `update_agent` and `delete_agent`: the manifests land as a pull request opened as the person in the repository that owns the namespace). The MCPServer's auth then pins the App as the authorization server: muster runs the App's consent once per person and puts their user token on every call, which this server verifies with `GET /user` and opens the pull request with, and sets `forwardIdentity: true`, so muster forwards the person's IdP ID token in `X-Muster-Id-Token` next to it and apply mode keeps acting on Kubernetes as the person. Needs `oauth.enabled`, and the App installed with contents and pull-request write on every repository a commit may target. Off: muster forwards the ID token as the bearer (`muster.mcpServer.auth.forwardToken`); commit mode then requires githubTokenExchange."
-                }
-            }
-        },
-        "githubTokenExchange": {
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-                "audience": {
-                    "type": "string",
-                    "description": "Fixed broker target for the manager App user grant."
+                    "description": "Offer commit mode (`mode: commit` on `create_agent`, `update_agent` and `delete_agent`: the manifests land as a pull request opened as the person in the repository that owns the namespace), with the person's user token of the GitHub App, which this server verifies with `GET /user`. Needs `oauth.enabled`, and the App installed with contents and pull-request write on every repository a commit may target. With `tokenExchange.tokenEndpoint` the server fetches that token per commit (RFC 8693) and muster forwards the ID token as the bearer (`muster.mcpServer.auth.forwardToken`); without it the MCPServer is pinned to the App through `authorizationServer` (deprecated)."
                 },
-                "caSecretName": {
-                    "type": "string",
-                    "description": "Optional existing Secret with ca.crt for the broker's private CA."
-                },
-                "clientID": {
-                    "type": "string",
-                    "description": "Confidential broker client ID, allowed to retrieve only the manager App grant."
-                },
-                "endpoint": {
-                    "type": "string",
-                    "description": "RFC 8693 token endpoint. Set, commit mode opens pull requests with the person's App user token from muster's broker; requires `github.enabled: false`. Empty, commit mode needs `github.enabled`."
-                },
-                "secretName": {
-                    "type": "string",
-                    "description": "Existing Secret in the release namespace, containing client-secret."
+                "tokenExchange": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "audience": {
+                            "type": "string",
+                            "description": "RFC 8693 audience of the grant, also the App a commit without the person's grant names in its `grant_required` answer and the MCPServer lists under `auth.providerApps` (muster's `aggregator.providerApps` key): lowercase letters, digits and hyphens, at most 63 characters. Required with `tokenEndpoint`.",
+                            "pattern": "^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)?$"
+                        },
+                        "caSecretName": {
+                            "type": "string",
+                            "description": "Optional existing Secret with `ca.crt` for the token endpoint's private CA."
+                        },
+                        "clientID": {
+                            "type": "string",
+                            "description": "Confidential client ID. Empty reads the Secret's `client-id` key."
+                        },
+                        "clientSecret": {
+                            "type": "string",
+                            "description": "Confidential client secret, rendered into a Secret `<fullname>-github-token-exchange`. Prefer `existingSecret`."
+                        },
+                        "existingSecret": {
+                            "type": "string",
+                            "description": "Existing Secret in the release namespace with `client-secret` (and `client-id` when `clientID` is empty). Required with `tokenEndpoint` unless `clientSecret` is set."
+                        },
+                        "tokenEndpoint": {
+                            "type": "string",
+                            "description": "RFC 8693 token endpoint the server fetches the person's grant of the App from, for each call that needs it. Empty uses the deprecated `authorizationServer` pin. Needs `enabled`, Dex OAuth and `oauth.downstream.enabled`."
+                        }
+                    }
                 }
             }
         },
@@ -346,6 +362,10 @@
         "imagePullSecrets": {
             "type": "array",
             "description": "Image pull secrets."
+        },
+        "installation": {
+            "type": "string",
+            "description": "The installation's name in the Dev Portal, reported by `get_info` as `installation`: a portal agent id is `<installation>/<namespace>/<name>`. Empty: not reported."
         },
         "kagent": {
             "type": "object",
@@ -860,6 +880,17 @@
                 }
             }
         },
+        "skillManager": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "description": "skill-manager's base URL (`http://skill-manager.agent-platform.svc:8080`): skills and plugins are pinned through it, `list_skills` proxies its catalogue (deprecated), as the caller; `skills.repositories` is unused. Empty: in-process discovery and pinning (deprecated). An outside host with one or two labels is written with a trailing dot (`example.com.`): otherwise the egress rule reads it as `<service>.<namespace>`.",
+                    "pattern": "^(https?://[^\\s/]+(/\\S*)?)?$"
+                }
+            }
+        },
         "skills": {
             "type": "object",
             "additionalProperties": false,
@@ -919,7 +950,7 @@
                 },
                 "repositories": {
                     "type": "array",
-                    "description": "GitHub repositories whose SKILL.md files list_skills offers (the same list the portal's create flow reads), each with the head commit an agent pins. Empty turns the skills capability off; skills given by URL are still resolved through the GitHub API.",
+                    "description": "GitHub repositories whose SKILL.md files list_skills offers (the same list the portal's create flow reads), each with the head commit an agent pins. Empty turns the skills capability off; skills given by URL are still resolved through the GitHub API. Unused when `skillManager.url` is set. Deprecated: skill-manager's sources replace it.",
                     "items": {
                         "type": "string"
                     }
@@ -951,13 +982,13 @@
                         },
                         "repository": {
                             "type": "string",
-                            "description": "The installation's repository (`owner/name`) the organization tools' `mode: commit` opens its pull requests in, as the person. Empty: `mode: commit` is not offered for organizations. Needs `github.authorizationServer.issuer`. The repository's CODEOWNERS must name the platform team for `objectsPath` and `contentPrefix`, and its `.sops.yaml` must cover `contentPrefix` (docs/organizations-commit-mode.md)."
+                            "description": "The installation's repository (`owner/name`) the organization tools' `mode: commit` opens its pull requests in, as the person. Empty: `mode: commit` is not offered for organizations. Needs `github.enabled`. The repository's CODEOWNERS must name the platform team for `objectsPath` and `contentPrefix`, and its `.sops.yaml` must cover `contentPrefix` (docs/organizations-commit-mode.md)."
                         }
                     }
                 },
                 "enabled": {
                     "type": "boolean",
-                    "description": "Manage the organization namespaces beside `kagent.namespace` and `kagent.additionalNamespaces`, and serve the organization tools (`create_organization`, `add_organization_member`, `set_organization_model`, `list_my_organizations` and the rest). An organization namespace is labelled `agent-platform.giantswarm.io/organization` (agent-platform-operator keeps it and what it holds); a Giant Swarm Organization's `org-<name>`, labelled `giantswarm.io/organization`, is not one. Everything a request does there runs as the caller. The ServiceAccount only finds the namespaces by label: the chart grants it `get` and `list` on namespaces, read-only. Needs `oauth.downstream.enabled` and `flux.helmReleaseServiceAccount`, and the ClusterRole `agent-platform-tenant-flux` the agents' HelmReleases run as there, which the Agent Platform chart renders. An agent in an organization namespace gets no installation skills credential (`skills.gitAuthSecretName`, `skills.mintGitAuthSecret`): it names its own. Read before you enable it: Helm keeps its release Secrets in the namespace and must `list` them, so `agent-platform-tenant-flux` can read every Secret of an organization namespace. A chart rendered through it can copy such a Secret with Helm `lookup` into an object it renders, overwrite or delete any Secret there, and get the token of any ServiceAccount there. Whoever may create or change a HelmRelease in the namespace can trigger that: the members bound to `agent-platform:editor` or `agent-platform:admin`."
+                    "description": "Manage the organization namespaces beside `kagent.namespace` and `kagent.additionalNamespaces`, and serve the organization tools (`create_organization`, `add_organization_member`, `set_organization_model`, `list_organizations` and the rest). An organization namespace is labelled `agent-platform.giantswarm.io/organization` (agent-platform-operator keeps it and what it holds); a Giant Swarm Organization's `org-<name>`, labelled `giantswarm.io/organization`, is not one. Everything a request does there runs as the caller. The ServiceAccount only finds the namespaces by label and lists the organizations: the chart grants it `get` and `list` on namespaces and AgentPlatformOrganizations, read-only. Needs `oauth.downstream.enabled` and `flux.helmReleaseServiceAccount`, and the ClusterRole `agent-platform-tenant-flux` the agents' HelmReleases run as there, which the Agent Platform chart renders. An agent in an organization namespace gets no installation skills credential (`skills.gitAuthSecretName`, `skills.mintGitAuthSecret`): it names its own. Read before you enable it: Helm keeps its release Secrets in the namespace and must `list` them, so `agent-platform-tenant-flux` can read every Secret of an organization namespace. A chart rendered through it can copy such a Secret with Helm `lookup` into an object it renders, overwrite or delete any Secret there, and get the token of any ServiceAccount there. Whoever may create or change a HelmRelease in the namespace can trigger that: the members bound to `agent-platform:editor` or `agent-platform:admin`."
                 }
             }
         },

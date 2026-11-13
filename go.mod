@@ -7,9 +7,9 @@ require (
 	filippo.io/age v1.3.2
 	github.com/Masterminds/semver/v3 v3.5.0
 	github.com/a2aproject/a2a-go/v2 v2.8.0
-	github.com/giantswarm/agent-platform-operator v0.1.8
-	github.com/giantswarm/gitops-commit v0.12.0-rc.6
-	github.com/giantswarm/mcp-oauth v1.13.2
+	github.com/giantswarm/agent-platform-operator v0.3.1
+	github.com/giantswarm/gitops-commit v0.12.0-rc.7
+	github.com/giantswarm/mcp-oauth v1.13.10
 	github.com/giantswarm/mcp-toolkit v0.5.3
 	github.com/go-jose/go-jose/v4 v4.1.9
 	github.com/golang-jwt/jwt/v5 v5.3.1
@@ -28,8 +28,8 @@ require (
 	go.opentelemetry.io/otel/sdk v1.47.0
 	go.opentelemetry.io/otel/sdk/metric v1.47.0
 	go.opentelemetry.io/otel/trace v1.47.0
-	golang.org/x/sync v0.24.0
-	golang.org/x/text v0.43.0
+	golang.org/x/sync v0.25.0
+	golang.org/x/text v0.44.0
 	google.golang.org/grpc v1.85.0
 	google.golang.org/protobuf v1.36.12
 	helm.sh/helm/v4 v4.3.0
@@ -37,6 +37,7 @@ require (
 	k8s.io/apiextensions-apiserver v0.37.2
 	k8s.io/apimachinery v0.37.2
 	k8s.io/client-go v0.37.2
+	k8s.io/utils v0.0.0-20261023123148-ca04ba58ecab
 	sigs.k8s.io/controller-runtime v0.25.2
 	sigs.k8s.io/yaml v1.6.0
 )
@@ -71,8 +72,8 @@ require (
 	github.com/ProtonMail/go-crypto v1.4.1 // indirect
 	github.com/aws/aws-sdk-go-v2 v1.47.8 // indirect
 	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.26 // indirect
-	github.com/aws/aws-sdk-go-v2/config v1.33.16 // indirect
-	github.com/aws/aws-sdk-go-v2/credentials v1.20.16 // indirect
+	github.com/aws/aws-sdk-go-v2/config v1.33.17 // indirect
+	github.com/aws/aws-sdk-go-v2/credentials v1.20.17 // indirect
 	github.com/aws/aws-sdk-go-v2/feature/ec2/imds v1.20.8 // indirect
 	github.com/aws/aws-sdk-go-v2/feature/s3/manager v1.22.34 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/configsources v1.5.11 // indirect
@@ -84,7 +85,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/internal/s3shared v1.20.11 // indirect
 	github.com/aws/aws-sdk-go-v2/service/kms v1.54.1 // indirect
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.114.9 // indirect
-	github.com/aws/aws-sdk-go-v2/service/signin v1.12.4 // indirect
+	github.com/aws/aws-sdk-go-v2/service/signin v1.13.0 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sso v1.39.4 // indirect
 	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.44.4 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sts v1.51.9 // indirect
@@ -202,11 +203,11 @@ require (
 	go.opentelemetry.io/proto/otlp v1.11.1 // indirect
 	go.yaml.in/yaml/v2 v2.4.4 // indirect
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
-	golang.org/x/crypto v0.58.0 // indirect
+	golang.org/x/crypto v0.59.0 // indirect
 	golang.org/x/net v0.62.0 // indirect
-	golang.org/x/oauth2 v0.37.0 // indirect
-	golang.org/x/sys v0.49.0 // indirect
-	golang.org/x/term v0.47.0 // indirect
+	golang.org/x/oauth2 v0.38.0 // indirect
+	golang.org/x/sys v0.50.0 // indirect
+	golang.org/x/term v0.48.0 // indirect
 	golang.org/x/time v0.16.0 // indirect
 	google.golang.org/api v0.289.0 // indirect
 	google.golang.org/genproto v0.0.0-20260720171339-e059f2f05d78 // indirect
@@ -218,7 +219,6 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	k8s.io/klog/v2 v2.140.0 // indirect
 	k8s.io/kube-openapi v0.0.0-20260721132016-d427ff9ee9ad // indirect
-	k8s.io/utils v0.0.0-20260626114624-be93311217bd // indirect
 	sigs.k8s.io/json v0.0.0-20250730193827-2d320260d730 // indirect
 	sigs.k8s.io/randfill v1.0.0 // indirect
 	sigs.k8s.io/structured-merge-diff/v6 v6.4.2 // indirect
@@ -228,8 +228,8 @@ require (
 // golang.org/x/mod < v0.40.0 (CVE-2026-56864, CVE-2026-56865). The module is
 // not imported by agent-manager, so a plain `go get` bump is dropped by
 // `go mod tidy`; the replace pins the graph to a fixed version instead.
-replace golang.org/x/mod => golang.org/x/mod v0.42.0
+replace golang.org/x/mod => golang.org/x/mod v0.43.0
 
 // Same for golang.org/x/crypto < v0.56.0 (CVE-2026-56854, CVE-2026-78662; ssh source-address
 // permissions): pulled in through the Kubernetes client, never imported here.
-replace golang.org/x/crypto => golang.org/x/crypto v0.58.0
+replace golang.org/x/crypto => golang.org/x/crypto v0.59.0

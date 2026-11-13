@@ -155,7 +155,7 @@ func TestASessionWhoseAgentCannotBeReadIsNotStarted(t *testing.T) {
 	assert.Contains(t, err.Error(), "toolset")
 	assert.Empty(t, bindings.Bound)
 	assert.NotContains(t, calledMethods(ctrl), "SendStreamingMessage", "no turn ran unbound")
-	list, err := svc.ListSessions(ctx, "", "ghost", false)
+	list, err := svc.ListSessions(ctx, "", "ghost", false, "")
 	require.NoError(t, err)
 	assert.Empty(t, list.Sessions, "the session was deleted again")
 }

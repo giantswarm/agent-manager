@@ -53,10 +53,12 @@ func (c *orgCommit) credentialSnapshot(ctx context.Context, operation *credentia
 	}
 	files, err := c.remote.ListFiles(ctx, c.cfg.Objects.Repository, c.cfg.Objects.Branch, directory.Path())
 	if err != nil {
-		return nil, commitError(err)
+		return nil, commitError(c.gh, err)
 	}
 	paths = append(paths, files...)
 	snapshot := map[string]string{}
+	scanned := map[string]bool{}
+	var gitConsumers []CredentialReference
 	for _, file := range paths {
 		raw, err := c.remote.ReadFile(ctx, c.cfg.Objects.Repository, c.cfg.Objects.Branch, file)
 		if errors.Is(err, commit.ErrFileNotFound) {
@@ -64,7 +66,7 @@ func (c *orgCommit) credentialSnapshot(ctx context.Context, operation *credentia
 			continue
 		}
 		if err != nil {
-			return nil, commitError(err)
+			return nil, commitError(c.gh, err)
 		}
 		snapshot[file] = fileDigest(raw)
 		for _, credential := range operation.Credentials {
@@ -102,17 +104,29 @@ func (c *orgCommit) credentialSnapshot(ctx context.Context, operation *credentia
 			}
 			for _, credential := range operation.Credentials {
 				for _, reference := range referencesOf(consumer.GetKind(), consumer, credential.Secret) {
-					if reference.Kind != kinds[operation.Result.Kind].kubeKind || reference.Name != operation.Result.Name {
+					if !writesFor(operation.Result, reference) {
 						return nil, fmt.Errorf("%w: another Git consumer references the credential Secret", agents.ErrConflict)
+					}
+					if operation.Result.Kind == KindCredential && reference.Key != credential.Key {
+						return nil, otherKey(reference, credential.Secret, credential.Key)
+					}
+					if operation.Result.Kind == KindCredential && !scanned[file] {
+						gitConsumers = append(gitConsumers, reference)
 					}
 				}
 			}
+			scanned[file] = true
 		}
+	}
+	// What git applies after the merge receives the value: it must be what
+	// the person confirmed, the live consumers, until Flux catches up.
+	if operation.Result.Kind == KindCredential && !sameConsumers(gitConsumers, operation.Consumers) {
+		return nil, consumersDiffer{fmt.Errorf("%w: the objects in %s that use Secret %s, or where they send its value, differ from the live ones the person confirms: wait for Flux to apply git, then prepare it again", agents.ErrConflict, c.cfg.Objects.Repository, operation.Credentials[0].Secret)}
 	}
 	for _, planned := range operation.Writes {
 		file := contentFile(directory, planned.Kind, planned.Name)
 		if planned.Action == opCreate && snapshot[file] != "absent" {
-			return nil, fmt.Errorf("%w: %s is in %s already and not applied yet: wait for the organization's Kustomization to apply it, then change it", agents.ErrConflict, file, c.cfg.Objects.Repository)
+			return nil, nameTaken{fmt.Errorf("%w: %s is in %s already and not applied yet: wait for the organization's Kustomization to apply it, then change it", agents.ErrConflict, file, c.cfg.Objects.Repository)}
 		}
 	}
 	snapshot["directory-entries"] = fileDigest([]byte(strings.Join(files, "\n")))
@@ -154,7 +168,7 @@ func (s *Service) commitCredentialOperation(ctx context.Context, operation *cred
 	}
 	plan, err := layout.Build(ctx, writer.commit.remote, change.dir, change.write, nil, options...)
 	if err != nil {
-		return nil, commitError(err)
+		return nil, commitError(writer.commit.gh, err)
 	}
 	landed := plan.Change()
 	for _, credential := range operation.Credentials {
@@ -188,7 +202,7 @@ func (s *Service) commitCredentialOperation(ctx context.Context, operation *cred
 	}
 	err = writer.commit.remote.CreateBranch(ctx, writer.commit.cfg.Objects.Repository, result.Branch, result.Base)
 	if err != nil {
-		return nil, commitError(err)
+		return nil, commitError(writer.commit.gh, err)
 	}
 	branchConfiguration := *writer.commit.cfg
 	branchConfiguration.Objects.Branch = result.Branch
@@ -203,11 +217,11 @@ func (s *Service) commitCredentialOperation(ctx context.Context, operation *cred
 	}
 	err = writer.commit.remote.Commit(ctx, writer.commit.cfg.Objects.Repository, result.Branch, "chore(organizations): save credential operation", landed.Files)
 	if err != nil {
-		return nil, commitError(err)
+		return nil, commitError(writer.commit.gh, err)
 	}
 	pullRequest, err := writer.commit.remote.OpenPullRequest(ctx, writer.commit.cfg.Objects.Repository, result.Branch, result.Base, "chore(organizations): save credential operation", "Updates the confirmed organization resources and their encrypted credentials. Operation: "+operation.ElicitationID+".\n\nThe platform team reviews the change through CODEOWNERS.")
 	if err != nil {
-		return nil, commitError(err)
+		return nil, commitError(writer.commit.gh, err)
 	}
 	result.PullRequest, result.Number = pullRequest.URL, pullRequest.Number
 	return result, nil
@@ -230,7 +244,7 @@ func (s *Service) recoverCredentialCommit(ctx context.Context, operation *creden
 	}
 	pullRequest, err := writer.commit.remote.OpenPullRequest(ctx, writer.commit.cfg.Objects.Repository, result.Branch, result.Base, "chore(organizations): save credential operation", "Completes credential operation "+operation.ElicitationID+". The platform team reviews the change through CODEOWNERS.")
 	if err != nil {
-		return nil, commitError(err)
+		return nil, commitError(writer.commit.gh, err)
 	}
 	result.PullRequest, result.Number = pullRequest.URL, pullRequest.Number
 	completeCredentialOperation(operation)

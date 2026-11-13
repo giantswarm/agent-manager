@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/giantswarm/agent-manager/internal/oci"
+	"github.com/giantswarm/agent-manager/internal/server"
 )
 
 func TestToolchainSourceReadsTheRegistryConfig(t *testing.T) {
@@ -39,34 +40,46 @@ func TestToolchainSourceReadsTheRegistryConfig(t *testing.T) {
 	require.ErrorContains(t, err, "--toolchain-registry-config")
 }
 
-func TestValidateCredentialOptionsGitHubTokenExchange(t *testing.T) {
-	secretFile := filepath.Join(t.TempDir(), "client-secret")
+func TestValidateGitHubTokenExchangeOptions(t *testing.T) {
 	exchange := func() *serveOptions {
-		return &serveOptions{
+		return &serveOptions{ // #nosec G101 -- configuration fixture with a path, no secret value
 			oauthEnabled:             true,
 			downstreamOAuth:          true,
-			oauthProvider:            "dex",
+			oauthProvider:            server.ProviderDex,
 			dexIssuerURL:             "https://identity.example.com",
 			githubExchangeEndpoint:   "https://broker.example.com/oauth/token",
-			githubExchangeClient:     "manager-client",
-			githubExchangeSecretFile: secretFile,
 			githubExchangeAudience:   "manager-app",
+			githubExchangeSecretFile: "/etc/agent-manager/github-token-exchange/client-secret",
 		}
 	}
-	require.NoError(t, validateCredentialOptions(exchange()))
+
+	options := exchange()
+	options.githubExchangeClient = "manager-client"
+	require.NoError(t, validateCredentialOptions(options), "the client ID flag")
+
+	options = exchange()
+	options.githubExchangeClientFile = "/etc/agent-manager/github-token-exchange/client-id"
+	require.NoError(t, validateCredentialOptions(options), "the client ID file")
+
+	require.Error(t, validateCredentialOptions(exchange()), "neither client ID nor its file")
+
+	options = exchange()
+	options.githubExchangeClient = "manager-client"
+	options.githubAuthorizationServer = "https://github.com/apps/giantswarm-agent-manager"
+	require.Error(t, validateCredentialOptions(options), "the exchange replaces the pin")
 
 	for name, mutate := range map[string]func(*serveOptions){
-		"GitHub-pinned registration": func(o *serveOptions) {
-			o.githubAuthorizationServer = "https://github.com/apps/giantswarm-agent-manager"
-		},
-		"OAuth off":            func(o *serveOptions) { o.oauthEnabled = false },
-		"downstream OAuth off": func(o *serveOptions) { o.downstreamOAuth = false },
-		"Google provider":      func(o *serveOptions) { o.oauthProvider = "google" },
+		"OAuth off":            func(options *serveOptions) { options.oauthEnabled = false },
+		"downstream OAuth off": func(options *serveOptions) { options.downstreamOAuth = false },
+		"Google provider":      func(options *serveOptions) { options.oauthProvider = server.ProviderGoogle },
 	} {
 		t.Run(name, func(t *testing.T) {
 			options := exchange()
+			options.githubExchangeClient = "manager-client"
 			mutate(options)
 			require.EqualError(t, validateCredentialOptions(options), "GitHub token exchange requires Dex OAuth and downstream OAuth, and replaces the GitHub-pinned MCP registration")
 		})
 	}
+
+	require.ErrorContains(t, validateCredentialOptions(&serveOptions{githubExchangeClientFile: "/etc/agent-manager/github-token-exchange/client-id"}), "--github-token-exchange-endpoint")
 }

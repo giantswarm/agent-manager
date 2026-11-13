@@ -103,3 +103,125 @@ tests:
       - equal:
           path: spec.template.spec.containers[0].startupProbe.periodSeconds
           value: 10
+
+  - it: replaces the GitHub App pin with github.tokenExchange
+    set:
+      oauth:
+        downstream:
+          enabled: true
+      github:
+        enabled: true
+        tokenExchange:
+          tokenEndpoint: https://muster.example.com/oauth/token
+          audience: github-app
+          existingSecret: agent-manager-github-exchange
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --github-token-exchange-endpoint=https://muster.example.com/oauth/token
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --github-token-exchange-audience=github-app
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --github-token-exchange-client-id-file=/etc/agent-manager/github-token-exchange/client-id
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --github-api-url=https://api.github.com
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --github-authorization-server=https://github.com/apps/giantswarm-agent-manager
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --github-token-exchange-client-id=
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: github-token-exchange
+            secret:
+              secretName: agent-manager-github-exchange
+              defaultMode: 288
+
+  - it: passes an explicit client ID
+    set:
+      oauth:
+        downstream:
+          enabled: true
+      github:
+        enabled: true
+        tokenExchange:
+          tokenEndpoint: https://muster.example.com/oauth/token
+          audience: github-app
+          clientID: agent-manager
+          existingSecret: agent-manager-github-exchange
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --github-token-exchange-client-id=agent-manager
+
+  - it: mounts the chart-rendered Secret with an inline client secret
+    set:
+      oauth:
+        downstream:
+          enabled: true
+      github:
+        enabled: true
+        tokenExchange:
+          tokenEndpoint: https://muster.example.com/oauth/token
+          audience: github-app
+          clientSecret: fixture-secret
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: github-token-exchange
+            secret:
+              secretName: RELEASE-NAME-agent-manager-github-token-exchange
+              defaultMode: 288
+
+  - it: refuses github.tokenExchange without github.enabled
+    set:
+      github:
+        tokenExchange:
+          tokenEndpoint: https://muster.example.com/oauth/token
+          audience: github-app
+          existingSecret: agent-manager-github-exchange
+    asserts:
+      - failedTemplate:
+          errorMessage: "github.tokenExchange needs github.enabled: set github.enabled to true, or unset github.tokenExchange.tokenEndpoint"
+
+  - it: refuses github.tokenExchange without an audience
+    set:
+      oauth:
+        downstream:
+          enabled: true
+      github:
+        enabled: true
+        tokenExchange:
+          tokenEndpoint: https://muster.example.com/oauth/token
+          existingSecret: agent-manager-github-exchange
+    asserts:
+      - failedTemplate:
+          errorMessage: github.tokenExchange.audience is required with github.tokenExchange.tokenEndpoint
+
+  - it: refuses github.tokenExchange without a client secret
+    set:
+      oauth:
+        downstream:
+          enabled: true
+      github:
+        enabled: true
+        tokenExchange:
+          tokenEndpoint: https://muster.example.com/oauth/token
+          audience: github-app
+    asserts:
+      - failedTemplate:
+          errorMessage: github.tokenExchange.existingSecret or github.tokenExchange.clientSecret is required with github.tokenExchange.tokenEndpoint
+
+  - it: refuses the removed githubTokenExchange key
+    set:
+      githubTokenExchange:
+        endpoint: https://muster.example.com/oauth/token
+    asserts:
+      - failedTemplate:
+          errorPattern: additional properties 'githubTokenExchange' not allowed

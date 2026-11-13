@@ -99,7 +99,7 @@ func newServiceAllowed(t *testing.T, allowed bool) (*agents.Service, *dynamicfak
 		return true, review, nil
 	})
 	client := kube.FromInterfaces(dyn, typed, typed.Discovery())
-	svc := agents.New(kube.NewServiceAccountProvider(client), embeddedChart{}, nil, pinner{}, agents.Config{DefaultNamespace: "kagent", Version: "test", Tags: tagstest.Rule()}, nil)
+	svc := agents.New(kube.NewServiceAccountProvider(client), embeddedChart{}, nil, agents.InProcessPinner(pinner{}), agents.Config{DefaultNamespace: "kagent", Version: "test", Tags: tagstest.Rule()}, nil)
 	return svc, dyn
 }
 
@@ -370,20 +370,20 @@ var wantHints = map[string]hints{
 	// The organization tools act on the cluster only. A create adds; a set or
 	// a member change converges on the arguments (idempotent) and may
 	// replace what was there; a delete erases.
-	ToolListOrganizations:         annotations(readOnly, additive, notIdempotent, closedWorld),
-	ToolGetOrganization:           annotations(readOnly, additive, notIdempotent, closedWorld),
-	ToolListMyOrganizations:       annotations(readOnly, additive, notIdempotent, closedWorld),
-	ToolListOrganizationMembers:   annotations(readOnly, additive, notIdempotent, closedWorld),
-	ToolListOrganizationConnector: annotations(readOnly, additive, notIdempotent, closedWorld),
-	ToolCreateOrganization:        annotations(writes, additive, notIdempotent, closedWorld),
-	ToolUpdateOrganization:        annotations(writes, destructive, idempotent, closedWorld),
-	ToolDeleteOrganization:        annotations(writes, destructive, notIdempotent, closedWorld),
-	ToolAddOrganizationMember:     annotations(writes, additive, idempotent, closedWorld),
-	ToolRemoveOrganizationMember:  annotations(writes, destructive, idempotent, closedWorld),
-	ToolSetOrganizationModel:      annotations(writes, destructive, idempotent, closedWorld),
-	ToolSetOrganizationConnector:  annotations(writes, destructive, idempotent, closedWorld),
-	ToolSetOrganizationEgress:     annotations(writes, destructive, idempotent, closedWorld),
-	ToolDeleteOrganizationObject:  annotations(writes, destructive, notIdempotent, closedWorld),
+	ToolListOrganizations:             annotations(readOnly, additive, notIdempotent, closedWorld),
+	ToolGetOrganization:               annotations(readOnly, additive, notIdempotent, closedWorld),
+	ToolListOrganizationMembers:       annotations(readOnly, additive, notIdempotent, closedWorld),
+	ToolListOrganizationConnector:     annotations(readOnly, additive, notIdempotent, closedWorld),
+	ToolCreateOrganization:            annotations(writes, additive, notIdempotent, closedWorld),
+	ToolUpdateOrganization:            annotations(writes, destructive, idempotent, closedWorld),
+	ToolDeleteOrganization:            annotations(writes, destructive, notIdempotent, closedWorld),
+	ToolAddOrganizationMember:         annotations(writes, additive, idempotent, closedWorld),
+	ToolRemoveOrganizationMember:      annotations(writes, destructive, idempotent, closedWorld),
+	ToolSetOrganizationModel:          annotations(writes, destructive, idempotent, closedWorld),
+	ToolSetOrganizationConnector:      annotations(writes, destructive, idempotent, closedWorld),
+	ToolSetOrganizationEgress:         annotations(writes, destructive, idempotent, closedWorld),
+	ToolDeleteOrganizationObject:      annotations(writes, destructive, notIdempotent, closedWorld),
+	ToolReplaceOrganizationCredential: annotations(writes, destructive, idempotent, closedWorld),
 }
 
 func TestMCPToolsMirrorREST(t *testing.T) {
@@ -637,6 +637,26 @@ func TestMCPErrorsCarryTheCodeOnce(t *testing.T) {
 	}
 	got := errResult(errors.New("boom")).Content[0].(mcp.TextContent).Text
 	assert.Equal(t, "backend_error: boom", got)
+}
+
+func TestErrResultNamesTheMissingGrant(t *testing.T) {
+	res := errResult(fmt.Errorf("create: %w", &agents.GrantRequiredError{App: "github", Reason: "grant it"}))
+	require.True(t, res.IsError)
+	require.Equal(t, "grant_required: grant it", res.Content[0].(mcp.TextContent).Text)
+	raw, err := json.Marshal(res)
+	require.NoError(t, err)
+	var wire struct {
+		StructuredContent map[string]any `json:"structuredContent"`
+	}
+	require.NoError(t, json.Unmarshal(raw, &wire))
+	require.Equal(t, map[string]any{"status": "grant_required", "apps": []any{"github"}, "message": "grant it"}, wire.StructuredContent)
+	require.Len(t, res.Content, 2)
+	var serialized map[string]any
+	require.NoError(t, json.Unmarshal([]byte(res.Content[1].(mcp.TextContent).Text), &serialized))
+	require.Equal(t, wire.StructuredContent, serialized, "the second text block is the structured content serialized")
+
+	_, code := statusFor(&agents.GrantRequiredError{App: "github", Reason: "grant it"})
+	require.Equal(t, "auth_required", code, "REST keeps answering auth_required")
 }
 
 func TestSpecToUpdateTags(t *testing.T) {

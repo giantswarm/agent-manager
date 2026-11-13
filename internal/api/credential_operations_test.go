@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -68,12 +69,15 @@ func answerCredentialResourceVersions(t *testing.T, client *dynamicfake.FakeDyna
 			if err != nil {
 				return true, nil, err
 			}
-			if stored.(*unstructured.Unstructured).GetResourceVersion() != object.GetResourceVersion() {
+			// An update without a resourceVersion is unconditional, as the API
+			// server allows for these kinds; one with a stale version conflicts.
+			current := stored.(*unstructured.Unstructured).GetResourceVersion()
+			if object.GetResourceVersion() != "" && object.GetResourceVersion() != current {
 				return true, nil, apierrors.NewConflict(action.GetResource().GroupResource(), object.GetName(), errors.New("stale version"))
 			}
 			version := 0
-			if object.GetResourceVersion() != "" {
-				version, err = strconv.Atoi(object.GetResourceVersion())
+			if current != "" {
+				version, err = strconv.Atoi(current)
 				require.NoError(t, err)
 			}
 			object.SetResourceVersion(strconv.Itoa(version + 1))
@@ -169,6 +173,77 @@ func valuesBody(t *testing.T, result organizations.ResourceResult, value string)
 	raw, err := json.Marshal(map[string]any{"values": values})
 	require.NoError(t, err)
 	return string(raw)
+}
+
+func TestCredentialOperationSavesEscapedValuesOverHTTP(t *testing.T) {
+	consumer := connector("gh", "tenant-credential-0", "token")
+	require.NoError(t, unstructured.SetNestedField(consumer.Object, "https://mcp.example.com/mcp", "spec", "url"))
+	headers := make([]any, 16)
+	for index := range headers {
+		headers[index] = map[string]any{
+			"name":      fmt.Sprintf("X-Credential-%d", index),
+			"valueFrom": map[string]any{"type": "Secret", "name": fmt.Sprintf("tenant-credential-%d", index), "key": "token"},
+		}
+	}
+	require.NoError(t, unstructured.SetNestedSlice(consumer.Object, headers, "spec", "headersFrom"))
+	fixture := newOrgFixture(t, consumer)
+	answer, failed := fixture.call(t, ToolSetOrganizationConnector, map[string]any{"namespace": orgNS, "name": "gh"})
+	require.False(t, failed, answer)
+	var operation organizations.ResourceResult
+	require.NoError(t, json.Unmarshal([]byte(answer), &operation))
+	require.Len(t, operation.Credentials, 16)
+	confirmation := confirmOperation(t, fixture, operation.CredentialOperation)
+	value := strings.Repeat("\x01", 16*1024)
+	body := valuesBody(t, operation, value)
+	require.Greater(t, len(body), maxBodyBytes)
+	require.Less(t, len(body), maxCredentialBodyBytes)
+	service, _ := newService(t)
+	mux := http.NewServeMux()
+	NewREST(service, nil, WithOrganizations(fixture.orgs)).Register(mux)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		mux.ServeHTTP(writer, request.WithContext(fixture.ctx))
+	}))
+	t.Cleanup(server.Close)
+	request, err := http.NewRequestWithContext(t.Context(), http.MethodPost, server.URL+Prefix+"/credential-operations/"+operation.CredentialOperation, strings.NewReader(body))
+	require.NoError(t, err)
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("If-Match", `"`+confirmation.Version+`"`)
+	response, err := server.Client().Do(request)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = response.Body.Close() })
+	require.Equal(t, http.StatusOK, response.StatusCode)
+	require.Equal(t, "no-store", response.Header.Get("Cache-Control"))
+	var result organizations.ResourceResult
+	require.NoError(t, json.NewDecoder(response.Body).Decode(&result))
+	require.False(t, result.Pending)
+	for _, credential := range operation.Credentials {
+		secret := fixture.get(t, secretGVR, orgNS, credential.Secret)
+		require.NotNil(t, secret)
+		stored, found, err := unstructured.NestedString(secret.Object, "data", credential.Key)
+		require.NoError(t, err)
+		require.True(t, found)
+		require.True(t, stored == base64.StdEncoding.EncodeToString([]byte(value)))
+	}
+}
+
+func TestCredentialOperationBodyLimit(t *testing.T) {
+	for _, size := range []int{maxCredentialBodyBytes, maxCredentialBodyBytes + 1} {
+		t.Run(strconv.Itoa(size), func(t *testing.T) {
+			fixture := newOrgFixture(t)
+			operation := prepareModelOperation(t, fixture, nil)
+			confirmation := confirmOperation(t, fixture, operation.CredentialOperation)
+			body := valuesBody(t, operation, "synthetic-value")
+			body += strings.Repeat(" ", size-len(body))
+			status, answer, headers := operationHTTP(t, fixture, http.MethodPost, operation.CredentialOperation, confirmation.Version, body, nil)
+			require.Equal(t, "no-store", headers.Get("Cache-Control"))
+			if size == maxCredentialBodyBytes {
+				require.Equal(t, http.StatusOK, status, answer)
+			} else {
+				require.Equal(t, http.StatusBadRequest, status)
+				require.Nil(t, fixture.get(t, secretGVR, orgNS, "tenant-credential-claude"))
+			}
+		})
+	}
 }
 
 func TestCredentialOperationCreatesAndRetriesWithoutAnotherWrite(t *testing.T) {
@@ -347,9 +422,11 @@ func TestConnectorCredentialOperationDeduplicatesSharedHeaderReferences(t *testi
 				if replace {
 					seedSecret(t, fixture, "tenant-credential-gh", "token")
 				}
-				answer, failed := fixture.call(t, ToolSetOrganizationConnector, map[string]any{
-					"namespace": orgNS, "name": "gh", "replaceCredential": replace, "mode": mode,
-				})
+				tool, arguments := ToolSetOrganizationConnector, map[string]any{"namespace": orgNS, "name": "gh", "mode": mode}
+				if replace {
+					tool, arguments = ToolReplaceOrganizationCredential, map[string]any{"namespace": orgNS, "secret": ghSecret, "key": "token", "mode": mode}
+				}
+				answer, failed := fixture.call(t, tool, arguments)
 				require.False(t, failed, answer)
 				var result organizations.ResourceResult
 				require.NoError(t, json.Unmarshal([]byte(answer), &result))
@@ -473,7 +550,7 @@ func TestCredentialCommitReplacesAnEncryptedSecret(t *testing.T) {
 	consumer.SetLabels(fromGitLabels("payments"))
 	fixture, forge = commitFixture(t, base, consumer)
 	seedSecret(t, fixture, "tenant-credential-claude", "apiKey")
-	replacement := prepareModelOperation(t, fixture, map[string]any{"mode": "commit", "replaceCredential": true})
+	replacement := replaceCredential(t, fixture, map[string]any{"secret": claudeSecret, "key": "apiKey", "mode": "commit"})
 	confirmation = confirmOperation(t, fixture, replacement.CredentialOperation)
 	status, answer, _ = operationHTTP(t, fixture, http.MethodPost, replacement.CredentialOperation, confirmation.Version, valuesBody(t, replacement, "replacement-synthetic-value"), nil)
 	require.Equal(t, http.StatusOK, status, answer)
@@ -505,12 +582,8 @@ func testCredentialPartialApply(t *testing.T, interveningEdit bool) {
 	secret := fixture.get(t, secretGVR, orgNS, "tenant-credential-claude")
 	if interveningEdit {
 		secret.SetAnnotations(map[string]string{credentialOperationAnnotation: result.ElicitationID, "other-writer": "changed"})
-		_, err := fixture.dyn.Resource(secretGVR).Namespace(orgNS).Update(t.Context(), secret, metav1.UpdateOptions{})
+		err := fixture.dyn.Tracker().Update(secretGVR, secret, orgNS)
 		require.NoError(t, err)
-		status, answer, _ := operationHTTP(t, fixture, http.MethodPost, result.CredentialOperation, confirmation.Version, valuesBody(t, result, "replacement-synthetic-value"), nil)
-		require.Equal(t, http.StatusConflict, status, answer)
-		require.Nil(t, fixture.get(t, mcGVR, orgNS, "claude"))
-		return
 	}
 	status, answer, _ := operationHTTP(t, fixture, http.MethodPost, result.CredentialOperation, confirmation.Version, valuesBody(t, result, "replacement-synthetic-value"), nil)
 	require.Equal(t, http.StatusOK, status, answer)
@@ -519,9 +592,14 @@ func testCredentialPartialApply(t *testing.T, interveningEdit bool) {
 	require.NoError(t, err)
 	require.Equal(t, base64.StdEncoding.EncodeToString([]byte("first-synthetic-value")), value)
 	require.NotNil(t, fixture.get(t, mcGVR, orgNS, "claude"))
+	if interveningEdit {
+		require.Equal(t, "changed", secret.GetAnnotations()["other-writer"], "the retry neither reads nor rewrites a Secret an earlier attempt wrote")
+	}
 }
 
-func TestCredentialApplyRefusesAnInterveningSecretEdit(t *testing.T) {
+// The retry after a partial apply leaves the Secret its first attempt wrote
+// as it finds it: it never reads it, so an edit in between is not judged.
+func TestCredentialApplyRetryLeavesAWrittenSecretAlone(t *testing.T) {
 	testCredentialPartialApply(t, true)
 }
 
@@ -555,11 +633,16 @@ func TestCredentialReplacementKeepsOrdinaryEditsSeparate(t *testing.T) {
 	require.False(t, failed, text)
 	require.NotContains(t, text, "credentialOperation")
 	for _, action := range fixture.dyn.Actions()[before:] {
-		if action.GetResource().Resource == "secrets" {
-			require.NotContains(t, []string{"create", "update", "patch", "delete"}, action.GetVerb())
+		if action.GetResource().Resource != "secrets" {
+			continue
 		}
+		// The dry-run create that tells the Secret exists writes nothing.
+		if creation, ok := action.(k8stesting.CreateActionImpl); ok && slices.Equal(creation.CreateOptions.DryRun, []string{metav1.DryRunAll}) {
+			continue
+		}
+		require.NotContains(t, []string{"create", "update", "patch", "delete"}, action.GetVerb())
 	}
-	result := prepareModelOperation(t, fixture, map[string]any{"replaceCredential": true, "requestId": "rotation"})
+	result := replaceCredential(t, fixture, map[string]any{"secret": claudeSecret, "key": "apiKey", "requestId": "rotation"})
 	confirmation := confirmOperation(t, fixture, result.CredentialOperation)
 	status, answer, _ := operationHTTP(t, fixture, http.MethodPost, result.CredentialOperation, confirmation.Version, valuesBody(t, result, "replacement-value"), nil)
 	require.Equal(t, http.StatusOK, status, answer)
@@ -567,4 +650,120 @@ func TestCredentialReplacementKeepsOrdinaryEditsSeparate(t *testing.T) {
 	data, _, err := unstructured.NestedString(secret.Object, "data", "apiKey")
 	require.NoError(t, err)
 	require.Equal(t, base64.StdEncoding.EncodeToString([]byte("replacement-value")), data)
+}
+
+func TestCredentialOperationRequiresIfMatch(t *testing.T) {
+	for _, method := range []string{http.MethodPost, http.MethodDelete} {
+		t.Run(method, func(t *testing.T) {
+			fixture := newOrgFixture(t)
+			result := prepareModelOperation(t, fixture, nil)
+			confirmOperation(t, fixture, result.CredentialOperation)
+			status, answer, headers := operationHTTP(t, fixture, method, result.CredentialOperation, "", valuesBody(t, result, "sensitive-fixture"), nil)
+			require.Equal(t, http.StatusPreconditionRequired, status, answer)
+			require.Contains(t, answer, `"precondition_required"`)
+			require.Equal(t, "no-store", headers.Get("Cache-Control"))
+			require.NotContains(t, answer, "sensitive-fixture")
+			require.Nil(t, fixture.get(t, secretGVR, orgNS, "tenant-credential-claude"))
+		})
+	}
+}
+
+// A Secret that appears between the preparation and the save is refused at
+// the save's dry-run create: nothing overwrites it and no consumer is written.
+func TestCredentialSaveRefusesASecretCreatedSinceThePreparation(t *testing.T) {
+	fixture := newOrgFixture(t)
+	result := prepareModelOperation(t, fixture, nil)
+	confirmation := confirmOperation(t, fixture, result.CredentialOperation)
+	seedSecret(t, fixture, "tenant-credential-claude", "apiKey")
+
+	status, answer, _ := operationHTTP(t, fixture, http.MethodPost, result.CredentialOperation, confirmation.Version, valuesBody(t, result, "synthetic-value"), nil)
+	require.Equal(t, http.StatusConflict, status, answer)
+	secret := fixture.get(t, secretGVR, orgNS, "tenant-credential-claude")
+	value, _, err := unstructured.NestedString(secret.Object, "data", "apiKey")
+	require.NoError(t, err)
+	require.Equal(t, base64.StdEncoding.EncodeToString([]byte(liveValue)), value)
+	require.Nil(t, fixture.get(t, mcGVR, orgNS, "claude"))
+}
+
+// A Secret its ModelConfig reports without the key (kagent's ResolvedRefs
+// False, APIKeySecretKeyNotFound, for the current generation) is missing: the
+// person enters the value and the Secret is written whole. A condition of an
+// older generation says nothing about the current one.
+func TestCredentialKeyMissingFromAnExistingSecret(t *testing.T) {
+	for _, current := range []bool{true, false} {
+		t.Run(fmt.Sprintf("current generation %t", current), func(t *testing.T) {
+			live := model("claude", true)
+			live.SetGeneration(2)
+			observed := int64(2)
+			if !current {
+				observed = 1
+			}
+			require.NoError(t, unstructured.SetNestedSlice(live.Object, []any{map[string]any{
+				"type": "ResolvedRefs", "status": "False", "reason": "APIKeySecretKeyNotFound", "message": "secret tenant-credential-claude does not contain key apiKey",
+				"observedGeneration": observed, "lastTransitionTime": "2026-11-10T00:00:00Z",
+			}}, "status", "conditions"))
+			fixture := newOrgFixture(t, live)
+			seedSecret(t, fixture, "tenant-credential-claude", "other")
+
+			text, failed := fixture.call(t, ToolSetOrganizationModel, map[string]any{"namespace": orgNS, "name": "claude", "provider": "Anthropic", "model": "claude-sonnet-4-6"})
+			require.False(t, failed, text)
+			var result organizations.ResourceResult
+			require.NoError(t, json.Unmarshal([]byte(text), &result))
+			if !current {
+				require.Equal(t, organizations.CredentialPresent, result.Credentials[0].State, text)
+				require.Empty(t, result.CredentialOperation, text)
+				return
+			}
+			require.Equal(t, organizations.CredentialMissing, result.Credentials[0].State, text)
+			require.NotEmpty(t, result.CredentialOperation, text)
+
+			confirmation := confirmOperation(t, fixture, result.CredentialOperation)
+			status, answer, _ := operationHTTP(t, fixture, http.MethodPost, result.CredentialOperation, confirmation.Version, valuesBody(t, result, "entered-value"), nil)
+			require.Equal(t, http.StatusOK, status, answer)
+			data, _, err := unstructured.NestedMap(fixture.get(t, secretGVR, orgNS, "tenant-credential-claude").Object, "data")
+			require.NoError(t, err)
+			require.Equal(t, map[string]any{"apiKey": base64.StdEncoding.EncodeToString([]byte("entered-value"))}, data)
+		})
+	}
+}
+
+// A replacement admission refuses (a Secret git applied, which only its
+// Flux ServiceAccount changes) is refused when it is prepared, by a dry-run
+// update, before a person enters a value: no operation, nothing written.
+func TestCredentialReplacementAdmissionRefusesBeforeAValueIsEntered(t *testing.T) {
+	fixture := newOrgFixture(t, model("claude", true))
+	seedSecret(t, fixture, "tenant-credential-claude", "apiKey")
+	fixture.dryRuns.Refuse = func(object *unstructured.Unstructured) error {
+		if object.GetKind() == "Secret" {
+			return apierrors.NewForbidden(schema.GroupResource{Resource: "secrets"}, object.GetName(), errors.New("a Secret applied from an organization path in git is changed in git"))
+		}
+		return nil
+	}
+
+	text, failed := fixture.call(t, ToolReplaceOrganizationCredential, map[string]any{"namespace": orgNS, "secret": claudeSecret, "key": "apiKey"})
+	require.True(t, failed, text)
+	require.Contains(t, text, "changed in git")
+	require.NotContains(t, text, "credentialOperation")
+	data, _, err := unstructured.NestedMap(fixture.get(t, secretGVR, orgNS, "tenant-credential-claude").Object, "data")
+	require.NoError(t, err)
+	require.Equal(t, map[string]any{"apiKey": base64.StdEncoding.EncodeToString([]byte(liveValue))}, data)
+}
+
+// A replacement writes the credential Secret whole, as the caller, without
+// reading it first: the one key the operation names, nothing else.
+func TestCredentialReplacementWritesTheSecretWhole(t *testing.T) {
+	fixture := newOrgFixture(t, model("claude", true))
+	seedSecret(t, fixture, "tenant-credential-claude", "apiKey")
+	stored := fixture.get(t, secretGVR, orgNS, "tenant-credential-claude")
+	require.NoError(t, unstructured.SetNestedField(stored.Object, base64.StdEncoding.EncodeToString([]byte(liveValue)), "data", "other"))
+	require.NoError(t, fixture.dyn.Tracker().Update(secretGVR, stored, orgNS))
+
+	result := replaceCredential(t, fixture, map[string]any{"secret": claudeSecret, "key": "apiKey"})
+	confirmation := confirmOperation(t, fixture, result.CredentialOperation)
+	status, answer, _ := operationHTTP(t, fixture, http.MethodPost, result.CredentialOperation, confirmation.Version, valuesBody(t, result, "replacement-value"), nil)
+	require.Equal(t, http.StatusOK, status, answer)
+
+	data, _, err := unstructured.NestedMap(fixture.get(t, secretGVR, orgNS, "tenant-credential-claude").Object, "data")
+	require.NoError(t, err)
+	require.Equal(t, map[string]any{"apiKey": base64.StdEncoding.EncodeToString([]byte("replacement-value"))}, data)
 }

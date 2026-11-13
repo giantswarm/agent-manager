@@ -31,6 +31,7 @@ import (
 	"github.com/giantswarm/agent-manager/internal/oci"
 	"github.com/giantswarm/agent-manager/internal/organizations"
 	"github.com/giantswarm/agent-manager/internal/server"
+	"github.com/giantswarm/agent-manager/internal/skillmanager"
 	"github.com/giantswarm/agent-manager/internal/skills"
 	"github.com/giantswarm/agent-manager/internal/toolchainmanager"
 	"github.com/giantswarm/agent-manager/internal/workspaces"
@@ -77,11 +78,14 @@ type serveOptions struct {
 	skillsGitAuth      string
 	skillsGitAuthPrev  string
 	skillsGitAuthMint  bool
+	defaultModelAgent  string
 	skillsCacheTTL     time.Duration
+	skillManagerURL    string
 
 	kagentTarget string
 
-	multiTenant bool
+	multiTenant  bool
+	installation string
 	// orgsRepository, orgsBranch, orgsObjectsPath and orgsContentPrefix
 	// are where the organization tools' mode commit writes.
 	orgsRepository    string
@@ -110,6 +114,7 @@ type serveOptions struct {
 	githubAPIURL                  string
 	githubExchangeEndpoint        string
 	githubExchangeClient          string
+	githubExchangeClientFile      string
 	githubExchangeSecretFile      string
 	githubExchangeAudience        string
 	githubExchangeCAFile          string
@@ -165,6 +170,8 @@ environment variable named next to it; flags win over the environment.`,
 	f.StringVar(&o.skillsGitAuth, "skills-git-auth-secret-name", envOr("AGENT_MANAGER_SKILLS_GIT_AUTH_SECRET_NAME", ""), "Secret (key token) in the agent's namespace every agent with a git skill fetches its skills with, unless the agent names its own gitAuthSecretName; composed as the chart value skillsGitAuthSecretRef.name. Empty: such agents fetch anonymously (AGENT_MANAGER_SKILLS_GIT_AUTH_SECRET_NAME)")
 	f.StringVar(&o.skillsGitAuthPrev, "skills-git-auth-previous-secret-names", envOr("AGENT_MANAGER_SKILLS_GIT_AUTH_PREVIOUS_SECRET_NAMES", ""), "Comma-separated earlier names of the --skills-git-auth-secret-name Secret: an agent that names one is composed with the current name on its next update (agent-manager migrate moves the rest), and with --skills-git-auth-mint their Secrets are kept filled too until no agent names them (AGENT_MANAGER_SKILLS_GIT_AUTH_PREVIOUS_SECRET_NAMES)")
 	f.BoolVar(&o.skillsGitAuthMint, "skills-git-auth-mint", envBool("AGENT_MANAGER_SKILLS_GIT_AUTH_MINT", false), "Keep the Secret --skills-git-auth-secret-name names filled with the skills GitHub App's installation token in every managed namespace, refreshed before it expires; the Secret must exist (the chart renders it) and the ServiceAccount may update it. Needs the skills GitHub App (AGENT_MANAGER_SKILLS_GIT_AUTH_MINT)")
+	f.StringVar(&o.defaultModelAgent, "default-model-agent", envOr("AGENT_MANAGER_DEFAULT_MODEL_AGENT", ""), "Agent in --kagent-namespace whose empty modelConfig is filled with the namespace's default model, never changed once set; checked at start and every 30s as the ServiceAccount (get and patch on that Agent, list on ModelConfigs); empty: off (AGENT_MANAGER_DEFAULT_MODEL_AGENT)")
+	f.StringVar(&o.skillManagerURL, "skill-manager-url", envOr("AGENT_MANAGER_SKILL_MANAGER_URL", ""), "Base URL of skill-manager (http://skill-manager.agent-platform.svc:8080): skills and plugins are pinned through its POST /v1/resolve and list_skills proxies its GET /v1/skills, as the caller; --skills-repositories is then unused. Empty: skills are discovered and pinned in process, deprecated (AGENT_MANAGER_SKILL_MANAGER_URL)")
 	f.DurationVar(&o.skillsCacheTTL, "skills-cache-ttl", envDuration("AGENT_MANAGER_SKILLS_CACHE_TTL", 5*time.Minute), "How long a repository's discovered skills are reused (AGENT_MANAGER_SKILLS_CACHE_TTL)")
 	f.StringVar(&o.kagentTarget, "kagent-target", envOr("AGENT_MANAGER_KAGENT_TARGET", ""), "The kagent controller's gRPC target through agentgateway, which list_sessions, get_session, get_session_turn, start_session and delete_session call as the caller: grpc://host:port (h2c, the in-cluster agentgateway Service) or grpcs://host[:port] (TLS). Empty: the session tools answer unsupported. Needs --enable-oauth for a caller token (AGENT_MANAGER_KAGENT_TARGET)")
 	f.BoolVar(&o.multiTenant, "multi-tenant", envBool("AGENT_MANAGER_MULTI_TENANT", false), "Manage the organization namespaces beside the configured ones: those labelled "+apov1alpha1.OrganizationLabel+", which agent-platform-operator keeps (never --kagent-namespace), found by label with the ServiceAccount's read of namespaces; and serve the organization tools, which act as the caller. Needs --downstream-oauth (AGENT_MANAGER_MULTI_TENANT)")
@@ -172,6 +179,7 @@ environment variable named next to it; flags win over the environment.`,
 	f.StringVar(&o.orgsBranch, "organizations-branch", envOr("AGENT_MANAGER_ORGANIZATIONS_BRANCH", "main"), "The branch of --organizations-repository the pull requests go to (AGENT_MANAGER_ORGANIZATIONS_BRANCH)")
 	f.StringVar(&o.orgsObjectsPath, "organizations-objects-path", envOr("AGENT_MANAGER_ORGANIZATIONS_OBJECTS_PATH", ""), "The directory of --organizations-repository the installation's Kustomization applies the organization objects from, one directory per parent namespace; its kustomization.yaml lists them (AGENT_MANAGER_ORGANIZATIONS_OBJECTS_PATH)")
 	f.StringVar(&o.orgsContentPrefix, "organizations-content-prefix", envOr("AGENT_MANAGER_ORGANIZATIONS_CONTENT_PREFIX", organizations.DefaultContentPrefix), "The directory of --organizations-repository that holds the organizations' content paths, <prefix>/<parent>/<name>: agent-platform-operator's --organization-path without {parent}/{name} (AGENT_MANAGER_ORGANIZATIONS_CONTENT_PREFIX)")
+	f.StringVar(&o.installation, "installation", envOr("AGENT_MANAGER_INSTALLATION", ""), "The installation's name in the Dev Portal, which get_info reports: a portal agent id is <installation>/<namespace>/<name> (AGENT_MANAGER_INSTALLATION)")
 	f.BoolVar(&o.mcpEnabled, "mcp-enabled", envBool("AGENT_MANAGER_MCP_ENABLED", true), "Serve the MCP streamable-HTTP endpoint (AGENT_MANAGER_MCP_ENABLED)")
 	f.StringVar(&o.mcpPath, "mcp-path", envOr("AGENT_MANAGER_MCP_PATH", "/mcp"), "MCP endpoint path (AGENT_MANAGER_MCP_PATH)")
 	f.BoolVar(&o.oauthEnabled, "enable-oauth", envBool("AGENT_MANAGER_OAUTH_ENABLED", false), "Require an OAuth 2.1 bearer token on the MCP endpoint and the REST API, validated against the platform IdP (mcp-oauth); the caller's identity travels with every request (AGENT_MANAGER_OAUTH_ENABLED)")
@@ -191,9 +199,10 @@ environment variable named next to it; flags win over the environment.`,
 	f.StringVar(&o.githubAuthorizationServer, "github-authorization-server", envOr("AGENT_MANAGER_GITHUB_AUTHORIZATION_SERVER", ""), "Issuer identity of the GitHub App muster pins this server's MCP registration to (https://github.com/apps/giantswarm-agent-manager): the bearer of every MCP call is then the person's App user token, verified with GET /user and used for commit mode's pull request, and the person's IdP ID token arrives in X-Muster-Id-Token (MCPServer auth.forwardIdentity). Empty: commit mode is not offered. Needs --enable-oauth (AGENT_MANAGER_GITHUB_AUTHORIZATION_SERVER)")
 	f.StringVar(&o.githubAPIURL, "github-api-url", envOr("AGENT_MANAGER_GITHUB_API_URL", server.DefaultGitHubAPIURL), "GitHub REST API base URL for GET /user and commit mode (AGENT_MANAGER_GITHUB_API_URL)")
 	f.StringVar(&o.githubExchangeEndpoint, "github-token-exchange-endpoint", envOr("AGENT_MANAGER_GITHUB_TOKEN_EXCHANGE_ENDPOINT", ""), "RFC 8693 endpoint for obtaining the manager App user grant (AGENT_MANAGER_GITHUB_TOKEN_EXCHANGE_ENDPOINT)")
-	f.StringVar(&o.githubExchangeClient, "github-token-exchange-client-id", envOr("AGENT_MANAGER_GITHUB_TOKEN_EXCHANGE_CLIENT_ID", ""), "Confidential token exchange client ID (AGENT_MANAGER_GITHUB_TOKEN_EXCHANGE_CLIENT_ID)")
+	f.StringVar(&o.githubExchangeClient, "github-token-exchange-client-id", envOr("AGENT_MANAGER_GITHUB_TOKEN_EXCHANGE_CLIENT_ID", ""), "Confidential token exchange client ID; empty reads --github-token-exchange-client-id-file (AGENT_MANAGER_GITHUB_TOKEN_EXCHANGE_CLIENT_ID)")
+	f.StringVar(&o.githubExchangeClientFile, "github-token-exchange-client-id-file", envOr("AGENT_MANAGER_GITHUB_TOKEN_EXCHANGE_CLIENT_ID_FILE", ""), "Mounted confidential client ID file, read at startup when --github-token-exchange-client-id is empty (AGENT_MANAGER_GITHUB_TOKEN_EXCHANGE_CLIENT_ID_FILE)")
 	f.StringVar(&o.githubExchangeSecretFile, "github-token-exchange-client-secret-file", envOr("AGENT_MANAGER_GITHUB_TOKEN_EXCHANGE_CLIENT_SECRET_FILE", ""), "Mounted confidential client secret file (AGENT_MANAGER_GITHUB_TOKEN_EXCHANGE_CLIENT_SECRET_FILE)")
-	f.StringVar(&o.githubExchangeAudience, "github-token-exchange-audience", envOr("AGENT_MANAGER_GITHUB_TOKEN_EXCHANGE_AUDIENCE", ""), "Fixed target of the manager App user grant (AGENT_MANAGER_GITHUB_TOKEN_EXCHANGE_AUDIENCE)")
+	f.StringVar(&o.githubExchangeAudience, "github-token-exchange-audience", envOr("AGENT_MANAGER_GITHUB_TOKEN_EXCHANGE_AUDIENCE", ""), "RFC 8693 audience of the manager App user grant, also the App named in grant_required answers (AGENT_MANAGER_GITHUB_TOKEN_EXCHANGE_AUDIENCE)")
 	f.StringVar(&o.githubExchangeCAFile, "github-token-exchange-ca-file", envOr("AGENT_MANAGER_GITHUB_TOKEN_EXCHANGE_CA_FILE", ""), "Additional CA bundle for token exchange (AGENT_MANAGER_GITHUB_TOKEN_EXCHANGE_CA_FILE)")
 	f.StringVar(&o.credentialUIURL, "credential-ui-url", envOr("AGENT_MANAGER_CREDENTIAL_UI_URL", ""), "HTTPS credential UI URL template containing {operation}; the URL grants no authority (AGENT_MANAGER_CREDENTIAL_UI_URL)")
 	f.StringVar(&o.credentialOperationsNamespace, "credential-operations-namespace", envOr("AGENT_MANAGER_CREDENTIAL_OPERATIONS_NAMESPACE", ""), "Dedicated namespace for nonsecret credential operation metadata (AGENT_MANAGER_CREDENTIAL_OPERATIONS_NAMESPACE)")
@@ -302,17 +311,35 @@ func runServe(ctx context.Context, o *serveOptions) error {
 	// takes no tags.
 	tagRule := chart.EmbeddedSchema().Tags
 
-	var discoverer *skills.Discoverer
-	if repos := splitList(o.skillsRepositories); len(repos) > 0 {
-		discoverer = skills.New(skills.Config{Repositories: repos, APIURL: o.skillsGitHubAPI, Tokens: skillsTokens, CacheTTL: o.skillsCacheTTL, Tags: tagRule}, log)
-	}
 	// Skills are pinned before they are written: a branch or tag to its head
-	// commit through the GitHub API, an image tag to its digest.
-	pinner := skills.NewResolver(o.skillsGitHubAPI, skillsTokens, nil, nil)
+	// commit, an image tag to its digest — through skill-manager when it is
+	// configured, else in process through the GitHub API (deprecated).
+	var (
+		discoverer   *skills.Discoverer
+		pinner       agents.SkillPinner
+		skillManager agents.SkillCatalog
+	)
+	if o.skillManagerURL != "" {
+		client, err := skillmanager.New(skillmanager.Config{URL: o.skillManagerURL})
+		if err != nil {
+			return fmt.Errorf("--skill-manager-url: %w", err)
+		}
+		pinner, skillManager = client, client
+		if !o.oauthEnabled {
+			// No caller token to forward, and never the service token: as
+			// the service a caller would skip skill-manager's read check.
+			log.Warn("--skill-manager-url without --enable-oauth: skill-manager is called with no bearer, which only a skill-manager without OAuth accepts", "skillManager", o.skillManagerURL)
+		}
+	} else {
+		pinner = agents.InProcessPinner(skills.NewResolver(o.skillsGitHubAPI, skillsTokens, nil, nil))
+		if repos := splitList(o.skillsRepositories); len(repos) > 0 {
+			discoverer = skills.New(skills.Config{Repositories: repos, APIURL: o.skillsGitHubAPI, Tokens: skillsTokens, CacheTTL: o.skillsCacheTTL, Tags: tagRule}, log)
+		}
+	}
 
-	// The one thing agent-manager does without a caller: the boot Secret of
-	// private git skills, written with the ServiceAccount's permission to
-	// update that one Secret.
+	// What agent-manager does without a caller, each with the
+	// ServiceAccount's narrow permission: the boot Secret of private git
+	// skills, and the default agent's model (--default-model-agent).
 	var bootSecret *skills.BootSecret
 	if o.skillsGitAuthMint {
 		bootSecret = skills.NewBootSecret(app, clients.Typed(), o.skillsGitAuth, splitList(o.skillsGitAuthPrev), agents.ManagedNamespaces(o.kagentNamespace, splitList(o.managedNamespaces)), log)
@@ -336,6 +363,16 @@ func runServe(ctx context.Context, o *serveOptions) error {
 		OCIRepositoryInterval: o.ociRepositoryInterval, OCIRepositoryAPIVersion: ociRepositoryAPI}
 	migrate.ConvergeSources(ctx, clients.Dynamic(), agents.ManagedNamespaces(o.kagentNamespace, splitList(o.managedNamespaces)), sourceCompose, log)
 
+	var sessions agents.SessionClient
+	if o.kagentTarget != "" {
+		client, err := kagent.Dial(o.kagentTarget)
+		if err != nil {
+			return fmt.Errorf("--kagent-target: %w", err)
+		}
+		defer func() { _ = client.Close() }()
+		sessions = client
+	}
+
 	// The organization namespaces, found by label with the ServiceAccount's
 	// read of namespaces: the one thing besides discovery the ServiceAccount
 	// reads for a request. What the caller may do there is asked as the
@@ -344,7 +381,7 @@ func runServe(ctx context.Context, o *serveOptions) error {
 	var orgs *organizations.Service
 	var resolveGitHub func(context.Context) (*identity.GitHub, error)
 	if o.githubExchangeEndpoint != "" {
-		resolveGitHub, err = server.NewGitHubExchange(server.GitHubExchangeConfig{TokenEndpoint: o.githubExchangeEndpoint, ClientID: o.githubExchangeClient, ClientSecretFile: o.githubExchangeSecretFile, Audience: o.githubExchangeAudience, CAFile: o.githubExchangeCAFile, APIURL: o.githubAPIURL, SubjectIssuer: o.dexIssuerURL})
+		resolveGitHub, err = server.NewGitHubExchange(server.GitHubExchangeConfig{TokenEndpoint: o.githubExchangeEndpoint, ClientID: o.githubExchangeClient, ClientIDFile: o.githubExchangeClientFile, ClientSecretFile: o.githubExchangeSecretFile, Audience: o.githubExchangeAudience, CAFile: o.githubExchangeCAFile, APIURL: o.githubAPIURL, SubjectIssuer: o.dexIssuerURL, Logger: log})
 		if err != nil {
 			return err
 		}
@@ -365,7 +402,7 @@ func runServe(ctx context.Context, o *serveOptions) error {
 			credentialOperations = organizations.NewCredentialOperations(clients.Typed().CoreV1().ConfigMaps(o.credentialOperationsNamespace))
 			go credentialOperations.Expire(ctx)
 		}
-		orgNamespaces = organizations.NewNamespaces(clients.Typed(), o.kagentNamespace)
+		orgNamespaces = organizations.NewNamespaces(clients.Typed(), clients.Dynamic(), o.kagentNamespace)
 		orgs = organizations.New(provider, organizations.Config{
 			Namespaces:            orgNamespaces,
 			KagentAPIVersion:      kagentVersion,
@@ -373,20 +410,12 @@ func runServe(ctx context.Context, o *serveOptions) error {
 			Commit:                orgsCommit,
 			CredentialUIURL:       o.credentialUIURL,
 			CredentialOperations:  credentialOperations,
+			Sessions:              sessions,
 		}, log)
 	} else if o.orgsRepository != "" {
 		return fmt.Errorf("--organizations-repository needs --multi-tenant: it is where the organization tools commit")
 	}
 
-	var sessions agents.SessionClient
-	if o.kagentTarget != "" {
-		client, err := kagent.Dial(o.kagentTarget)
-		if err != nil {
-			return fmt.Errorf("--kagent-target: %w", err)
-		}
-		defer func() { _ = client.Close() }()
-		sessions = client
-	}
 	var bindings agents.SessionBinder
 	if o.musterBindingsURL != "" {
 		client, err := muster.New(o.musterBindingsURL, nil)
@@ -445,6 +474,11 @@ func runServe(ctx context.Context, o *serveOptions) error {
 		HarnessEgress:    harnessEgress,
 		Toolchains:       toolchains,
 		Tenants:          tenantSetOrNil(orgNamespaces),
+		SkillManager:     skillManager,
+		Installation:     o.installation,
+		// Every listing reports the default agent: read it once per
+		// caller and quarter minute, not per call.
+		DefaultAgentTTL: 15 * time.Second,
 	}, log)
 
 	srvCfg := server.Config{Addr: o.listen, MCPEnabled: o.mcpEnabled, MCPPath: o.mcpPath}
@@ -479,10 +513,13 @@ func runServe(ctx context.Context, o *serveOptions) error {
 	log.Info("agent-manager starting", "version", build.Version, "commit", build.Commit, "listen", o.listen, "rest", api.Prefix, "mcp", o.mcpPath, "mcpEnabled", o.mcpEnabled,
 		"oauth", o.oauthEnabled, "downstreamOAuth", o.downstreamOAuth, "commit", info.Capabilities["commit"], "identity", info.Identity,
 		"namespaces", svc.Managed(ctx), "multiTenant", o.multiTenant, "chart", o.chartOCIURL, "chartSemver", o.chartSemver, "chartVersion", info.Chart.LatestVersion, "schemaSource", info.Chart.SchemaSource,
-		"kagentAPI", kagentVersion, "harness", info.Harness.Name, "musterURL", info.Muster.URL, "helmReleaseAPI", helmReleaseAPI, "ociRepositoryAPI", ociRepositoryAPI, "skillsRepositories", info.SkillsRepositories, "skillsGitHubApp", o.skillsAppID, "skillsGitAuthSecretName", o.skillsGitAuth, "kagentTarget", o.kagentTarget)
+		"kagentAPI", kagentVersion, "harness", info.Harness.Name, "musterURL", info.Muster.URL, "helmReleaseAPI", helmReleaseAPI, "ociRepositoryAPI", ociRepositoryAPI, "skillsRepositories", info.SkillsRepositories, "skillManager", info.SkillManager, "skillsGitHubApp", o.skillsAppID, "skillsGitAuthSecretName", o.skillsGitAuth, "kagentTarget", o.kagentTarget, "defaultModelAgent", o.defaultModelAgent)
 
 	if bootSecret != nil {
 		go bootSecret.Run(ctx)
+	}
+	if o.defaultModelAgent != "" {
+		go agents.NewDefaultModelFollower(clients.Dynamic(), kagentVersion, o.kagentNamespace, o.defaultModelAgent, log).Run(ctx)
 	}
 	return srv.Run(ctx)
 }
@@ -630,9 +667,9 @@ func validateCredentialOptions(options *serveOptions) error {
 		if !options.oauthEnabled || !options.downstreamOAuth || options.oauthProvider != server.ProviderDex || options.githubAuthorizationServer != "" {
 			return errors.New("GitHub token exchange requires Dex OAuth and downstream OAuth, and replaces the GitHub-pinned MCP registration")
 		}
-		return (server.GitHubExchangeConfig{TokenEndpoint: options.githubExchangeEndpoint, ClientID: options.githubExchangeClient, ClientSecretFile: options.githubExchangeSecretFile, Audience: options.githubExchangeAudience, CAFile: options.githubExchangeCAFile, APIURL: options.githubAPIURL, SubjectIssuer: options.dexIssuerURL}).Validate()
+		return (server.GitHubExchangeConfig{TokenEndpoint: options.githubExchangeEndpoint, ClientID: options.githubExchangeClient, ClientIDFile: options.githubExchangeClientFile, ClientSecretFile: options.githubExchangeSecretFile, Audience: options.githubExchangeAudience, CAFile: options.githubExchangeCAFile, APIURL: options.githubAPIURL, SubjectIssuer: options.dexIssuerURL}).Validate()
 	}
-	if options.githubExchangeClient != "" || options.githubExchangeSecretFile != "" || options.githubExchangeAudience != "" || options.githubExchangeCAFile != "" {
+	if options.githubExchangeClient != "" || options.githubExchangeClientFile != "" || options.githubExchangeSecretFile != "" || options.githubExchangeAudience != "" || options.githubExchangeCAFile != "" {
 		return errors.New("GitHub token exchange options require --github-token-exchange-endpoint")
 	}
 	return nil

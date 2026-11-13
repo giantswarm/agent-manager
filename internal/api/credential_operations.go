@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"mime"
 	"net/http"
@@ -13,6 +14,8 @@ import (
 type credentialOperationSave struct {
 	Values []organizations.CredentialValue `json:"values"`
 }
+
+const maxCredentialBodyBytes = 2 << 20
 
 func (h *REST) getCredentialOperation(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
@@ -40,7 +43,7 @@ func (h *REST) saveCredentialOperation(w http.ResponseWriter, r *http.Request) {
 		h.writeError(w, errCredentialBody)
 		return
 	}
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxCredentialBodyBytes))
 	if err != nil {
 		h.writeError(w, errCredentialBody)
 		return
@@ -83,8 +86,15 @@ func (h *REST) cancelCredentialOperation(w http.ResponseWriter, r *http.Request)
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// errIfMatchRequired answers a save or cancellation without If-Match: 428
+// Precondition Required (RFC 6585 §3).
+var errIfMatchRequired = errors.New("If-Match with the confirmation's ETag is required")
+
 func operationVersion(request *http.Request) (string, error) {
 	value := request.Header.Get("If-Match")
+	if value == "" {
+		return "", errIfMatchRequired
+	}
 	if len(value) < 3 || value[0] != '"' || value[len(value)-1] != '"' {
 		return "", errCredentialBody
 	}
