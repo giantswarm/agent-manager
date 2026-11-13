@@ -457,12 +457,13 @@ unknown` and one sentence:
   provenance labels lead to it.
 - `none` — a bare Agent with no HelmRelease behind it: nothing to write to;
   `delete_agent` removes it only with `force`.
-- `unknown` — the caller may not read the Flux HelmReleases and
-  OCIRepositories (in the agent's namespace only `agent-platform:editor`
-  may; a release in another namespace, such as `flux-giantswarm`, is outside
-  the agent-platform roles): `list_agents`, `get_agent` and
-  `get_agent_status` answer from the Agent alone, and `releaseWithheld` says
-  so. A platform label on the Agent keeps `managed: platform` even when
+- `unknown`: a required Flux read was forbidden. `list_agents`, `get_agent`
+  and `get_agent_status` answer from the readable Agent data, and
+  `releaseWithheld` names the owning release's namespace. The editor role
+  grants Flux reads in the site's Flux namespace; no role is recommended for
+  a release elsewhere, such as `flux-giantswarm`. The status summary states
+  when HelmRelease state was not read. A platform label on the Agent keeps
+  `managed: platform` even when
   `releaseWithheld` is set. Agents whose HelmRelease has not rendered an Agent
   yet are not listed.
 

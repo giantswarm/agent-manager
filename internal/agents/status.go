@@ -94,6 +94,9 @@ func (s *Service) status(ctx context.Context, site *site, name string) (*Status,
 	}
 	st.sourceFailure = s.sourceFailure(ctx, site, hr)
 	st.Verdict, st.Summary = verdict(st)
+	if withheld != "" {
+		st.Summary += "; HelmRelease state was not read (Flux access denied)"
+	}
 	return st, nil
 }
 
