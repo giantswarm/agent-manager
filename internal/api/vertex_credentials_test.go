@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/giantswarm/agent-manager/internal/organizations"
@@ -80,6 +81,36 @@ func TestVertexCredentialValidationBeforeWrites(t *testing.T) {
 			require.NotContains(t, answer, "sensitive-")
 			require.Nil(t, fixture.get(t, mcGVR, orgNS, "claude"))
 			require.Nil(t, fixture.get(t, secretGVR, orgNS, result.Credentials[0].Secret))
+		})
+	}
+}
+
+func TestVertexCredentialSavePreservesConsumerStatus(t *testing.T) {
+	for _, provider := range []string{"AnthropicVertexAI", "GeminiVertexAI"} {
+		t.Run(provider, func(t *testing.T) {
+			fixture := newOrgFixture(t)
+			arguments := map[string]any{"provider": provider, "projectID": "vertex-test", "location": "global"}
+			result := prepareModelOperation(t, fixture, arguments)
+			confirmation := confirmOperation(t, fixture, result.CredentialOperation)
+			encoded, err := json.Marshal(vertexCredential(t))
+			require.NoError(t, err)
+			status, answer, _ := operationHTTP(t, fixture, http.MethodPost, result.CredentialOperation, confirmation.Version, valuesBody(t, result, string(encoded)), nil)
+			require.Equal(t, http.StatusOK, status, answer)
+			require.NoError(t, fixture.dyn.Resource(secretGVR).Namespace(orgNS).Delete(t.Context(), result.Credentials[0].Secret, metav1.DeleteOptions{}))
+			arguments["model"] = "vertex-model-edited"
+			result = prepareModelOperation(t, fixture, arguments)
+			confirmation = confirmOperation(t, fixture, result.CredentialOperation)
+			model := fixture.get(t, mcGVR, orgNS, "claude")
+			require.NoError(t, unstructured.SetNestedField(model.Object, "Ready", "status", "phase"))
+			_, err = fixture.dyn.Resource(mcGVR).Namespace(orgNS).UpdateStatus(t.Context(), model, metav1.UpdateOptions{})
+			require.NoError(t, err)
+			status, answer, _ = operationHTTP(t, fixture, http.MethodPost, result.CredentialOperation, confirmation.Version, valuesBody(t, result, string(encoded)), nil)
+			require.Equal(t, http.StatusOK, status, answer)
+			stored := fixture.get(t, mcGVR, orgNS, "claude")
+			modelID, _, _ := unstructured.NestedString(stored.Object, "spec", "model")
+			require.Equal(t, "vertex-model-edited", modelID)
+			phase, _, _ := unstructured.NestedString(stored.Object, "status", "phase")
+			require.Equal(t, "Ready", phase)
 		})
 	}
 }
