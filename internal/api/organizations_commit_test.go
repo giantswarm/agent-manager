@@ -627,6 +627,23 @@ func TestContentToolsCommitIntoTheContentPath(t *testing.T) {
 	assert.NotContains(t, obj.Object, "status")
 }
 
+// In commit mode an explicit workerReplicas 0 is written into a file that
+// has no spec.workers.replicas: left unset, the operator would run its
+// default of 1.
+func TestUpdateOrganizationCommitsAnExplicitZeroWorkerReplicas(t *testing.T) {
+	f, fake := gitOrganization(t)
+	text, isErr := f.call(t, ToolUpdateOrganization, map[string]any{"namespace": "org-acme", "name": "payments", "workerReplicas": 0, "mode": "commit"})
+	require.False(t, isErr, text)
+	res := decode(t, text)
+	assert.Equal(t, []any{"workerReplicas"}, res["changed"])
+	assert.EqualValues(t, 0, res["after"].(map[string]any)["workerReplicas"])
+	require.Len(t, fake.PullRequests(), 1)
+	obj := parseFile(t, fake.Files(mcRepo, fake.PullRequests()[0].Head)[paymentsFile])
+	replicas, found, _ := unstructured.NestedFieldNoCopy(obj.Object, "spec", "workers", "replicas")
+	require.True(t, found, "an explicit 0 is written into the file")
+	assert.EqualValues(t, 0, replicas)
+}
+
 // Every content tool lands its file in the content path in commit mode; a
 // dry run opens nothing; a second change while the object's pull request
 // is open is refused rather than undoing the first in it.

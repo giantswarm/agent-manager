@@ -79,6 +79,15 @@ const (
 	argCacheTTL         = "cacheTTL"
 )
 
+// The workerReplicas argument of create_organization and update_organization:
+// the operator's default (agent-platform-operator's DefaultWorkerReplicas) and
+// when the workers run.
+const (
+	workerReplicasRule              = "0 runs none. They run only while the organization has a model and an agent or a session"
+	createWorkerReplicasDescription = "Warm workers of its WorkerPool; omitted means 1, " + workerReplicasRule
+	updateWorkerReplicasDescription = "Warm workers; omitted keeps the value (none set means 1), " + workerReplicasRule
+)
+
 // JSON Schema keys of the destinations item.
 const (
 	schemaType       = "type"
@@ -186,7 +195,7 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service, l
 		mcp.WithArray(argAdminGroups, mcp.Description("First admins: identity provider groups, as the API server sees them (preferred)"), mcp.Items(stringList)),
 		mcp.WithArray(argAdminUsers, mcp.Description("First admins: users, as the API server sees them"), mcp.Items(stringList)),
 		mcp.WithArray(argHarnesses, mcp.Description("Curated Harnesses the organization gets"), mcp.Items(stringList)),
-		mcp.WithNumber(argWorkerReplicas, mcp.Description("Warm workers of its WorkerPool")),
+		mcp.WithNumber(argWorkerReplicas, mcp.Description(createWorkerReplicasDescription)),
 		dryRun, modeProp,
 		mcp.WithReadOnlyHintAnnotation(false),
 		mcp.WithDestructiveHintAnnotation(false),
@@ -217,7 +226,7 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service, l
 		parentProp, orgNameProp,
 		mcp.WithString(argDisplayName, mcp.Description("Name people see")),
 		mcp.WithArray(argHarnesses, mcp.Description("Curated Harnesses the organization gets"), mcp.Items(stringList)),
-		mcp.WithNumber(argWorkerReplicas, mcp.Description("Warm workers of its WorkerPool")),
+		mcp.WithNumber(argWorkerReplicas, mcp.Description(updateWorkerReplicasDescription)),
 		dryRun, modeProp,
 		mcp.WithReadOnlyHintAnnotation(false),
 		mcp.WithDestructiveHintAnnotation(true),
