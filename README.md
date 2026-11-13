@@ -696,7 +696,11 @@ The organization tools (every name holds `organization`):
   organization with neither `manage` nor `member` is not listed; one the
   caller only belongs to carries its status alone (namespace, `orphaned`,
   `deleting`), and one the caller manages also its summary (`organization`).
-  A New agent can be created where `createAgents` is true.
+  A New agent can be created where `createAgents` is true. When the review
+  for `createAgents` fails (an error, not a denial), the field is left out:
+  a missing `createAgents` means not known. A failed review for `manage` or
+  `member` answers false, because those two decide whether the organization
+  is listed at all, and a missing one could not say whether to list it.
 
 Every write is dry-run as the caller first, all of a call's writes before any
 of them, so RBAC, schemas and admission refuse before anything changes; a
