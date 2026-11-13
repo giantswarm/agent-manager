@@ -187,14 +187,14 @@ func (s *Service) SetModel(ctx context.Context, req ModelRequest) (*ResourceResu
 		obj = newObject(s.apiVersion(), "ModelConfig", ns, req.Name)
 		res.Created = true
 	}
-	if !res.Created {
-		if err := refuseProviderChangeOnSameSecret(obj, req); err != nil {
-			return nil, err
-		}
-	}
 	// The provider before the write: a file in git may leave it out, and then
 	// the live object says what the API server defaulted it to.
 	previous := storedProvider(obj, find(items, req.Name))
+	if !res.Created {
+		if err := refuseProviderChangeOnSameSecret(obj, previous, req); err != nil {
+			return nil, err
+		}
+	}
 	providerChanged := !res.Created && req.Provider != "" && !strings.EqualFold(req.Provider, previous)
 	var carried map[string]any
 	if providerChanged {
@@ -290,9 +290,10 @@ func (s *Service) SetModel(ctx context.Context, req ModelRequest) (*ResourceResu
 // exist, the save writes it first and then the provider and the reference in
 // one write of the model. A model that names no Secret has no key to send to
 // another provider, so its change is not refused; a provider that differs only
-// in case is no change here, and admission judges its spelling.
-func refuseProviderChangeOnSameSecret(obj *unstructured.Unstructured, req ModelRequest) error {
-	current, _, _ := unstructured.NestedString(obj.Object, "spec", "provider")
+// in case is no change here, and admission judges its spelling. current is
+// the stored provider (storedProvider): a file in git that leaves it out has
+// the one the API server defaulted live.
+func refuseProviderChangeOnSameSecret(obj *unstructured.Unstructured, current string, req ModelRequest) error {
 	if req.Provider == "" || current == "" || strings.EqualFold(req.Provider, current) {
 		return nil
 	}

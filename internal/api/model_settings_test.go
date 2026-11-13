@@ -206,6 +206,27 @@ func TestSetModelInCommitModeTakesTheDefaultedProvider(t *testing.T) {
 	assert.Empty(t, provider, "the file keeps leaving it to the default")
 }
 
+// A file in git that leaves the provider out has the one the API server
+// defaulted live: a change to another provider that keeps the Secret is
+// refused as for a stored provider, and opens no pull request.
+func TestSetModelInCommitModeRefusesAChangeFromTheDefaultedProvider(t *testing.T) {
+	path := paymentsPath + "/modelconfig-claude.yaml"
+	inGit := model("claude", true)
+	unstructured.RemoveNestedField(inGit.Object, "spec", "provider")
+	_ = unstructured.SetNestedField(inGit.Object, map[string]any{"maxTokens": int64(4096)}, "spec", "openAI")
+	live := inGit.DeepCopy()
+	_ = unstructured.SetNestedField(live.Object, "OpenAI", "spec", "provider")
+	live.SetLabels(fromGitLabels("payments"))
+	manifest := gitManifest(t, inGit)
+	fixture, forge := commitFixture(t, map[string][]byte{path: manifest}, live)
+	seedSecret(t, fixture, "tenant-credential-claude", "apiKey")
+	text, failed := fixture.call(t, ToolSetOrganizationModel, map[string]any{"namespace": orgNS, "name": "claude", "provider": "Anthropic", "mode": "commit"})
+	require.True(t, failed, text)
+	require.True(t, strings.HasPrefix(text, "conflict:"), text)
+	require.Empty(t, forge.PullRequests())
+	require.Equal(t, manifest, forge.Files(mcRepo, "main")[path])
+}
+
 // Caching turned on in an update of a model that stores no cache time gets
 // the default one, so the file in git says it.
 func TestSetModelCachingTurnedOnGetsTheDefaultCacheTime(t *testing.T) {
