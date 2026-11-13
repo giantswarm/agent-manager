@@ -1341,6 +1341,10 @@ components:
         message: { type: string, description: The Accepted condition's message }
         managedBy: { type: string }
         default: { type: boolean, description: "The namespace default a create without modelConfig writes: the one ModelConfig annotated agent-platform.giantswarm.io/is-default-model-config: \"true\"; none or several annotated is no default" }
+        displayName: { type: string, description: "The name people see, annotation ui.giantswarm.io/display-name" }
+        maxTokens: { type: integer, description: "The token limit of an answer, the provider block's maxTokens; omitted when unset (the provider's default)" }
+        promptCaching: { type: boolean, description: "The provider block's promptCaching (Anthropic, Bedrock), false when unset; omitted for a provider without the setting" }
+        cacheTTL: { type: string, description: "The prompt cache time (5m or 1h), given while promptCaching is true" }
     EgressPolicy:
       type: object
       properties:
