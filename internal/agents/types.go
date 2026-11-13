@@ -136,11 +136,18 @@ const (
 	ManagedGitOps = "gitops"
 	// ManagedNone: a bare Agent object with no HelmRelease behind it.
 	ManagedNone = "none"
+	// ManagedUnknown: the caller may not read the HelmReleases, so whether
+	// one owns the agent is not known (Agent.ReleaseWithheld says why).
+	ManagedUnknown = "unknown"
 	// ManagedPlatform: the agent ships with the Agent Platform (its
 	// HelmRelease or Agent carries PlatformManagedByLabel); it is read-only here and
 	// changes go through the platform's configuration.
 	ManagedPlatform = "platform"
 )
+
+// RoleEditor is the agent-platform role that may read and write a
+// namespace's agent HelmReleases and OCIRepositories.
+const RoleEditor = "agent-platform:editor"
 
 // GitSkill is a skill in a git repository. A write takes the repository and,
 // optionally, a Ref to resolve or a Commit to pin; what is written and read
@@ -498,6 +505,9 @@ type Agent struct {
 	// Values are the HelmRelease's inline values (the chart contract), when a
 	// HelmRelease owns the agent.
 	Values map[string]any `json:"values,omitempty"`
+	// ReleaseWithheld explains a denied Flux read. HelmRelease and Values
+	// are absent; Managed is unknown unless the Agent is platform-owned.
+	ReleaseWithheld string `json:"releaseWithheld,omitempty"`
 }
 
 // AgentSummary is an agent as list_agents reports it unless asked for
@@ -526,10 +536,11 @@ type AgentSummary struct {
 	Default                   bool     `json:"default,omitempty"`
 	// The owning HelmRelease's state, when it needs attention: suspended,
 	// being uninstalled, or not Ready (its reason and message).
-	Suspended      bool   `json:"suspended,omitempty"`
-	Deleting       bool   `json:"deleting,omitempty"`
-	ReleaseReason  string `json:"releaseReason,omitempty"`
-	ReleaseMessage string `json:"releaseMessage,omitempty"`
+	Suspended       bool   `json:"suspended,omitempty"`
+	Deleting        bool   `json:"deleting,omitempty"`
+	ReleaseReason   string `json:"releaseReason,omitempty"`
+	ReleaseMessage  string `json:"releaseMessage,omitempty"`
+	ReleaseWithheld string `json:"releaseWithheld,omitempty"`
 }
 
 // Summary is the agent as an AgentSummary.
@@ -554,6 +565,7 @@ func (a Agent) Summary() AgentSummary {
 		ToolsetBound:              a.ToolsetBound,
 		Ready:                     a.Ready,
 		Managed:                   a.Managed,
+		ReleaseWithheld:           a.ReleaseWithheld,
 		Default:                   a.Default,
 	}
 	if hr := a.HelmRelease; hr != nil {
@@ -719,6 +731,9 @@ type Status struct {
 	Agent       *ObjectStatus      `json:"agent,omitempty"`
 	HelmRelease *HelmReleaseStatus `json:"helmRelease,omitempty"`
 	Events      []Event            `json:"events,omitempty"`
+	// ReleaseWithheld is Agent.ReleaseWithheld: set when HelmRelease is not
+	// reported because the caller may not read it.
+	ReleaseWithheld string `json:"releaseWithheld,omitempty"`
 
 	// sourceFailure is the Ready condition of a chart source that reports a
 	// failure while the HelmRelease waits for it.

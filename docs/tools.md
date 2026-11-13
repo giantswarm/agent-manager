@@ -570,7 +570,7 @@ Another person's session is refused as not_found. While another operation on it 
 ```text
 Get one agent: its HelmRelease values, Harness, pinned skills and plugins, toolset and Agent status.
 
-default: true is the installation's default agent, to preselect when starting a session.
+default: true is the installation's default agent, to preselect when starting a session. If you may not read the agent's HelmRelease, you get the Agent alone with releaseWithheld explaining the denial; managed is unknown unless its platform label establishes ownership.
 ```
 
 ```json
@@ -605,7 +605,7 @@ default: true is the installation's default agent, to preselect when starting a 
 ```text
 One readiness verdict for an agent: ready, progressing, failed or unknown, with a one-line summary.
 
-From the Agent's conditions and warnings, the HelmRelease's conditions and history, and recent Warning events. Poll it after a create or update until ready. No Deployment or pod is involved: agents run as Substrate actors.
+From the Agent's conditions and warnings, the HelmRelease's conditions and history, and recent Warning events. Poll it after a create or update until ready. No Deployment or pod is involved: agents run as Substrate actors. If you may not read the agent's HelmRelease, the verdict comes from the Agent alone and releaseWithheld says why.
 ```
 
 ```json
@@ -771,7 +771,7 @@ detail: transcript (default) clips tool arguments and gives tool results as stub
 ```text
 List the agents of a namespace, one summary each: model, Harness, toolset, readiness and how it is managed.
 
-managed: helmrelease is writable here, gitops only with mode commit, platform ships with the Agent Platform, read-only; none is a bare Agent. default: true is the installation's default agent: preselect it when starting a session. implicitFullAccess: true: the agent sees every gateway tool and still needs a toolset (update_agent). toolsetBound: true: the toolset is bound to each session at its start; else the runtime declares it. Prompt, skills, plugins and values come from get_agent.
+managed: helmrelease is writable here; gitops needs mode commit; platform is read-only; none is a bare Agent; unknown means Flux unreadable and ownership unknown (releaseWithheld explains). default: true marks the default agent to preselect. implicitFullAccess: true means every gateway tool is visible and a toolset is still needed (update_agent). toolsetBound: true binds the toolset at session start; else the runtime declares it. Prompt, skills, plugins and values come from get_agent.
 ```
 
 ```json

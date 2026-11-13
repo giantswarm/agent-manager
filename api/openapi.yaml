@@ -1164,12 +1164,13 @@ components:
         toolset: { $ref: "#/components/schemas/Toolset" }
         implicitFullAccess: { type: boolean }
         ready: { type: [boolean, "null"] }
-        managed: { type: string, enum: [helmrelease, gitops, platform, none] }
+        managed: { type: string, enum: [helmrelease, gitops, platform, none, unknown] }
         default: { type: boolean, description: "The installation's default agent (label agent-platform.giantswarm.io/default); clients preselect it. Absent when not" }
         suspended: { type: boolean, description: The HelmRelease is suspended (absent when not) }
         deleting: { type: boolean, description: helm-controller is uninstalling the release (absent when not) }
         releaseReason: { type: string, description: The HelmRelease's Ready reason, when it is not Ready }
         releaseMessage: { type: string, description: The HelmRelease's Ready message, when it is not Ready }
+        releaseWithheld: { type: string, description: "Set when the caller may not read the Flux HelmReleases and OCIRepositories: why the release fields are absent and managed is unknown unless the Agent is platform-owned and, for a release in the agent's own namespace, the role that may read them (agent-platform:editor)" }
     Agent:
       type: object
       properties:
@@ -1196,10 +1197,11 @@ components:
         tools: { type: array, items: { $ref: "#/components/schemas/ToolBinding" } }
         ready: { type: [boolean, "null"], description: The Agent's verdict (Ready and the desired revision is the latest successful one); null while unreported }
         status: { $ref: "#/components/schemas/ObjectStatus" }
-        managed: { type: string, enum: [helmrelease, gitops, platform, none] }
+        managed: { type: string, enum: [helmrelease, gitops, platform, none, unknown] }
         default: { type: boolean, description: "The installation's default agent (label agent-platform.giantswarm.io/default); clients preselect it. Absent when not" }
         helmRelease: { $ref: "#/components/schemas/HelmReleaseRef" }
         values: { type: object, description: The HelmRelease's inline values (the chart contract) }
+        releaseWithheld: { type: string, description: "Set when the caller may not read the Flux HelmReleases and OCIRepositories: why the release fields are absent and managed is unknown unless the Agent is platform-owned and, for a release in the agent's own namespace, the role that may read them (agent-platform:editor)" }
     Manifests:
       type: object
       properties:
@@ -1314,6 +1316,7 @@ components:
                   status: { type: string }
                   lastDeployed: { type: string }
             lastAttemptedRevision: { type: string }
+        releaseWithheld: { type: string, description: "Set when the caller may not read the agent's HelmRelease: helmRelease is absent, the verdict comes from the Agent alone and, for a release in the agent's own namespace, it names the role that may read it (agent-platform:editor)" }
         events:
           type: array
           description: Recent Warning events on the agent's objects (Agent, RemoteMCPServer, HelmRelease)
