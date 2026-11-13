@@ -2,14 +2,17 @@ package api
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
 	apov1alpha1 "github.com/giantswarm/agent-platform-operator/api/v1alpha1"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	k8stesting "k8s.io/client-go/testing"
 )
 
@@ -108,6 +111,40 @@ func TestWritesToAnOrganizationInPendingEraseAreRefused(t *testing.T) {
 				})
 			}
 		}
+	}
+}
+
+// A caller who may not read in the organization namespace gets forbidden,
+// not the organization's state, which agent-manager reads with its own
+// ServiceAccount.
+func TestACallerWithoutRightsIsNotToldThePendingErase(t *testing.T) {
+	writes := map[string]struct {
+		tool string
+		args map[string]any
+	}{"delete an object": {ToolDeleteOrganizationObject, map[string]any{"kind": "model", "name": "claude"}}}
+	for kind, w := range oneWriteOfEachKind {
+		writes[kind] = w
+	}
+	for kind, w := range writes {
+		t.Run(kind, func(t *testing.T) {
+			f := newOrgFixture(t, pendingErase(t, nil), model("claude", true))
+			for _, verb := range []string{"get", "list"} {
+				f.dyn.PrependReactor(verb, "*", func(a k8stesting.Action) (bool, runtime.Object, error) {
+					if a.GetNamespace() != orgNS {
+						return false, nil, nil
+					}
+					return true, nil, apierrors.NewForbidden(a.GetResource().GroupResource(), "", errors.New("RBAC: access denied"))
+				})
+			}
+			args := map[string]any{"namespace": orgNS}
+			for k, v := range w.args {
+				args[k] = v
+			}
+			text, isErr := f.call(t, w.tool, args)
+			require.True(t, isErr, text)
+			assert.True(t, strings.HasPrefix(text, "forbidden:"), text)
+			assert.NotContains(t, text, "Pending erase")
+		})
 	}
 }
 
