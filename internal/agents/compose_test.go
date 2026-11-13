@@ -220,7 +220,7 @@ func TestBuildHelmReleaseAndOCIRepositoryTrackTheChartRange(t *testing.T) {
 func TestValidateValuesReportsSchemaViolations(t *testing.T) {
 	values := map[string]any{
 		"agent":       map[string]any{"name": "Bad Name", "displayName": strings.Repeat("x", 64), "runtime": "go"},
-		"modelConfig": map[string]any{"name": ""},
+		"modelConfig": map[string]any{"name": 42},
 		"replicas":    2,
 		"muster":      map[string]any{"serverRef": map[string]any{"name": "muster"}, "toolNames": []any{"a"}},
 		"skills": []any{

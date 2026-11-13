@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync/atomic"
 
@@ -193,12 +194,18 @@ func NewMCPServer(svc *agents.Service, version string, opts ...Option) *mcpserve
 	skillsProp := mcp.WithArray(argSkills, mcp.Description(skillDesc), mcp.Items(skillEntry))
 	skillsReplaceProp := mcp.WithArray(argSkills, mcp.Description("Replaces the whole skill list: "+skillShape+"."), mcp.Items(skillEntry))
 	refreshSkillsProp := mcp.WithBoolean(argRefreshSkills, mcp.Description("Re-pin every git skill and git plugin to its default-branch head (with skill-manager: its source's ref); nothing else changes (default false)."))
-	selectorShape := "preset:<name>, server:<name>, workflow:<name> or tool:<name> selectors, at most 32"
+	selectorShape := "preset:, server:, workflow: or tool:; inline limits are validated by the agent chart"
 	toolsetDesc := "Gateway tools the agent may use: " + selectorShape + "; preset:none means no tools."
 	presetsSentence := "Presets: " + strings.Join(agents.PresetSelectors(), ", ") + "."
-	toolsetProp := mcp.WithArray(argToolset, mcp.Description(toolsetDesc), mcp.WithStringItems())
-	toolsetRequiredProp := mcp.WithArray(argToolset, mcp.Required(), mcp.Description(toolsetDesc), mcp.WithStringItems())
-	toolsetReplaceProp := mcp.WithArray(argToolset, mcp.Description("Replaces the whole toolset: "+selectorShape+"; [] is refused: use preset:none."), mcp.WithStringItems())
+	toolsetOptions := []mcp.PropertyOption{mcp.Description(toolsetDesc), mcp.WithStringItems()}
+	if svc != nil {
+		if maximum := svc.ToolsetMaxItems(context.Background()); maximum > 0 {
+			toolsetOptions = append(toolsetOptions, mcp.MaxItems(maximum))
+		}
+	}
+	toolsetProp := mcp.WithArray(argToolset, toolsetOptions...)
+	toolsetRequiredProp := mcp.WithArray(argToolset, slices.Concat(toolsetOptions, []mcp.PropertyOption{mcp.Required()})...)
+	toolsetReplaceProp := mcp.WithArray(argToolset, slices.Concat(toolsetOptions, []mcp.PropertyOption{mcp.Description("Replaces the whole toolset: " + selectorShape + "; [] is refused: use preset:none.")})...)
 	labelsProp := mcp.WithObject(argLabels, mcp.Description("Extra labels on the Agent object (string values)."), mcp.AdditionalProperties(stringSchema))
 	annotationsProp := mcp.WithObject(argAnnotations, mcp.Description("Extra annotations on the Agent object (string values)."), mcp.AdditionalProperties(stringSchema))
 	labelsReplaceProp := mcp.WithObject(argLabels, mcp.Description("Replaces all extra labels on the Agent object ({} clears them); pass every label to keep."), mcp.AdditionalProperties(stringSchema))

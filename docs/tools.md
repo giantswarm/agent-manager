@@ -302,10 +302,11 @@ name is the DNS-1123 name the person chose, never derived from displayName. mode
       "type": "array"
     },
     "toolset": {
-      "description": "Gateway tools the agent may use: preset:<name>, server:<name>, workflow:<name> or tool:<name> selectors, at most 32; preset:none means no tools.",
+      "description": "Gateway tools the agent may use: preset:, server:, workflow: or tool:; inline limits are validated by the agent chart; preset:none means no tools.",
       "items": {
         "type": "string"
       },
+      "maxItems": 128,
       "type": "array"
     }
   },
@@ -1631,10 +1632,11 @@ Lists are skills, plugins, egress and toolset. "" clears a text field back to th
       "type": "array"
     },
     "toolset": {
-      "description": "Replaces the whole toolset: preset:<name>, server:<name>, workflow:<name> or tool:<name> selectors, at most 32; [] is refused: use preset:none.",
+      "description": "Replaces the whole toolset: preset:, server:, workflow: or tool:; inline limits are validated by the agent chart; [] is refused: use preset:none.",
       "items": {
         "type": "string"
       },
+      "maxItems": 128,
       "type": "array"
     }
   },
@@ -1905,10 +1907,11 @@ Checks the name, modelConfig (omitted: the default), egressPolicyRefs, harness a
       "type": "array"
     },
     "toolset": {
-      "description": "Gateway tools the agent may use: preset:<name>, server:<name>, workflow:<name> or tool:<name> selectors, at most 32; preset:none means no tools.",
+      "description": "Gateway tools the agent may use: preset:, server:, workflow: or tool:; inline limits are validated by the agent chart; preset:none means no tools.",
       "items": {
         "type": "string"
       },
+      "maxItems": 128,
       "type": "array"
     },
     "update": {

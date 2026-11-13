@@ -347,6 +347,12 @@ public repositories only.
 
 ## The toolset
 
+Muster owns the runtime limits. The resolved chart supplies the declaration's
+count through `values.schema.json` and checks aggregate UTF-8 bytes during render.
+The MCP input schema publishes that count for Backstage's existing `describe_tool`
+reader; agent-manager keeps no independent count or header-byte definition. Session
+bindings also check their complete serialized JSON against Muster's 16 KiB budget.
+
 Every agent declares a **toolset**: the list of selectors that bounds which of
 the gateway's tools its meta-tools can see and call. It is the agent chart's
 top-level `toolset` value, which the chart renders as the `X-Muster-Toolset`
@@ -358,7 +364,7 @@ list exactly as given — it never resolves a toolset, and it never writes
 so).
 
 - Selectors: `preset:<name>`, `server:<name>`, `workflow:<name>`,
-  `tool:<name>` — exact, case-sensitive names; at most 32 inline (define a
+  `tool:<name>` — exact, case-sensitive names; at most 128 inline and 8192 UTF-8 bytes joined by commas (define a
   preset for more). `toolset:<name>` is reserved; `label:` selectors exist
   inside presets only.
 - Presets every installation has: `read-only`, `none`, `infrastructure`,
