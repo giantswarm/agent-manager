@@ -15,6 +15,8 @@ type credentialOperationSave struct {
 	Values []organizations.CredentialValue `json:"values"`
 }
 
+const maxCredentialBodyBytes = 2 << 20
+
 func (h *REST) getCredentialOperation(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	if h.orgs == nil {
@@ -41,7 +43,7 @@ func (h *REST) saveCredentialOperation(w http.ResponseWriter, r *http.Request) {
 		h.writeError(w, errCredentialBody)
 		return
 	}
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxCredentialBodyBytes))
 	if err != nil {
 		h.writeError(w, errCredentialBody)
 		return

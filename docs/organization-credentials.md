@@ -96,6 +96,8 @@ authentication profile and Kubernetes downstream authorization.
    `{"values":[{"secret":"tenant-credential-example","key":"apiKey","value":"<entered value>"}]}`.
    Supply exactly the requested pairs. `DELETE` with `If-Match` cancels a pending
    operation. Responses carry `Cache-Control: no-store`.
+   The credential POST accepts JSON bodies up to 2 MiB, including escaped values;
+   other REST request bodies retain their existing limit.
 4. Retry the original MCP call with identical arguments and client/session
    context. It returns the saved receipt. Opening or accepting the URL alone
    never confirms a save. A cancelled operation requires a new `requestId`.
