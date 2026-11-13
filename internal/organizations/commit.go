@@ -69,7 +69,8 @@ type RemoteFor = agents.RemoteFor
 
 // CommitConfig is where commit mode writes an installation's organizations.
 type CommitConfig struct {
-	User func(context.Context) (*identity.GitHub, error)
+	PlatformModelsPath string
+	User               func(context.Context) (*identity.GitHub, error)
 	// GitHub builds the caller's remote.
 	GitHub RemoteFor
 	// Objects is the installation's repository, its branch, and the
@@ -478,13 +479,16 @@ func (s *Service) contentWriter(ctx context.Context, org Namespace, mode string)
 	if mode != agents.ModeCommit {
 		return w, nil
 	}
-	if org.Parent == "" || org.Organization == "" {
+	if org.Scope != scopePlatform && (org.Parent == "" || org.Organization == "") {
 		return nil, fmt.Errorf("%w: namespace %s does not name its organization (labels %s and %s): its content path is unknown", agents.ErrConflict, org.Name, "agent-platform.giantswarm.io/parent", "agent-platform.giantswarm.io/organization")
 	}
 	if w.commit, err = s.newCommit(ctx); err != nil {
 		return nil, err
 	}
-	w.dir = w.commit.contentDir(org.Parent, org.Organization)
+	w.dir, err = w.commit.credentialDirectory(org)
+	if err != nil {
+		return nil, err
+	}
 	return w, nil
 }
 

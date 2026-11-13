@@ -68,7 +68,10 @@ type Listing struct {
 // answers no for its flag; a refused token fails the call.
 func (s *Service) List(ctx context.Context, parent string) (*Listing, error) {
 	if s.cfg.Namespaces == nil {
-		return nil, fmt.Errorf("%w: agent-manager serves the organization tools without a ServiceAccount to list them", agents.ErrUnsupported)
+		if s.cfg.PlatformNamespace == "" {
+			return nil, fmt.Errorf("%w: organization management is not configured", agents.ErrUnsupported)
+		}
+		return &Listing{Organizations: []Listed{}}, nil
 	}
 	objects, err := s.cfg.Namespaces.Organizations(ctx, parent)
 	if err != nil {
