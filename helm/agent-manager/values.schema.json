@@ -71,7 +71,7 @@
                 },
                 "platformUIURL": {
                     "type": "string",
-                    "description": "HTTPS installation model credential form template, containing {operation}."
+                    "description": "HTTPS installation model credential form template, containing {operation}. Independent of tenants.enabled and credentials.uiURL; requires downstream OAuth."
                 },
                 "uiURL": {
                     "type": "string",

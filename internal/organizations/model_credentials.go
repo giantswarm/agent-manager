@@ -20,7 +20,7 @@ import (
 )
 
 func (s *Service) modelNamespace(ctx context.Context, namespace string) (Namespace, error) {
-	if s.cfg.Namespaces == nil || namespace == "" || namespace != s.cfg.Namespaces.platform {
+	if namespace == "" || namespace != s.cfg.PlatformNamespace {
 		return s.organization(ctx, namespace)
 	}
 	caller, err := s.caller(ctx)

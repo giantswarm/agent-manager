@@ -180,7 +180,7 @@ meta chart (`components.agent-manager.enabled`), which sets `kagent.namespace`,
 | tenants.commit.objectsPath | string | `""` | The directory the installation's Kustomization applies the organization objects from: `<objectsPath>/<parent>/<name>.yaml`. |
 | tenants.commit.contentPrefix | string | `"agent-platform/organizations"` | The directory of the organizations' content paths, `<contentPrefix>/<parent>/<name>`: agent-platform-operator's `commitMode.path` without `{parent}/{name}`. |
 | tenants.commit.platformModelsPath | string | `""` | Trusted repository-relative directory for installation model commits. |
-| credentials.platformUIURL | string | `""` | HTTPS installation model credential form template, containing {operation}. |
+| credentials.platformUIURL | string | `""` | HTTPS installation model credential form template, containing {operation}. Independent of tenants.enabled and credentials.uiURL; requires downstream OAuth. |
 | credentials.uiURL | string | `""` | HTTPS RFC 6570 URI template with one {operation} expression. The UI owns its routes; agent-manager supplies only a non-authorizing operation ID. |
 | credentials.operationsNamespace | string | `""` | Dedicated namespace for nonsecret operation metadata. Empty derives a namespace from the release. Do not share it with application config. |
 | installation | string | `""` | The installation's name in the Dev Portal, reported by `get_info` as `installation`: a portal agent id is `<installation>/<namespace>/<name>`. Empty: not reported. |
