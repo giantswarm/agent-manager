@@ -902,6 +902,26 @@ func TestWorkerReplicasDefaultIsOneAndAnExplicitZeroIsWritten(t *testing.T) {
 	assert.Empty(t, decode(t, text)["changed"], "a stored 0 is no change")
 }
 
+// An explicit workerReplicas equal to the default is written over an
+// object without the field, so it stays when the operator's default
+// changes; a create with an explicit 0 writes 0.
+func TestWorkerReplicasExplicitValuesAreWritten(t *testing.T) {
+	f := newOrgFixture(t, organization("org-acme", "payments", nil))
+	text, isErr := f.call(t, ToolUpdateOrganization, map[string]any{"namespace": "org-acme", "name": "payments", "workerReplicas": 1})
+	require.False(t, isErr, text)
+	assert.Equal(t, []any{"workerReplicas"}, decode(t, text)["changed"])
+	replicas, found, _ := unstructured.NestedFieldNoCopy(f.get(t, orgGVR, "org-acme", "payments").Object, "spec", "workers", "replicas")
+	require.True(t, found, "an explicit 1 is written")
+	assert.EqualValues(t, 1, replicas)
+
+	f = newOrgFixture(t)
+	text, isErr = f.call(t, ToolCreateOrganization, map[string]any{"namespace": "org-acme", "name": "payments", "adminGroups": []any{"payments-leads"}, "workerReplicas": 0})
+	require.False(t, isErr, text)
+	replicas, found, _ = unstructured.NestedFieldNoCopy(f.get(t, orgGVR, "org-acme", "payments").Object, "spec", "workers", "replicas")
+	require.True(t, found, "a create writes an explicit 0")
+	assert.EqualValues(t, 0, replicas)
+}
+
 // get_organization answers what a delete erases as far as the caller can
 // read it, and names what it cannot read instead of failing.
 func TestGetOrganizationNamesWhatItCannotRead(t *testing.T) {

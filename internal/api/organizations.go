@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"sync"
 
 	apov1alpha1 "github.com/giantswarm/agent-platform-operator/api/v1alpha1"
@@ -82,10 +83,11 @@ const (
 // The workerReplicas argument of create_organization and update_organization:
 // the operator's default (agent-platform-operator's DefaultWorkerReplicas) and
 // when the workers run.
-const (
+var (
+	defaultWorkerReplicas           = strconv.Itoa(int(apov1alpha1.DefaultWorkerReplicas))
 	workerReplicasRule              = "0 runs none. They run only while the organization has a model and an agent or a session"
-	createWorkerReplicasDescription = "Warm workers of its WorkerPool; omitted means 1, " + workerReplicasRule
-	updateWorkerReplicasDescription = "Warm workers; omitted keeps the value (none set means 1), " + workerReplicasRule
+	createWorkerReplicasDescription = "Warm workers of its WorkerPool; omitted means " + defaultWorkerReplicas + ", " + workerReplicasRule
+	updateWorkerReplicasDescription = "Warm workers; omitted keeps the value (none set means " + defaultWorkerReplicas + "), " + workerReplicasRule
 )
 
 // JSON Schema keys of the destinations item.

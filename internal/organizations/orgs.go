@@ -683,6 +683,8 @@ func changeOrganization(next *unstructured.Unstructured, req UpdateRequest) ([]s
 	}
 	// An unset field is the CRD's default, not the requested value: write
 	// the request then too, so an explicit 0 is never taken for "no change".
+	// A request equal to the default is written as well: the value then stays
+	// when the operator's default changes.
 	if req.WorkerReplicas != nil && (cur.Spec.Workers.Replicas == nil || *req.WorkerReplicas != *cur.Spec.Workers.Replicas) {
 		if err := unstructured.SetNestedField(next.Object, int64(*req.WorkerReplicas), "spec", "workers", "replicas"); err != nil {
 			return nil, err
