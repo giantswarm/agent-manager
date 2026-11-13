@@ -43,7 +43,9 @@ import (
 // The roles the tools name: the ones agent-platform's connectivity chart
 // renders (giantswarm/agent-platform#1270).
 const (
-	fieldMetadata = "metadata"
+	fieldMetadata  = "metadata"
+	fieldNamespace = "namespace"
+	scopePlatform  = "platform"
 	// RoleOrganizationsAdmin creates, changes and deletes
 	// AgentPlatformOrganizations, and binds members in their namespaces.
 	RoleOrganizationsAdmin = "agent-platform:organizations-admin"
@@ -73,8 +75,9 @@ var rbacGVR = schema.GroupVersionResource{Group: "rbac.authorization.k8s.io", Ve
 
 // Config is what the tools need besides the caller's client.
 type Config struct {
-	CredentialUIURL      string
-	CredentialOperations *CredentialOperations
+	PlatformCredentialUIURL string
+	CredentialUIURL         string
+	CredentialOperations    *CredentialOperations
 	// Namespaces finds the organization namespaces with the ServiceAccount.
 	Namespaces *Namespaces
 	// KagentAPIVersion is the api.kagent.dev version of the ModelConfigs,

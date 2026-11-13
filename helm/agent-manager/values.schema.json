@@ -69,6 +69,10 @@
                     "type": "string",
                     "description": "Dedicated namespace for nonsecret operation metadata. Empty derives a namespace from the release. Do not share it with application config."
                 },
+                "platformUIURL": {
+                    "type": "string",
+                    "description": "HTTPS installation model credential form template, containing {operation}."
+                },
                 "uiURL": {
                     "type": "string",
                     "description": "HTTPS RFC 6570 URI template with one {operation} expression. The UI owns its routes; agent-manager supplies only a non-authorizing operation ID."
@@ -979,6 +983,10 @@
                         "objectsPath": {
                             "type": "string",
                             "description": "The directory the installation's Kustomization applies the organization objects from: `<objectsPath>/<parent>/<name>.yaml`."
+                        },
+                        "platformModelsPath": {
+                            "type": "string",
+                            "description": "Trusted repository-relative directory for installation model commits."
                         },
                         "repository": {
                             "type": "string",

@@ -28,11 +28,11 @@ type CredentialRequest struct {
 // whole and never read, so a Secret another object reads by a different key
 // is refused: that key would be lost.
 func (s *Service) ReplaceCredential(ctx context.Context, req CredentialRequest) (*ResourceResult, error) {
-	org, err := s.organization(ctx, req.Namespace)
+	org, err := s.modelNamespace(ctx, req.Namespace)
 	if err != nil {
 		return nil, err
 	}
-	if err := credentialRef(req.Secret, req.Key); err != nil {
+	if err := modelCredentialRef(org, req.Secret, req.Key); err != nil {
 		return nil, err
 	}
 	c, err := s.caller(ctx)
@@ -51,6 +51,9 @@ func (s *Service) ReplaceCredential(ctx context.Context, req CredentialRequest) 
 	}
 	var users []string
 	for _, reference := range references {
+		if org.Scope == scopePlatform && reference.Kind != kubeKindModelConfig {
+			return nil, invalidf("installation credential operations support model credentials only")
+		}
 		if reference.Key == req.Key {
 			users = append(users, reference.Kind+" "+reference.Name)
 		}
@@ -79,6 +82,11 @@ func (s *Service) ReplaceCredential(ctx context.Context, req CredentialRequest) 
 		state = CredentialMissing
 	}
 	credential := Credential{Secret: req.Secret, Key: req.Key, State: state, exists: exists}
+	for _, reference := range references {
+		if isVertexModel(live[reference.Kind+"/"+reference.Name]) {
+			credential.InputFormat = "google-service-account-json"
+		}
+	}
 	credential.Next = s.next(credential, users...)
 	res := &ResourceResult{Namespace: org.Name, Kind: KindCredential, Name: req.Secret, DryRun: req.DryRun, RequestedBy: identity.Caller(ctx), Credentials: []Credential{credential}}
 	if err := s.landResource(ctx, w, nil, res, "credential-"+req.Secret, "chore(organizations): replace credential "+req.Secret); err != nil {

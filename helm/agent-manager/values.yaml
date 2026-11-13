@@ -554,8 +554,12 @@ tenants:
     # `<contentPrefix>/<parent>/<name>`: agent-platform-operator's
     # `commitMode.path` without `{parent}/{name}`.
     contentPrefix: agent-platform/organizations
+    # -- Trusted repository-relative directory for installation model commits.
+    platformModelsPath: ""
 
 credentials:
+  # -- HTTPS installation model credential form template, containing {operation}.
+  platformUIURL: ""
   # -- HTTPS RFC 6570 URI template with one {operation} expression. The UI owns
   # its routes; agent-manager supplies only a non-authorizing operation ID.
   uiURL: ""

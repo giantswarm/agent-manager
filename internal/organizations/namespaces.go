@@ -16,6 +16,7 @@ import (
 
 // Namespace is an organization namespace as its labels describe it.
 type Namespace struct {
+	Scope string `json:"scope,omitempty"`
 	// Name is the namespace.
 	Name string `json:"namespace"`
 	// Organization and Parent name its AgentPlatformOrganization
