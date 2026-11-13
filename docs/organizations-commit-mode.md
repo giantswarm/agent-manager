@@ -129,13 +129,46 @@ The erase is refused:
   again, or move the file back and open the delete again. A file that does not parse
   defines nothing, since Kustomize cannot apply it either. When the objects path cannot
   be read (a read fails, or the repository's tree is too large for one read), nothing
-  is erased;
+  is erased (see "What the scan is for" below);
 - when GitHub cannot list the merged pull request's files: whether it removed the file
   is unknown, so nothing is erased. Call again to retry. A pull request of more than
   3000 files never lists, since GitHub lists at most 3000: restore only the object's
   file, not the content path, and open the delete again. The merge removed the content
   path already, so the new delete pull request changes the objects path only, and its
   files list.
+
+### What the scan is for
+
+The scan of the objects path gives an early, clear answer for the usual mistake: a
+delete pull request that moved the organization's file instead of removing it, or a
+later commit that wrote it again. It reads the files as they are, it does not run
+Kustomize, so it does not find these three cases:
+
+- an overlay in a sibling directory that refers to the file (for one, `../../base`)
+  and sets `namespace`, so that Kustomize applies the organization into its parent
+  from a document with another namespace (giantswarm/agent-manager#399);
+- a resource file named `kustomization.yaml` that another kustomization lists as a
+  resource: the scan reads every file of that name as a kustomization only
+  (giantswarm/agent-manager#399);
+- a commit that moves the definition between the scan's tree read and its file reads,
+  a few seconds: each read takes the branch's head again (giantswarm/gitops-commit#70).
+
+These are accepted because the cluster has a second guard, which follows Flux's own
+Kustomize build. The admission policy `agent-platform-organization-delete-intent`
+(giantswarm/agent-platform, `helm/agent-platform-connectivity/templates/organizations/admission.yaml`)
+permits the delete of an organization that carries an `Orphaned` condition (one that
+agent-platform-operator found applied from git) only when that condition is `True`
+with reason `DeleteMerged`. The operator sets `Orphaned=True` only when the
+installation's Flux Kustomization is settled (its generation observed, `Ready` true,
+not reconciling) and its `status.inventory` has no entry for the organization; with
+the delete annotation the reason is `DeleteMerged`. That inventory is what Flux applied
+from the Kustomization's last applied revision. So while a revision that Flux applied
+still builds the organization, by whichever path, the condition is `False`
+(`InInventory`) and the API server refuses the erase. The limit is the same as Flux's:
+a definition written after Flux applied the delete counts only once Flux has applied
+that later revision.
+
+### Reads
 
 To erase, agent-manager reads the delete pull request with pull request reads only:
 whether it is merged (one read), and its files (one read for each 100 files). It does
