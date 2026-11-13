@@ -186,6 +186,14 @@ Secret for all of them, and refuses at preparation and at save an object that
 reads another key of it. Backend refusals are sanitized before
 entering errors or logs.
 
+Direct credential saves tolerate consumer status updates. The saved confirmation
+binds the consumer's UID, configuration and credential references; the final
+update rereads that object and retries resource-version conflicts only while
+that confirmed configuration remains unchanged. Status and managed fields are
+preserved. A changed URL, Secret binding, UID or other configuration still
+requires a new preparation. This does not relax the operation's `If-Match` or
+current permission checks.
+
 Credentials are write-only. Neither the person nor agent-manager reads a
 credential Secret. `get`, `list` and `watch` return its data, and so does a
 `patch` (its response is the stored object), so the organization admin role
@@ -247,13 +255,15 @@ must use the authenticated operation API and its `If-Match` confirmation.
 
 ## Recovery
 
-Resource-version comparisons of the consumers serialize saves across replicas.
+Resource-version comparisons of the operation record serialize saves across replicas.
 Completed retries return the receipt without another write. After a known
 partial apply, refresh the confirmation and retry with the value: a Secret write
 the operation recorded is not repeated, so the first value stays; one it did not
 record is written again: created when the Secret does not exist, otherwise
 updated with the retried value, whoever created it in between. Consumers are
-recognized by their marker and recorded resource version. Only direct writes
+recognized by their marker and recorded configuration hash, including UID;
+status-only changes do not prevent recovery. Records without a configuration
+hash require their exact recorded resource version. Only direct writes
 carry the `agent-manager.giantswarm.io/credential-operation`
 marker; committed files hold the desired state alone. An uncertain Git save
 verifies the same private branch against stored encrypted-file hashes and
