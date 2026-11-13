@@ -177,7 +177,7 @@ func ValidateName(name string) error {
 }
 
 // BuildValues composes the chart values from a spec whose skills are pinned
-// (see pinSkills). Only what the caller set is emitted so the chart's
+// (see pinSources). Only what the caller set is emitted so the chart's
 // defaults apply to everything else — the same rule as the portal (an empty
 // prompt means "the chart's default prompt").
 func BuildValues(spec Spec, cfg ComposeConfig) map[string]any {
@@ -255,8 +255,8 @@ func BuildHelmRelease(name, namespace string, values map[string]any, cfg Compose
 		"namespace": namespace,
 		"labels":    map[string]any{ManagedByLabel: ManagedByValue},
 	}
-	if creator := creatorOf(values); creator != "" {
-		metadata["annotations"] = map[string]any{CreatedByAnnotation: creator}
+	if creator := creatorOf(values); len(creator) > 0 {
+		metadata["annotations"] = creator
 	}
 	return &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": orDefault(cfg.HelmReleaseAPIVersion, DefaultHelmReleaseAPIVersion),
@@ -266,17 +266,27 @@ func BuildHelmRelease(name, namespace string, values map[string]any, cfg Compose
 	}}
 }
 
-// creatorOf reads the creator from the chart's annotations value.
-func creatorOf(values map[string]any) string {
+// creatorAnnotations record who created an agent; agent-manager alone
+// writes them.
+var creatorAnnotations = []string{CreatedByAnnotation, CreatedByNameAnnotation}
+
+// creatorOf reads the creator annotations from the chart's annotations value.
+func creatorOf(values map[string]any) map[string]any {
 	annotations, _ := values["annotations"].(map[string]any)
-	creator, _ := annotations[CreatedByAnnotation].(string)
+	creator := map[string]any{}
+	for _, k := range creatorAnnotations {
+		if v, _ := annotations[k].(string); v != "" {
+			creator[k] = v
+		}
+	}
 	return creator
 }
 
 // setCreator records the creator in the chart's annotations value, which
 // the chart puts on the Agent object; BuildHelmRelease copies it onto the
-// HelmRelease. No caller (a server without OAuth) records nothing.
-func setCreator(values map[string]any, creator string) {
+// HelmRelease. No caller (a server without OAuth) records nothing; no
+// display name records the identifier only.
+func setCreator(values map[string]any, creator, name string) {
 	if creator == "" {
 		return
 	}
@@ -285,6 +295,9 @@ func setCreator(values map[string]any, creator string) {
 		annotations = map[string]any{}
 	}
 	annotations[CreatedByAnnotation] = creator
+	if name != "" {
+		annotations[CreatedByNameAnnotation] = name
+	}
 	values["annotations"] = annotations
 }
 
@@ -292,19 +305,28 @@ func setCreator(values map[string]any, creator string) {
 // changes it. A change asked for is refused.
 func keepCreator(before, after map[string]any, requested map[string]string) error {
 	creator := creatorOf(before)
-	if v, ok := requested[CreatedByAnnotation]; ok && v != creator {
-		return invalidf("annotation %s records who created the agent and cannot be changed", CreatedByAnnotation)
+	for _, k := range creatorAnnotations {
+		if v, ok := requested[k]; ok && v != creator[k] {
+			return invalidf("annotation %s records who created the agent and cannot be changed", k)
+		}
 	}
-	if creator == "" {
-		if annotations, _ := after["annotations"].(map[string]any); annotations != nil {
-			delete(annotations, CreatedByAnnotation)
-			if len(annotations) == 0 {
-				delete(after, "annotations")
-			}
+	annotations, _ := after["annotations"].(map[string]any)
+	for _, k := range creatorAnnotations {
+		delete(annotations, k)
+	}
+	if len(creator) == 0 {
+		if len(annotations) == 0 {
+			delete(after, "annotations")
 		}
 		return nil
 	}
-	setCreator(after, creator)
+	if annotations == nil {
+		annotations = map[string]any{}
+	}
+	for k, v := range creator {
+		annotations[k] = v
+	}
+	after["annotations"] = annotations
 	return nil
 }
 

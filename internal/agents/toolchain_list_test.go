@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/giantswarm/agent-manager/internal/kagent"
 	"github.com/giantswarm/agent-manager/internal/toolchainmanager"
 )
 
@@ -234,4 +236,20 @@ func TestToolchainUsersMatchesEverySourcesDigest(t *testing.T) {
 	require.Len(t, users.Sessions, 1, "the session holding the private source's digest")
 	assert.Equal(t, privateRepo+"/lint@"+toolchainDigest(privateRepo+"/lint", "0.1.0"), users.Sessions[0].Image)
 	assert.Empty(t, users.Unreadable)
+}
+
+func TestToolchainUsersSaysWhenAnAgentHasMoreSessionsThanOneListingReads(t *testing.T) {
+	svc, ctrl, _ := newToolchainFixture(t, "go@0.1.0")
+	ctx := asPerson(t.Context(), "admin@lab.local")
+	_, err := svc.StartSession(ctx, StartSession{Name: "sre", Toolchains: []string{"go@0.1.0"}})
+	require.NoError(t, err)
+	for range kagent.MaxListedSessions {
+		ctrl.AddSession("kagent", "sre")
+	}
+
+	users, err := svc.ToolchainUsers(ctx, "go", "")
+	require.NoError(t, err)
+	assert.Len(t, users.Sessions, 1, "the sessions read are still searched")
+	require.Len(t, users.Unreadable, 1)
+	assert.Contains(t, users.Unreadable[0], fmt.Sprintf("sessions of agent kagent/sre: more than %d", kagent.MaxListedSessions))
 }

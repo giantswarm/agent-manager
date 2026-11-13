@@ -2,6 +2,7 @@ package organizations
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"regexp"
@@ -24,6 +25,9 @@ const (
 	KindModel        = "model"
 	KindConnector    = "connector"
 	KindEgressPolicy = "egressPolicy"
+	// KindCredential is the kind of a ResourceResult that names a credential
+	// Secret, written for every object that reads it and without any of them.
+	KindCredential = "credential"
 )
 
 // The default keys of a credential Secret.
@@ -120,9 +124,10 @@ type ModelRequest struct {
 	CredentialKey    string
 	// Default moves the organization's default mark to this model.
 	Default bool
-	// ReplaceCredential answers with the credential form for a new value.
-	ReplaceCredential bool
-	DryRun            bool
+	// Create only creates: a model of that name, live or in git, is refused
+	// with ErrAlreadyExists instead of changed.
+	Create bool
+	DryRun bool
 	// Mode is apply (default) or commit.
 	Mode string
 }
@@ -153,6 +158,11 @@ func (s *Service) SetModel(ctx context.Context, req ModelRequest) (*ResourceResu
 	if err != nil {
 		return nil, err
 	}
+	if req.Create {
+		if err := refuseTaken(ctx, w, items, "ModelConfig", ns, req.Name); err != nil {
+			return nil, err
+		}
+	}
 	obj, err := w.source(ctx, find(items, req.Name), "ModelConfig")
 	if err != nil {
 		return nil, err
@@ -164,6 +174,11 @@ func (s *Service) SetModel(ctx context.Context, req ModelRequest) (*ResourceResu
 		}
 		obj = newObject(s.apiVersion(), "ModelConfig", ns, req.Name)
 		res.Created = true
+	}
+	if !res.Created {
+		if err := refuseProviderChangeOnSameSecret(obj, req); err != nil {
+			return nil, err
+		}
 	}
 	if req.Provider != "" {
 		_ = unstructured.SetNestedField(obj.Object, req.Provider, "spec", "provider")
@@ -225,14 +240,90 @@ func (s *Service) SetModel(ctx context.Context, req ModelRequest) (*ResourceResu
 	case len(marks) > 1:
 		res.Note = fmt.Sprintf("the namespace has %d models marked as its default (%s), so it has none: set_organization_model with default true on one of them", len(marks), strings.Join(marks, ", "))
 	}
-	res.Credentials = []Credential{s.credential(ctx, c, org, "ModelConfig", req.Name, secret, key, req.ReplaceCredential)}
-	if err = s.landResource(ctx, w, writes, res, req.ReplaceCredential, "model-"+req.Name, "chore(organizations): set model "+req.Name); err != nil {
+	cred, err := s.credential(ctx, c, org, "ModelConfig", req.Name, secret, key)
+	if err != nil {
 		return nil, err
+	}
+	if cred.State == CredentialPresent && modelKeyNotFound(find(items, req.Name), secret, key) {
+		cred.State = CredentialMissing
+		cred.Next = s.next(cred, "ModelConfig "+req.Name)
+	}
+	res.Credentials = []Credential{cred}
+	if err = s.landResource(ctx, w, writes, res, "model-"+req.Name, "chore(organizations): set model "+req.Name); err != nil {
+		return nil, createOnly(err, req.Create, "ModelConfig", ns, req.Name)
 	}
 	if !req.DryRun && res.Commit == nil && res.CredentialOperation == "" {
 		s.log.Info("organization model written", identity.LogAttr(ctx), "namespace", ns, "name", req.Name, "created", res.Created, "default", agents.IsMarkedDefault(obj))
 	}
 	return res, nil
+}
+
+// refuseProviderChangeOnSameSecret refuses a change of the provider of the
+// existing model obj (live, or its file in git in commit mode) that keeps its
+// credential Secret: the Secret holds the old provider's key, and no order of
+// a provider write and a key write is safe, as one of the two providers
+// receives the other's key for a time. A new Secret is safe: when it does not
+// exist, the save writes it first and then the provider and the reference in
+// one write of the model. A model that names no Secret has no key to send to
+// another provider, so its change is not refused; a provider that differs only
+// in case is no change here, and admission judges its spelling.
+func refuseProviderChangeOnSameSecret(obj *unstructured.Unstructured, req ModelRequest) error {
+	current, _, _ := unstructured.NestedString(obj.Object, "spec", "provider")
+	if req.Provider == "" || current == "" || strings.EqualFold(req.Provider, current) {
+		return nil
+	}
+	secret, _, _ := unstructured.NestedString(obj.Object, "spec", "apiKeySecret")
+	if secret == "" || firstOf(req.CredentialSecret, secret) != secret {
+		return nil
+	}
+	return fmt.Errorf("%w: ModelConfig %s/%s sends the key in credential Secret %s to %s; a change of its provider to %s that keeps that Secret sends one provider's key to the other for a time, whatever the order of the provider and the key. Give a new credentialSecret that does not exist yet (you enter the %s key, and the save writes the Secret before it changes the provider and the reference), or create a new model",
+		agents.ErrConflict, req.Namespace, req.Name, secret, current, req.Provider, req.Provider)
+}
+
+// ErrAlreadyExists refuses a create of an object that exists by then, live or
+// as its file in git: the name is taken. It is not ErrConflict, so a client
+// tells it from the other refusals by its code.
+var ErrAlreadyExists = errors.New("already exists")
+
+// nameTaken marks a refusal, keeping its text and code, because the object a
+// write creates exists by then: its file is in git, or it is live (the save's
+// check sees it, or the create itself refuses it).
+// A tool call with create, and a save, answer ErrAlreadyExists for it.
+type nameTaken struct{ err error }
+
+func (e nameTaken) Error() string { return e.err.Error() }
+func (e nameTaken) Unwrap() error { return e.err }
+
+// alreadyExists refuses a create-only write of kind ns/name.
+func alreadyExists(kind, ns, name string) error {
+	return fmt.Errorf("%w: %s %s/%s exists already: pick another name, or call without create to change or replace it", ErrAlreadyExists, kind, ns, name)
+}
+
+// refuseTaken refuses a create-only write of kind ns/name when an object of
+// that name is live (items) or, in commit mode, its file is in git, a dry run
+// included.
+func refuseTaken(ctx context.Context, w *contentWriter, items []unstructured.Unstructured, kind, ns, name string) error {
+	taken := find(items, name) != nil
+	if !taken && w.commit != nil {
+		var err error
+		if taken, err = w.commit.exists(ctx, contentFile(w.dir, kind, name)); err != nil {
+			return err
+		}
+	}
+	if taken {
+		return alreadyExists(kind, ns, name)
+	}
+	return nil
+}
+
+// createOnly is err of a write of kind ns/name; with create, an object of
+// that name made since the read, live (the create itself refuses it) or as
+// its file in git, answers ErrAlreadyExists too.
+func createOnly(err error, create bool, kind, ns, name string) error {
+	if create && errors.As(err, new(nameTaken)) {
+		return alreadyExists(kind, ns, name)
+	}
+	return err
 }
 
 func setMark(obj *unstructured.Unstructured) {
@@ -270,9 +361,11 @@ type ConnectorRequest struct {
 	CredentialSecret string
 	CredentialKey    string
 	// NoCredential removes the Secret-backed headers.
-	NoCredential      bool
-	ReplaceCredential bool
-	DryRun            bool
+	NoCredential bool
+	// Create only creates: a connector of that name, live or in git, is
+	// refused with ErrAlreadyExists instead of changed.
+	Create bool
+	DryRun bool
 	// Mode is apply (default) or commit.
 	Mode string
 }
@@ -369,6 +462,11 @@ func (s *Service) SetConnector(ctx context.Context, req ConnectorRequest) (*Reso
 	if err != nil {
 		return nil, err
 	}
+	if req.Create {
+		if err := refuseTaken(ctx, w, items, "RemoteMCPServer", ns, req.Name); err != nil {
+			return nil, err
+		}
+	}
 	obj, err := w.source(ctx, find(items, req.Name), "RemoteMCPServer")
 	if err != nil {
 		return nil, err
@@ -444,10 +542,14 @@ func (s *Service) SetConnector(ctx context.Context, req ConnectorRequest) (*Reso
 			continue
 		}
 		seenCredentials[pair] = true
-		res.Credentials = append(res.Credentials, s.credential(ctx, c, org, "RemoteMCPServer", req.Name, cc.Secret, cc.Key, req.ReplaceCredential))
+		cred, err := s.credential(ctx, c, org, "RemoteMCPServer", req.Name, cc.Secret, cc.Key)
+		if err != nil {
+			return nil, err
+		}
+		res.Credentials = append(res.Credentials, cred)
 	}
-	if err = s.landResource(ctx, w, []write{wr}, res, req.ReplaceCredential, "connector-"+req.Name, "chore(organizations): set connector "+req.Name); err != nil {
-		return nil, err
+	if err = s.landResource(ctx, w, []write{wr}, res, "connector-"+req.Name, "chore(organizations): set connector "+req.Name); err != nil {
+		return nil, createOnly(err, req.Create, "RemoteMCPServer", ns, req.Name)
 	}
 	if !req.DryRun && res.Commit == nil && res.CredentialOperation == "" {
 		s.log.Info("organization connector written", identity.LogAttr(ctx), "namespace", ns, "name", req.Name, "created", res.Created)
@@ -495,11 +597,13 @@ func egressDestinations(u *unstructured.Unstructured) []EgressDestination {
 // EgressRequest is set_organization_egress_policy's arguments: the whole
 // destination list.
 type EgressRequest struct {
-	Namespace         string
-	Name              string
-	Destinations      []EgressDestination
-	ReplaceCredential bool
-	DryRun            bool
+	Namespace    string
+	Name         string
+	Destinations []EgressDestination
+	// Create only creates: an egress policy of that name, live or in git, is
+	// refused with ErrAlreadyExists instead of replaced.
+	Create bool
+	DryRun bool
 	// Mode is apply (default) or commit.
 	Mode string
 }
@@ -530,6 +634,11 @@ func (s *Service) SetEgressPolicy(ctx context.Context, req EgressRequest) (*Reso
 	w, err := s.contentWriter(ctx, org, req.Mode)
 	if err != nil {
 		return nil, err
+	}
+	if req.Create {
+		if err := refuseTaken(ctx, w, items, "EgressPolicy", ns, req.Name); err != nil {
+			return nil, err
+		}
 	}
 	obj, err := w.source(ctx, find(items, req.Name), "EgressPolicy")
 	if err != nil {
@@ -574,10 +683,14 @@ func (s *Service) SetEgressPolicy(ctx context.Context, req EgressRequest) (*Reso
 			continue
 		}
 		seen[d.CredentialSecret+"/"+d.CredentialKey] = true
-		res.Credentials = append(res.Credentials, s.credential(ctx, c, org, "EgressPolicy", req.Name, d.CredentialSecret, d.CredentialKey, req.ReplaceCredential))
+		cred, err := s.credential(ctx, c, org, "EgressPolicy", req.Name, d.CredentialSecret, d.CredentialKey)
+		if err != nil {
+			return nil, err
+		}
+		res.Credentials = append(res.Credentials, cred)
 	}
-	if err = s.landResource(ctx, w, []write{wr}, res, req.ReplaceCredential, "egress-"+req.Name, "chore(organizations): set egress policy "+req.Name); err != nil {
-		return nil, err
+	if err = s.landResource(ctx, w, []write{wr}, res, "egress-"+req.Name, "chore(organizations): set egress policy "+req.Name); err != nil {
+		return nil, createOnly(err, req.Create, "EgressPolicy", ns, req.Name)
 	}
 	if !req.DryRun && res.Commit == nil && res.CredentialOperation == "" {
 		s.log.Info("organization egress policy written", identity.LogAttr(ctx), "namespace", ns, "name", req.Name, "created", res.Created)

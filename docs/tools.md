@@ -20,13 +20,13 @@ Generated from the registered tools (`make tools-doc`); through muster every too
 | `list_agents` | read-only |
 | `list_egress_policies` | read-only |
 | `list_model_configs` | read-only |
-| `list_my_organizations` | read-only |
 | `list_organization_connectors` | read-only |
 | `list_organization_members` | read-only |
 | `list_organizations` | read-only |
 | `list_sessions` | read-only |
 | `list_skills` | read-only |
 | `remove_organization_member` | write, destructive |
+| `replace_organization_credential` | write, destructive |
 | `set_organization_connector` | write, destructive |
 | `set_organization_egress_policy` | write, destructive |
 | `set_organization_model` | write, destructive |
@@ -64,7 +64,7 @@ Writes the RoleBinding organization-<role>s (admins: organization-admins), dry r
       "type": "string"
     },
     "namespace": {
-      "description": "The organization namespace, e.g. agents-payments-x7k2q (list_my_organizations, get_organization)",
+      "description": "The organization namespace, e.g. agents-payments-x7k2q (list_organizations, get_organization)",
       "type": "string"
     },
     "role": {
@@ -322,7 +322,7 @@ name is the DNS-1123 name the person chose, never derived from displayName. mode
 ```text
 Create an organization as you, then bind its first admins in its namespace.
 
-Asks first whether you may bind them and dry-runs the object, so a refusal comes before anything exists. Waits for the operator's Ready (it creates the namespace), then writes the RoleBinding organization-admins to agent-platform:admin as you. Not Ready in time: call again with the same arguments. mode commit opens one pull request with the object and organization-admins instead. Offer an identity provider group as admin before a person. Needs agent-platform:organizations-admin in the parent namespace.
+Before any write, dry run too, refuses when you may not bind them or your right will not reach the new namespace (it does cluster-wide, or by a parent RoleBinding naming you that the operator mirrors: organizations-admin, or rbac-operator's cluster-admin). Waits for Ready, then writes organization-admins to agent-platform:admin as you. pending: call again with the same arguments. mode commit opens one pull request instead. Prefer a group as admin. Needs agent-platform:organizations-admin in the parent namespace.
 ```
 
 ```json
@@ -391,7 +391,7 @@ Asks first whether you may bind them and dry-runs the object, so a refusal comes
 ```text
 Delete an agent: its HelmRelease, which removes the Agent and its muster RemoteMCPServer.
 
-The chart's shared OCIRepository goes too when nothing else in the namespace uses it; the answer says why it was kept. A bare Agent or a suspended release is refused unless force is true; a GitOps-owned one needs mode commit.
+The chart's shared OCIRepository goes too when nothing else in the namespace uses it; the answer says why it was kept. A bare Agent or a suspended release is refused unless force is true; a GitOps-owned one needs mode commit; a platform one (managed: platform) is refused.
 ```
 
 ```json
@@ -529,7 +529,7 @@ Dry run first. Its credential Secret stays. Deleting the default model leaves th
       "type": "string"
     },
     "namespace": {
-      "description": "The organization namespace, e.g. agents-payments-x7k2q (list_my_organizations, get_organization)",
+      "description": "The organization namespace, e.g. agents-payments-x7k2q (list_organizations, get_organization)",
       "type": "string"
     }
   },
@@ -570,7 +570,7 @@ Another person's session is refused as not_found. While another operation on it 
 ```text
 Get one agent: its HelmRelease values, Harness, pinned skills and plugins, toolset and Agent status.
 
-If you may not read the agent's HelmRelease, you get the Agent alone with managed unknown, and releaseWithheld says why.
+default: true is the installation's default agent, to preselect when starting a session. If you may not read the agent's HelmRelease, you get the Agent alone with releaseWithheld explaining the denial; managed is unknown unless its platform label establishes ownership.
 ```
 
 ```json
@@ -640,7 +640,7 @@ From the Agent's conditions and warnings, the HelmRelease's conditions and histo
 ```text
 Where you can create agents and what this installation offers: managed namespaces, chart, Harness, capabilities.
 
-Call it first: capabilities says whether this installation offers mode commit, the session tools and workload clusters. Also the service version, the served API versions, the muster URL and Flux settings composed into every agent, and how writes are authenticated.
+Call it first: capabilities says whether this installation offers mode commit, the session tools and workload clusters; defaultAgent (namespace/name) is the agent to preselect when starting a session; a portal agent id is <installation>/<namespace>/<name>. Also the service version, the served API versions, the muster URL and Flux settings composed into every agent, and how writes are authenticated.
 ```
 
 ```json
@@ -656,7 +656,7 @@ Call it first: capabilities says whether this installation offers mode commit, t
 ```text
 Read one organization and what deleting it would erase.
 
-erases lists, as you can read them in the organization namespace, its agents, HelmReleases, models, connectors, egress policies, credential Secrets (names only), member bindings and snapshot prefix; what you may not read is named in unreadable.
+erases lists, as you can read them in the organization namespace, its agents, HelmReleases, models, connectors, egress policies, credential Secrets (names only), member bindings and snapshot prefix; what you may not read is named in unreadable. sessions counts, per agent and across every person, the running and stopped sessions the erase deletes; when they cannot be listed it is null and sessionsUnavailable says why.
 ```
 
 ```json
@@ -771,7 +771,7 @@ detail: transcript (default) clips tool arguments and gives tool results as stub
 ```text
 List the agents of a namespace, one summary each: model, Harness, toolset, readiness and how it is managed.
 
-managed: helmrelease is writable here, gitops changes only with mode commit, none is a bare Agent, unknown: Flux objects unreadable (releaseWithheld says why). implicitFullAccess: true means the agent sees every gateway tool and still needs a toolset (update_agent). toolsetBound: true means the toolset is bound to each session at its start, for every process of its sandbox; otherwise the agent's runtime declares it. An agent's prompt, skills, plugins and values come from get_agent.
+managed: helmrelease is writable here; gitops needs mode commit; platform is read-only; none is a bare Agent; unknown means Flux unreadable and ownership unknown (releaseWithheld explains). default: true marks the default agent to preselect. implicitFullAccess: true means every gateway tool is visible and a toolset is still needed (update_agent). toolsetBound: true binds the toolset at session start; else the runtime declares it. Prompt, skills, plugins and values come from get_agent.
 ```
 
 ```json
@@ -864,22 +864,6 @@ Each with provider, model, its Accepted and ResolvedRefs conditions, who manages
 }
 ```
 
-## `list_my_organizations`
-
-```text
-List the organizations you belong to: the namespaces a New agent can go into.
-
-An organization namespace is listed when you may list its Agents, which every organization role grants, asked with your own token. none says who can add you when there is none.
-```
-
-```json
-{
-  "properties": {},
-  "required": [],
-  "type": "object"
-}
-```
-
 ## `list_organization_connectors`
 
 ```text
@@ -892,7 +876,7 @@ Read as you. A credential in a URL written elsewhere is shown as REDACTED. curat
 {
   "properties": {
     "namespace": {
-      "description": "The organization namespace, e.g. agents-payments-x7k2q (list_my_organizations, get_organization)",
+      "description": "The organization namespace, e.g. agents-payments-x7k2q (list_organizations, get_organization)",
       "type": "string"
     }
   },
@@ -908,14 +892,14 @@ Read as you. A credential in a URL written elsewhere is shown as REDACTED. curat
 ```text
 List an organization's members: the groups and people bound to agent-platform:admin, editor or user, groups first.
 
-Read as you; every member may read them.
+Read as you; every member role (user, editor or admin) may read them, from agent-platform chart 4.179.0 on.
 ```
 
 ```json
 {
   "properties": {
     "namespace": {
-      "description": "The organization namespace, e.g. agents-payments-x7k2q (list_my_organizations, get_organization)",
+      "description": "The organization namespace, e.g. agents-payments-x7k2q (list_organizations, get_organization)",
       "type": "string"
     }
   },
@@ -929,9 +913,9 @@ Read as you; every member may read them.
 ## `list_organizations`
 
 ```text
-List the Agent Platform organizations (AgentPlatformOrganizations) of a parent namespace, or of all, as you.
+List the organizations you manage or belong to, of one parent namespace or of all.
 
-Each with its organization namespace, harnesses, worker replicas and the operator's Ready, DefaultModelConfigured and Orphaned conditions. Needs agent-platform:organizations-admin; omit namespace only when it is bound to you cluster-wide.
+Each with its organization namespace, Orphaned condition, deleting, and permissions (manage, member, createAgents), asked with your own token; a New agent goes where createAgents is true. Where you manage it, organization is its summary: harnesses, workers, Ready, DefaultModelConfigured, the last revision Flux applied (lastAppliedRevision) and in mode commit its commit and the organization's file (lastAppliedRevisionUrl, lastAppliedFile, lastAppliedFileUrl). none says who can add you when there is none.
 ```
 
 ```json
@@ -952,7 +936,7 @@ Each with its organization namespace, harnesses, worker replicas and the operato
 ```text
 List your conversations with one agent: id, name, state, failure and timestamps.
 
-Read through agentgateway as you. allCreators includes every person's sessions, when the controller authorizes you for it.
+Read through agentgateway as you. allCreators includes every person's sessions, when the controller authorizes you for it. At most 2000 sessions are answered at a time; nextPageToken says more follow: list again with it as pageToken.
 ```
 
 ```json
@@ -969,6 +953,11 @@ Read through agentgateway as you. allCreators includes every person's sessions, 
     "namespace": {
       "description": "Namespace of the agent; default: the installation's kagent namespace (get_info lists the managed ones).",
       "type": "string"
+    },
+    "pageToken": {
+      "description": "nextPageToken of the previous answer, with the same name, namespace and allCreators; empty lists from the start",
+      "maxLength": 512,
+      "type": "string"
     }
   },
   "required": [
@@ -981,16 +970,16 @@ Read through agentgateway as you. allCreators includes every person's sessions, 
 ## `list_skills`
 
 ```text
-List the skills agents can mount, from the configured skill repositories, with each repository's head commit.
+Deprecated, use skill-manager's list_skills: the skills agents can mount, per repository with its head commit.
 
-Per repository: the ref read, the commit it resolved to (what a skills entry pins) and each SKILL.md's name, description, path and tags (metadata.tags). Cached briefly; refresh re-reads GitHub.
+Per repository: the ref read, the commit it resolved to (what a skills entry pins) and each SKILL.md's name, description, path and tags (metadata.tags). Cached briefly; refresh re-reads GitHub. With skill-manager (get_info skillManager) this is its list_skills, as you.
 ```
 
 ```json
 {
   "properties": {
     "ref": {
-      "description": "Git ref to read; default: the default branch (the ref refreshSkills follows)",
+      "description": "Git ref to read; default: the default branch (the ref refreshSkills follows). Refused with skill-manager",
       "type": "string"
     },
     "refresh": {
@@ -1042,7 +1031,7 @@ From every binding of the role that holds them, dry run first; an emptied bindin
       "type": "string"
     },
     "namespace": {
-      "description": "The organization namespace, e.g. agents-payments-x7k2q (list_my_organizations, get_organization)",
+      "description": "The organization namespace, e.g. agents-payments-x7k2q (list_organizations, get_organization)",
       "type": "string"
     },
     "role": {
@@ -1066,6 +1055,55 @@ From every binding of the role that holds them, dry run first; an emptied bindin
 }
 ```
 
+## `replace_organization_credential`
+
+```text
+Replace an organization's credential by its Secret and key, as you, writing only the Secret.
+
+No model, connector or egress policy is written. Answers with a URL elicitation of the credential UI, link in credentials[].next; the form lists every object that uses the Secret and where each sends the value. Refused when nothing uses that key of the Secret, and when an object reads another key of it: the Secret is written whole, holding the one key. A credential whose consumer git applies is replaced with mode commit. Never pass a value. Needs agent-platform:admin.
+```
+
+```json
+{
+  "properties": {
+    "dryRun": {
+      "description": "Check every write with the API server as you and write nothing (default false)",
+      "type": "boolean"
+    },
+    "key": {
+      "description": "Key of that Secret the objects read, e.g. apiKey or token",
+      "type": "string"
+    },
+    "mode": {
+      "description": "apply (default): write live as you; refused with gitops_owned for what git applies. commit: dry-run as you, then open a pull request as you",
+      "enum": [
+        "apply",
+        "commit"
+      ],
+      "type": "string"
+    },
+    "namespace": {
+      "description": "The organization namespace, e.g. agents-payments-x7k2q (list_organizations, get_organization)",
+      "type": "string"
+    },
+    "requestId": {
+      "description": "Idempotency key, at most 128 characters. Reuse on retries; use a fresh key for another save or a refreshed confirmation.",
+      "type": "string"
+    },
+    "secret": {
+      "description": "Secret in the organization namespace that holds the credential, by name (tenant-credential-...); never a value",
+      "type": "string"
+    }
+  },
+  "required": [
+    "namespace",
+    "secret",
+    "key"
+  ],
+  "type": "object"
+}
+```
+
 ## `set_organization_connector`
 
 ```text
@@ -1077,6 +1115,10 @@ A credential field sets the Secret-backed header it names (default: the only one
 ```json
 {
   "properties": {
+    "create": {
+      "description": "Only create: a connector of that name, live or in git, is refused with already_exists, not changed (default false: create or change)",
+      "type": "boolean"
+    },
     "credentialHeader": {
       "description": "Header the credential goes in; default Authorization",
       "type": "string"
@@ -1110,15 +1152,11 @@ A credential field sets the Secret-backed header it names (default: the only one
       "type": "string"
     },
     "namespace": {
-      "description": "The organization namespace, e.g. agents-payments-x7k2q (list_my_organizations, get_organization)",
+      "description": "The organization namespace, e.g. agents-payments-x7k2q (list_organizations, get_organization)",
       "type": "string"
     },
     "noCredential": {
       "description": "Remove the credential header (default false)",
-      "type": "boolean"
-    },
-    "replaceCredential": {
-      "description": "Answer with a URL elicitation of the credential UI to enter a new value (default false)",
       "type": "boolean"
     },
     "requestId": {
@@ -1149,6 +1187,10 @@ destinations replaces the whole list. A credentialHeader makes the egress gatewa
 ```json
 {
   "properties": {
+    "create": {
+      "description": "Only create: a policy of that name, live or in git, is refused with already_exists, not replaced (default false: create or replace)",
+      "type": "boolean"
+    },
     "destinations": {
       "description": "Origins, each {origin, credentialHeader, credentialPrefix, credentialSecret, credentialKey}",
       "items": {
@@ -1198,12 +1240,8 @@ destinations replaces the whole list. A credentialHeader makes the egress gatewa
       "type": "string"
     },
     "namespace": {
-      "description": "The organization namespace, e.g. agents-payments-x7k2q (list_my_organizations, get_organization)",
+      "description": "The organization namespace, e.g. agents-payments-x7k2q (list_organizations, get_organization)",
       "type": "string"
-    },
-    "replaceCredential": {
-      "description": "Answer with a URL elicitation of the credential UI to enter a new value (default false)",
-      "type": "boolean"
     },
     "requestId": {
       "description": "Idempotency key, at most 128 characters. Reuse on retries; use a fresh key for another save or a refreshed confirmation.",
@@ -1230,6 +1268,10 @@ The first model of an organization without a default becomes its default (annota
 ```json
 {
   "properties": {
+    "create": {
+      "description": "Only create: a model of that name, live or in git, is refused with already_exists, not changed (default false: create or change)",
+      "type": "boolean"
+    },
     "credentialKey": {
       "description": "Key of that Secret; default apiKey",
       "type": "string"
@@ -1263,16 +1305,12 @@ The first model of an organization without a default becomes its default (annota
       "type": "string"
     },
     "namespace": {
-      "description": "The organization namespace, e.g. agents-payments-x7k2q (list_my_organizations, get_organization)",
+      "description": "The organization namespace, e.g. agents-payments-x7k2q (list_organizations, get_organization)",
       "type": "string"
     },
     "provider": {
-      "description": "Provider as kagent's ModelConfig takes it, e.g. Anthropic, OpenAI; required to create",
+      "description": "Provider as kagent's ModelConfig takes it, e.g. Anthropic, OpenAI; required to create; a change needs a new credentialSecret too",
       "type": "string"
-    },
-    "replaceCredential": {
-      "description": "Answer with a URL elicitation of the credential UI to enter a new value (default false)",
-      "type": "boolean"
     },
     "requestId": {
       "description": "Idempotency key, at most 128 characters. Reuse on retries; use a fresh key for another save or a refreshed confirmation.",
@@ -1377,7 +1415,7 @@ Read as you in every managed namespace, every person's sessions where the contro
 ```text
 Change an agent: only the fields passed change; a list, labels or annotations replaces the whole value.
 
-Lists are skills, plugins, egress and toolset. "" clears a text field back to the chart default; gitAuthSecretName "" goes back to the installation's. Presets: preset:read-only, preset:none, preset:infrastructure, preset:agent-platform, preset:full. refreshSkills re-pins every git skill and git plugin. harness re-runs the create-time checks on the new Harness. Returns the values before and after. A suspended release is refused unless force is true; a GitOps-owned one needs mode commit.
+Lists are skills, plugins, egress and toolset. "" clears a text field back to the chart default; gitAuthSecretName "" goes back to the installation's. Presets: preset:read-only, preset:none, preset:infrastructure, preset:agent-platform, preset:full. refreshSkills re-pins every git skill and git plugin. harness re-runs the create-time checks on the new Harness. Returns the values before and after. A suspended release needs force; a GitOps-owned one mode commit; a platform one is refused.
 ```
 
 ```json
@@ -1533,7 +1571,7 @@ Lists are skills, plugins, egress and toolset. "" clears a text field back to th
       "type": "array"
     },
     "refreshSkills": {
-      "description": "Re-pin every git skill and git plugin to its default-branch head and change nothing else on the release (default false).",
+      "description": "Re-pin every git skill and git plugin to its default-branch head (with skill-manager: its source's ref); nothing else changes (default false).",
       "type": "boolean"
     },
     "repository": {
@@ -1811,7 +1849,7 @@ Checks the name, modelConfig (omitted: the default), egressPolicyRefs, harness a
       "type": "array"
     },
     "refreshSkills": {
-      "description": "Re-pin every git skill and git plugin to its default-branch head and change nothing else on the release (default false).",
+      "description": "Re-pin every git skill and git plugin to its default-branch head (with skill-manager: its source's ref); nothing else changes (default false).",
       "type": "boolean"
     },
     "skills": {

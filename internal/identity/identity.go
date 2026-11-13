@@ -18,6 +18,11 @@ import (
 // Source says how the caller was authenticated.
 type Source string
 
+// ForwardedIdentityHeader is where muster puts the person's IdP ID token on
+// every call to a registration with auth.forwardIdentity; agent-manager
+// forwards it to skill-manager beside the person's GitHub token.
+const ForwardedIdentityHeader = "X-Muster-Id-Token"
+
 const (
 	// SourceSSO is an IdP id_token forwarded by a trusted aggregator (muster)
 	// or sent by the portal through the gateway, validated against the IdP's
@@ -85,6 +90,15 @@ func Caller(ctx context.Context) string {
 	return id.String()
 }
 
+// CallerName is the caller's display name, or "" without one. For display
+// only: Caller is the identifier.
+func CallerName(ctx context.Context) string {
+	if id, ok := FromContext(ctx); ok {
+		return id.Name
+	}
+	return ""
+}
+
 // LogAttr is the structured-log attribute every mutation carries: the caller,
 // or the ServiceAccount marker when the server runs without OAuth.
 func LogAttr(ctx context.Context) slog.Attr {
@@ -136,13 +150,18 @@ func TokenExpiry(token string) time.Time {
 	return time.Unix(exp, 0)
 }
 
-// GitHub is the caller's GitHub identity on the App-pinned registration: the
-// login GET /user answered for the bearer muster put on the call — the
-// person's user token of the App giantswarm-agent-manager — and that token,
-// which commit mode opens the pull request with.
+// GitHub is the caller's GitHub identity: the login GET /user answered for
+// the person's user token of the GitHub App, and that token, which commit
+// mode opens the pull request with. The token is the bearer muster put on
+// the call on the App-pinned registration, else the grant the token
+// exchange fetched.
 type GitHub struct {
 	Login string
 	Token string
+	// App names the provider App in muster whose grant Token is, as
+	// grant_required answers name it; empty on the App-pinned
+	// registration.
+	App string
 }
 
 // ContextWithGitHub returns ctx carrying the caller's GitHub identity.

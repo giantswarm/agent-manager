@@ -9,14 +9,13 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"k8s.io/apimachinery/pkg/runtime"
-	dynamicfake "k8s.io/client-go/dynamic/fake"
 	kubefake "k8s.io/client-go/kubernetes/fake"
 
 	"github.com/giantswarm/agent-manager/internal/agents"
 	"github.com/giantswarm/agent-manager/internal/api"
 	"github.com/giantswarm/agent-manager/internal/chart"
 	"github.com/giantswarm/agent-manager/internal/kube"
+	"github.com/giantswarm/agent-manager/internal/kube/kubetest"
 )
 
 type embeddedChart struct{}
@@ -30,7 +29,7 @@ func (embeddedChart) SemverRange() string                 { return "x.x.x" }
 // Without OAuth nothing guards the API: the deployment in front of it is the
 // trust boundary and the service acts as its ServiceAccount.
 func TestServerMountsHealthRESTAndMCP(t *testing.T) {
-	dyn := dynamicfake.NewSimpleDynamicClient(runtime.NewScheme())
+	dyn := kubetest.NewDynamicClient()
 	typed := kubefake.NewClientset()
 	svc := agents.New(kube.NewServiceAccountProvider(kube.FromInterfaces(dyn, typed, typed.Discovery())), embeddedChart{}, nil, nil, agents.Config{Version: "test"}, nil)
 	srv, err := New(Config{Addr: "127.0.0.1:0", MCPEnabled: true}, svc, api.NewMCPServer(svc, "test"), nil)

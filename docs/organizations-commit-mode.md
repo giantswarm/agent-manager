@@ -96,7 +96,10 @@ giantswarm/agent-platform-operator#15 is the long-term fix.
    `agent-platform.giantswarm.io/delete-pull-request: <url>`. Nothing is erased.
    agent-platform-operator reports the organization `Orphaned` with reason
    `DeleteMerged` once the file has left the installation Kustomization's inventory.
-2. After the merge, the organization is pending erase. Without `confirm` the call
+2. After the merge, the organization is pending erase once agent-manager has read the
+   merged pull request's files, found the object's file removed by it (a move that
+   GitHub reports as a rename does not count), and found that no file under the objects
+   path still defines the organization on the base branch. Without `confirm` the call
    answers what is erased. With `confirm: <parent>/<name>` (Erase now) it sets
    `kustomize.toolkit.fluxcd.io/prune: enabled` on the live object and deletes it; the
    operator erases it.
@@ -106,4 +109,75 @@ The erase is refused:
 - while the object's file is still in git, also when the pull request the object names
   is merged (a merged pull request that did not remove the file is not the delete);
 - when the file is gone from git without a merged delete pull request (Missing from
-  git): restore the file instead.
+  git): restore the file instead. `lastAppliedRevisionUrl` on the organization links the
+  last commit that held it (the operator's `status.lastAppliedRevision`), and
+  `lastAppliedFileUrl` the file itself at that commit (`lastAppliedFile`, the path mode
+  commit keeps it at);
+- when the merged delete pull request did not remove the file itself: it was edited
+  before its merge, and another merge removed the file (Missing from git), or it moved
+  the file to another path (a rename on GitHub), which may still define the
+  organization in git. Restore the file, or move it back, and open the delete again with
+  `mode: commit` and no `confirm`;
+- when a file under the objects path, whatever its name, still defines the
+  organization on the base branch: a move whose content changed so much that GitHub
+  reports a removal and an addition, or a definition that the pull request or a later
+  commit wrote there. A document defines it when it is an `AgentPlatformOrganization`
+  of its name in its parent or without a namespace, also as an item of a `List`. Where
+  a `kustomization.yaml` above the file sets `namespace`, `namePrefix` or `nameSuffix`,
+  or SOPS encrypted the value, the document's own namespace or name does not count, and
+  it is taken as a match. The answer names the file: remove that definition and erase
+  again, or move the file back and open the delete again. A file that does not parse
+  defines nothing, since Kustomize cannot apply it either. When the objects path cannot
+  be read (a read fails, or the repository's tree is too large for one read), nothing
+  is erased (see "What the scan is for" below);
+- when GitHub cannot list the merged pull request's files: whether it removed the file
+  is unknown, so nothing is erased. Call again to retry. A pull request of more than
+  3000 files never lists, since GitHub lists at most 3000: restore only the object's
+  file, not the content path, and open the delete again. The merge removed the content
+  path already, so the new delete pull request changes the objects path only, and its
+  files list.
+
+### What the scan is for
+
+The scan of the objects path gives an early, clear answer for the usual mistake: a
+delete pull request that moved the organization's file instead of removing it, or a
+later commit that wrote it again. A file named `kustomization.yaml` (`.yml`,
+`Kustomization`) is read both as its directory's kustomization and as a resource file,
+since another kustomization may list it as one. The scan reads the files as they are
+and does not run Kustomize, so it does not find these two cases:
+
+- an overlay in a sibling directory that refers to the file (for one, `../../base`)
+  and sets `namespace`, so that Kustomize applies the organization into its parent
+  from a document with another namespace (giantswarm/agent-manager#399);
+- a commit that moves the definition between the scan's tree read and its file reads,
+  a few seconds: each read takes the branch's head again (giantswarm/gitops-commit#70).
+
+These are accepted because the cluster has a second guard, which follows Flux's own
+Kustomize build. The admission policy `agent-platform-organization-delete-intent`
+(giantswarm/agent-platform, `helm/agent-platform-connectivity/templates/organizations/admission.yaml`)
+permits the delete of an organization that carries an `Orphaned` condition (one that
+agent-platform-operator found applied from git) only when that condition is `True`
+with reason `DeleteMerged`. The operator sets `Orphaned=True` only when the
+installation's Flux Kustomization is settled (its generation observed, `Ready` true,
+not reconciling) and its `status.inventory` has no entry for the organization; with
+the delete annotation the reason is `DeleteMerged`. That inventory is what Flux applied
+from the Kustomization's last applied revision. So while a revision that Flux applied
+still builds the organization, by whichever path, the condition is `False`
+(`InInventory`) and the API server refuses the erase. The limit is the same as Flux's:
+a definition written after Flux applied the delete counts only once Flux has applied
+that later revision. While Flux applies no new revision (the Kustomization is
+suspended), the condition follows the last applied one, and while the Kustomization is
+not settled (reconciling, or not `Ready`) the operator keeps the condition it had. In
+both cases an earlier `DeleteMerged` still permits the erase.
+
+### Reads
+
+To erase, agent-manager reads the delete pull request with pull request reads only:
+whether it is merged (one read), and its files (one read for each 100 files). It does
+not read its reviews, or the commit statuses and check runs of its head. Then it reads
+the objects path on the base branch: one read of the repository's tree, and two
+contents reads for each file under the objects path (about two for each organization
+and for each parent's `kustomization.yaml`). The erase is rare, so these reads are
+taken on each erase and on each answer of pending erase. The GitHub App needs no
+permission beyond contents and pull requests. When GitHub refuses a step that only reads with 403, the answer
+names the step and the App's permissions: a new sign-in does not change them.

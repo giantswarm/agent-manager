@@ -164,6 +164,23 @@ the union adds nothing there.
 {{- end }}
 
 {{/*
+The namespace of an in-cluster Service host, for an egress rule: <svc> (the
+release's namespace), <svc>.<namespace> or <svc>.<namespace>.svc[...], as the
+pod's resolver tries them first (its search path); empty for any other host
+(egress to every address). A host outside the cluster with one or two labels
+is written as an absolute name, with a trailing dot (example.com.), which the
+resolver never completes.
+*/}}
+{{- define "agent-manager.hostNamespace" -}}
+{{- $labels := splitList "." .host -}}
+{{- if eq (len $labels) 1 -}}
+{{- .root.Release.Namespace -}}
+{{- else if or (eq (len $labels) 2) (eq (index $labels 2) "svc") -}}
+{{- index $labels 1 -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
 The OTLP collector the pod exports to, as YAML {namespace, port}: the
 namespace of an in-cluster Service host (<svc>.<ns>.svc[.cluster.local]),
 empty for any other host; the endpoint's port, else the protocol's default
@@ -178,11 +195,7 @@ empty for any other host; the endpoint's port, else the protocol's default
 {{- if not $port -}}
 {{- $port = ternary "4318" "4317" (hasPrefix "http/" ($.Values.observability.otel.protocol | default "grpc")) -}}
 {{- end -}}
-{{- $labels := splitList "." $host -}}
-{{- $namespace := "" -}}
-{{- if and (ge (len $labels) 3) (eq (index $labels 2) "svc") -}}
-{{- $namespace = index $labels 1 -}}
-{{- end -}}
+{{- $namespace := include "agent-manager.hostNamespace" (dict "host" $host "root" $) -}}
 namespace: {{ $namespace | quote }}
 port: {{ $port }}
 {{- end -}}
@@ -190,7 +203,7 @@ port: {{ $port }}
 
 {{/*
 The kagent controller target's egress, when the session tools are on:
-namespace (empty unless the host is <service>.<namespace>.svc...) and port.
+namespace (agent-manager.hostNamespace) and port.
 */}}
 {{- define "agent-manager.kagentEgress" -}}
 {{- if and .Values.oauth.enabled .Values.kagent.controllerTarget -}}
@@ -206,11 +219,7 @@ namespace (empty unless the host is <service>.<namespace>.svc...) and port.
 {{- end -}}
 {{- $port = "443" -}}
 {{- end -}}
-{{- $labels := splitList "." (first $hostPort) -}}
-{{- $namespace := "" -}}
-{{- if and (ge (len $labels) 3) (eq (index $labels 2) "svc") -}}
-{{- $namespace = index $labels 1 -}}
-{{- end -}}
+{{- $namespace := include "agent-manager.hostNamespace" (dict "host" (first $hostPort) "root" $) -}}
 namespace: {{ $namespace | quote }}
 port: {{ $port }}
 {{- end -}}
@@ -219,8 +228,8 @@ port: {{ $port }}
 {{/*
 muster as egress, its session bindings endpoint, else its MCP endpoint when
 start_session asks the toolchain-manager there: the Service's namespace for
-an in-cluster host (<name>.<namespace>.svc...), the port the URL names or its
-scheme's. Rendered with the session tools only (oauth and a controller
+an in-cluster host (agent-manager.hostNamespace), the port the URL names or
+its scheme's. Rendered with the session tools only (oauth and a controller
 target), as the flags are.
 */}}
 {{- define "agent-manager.musterBindingsEgress" -}}
@@ -236,11 +245,26 @@ target), as the flags are.
 {{- end -}}
 {{- $hostPort := splitList ":" $url.host -}}
 {{- $port := ternary (last $hostPort) (ternary "443" "80" (eq $url.scheme "https")) (gt (len $hostPort) 1) -}}
-{{- $labels := splitList "." (first $hostPort) -}}
-{{- $namespace := "" -}}
-{{- if and (ge (len $labels) 3) (eq (index $labels 2) "svc") -}}
-{{- $namespace = index $labels 1 -}}
+{{- $namespace := include "agent-manager.hostNamespace" (dict "host" (first $hostPort) "root" $) -}}
+namespace: {{ $namespace | quote }}
+port: {{ $port }}
 {{- end -}}
+{{- end -}}
+
+{{/*
+skill-manager's address for the egress policy: namespace
+(agent-manager.hostNamespace) and port, from skillManager.url; empty when
+unset.
+*/}}
+{{- define "agent-manager.skillManagerEgress" -}}
+{{- with .Values.skillManager.url -}}
+{{- $url := urlParse . -}}
+{{- if not (has $url.scheme (list "http" "https")) -}}
+{{- fail (printf "skillManager.url %q must be http(s)://host[:port]" .) -}}
+{{- end -}}
+{{- $hostPort := splitList ":" $url.host -}}
+{{- $port := ternary (last $hostPort) (ternary "443" "80" (eq $url.scheme "https")) (gt (len $hostPort) 1) -}}
+{{- $namespace := include "agent-manager.hostNamespace" (dict "host" (first $hostPort) "root" $) -}}
 namespace: {{ $namespace | quote }}
 port: {{ $port }}
 {{- end -}}
@@ -294,3 +318,39 @@ to the current name; while minting, each is rendered and kept filled as well.
 {{- printf "%s-%s-credentials" (include "agent-manager.fullname" . | trunc 30 | trimSuffix "-") (printf "%s/%s" .Release.Namespace .Release.Name | sha256sum | trunc 8) -}}
 {{- end -}}
 {{- end -}}
+
+{{/*
+Non-empty when github.tokenExchange is configured; fails on an incomplete
+configuration, one without github.enabled, without Dex OAuth and downstream
+OAuth (the person's Dex ID token is the subject token), or without
+muster.mcpServer.auth.forwardToken (providerApps needs the person's
+connection).
+*/}}
+{{- define "agent-manager.githubTokenExchange" -}}
+{{- with .Values.github.tokenExchange }}
+{{- if .tokenEndpoint }}
+{{- if not $.Values.github.enabled }}
+{{- fail "github.tokenExchange needs github.enabled: set github.enabled to true, or unset github.tokenExchange.tokenEndpoint" }}
+{{- end }}
+{{- if not (and $.Values.oauth.enabled (eq $.Values.oauth.provider "dex") $.Values.oauth.downstream.enabled) }}
+{{- fail "github.tokenExchange exchanges the person's Dex ID token: set oauth.enabled with oauth.provider dex and oauth.downstream.enabled" }}
+{{- end }}
+{{- if not $.Values.muster.mcpServer.auth.forwardToken }}
+{{- fail "github.tokenExchange lists its App under the MCPServer's providerApps, which muster serves only on a forwarded token: set muster.mcpServer.auth.forwardToken" }}
+{{- end }}
+{{- $_ := required "github.tokenExchange.audience is required with github.tokenExchange.tokenEndpoint" .audience }}
+{{- if not (or .existingSecret .clientSecret) }}
+{{- fail "github.tokenExchange.existingSecret or github.tokenExchange.clientSecret is required with github.tokenExchange.tokenEndpoint" }}
+{{- end }}
+{{- "true" }}
+{{- end }}
+{{- end }}
+{{- end }}
+
+{{/*
+The Secret holding the GitHub token exchange client: existingSecret, else the
+one the chart renders from clientSecret.
+*/}}
+{{- define "agent-manager.githubTokenExchangeSecretName" -}}
+{{- .Values.github.tokenExchange.existingSecret | default (printf "%s-github-token-exchange" (include "agent-manager.fullname" .)) }}
+{{- end }}

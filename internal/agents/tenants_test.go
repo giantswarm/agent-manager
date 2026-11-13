@@ -113,6 +113,68 @@ func TestCreatorAnnotation(t *testing.T) {
 	assert.ErrorIs(t, err, ErrInvalid)
 }
 
+// The creator's display name is recorded beside the creator under the same
+// rules; without one from the IdP nothing is recorded.
+func TestCreatorNameAnnotation(t *testing.T) {
+	f := seeded(t)
+	alice := identity.ContextWith(context.Background(), &identity.Identity{Subject: "a", Email: "alice@example.com", Name: "Alice Doe"})
+	bob := identity.ContextWith(context.Background(), &identity.Identity{Subject: "b", Email: "bob@example.com", Name: "Bob"})
+	spec := func(name string) Spec {
+		return Spec{Name: name, ModelConfig: "default-model-config", Toolset: []string{"preset:read-only"}}
+	}
+
+	forged := spec("sre")
+	forged.Annotations = map[string]string{CreatedByNameAnnotation: "Mallory"}
+	_, err := f.svc.Create(alice, forged)
+	assert.ErrorIs(t, err, ErrInvalid, "the caller cannot name the creator")
+
+	res, err := f.svc.Create(alice, spec("sre"))
+	require.NoError(t, err)
+	assert.Equal(t, "Alice Doe", res.Agent.CreatedByName)
+	assert.Contains(t, res.Manifests.HelmRelease, CreatedByNameAnnotation+": Alice Doe")
+	hr, err := f.dyn.Resource(hrGVR).Namespace("kagent").Get(alice, "sre", metav1.GetOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, "Alice Doe", hr.GetAnnotations()[CreatedByNameAnnotation])
+	assert.Equal(t, "Alice Doe", valuesAnnotation(t, hr.Object["spec"].(map[string]any)["values"].(map[string]any), CreatedByNameAnnotation))
+	got, err := f.svc.Get(alice, In(""), "sre")
+	require.NoError(t, err)
+	assert.Equal(t, "Alice Doe", got.CreatedByName)
+	assert.Equal(t, "Alice Doe", got.Summary().CreatedByName)
+
+	// An update keeps it, also when every annotation is cleared; a change
+	// or a removal is refused.
+	empty := map[string]string{}
+	upd, err := f.svc.Update(bob, Update{Name: "sre", Annotations: &empty})
+	require.NoError(t, err)
+	assert.Equal(t, "Alice Doe", valuesAnnotation(t, upd.After, CreatedByNameAnnotation))
+	same := map[string]string{CreatedByAnnotation: "alice@example.com", CreatedByNameAnnotation: "Alice Doe"}
+	_, err = f.svc.Update(bob, Update{Name: "sre", Annotations: &same})
+	require.NoError(t, err)
+	for _, steal := range []map[string]string{{CreatedByNameAnnotation: "Bob"}, {CreatedByNameAnnotation: ""}} {
+		_, err = f.svc.Update(bob, Update{Name: "sre", Annotations: &steal})
+		assert.ErrorIs(t, err, ErrInvalid)
+	}
+
+	// No name from the IdP records the creator only, and none can be added.
+	carol := identity.ContextWith(context.Background(), &identity.Identity{Subject: "c", Email: "carol@example.com"})
+	res, err = f.svc.Create(carol, spec("ops"))
+	require.NoError(t, err)
+	assert.Equal(t, "carol@example.com", res.Agent.CreatedBy)
+	assert.Empty(t, res.Agent.CreatedByName)
+	assert.NotContains(t, res.Manifests.HelmRelease, CreatedByNameAnnotation)
+	add := map[string]string{CreatedByNameAnnotation: "Carol"}
+	_, err = f.svc.Update(carol, Update{Name: "ops", Annotations: &add})
+	assert.ErrorIs(t, err, ErrInvalid)
+}
+
+// valuesAnnotation reads annotation key where the chart reads it.
+func valuesAnnotation(t *testing.T, values map[string]any, key string) string {
+	t.Helper()
+	v, _, err := unstructured.NestedString(values, "annotations", key)
+	require.NoError(t, err)
+	return v
+}
+
 // valuesCreator reads the creator where the chart reads it:
 // annotations[CreatedByAnnotation] of the values.
 func valuesCreator(t *testing.T, values map[string]any) string {

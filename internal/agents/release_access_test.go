@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	k8stesting "k8s.io/client-go/testing"
@@ -135,4 +136,38 @@ func TestGet_WithoutReadAccessToAReleaseInAnotherNamespaceNamesNoRole(t *testing
 	_, err = f.svc.Update(t.Context(), Update{Name: "sre-agent", Description: &desc})
 	require.ErrorIs(t, err, ErrForbidden)
 	assert.NotContains(t, err.Error(), RoleEditor)
+}
+
+func TestPlatformOwnershipWithoutFluxReadAccess(t *testing.T) {
+	for _, operation := range []string{"list", "get"} {
+		t.Run(operation, func(t *testing.T) {
+			f := seeded(t)
+			object, err := f.dyn.Resource(agentGVR).Namespace("kagent").Get(t.Context(), "verifier", metav1.GetOptions{})
+			require.NoError(t, err)
+			labels := object.GetLabels()
+			labels[PlatformManagedByLabel] = PlatformManagedByValue
+			object.SetLabels(labels)
+			_, err = f.dyn.Resource(agentGVR).Namespace("kagent").Update(t.Context(), object, metav1.UpdateOptions{})
+			require.NoError(t, err)
+			refuse(f, "list", ociGVR)
+			refuse(f, "get", hrGVR)
+
+			var agent Agent
+			if operation == "list" {
+				list, err := f.svc.List(t.Context(), In(""), nil)
+				require.NoError(t, err)
+				require.Len(t, list, 1)
+				agent = list[0]
+			} else {
+				got, err := f.svc.Get(t.Context(), In(""), "verifier")
+				require.NoError(t, err)
+				agent = *got
+			}
+			assert.Equal(t, ManagedPlatform, agent.Managed)
+			assert.Equal(t, ManagedPlatform, agent.Summary().Managed)
+			assert.NotEmpty(t, agent.ReleaseWithheld)
+			assert.Nil(t, agent.HelmRelease)
+			assert.Nil(t, agent.Values)
+		})
+	}
 }

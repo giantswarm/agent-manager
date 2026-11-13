@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/yosida95/uritemplate/v3"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
@@ -40,15 +41,45 @@ func ContextWithCredentialRequest(ctx context.Context, tool, intent, client stri
 	return context.WithValue(ctx, credentialRequestKey{}, credentialRequest{tool, intent, client})
 }
 
+// credentialUIVars are the variables a credential UI URL template may use.
+var credentialUIVars = []string{"operation", "parent", "organization"}
+
+var errCredentialUIURL = errors.New("credential UI requires an HTTPS RFC 6570 URI template with one {operation} expression in its path or query, using only {operation}, {parent} and {organization}")
+
 // ValidateCredentialUIURL keeps the origin fixed while allowing domain identifiers in the path or query.
 func ValidateCredentialUIURL(template string) error {
-	const marker = "credential-operation-placeholder"
-	validationURL := strings.NewReplacer("{operation}", marker, "{parent}", marker, "{organization}", marker).Replace(template)
-	parsed, err := url.Parse(validationURL)
-	if err != nil || strings.ContainsAny(validationURL, "{}") || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || parsed.Fragment != "" || strings.Contains(parsed.Host, marker) || strings.Count(template, "{operation}") != 1 {
-		return errors.New("credential UI requires an HTTPS URL containing exactly one {operation} placeholder in its path or query")
+	_, err := parseCredentialUIURL(template)
+	return err
+}
+
+func parseCredentialUIURL(template string) (*uritemplate.Template, error) {
+	const marker = "credentialoperationplaceholder"
+	tpl, err := uritemplate.New(template)
+	if err != nil || !slices.Contains(tpl.Varnames(), "operation") {
+		return nil, errCredentialUIURL
 	}
-	return nil
+	for _, name := range tpl.Varnames() {
+		if !slices.Contains(credentialUIVars, name) {
+			return nil, errCredentialUIURL
+		}
+	}
+	expanded, err := expandCredentialUIURL(tpl, marker+"o", marker+"p", marker+"n")
+	if err != nil {
+		return nil, errCredentialUIURL
+	}
+	parsed, err := url.Parse(expanded)
+	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || parsed.Fragment != "" || strings.Contains(parsed.Host, marker) || strings.Count(expanded, marker+"o") != 1 {
+		return nil, errCredentialUIURL
+	}
+	return tpl, nil
+}
+
+func expandCredentialUIURL(tpl *uritemplate.Template, operation, parent, organization string) (string, error) {
+	return tpl.Expand(uritemplate.Values{
+		"operation":    uritemplate.String(operation),
+		"parent":       uritemplate.String(parent),
+		"organization": uritemplate.String(organization),
+	})
 }
 
 type operationWrite struct {
@@ -63,7 +94,6 @@ type operationWrite struct {
 type operationCredential struct {
 	Secret  string `json:"secret"`
 	Key     string `json:"key"`
-	Version string `json:"version,omitempty"`
 	Replace bool   `json:"replace"`
 	Exists  bool   `json:"exists"`
 }
@@ -86,6 +116,10 @@ type credentialOperation struct {
 	WrittenFiles    map[string]string     `json:"writtenFiles,omitempty"`
 	GitTarget       *CredentialGitTarget  `json:"gitTarget,omitempty"`
 	AppliedVersions map[string]string     `json:"appliedVersions,omitempty"`
+	// Consumers are, for a replace_organization_credential operation, the
+	// objects that read its Secret and where they send the value, as
+	// prepared.
+	Consumers []CredentialReference `json:"consumers,omitempty"`
 }
 
 type CredentialGitTarget struct {
@@ -174,13 +208,13 @@ func (s *Service) ReadCredentialOperation(ctx context.Context, id string) (*Cred
 	if err != nil {
 		return nil, err
 	}
-	var references []CredentialReference
 	changes := make([]CredentialChange, 0, len(operation.Writes))
 	for _, planned := range operation.Writes {
 		changes = append(changes, CredentialChange{Action: planned.Action, Object: unstructuredOf(planned.Object).DeepCopy().Object})
-		for _, credential := range operation.Credentials {
-			references = append(references, referencesOf(planned.Kind, unstructuredOf(planned.Object), credential.Secret)...)
-		}
+	}
+	references, err := s.operationReferences(ctx, operation)
+	if err != nil {
+		return nil, err
 	}
 	return &CredentialOperation{ID: operation.ID, Version: operation.Version, ElicitationID: operation.ElicitationID, ExpiresAt: operation.ExpiresAt, State: operation.State, Mode: operation.Mode, Result: operation.Result, References: references, GitTarget: operation.GitTarget, Organization: operation.Namespace, Changes: changes}, nil
 }
@@ -216,10 +250,7 @@ func (s *Service) CredentialReceipt(ctx context.Context) (*ResourceResult, error
 	return &operation.Result, nil
 }
 
-func (s *Service) landResource(ctx context.Context, writer *contentWriter, writes []write, result *ResourceResult, replace bool, verb, title string) error {
-	if slices.ContainsFunc(result.Credentials, func(credential Credential) bool { return credential.State == CredentialUnknown }) {
-		return fmt.Errorf("%w: credential state cannot be verified", agents.ErrForbidden)
-	}
+func (s *Service) landResource(ctx context.Context, writer *contentWriter, writes []write, result *ResourceResult, verb, title string) error {
 	needsCredential := slices.ContainsFunc(result.Credentials, func(credential Credential) bool {
 		return credential.State == CredentialMissing || credential.State == CredentialReplace
 	})
@@ -246,13 +277,43 @@ func (s *Service) landResource(ctx context.Context, writer *contentWriter, write
 			}
 		}
 	}
+	seenSecrets := map[string]bool{}
+	var consumers []CredentialReference
+	for _, credential := range result.Credentials {
+		if credential.State != CredentialMissing && credential.State != CredentialReplace {
+			continue
+		}
+		if seenSecrets[credential.Secret] {
+			return invalidf("each credential Secret must contain one credential key")
+		}
+		seenSecrets[credential.Secret] = true
+		references, _, err := s.references(ctx, caller, writer.org.Name, credential.Secret)
+		if err != nil {
+			return err
+		}
+		consumers = append(consumers, references...)
+		for _, reference := range references {
+			if !writesFor(*result, reference) {
+				return fmt.Errorf("%w: another consumer references the credential Secret", agents.ErrConflict)
+			}
+		}
+		// Admission judges the replacement before the person enters a value,
+		// in a dry run too: it sees the stored Secret the caller may not read,
+		// and refuses one git applied in an apply-mode write.
+		if credential.exists && writer.mode == agents.ModeApply {
+			if _, err := do(ctx, caller.Dynamic(), credentialSecretWrite(writer.org.Name, credential.Secret, opUpdate, map[string]any{credential.Key: ""}), dryRunAll); err != nil {
+				return err
+			}
+		}
+	}
 	if result.DryRun {
 		return nil
 	}
 	if s.cfg.CredentialUIURL == "" {
 		return fmt.Errorf("%w: no credential UI URL is configured; no resource was written", agents.ErrUnsupported)
 	}
-	if err := ValidateCredentialUIURL(s.cfg.CredentialUIURL); err != nil {
+	uiURL, err := parseCredentialUIURL(s.cfg.CredentialUIURL)
+	if err != nil {
 		return invalidf("%s", err)
 	}
 	id, err := credentialOperationID(ctx)
@@ -266,41 +327,19 @@ func (s *Service) landResource(ctx context.Context, writer *contentWriter, write
 		object := unstructuredOf(planned.obj)
 		operation.Writes = append(operation.Writes, operationWrite{Resource: planned.gvr, Kind: planned.kind, Action: planned.op, Object: object.DeepCopy().Object, Name: planned.name, Version: object.GetResourceVersion()})
 	}
-	seenSecrets := map[string]bool{}
 	for _, credential := range result.Credentials {
 		if credential.State != CredentialMissing && credential.State != CredentialReplace {
 			continue
 		}
-		if seenSecrets[credential.Secret] {
-			return invalidf("each credential Secret must contain one credential key")
-		}
-		seenSecrets[credential.Secret] = true
-		references, _, err := s.references(ctx, caller, writer.org.Name, credential.Secret)
-		if err != nil {
-			return err
-		}
-		for _, reference := range references {
-			if reference.Kind != kinds[result.Kind].kubeKind || reference.Name != result.Name {
-				return fmt.Errorf("%w: another consumer references the credential Secret", agents.ErrConflict)
-			}
-		}
-		secret, err := liveSecret(ctx, caller, writer.org.Name, credential.Secret)
-		if err != nil {
-			return err
-		}
-		version := ""
-		if secret != nil {
-			version = secret.GetResourceVersion()
-			for _, field := range []string{"data", "stringData"} {
-				data, _, _ := unstructured.NestedMap(secret.Object, field)
-				for key := range data {
-					if key != credential.Key {
-						return fmt.Errorf("%w: credential replacement requires a Secret with one key", agents.ErrConflict)
-					}
-				}
-			}
-		}
-		operation.Credentials = append(operation.Credentials, operationCredential{Secret: credential.Secret, Key: credential.Key, Version: version, Replace: replace, Exists: secret != nil})
+		// A missing key of an existing Secret is written as a replacement:
+		// the Secret is written whole, holding that one key.
+		operation.Credentials = append(operation.Credentials, operationCredential{Secret: credential.Secret, Key: credential.Key, Replace: credential.State == CredentialReplace || credential.exists, Exists: credential.exists})
+	}
+	// A replacement writes no consumer, so no consumer version guards it: the
+	// operation keeps the consumers and where they send the value, and the
+	// save and the Git snapshot refuse any other.
+	if result.Kind == KindCredential {
+		operation.Consumers = consumers
 	}
 	if writer.commit != nil {
 		operation.GitTarget = &CredentialGitTarget{Repository: writer.commit.cfg.Objects.Repository.String(), Base: writer.commit.cfg.Objects.Branch, Directory: writer.dir.Path()}
@@ -309,7 +348,10 @@ func (s *Service) landResource(ctx context.Context, writer *contentWriter, write
 			return err
 		}
 	}
-	link := strings.NewReplacer("{operation}", url.PathEscape(id), "{parent}", url.PathEscape(writer.org.Parent), "{organization}", url.PathEscape(writer.org.Organization)).Replace(s.cfg.CredentialUIURL)
+	link, err := expandCredentialUIURL(uiURL, id, writer.org.Parent, writer.org.Organization)
+	if err != nil {
+		return invalidf("%s", errCredentialUIURL)
+	}
 	for index := range operation.Result.Credentials {
 		credential := &operation.Result.Credentials[index]
 		if credential.State == CredentialMissing || credential.State == CredentialReplace {

@@ -157,7 +157,7 @@ func newCluster(objs ...runtime.Object) *cluster {
 func (c *cluster) runner(t *testing.T, opts Options, latest, token string) *Runner {
 	t.Helper()
 	ch := fakeChart{latest: latest}
-	p := pinner{git: skills.NewResolver(fakeGitHub(t).URL, skills.StaticToken(token), nil, nil)}
+	p := agents.InProcessPinner(pinner{git: skills.NewResolver(fakeGitHub(t).URL, skills.StaticToken(token), nil, nil)})
 	opts.Version = "test"
 	r, err := New(c.client, ch, p, TemplateStatus{Client: c.dyn, APIVersion: "v1alpha3", Harness: kagentNS}, opts, nil)
 	require.NoError(t, err)
@@ -872,7 +872,7 @@ func TestNothingToMigrateIsComplete(t *testing.T) {
 
 func TestRewriteValues(t *testing.T) {
 	ctx := context.Background()
-	p := pinner{git: skills.NewResolver(fakeGitHub(t).URL, nil, nil, nil)}
+	p := agents.InProcessPinner(pinner{git: skills.NewResolver(fakeGitHub(t).URL, nil, nil, nil)})
 	cases := map[string]struct {
 		values  map[string]any
 		harness string
@@ -1020,4 +1020,46 @@ func TestExpandRetriesAWriteThatRacesTheControllers(t *testing.T) {
 	assert.Equal(t, "edited meanwhile", botAgent["description"])
 	assert.Equal(t, "go", botAgent["runtime"], "nothing of the rewrite was written")
 	assert.Equal(t, SourceNotMoved, bySource(tenant)["tenant/agent"].Action)
+}
+
+// A release the Agent Platform ships is reported, never written, even in a
+// managed namespace without a Kustomization; the source it shares is not
+// moved under it, and its writable siblings wait.
+func TestExpandNeverWritesAPlatformOwnedRelease(t *testing.T) {
+	platform := helmRelease("kagent", "agent-manager-assistant", portalValues(), "0.6.1")
+	platform.SetLabels(map[string]string{agents.PlatformManagedByLabel: agents.PlatformManagedByValue})
+	c := newCluster(ociRepository("kagent", legacyRange), platform, helmRelease("kagent", "sre", portalValues(), "0.6.1"), harness("kagent"))
+
+	res, err := c.runner(t, Options{Namespaces: []string{"kagent"}}, "1.0.0", "secret").Run(context.Background())
+	require.NoError(t, err)
+	rep := res.Reports[0]
+	rel := byRelease(rep)["kagent/agent-manager-assistant"]
+	assert.Equal(t, ActionDiff, rel.Action)
+	assert.Equal(t, OwnershipPlatform, rel.Ownership)
+	assert.Contains(t, rel.Reason, "Agent Platform")
+	assert.Equal(t, portalValues(), c.values(t, "kagent", "agent-manager-assistant"))
+	src := bySource(rep)["kagent/agent"]
+	assert.Equal(t, OwnershipPlatform, src.Ownership)
+	assert.Equal(t, ActionDiff, src.Action)
+	assert.Equal(t, legacyRange, c.semver(t, "kagent", "agent"))
+	held := byRelease(rep)["kagent/sre"]
+	assert.Equal(t, ActionPending, held.Action, "a sibling on the source that does not move waits")
+	assert.Contains(t, held.Reason, "kagent/agent-manager-assistant (platform)")
+	assert.Equal(t, portalValues(), c.values(t, "kagent", "sre"), "1.x values under the 0.x chart would fail its render")
+	assert.Contains(t, rep.Pending, "release kagent/agent-manager-assistant: ships with the Agent Platform; its rewrite (the diff in this report) comes with the platform release")
+}
+
+// A release that renders the platform's label onto its Agent (values.labels)
+// ships with the Agent Platform too.
+func TestExpandNeverWritesAReleaseThatLabelsItsAgentPlatformOwned(t *testing.T) {
+	values := portalValues()
+	values["labels"] = map[string]any{agents.PlatformManagedByLabel: agents.PlatformManagedByValue}
+	c := newCluster(ociRepository("kagent", legacyRange), helmRelease("kagent", "assistant", values, "0.6.1"), harness("kagent"))
+
+	res, err := c.runner(t, Options{Namespaces: []string{"kagent"}}, "1.0.0", "secret").Run(t.Context())
+	require.NoError(t, err)
+	rel := byRelease(res.Reports[0])["kagent/assistant"]
+	assert.Equal(t, ActionDiff, rel.Action)
+	assert.Equal(t, OwnershipPlatform, rel.Ownership)
+	assert.Equal(t, values, c.values(t, "kagent", "assistant"))
 }

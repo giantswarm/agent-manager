@@ -42,14 +42,19 @@ const (
 const (
 	// pageSize is the controller's cap for ListSessions and ListTasks.
 	pageSize = 100
-	// maxSessionPages and maxTaskPages bound how far a listing is followed, so
-	// a misbehaving next_page_token cannot loop forever.
-	maxSessionPages = 20
+	// maxSessionPages and maxTaskPages bound how far one call follows a
+	// listing.
+	maxSessionPages = MaxListedSessions / pageSize
 	maxTaskPages    = MaxListedTasks / pageSize
 	// maxMessageBytes bounds one response: a session's tasks carry its whole
 	// history and artifacts.
 	maxMessageBytes = 32 << 20
 )
+
+// MaxListedSessions is how many sessions of one Agent ListSessions reads in
+// one call: what one request may cost, since a caller lists the sessions of
+// every Agent of an organization or installation at once.
+const MaxListedSessions = 2_000
 
 // MaxListedTasks is how many tasks ListSessionTasks reads before it stops:
 // a conversation's tasks are listed without their history, to address its
@@ -147,16 +152,24 @@ func asCaller(ctx context.Context, token string) (context.Context, error) {
 	return metadata.NewOutgoingContext(ctx, metadata.Pairs("authorization", "Bearer "+token)), nil
 }
 
-// ListSessions is SessionService/ListSessions for one Agent, walked to the
-// end. allCreators asks for every person's sessions, which the controller
-// grants only to a caller authorized for it.
-func (c *Client) ListSessions(ctx context.Context, token string, agent Ref, allCreators bool) ([]*apiv1alpha1.Session, error) {
+// SessionPage is one call's share of an Agent's sessions, in kagent's order
+// (ascending session id). NextPageToken is empty when the listing is complete;
+// otherwise it is kagent's opaque token to continue from.
+type SessionPage struct {
+	Sessions      []*apiv1alpha1.Session
+	NextPageToken string
+}
+
+// ListSessions is SessionService/ListSessions for one Agent, from pageToken
+// (empty: the start) through at most MaxListedSessions sessions. allCreators
+// asks for every person's sessions, which the controller grants only to a
+// caller authorized for it.
+func (c *Client) ListSessions(ctx context.Context, token string, agent Ref, allCreators bool, pageToken string) (*SessionPage, error) {
 	ctx, err := asCaller(ctx, token)
 	if err != nil {
 		return nil, err
 	}
-	var out []*apiv1alpha1.Session
-	pageToken := ""
+	out := &SessionPage{}
 	for range maxSessionPages {
 		resp, err := c.sessions.ListSessions(ctx, &apiv1alpha1.ListSessionsRequest{
 			Agent:       &apiv1alpha1.ResourceReference{Namespace: agent.Namespace, Name: agent.Name},
@@ -166,12 +179,17 @@ func (c *Client) ListSessions(ctx context.Context, token string, agent Ref, allC
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, resp.GetSessions()...)
-		pageToken = resp.GetPage().GetNextPageToken()
+		out.Sessions = append(out.Sessions, resp.GetSessions()...)
+		next := resp.GetPage().GetNextPageToken()
+		if next != "" && next == pageToken {
+			return nil, errors.New("kagent: ListSessions answered the page token it was sent")
+		}
+		pageToken = next
 		if pageToken == "" {
 			break
 		}
 	}
+	out.NextPageToken = pageToken
 	return out, nil
 }
 

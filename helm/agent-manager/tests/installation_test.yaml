@@ -1,0 +1,22 @@
+# installation: the Dev Portal's name of the installation, which get_info
+# reports.
+#
+# Run with: make helm-test (helm unittest helm/agent-manager)
+suite: installation
+templates:
+  - templates/deployment.yaml
+tests:
+  - it: passes installation
+    set:
+      installation: golem
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --installation=golem
+
+  - it: passes nothing when unset
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --installation=
+          any: true

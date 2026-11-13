@@ -56,7 +56,7 @@ MCP-server-writer half.
 | kagent ModelConfigs of a namespace, with the namespace default (`default`) and their `accepted` and `resolvedRefs` conditions | `GET /api/v1/modelconfigs?namespace=` | `list_model_configs` | no |
 | kagent EgressPolicies of a namespace, read as the caller: each origin and its credential header's name, never the Secret | `GET /api/v1/egresspolicies?namespace=` | `list_egress_policies` | no |
 | Skills (`SKILL.md`) of the configured GitHub repositories, grouped by repository with its head commit, tags from `metadata.tags`; `tags` keeps those with any of them | `GET /api/v1/skills[?repository=&ref=&refresh=&tags=]` | `list_skills` | no |
-| Sessions of an agent, as the caller (`SessionService/ListSessions`; `allCreators` when the controller grants it) | `GET /api/v1/agents/{ns}/{name}/sessions[?allCreators=true]` | `list_sessions` | no |
+| Sessions of an agent, as the caller (`SessionService/ListSessions`; `allCreators` when the controller grants it) | `GET /api/v1/agents/{ns}/{name}/sessions[?allCreators=true][&pageToken=…]` | `list_sessions` | no |
 | Start a session: create it (in a workspace with `workspaceGrant`), send the first message when one is given and answer once the turn is accepted; without `message` only create it | `POST /api/v1/agents/{ns}/{name}/sessions` | `start_session` | a kagent Session |
 | One session and its conversation, one turn per A2A task of its context, oldest first, within `maxBytes`: a summary per turn by default, a transcript or the raw tasks on request | `GET /api/v1/sessions/{id}[?detail=&lastTurns=&maxBytes=]` | `get_session` | no |
 | One turn of a session: its messages, paged within `maxBytes`, or one tool call whole | `GET /api/v1/sessions/{id}/turns/{turn}[?detail=&toolCall=&fromMessage=&maxBytes=]` | `get_session_turn` | no |
@@ -70,8 +70,20 @@ The three writes take `dryRun` and `mode` (`apply` | `commit`, see
 column is files of a pull request, nothing live. `validate_agent` takes
 `mode` too and answers as the write would.
 
-Errors are `{"error":{"code":"not_found|invalid_request|conflict|gitops_owned|forbidden|unauthenticated|auth_required|unsupported|backend_error","message":"…"}}`;
-`conflict` (409) covers "exists already", "suspended" and "bare
+Errors are `{"error":{"code":"not_found|invalid_request|conflict|gitops_owned|forbidden|unauthenticated|auth_required|unsupported|precondition_failed|precondition_required|credential_consumers_changed|already_exists|backend_error","message":"…"}}`;
+`unsupported` (501) is something this installation is not configured for,
+`backend_error` (502) a failure of the API server, Git or a store behind it;
+`precondition_failed` (412) and `precondition_required` (428) answer a
+credential save or cancellation whose `If-Match` is stale or missing;
+`credential_consumers_changed` (409) a credential save of
+`replace_organization_credential` whose consumers changed since the
+preparation (see [organization credentials](docs/organization-credentials.md));
+`already_exists` (409) a create of an organization model, connector or egress
+policy whose name is taken (`set_organization_model`,
+`set_organization_connector` or `set_organization_egress_policy` with
+`create`), and a credential save whose
+operation creates an object that exists by then;
+`conflict` (409) covers an agent that "exists already", "suspended" and "bare
 Agent", the cases `force` overrides where documented;
 `gitops_owned` (409) is an apply-mode write to a release applied from git,
 `auth_required` (401) a commit without the caller's GitHub authorization.
@@ -164,6 +176,10 @@ conditions.
 - `validate_agent` reports in `modelConfig` the model a create would write,
   and adds a `notes` entry when that ModelConfig is not `ResolvedRefs=True`
   (its key Secret missing, say). The create is not refused for it.
+- `--default-model-agent` (chart: `defaultAgentModel.agent`) names one Agent
+  of `--kagent-namespace` whose empty `modelConfig` is filled with the default,
+  checked every 30s, like a default StorageClass fills a PVC. Once set, by
+  anyone, it is never changed. Several marked: a warning, nothing.
 
 ## The Harness and plugins
 
@@ -272,6 +288,11 @@ ref's head) and changes nothing else on the release — the way to pick up new
 skill and plugin commits. `name`
 defaults to the last path segment (else the repository or image name) and
 must be unique per agent; `path` is relative without `..`.
+
+### Through skill-manager
+
+With `--skill-manager-url` (chart `skillManager.url`) every pin goes through
+skill-manager: see [docs/skill-manager.md](docs/skill-manager.md).
 
 ## Private skills
 
@@ -441,7 +462,9 @@ unknown` and one sentence:
   may; a release in another namespace, such as `flux-giantswarm`, is outside
   the agent-platform roles): `list_agents`, `get_agent` and
   `get_agent_status` answer from the Agent alone, and `releaseWithheld` says
-  so. Agents whose HelmRelease has not rendered an Agent yet are not listed.
+  so. A platform label on the Agent keeps `managed: platform` even when
+  `releaseWithheld` is set. Agents whose HelmRelease has not rendered an Agent
+  yet are not listed.
 
 A suspended HelmRelease is refused the same way: Flux drops its finalizer
 without uninstalling, so deleting it would leave the rendered objects behind
@@ -505,11 +528,19 @@ standard manifests a kubectl or GitOps user would apply, returns them on
   `commit: {repository, base, directory, kustomization, prune, branch, files:
   [{path, action, content (dry run)}], pullRequest, number, author}`.
 
-Commit mode needs the GitHub App pin (`github.enabled`, below) and reports
-itself in `get_info` as `capabilities.commit`; without it `mode: commit`
-answers `unsupported`. A call that carries no GitHub authorization answers
-`auth_required`, naming the one-time consent (`core_auth_login
-server=agent-manager`).
+Commit mode needs `github.enabled`, with `github.tokenExchange`
+([GitHub authorization](docs/organization-credentials.md#github-authorization))
+or the deprecated GitHub App pin (below), and reports itself in `get_info` as
+`capabilities.commit`; without it `mode: commit` answers `unsupported`. With
+`github.tokenExchange` only the commit asks for GitHub: without the person's
+grant, or when GitHub refuses it (401), it answers `grant_required` naming the
+App (`github.tokenExchange.audience`), and muster answers with the App's
+sign-in (`core_auth_login app=<audience>`). GitHub refusing the commit with
+the grant (403) answers `forbidden`: the App must be installed on the
+repository and the person allowed to push to it. An agent acting for the
+person (a token with `act`) is refused with `forbidden`. With the pin, a call
+that carries no GitHub authorization answers `auth_required`, naming the
+one-time consent (`core_auth_login server=agent-manager`).
 
 ## Identity
 
@@ -528,9 +559,9 @@ client, a portal session forwards the id_token of the portal's own client —
 and every forwarded token carries the audiences the MCPServer requires, the
 ones the kube-apiserver trusts. So the chart trusts both: `oauth.trustedAudiences`
 (default `[global.identity.clientId]`) plus `muster.mcpServer.auth.requiredAudiences`,
-always. A token for none of them is refused with `401`; the log line and the
-`WWW-Authenticate` description name its `aud` next to the trusted audiences
-(muster shows the description in its session hint). The caller
+always. A token for none of them is refused with `401`; the
+`Unknown JWT bearer refused` log line names its `token_audience` next to the
+`trusted_audiences`. The caller
 (`internal/identity`: subject, email, groups, source `sso|oauth`) is on every
 write's log line (`caller=`) and on every create/update/delete result as
 `requestedBy`.
@@ -555,9 +586,16 @@ audience it trusts (`dex-k8s-authenticator` on Giant Swarm clusters,
 client id *is* the apiserver's `--oidc-client-id` (`requiredAudiences: []`).
 `get_info` reports `identity: caller` and `capabilities.writesAsCaller: true`.
 
-With `--github-authorization-server` (chart `github.enabled`) the MCP
-registration is pinned to agent-manager's own user-to-server GitHub App,
-`giantswarm-agent-manager`: the MCPServer's auth names the App as the
+`github.tokenExchange` (chart `github.enabled` with
+`github.tokenExchange.tokenEndpoint`) configures a confidential RFC 8693
+client that retrieves the person's App user grant per call that needs it.
+MCP keeps its platform identity registration (`forwardToken`) and lists the
+App under `auth.providerApps`. The trust policy and prerequisites are in
+[Credential operations](docs/organization-credentials.md#github-authorization).
+
+Deprecated: with `--github-authorization-server` (chart `github.enabled`
+without `github.tokenExchange`) the MCP registration is pinned to
+agent-manager's own user-to-server GitHub App, `giantswarm-agent-manager`: the MCPServer's auth names the App as the
 authorization server with `forwardIdentity: true`, so muster runs the App's
 consent once per person and puts the person's App user token on every MCP call
 as the bearer, and the person's IdP ID token in `X-Muster-Id-Token`. The server
@@ -568,13 +606,6 @@ person. The REST API keeps taking the ID token as its bearer. No GitHub
 credential other than the App's OAuth client (read by muster) exists in the
 pod or the chart in this mode. Operator precondition: the App installed with contents and
 pull-request write on every repository a commit may target.
-
-Alternatively, `githubTokenExchange` configures a confidential RFC 8693 client
-that retrieves the person's manager App user grant on demand. This supports
-REST commit mode with the person's verified ID token and keeps MCP on its
-platform identity registration. It replaces `github.enabled`; it does not
-require an App-pinned MCP call. The trust policy and prerequisites are in
-[Credential operations](docs/organization-credentials.md#github-authorization).
 
 Without `--enable-oauth` the service checks no identity and acts as its
 ServiceAccount (the Role per managed namespace: HelmReleases and
@@ -605,23 +636,40 @@ Everything else runs as the caller, which needs `--downstream-oauth`.
 
 The organization tools (every name holds `organization`):
 
-- for an `agent-platform:organizations-admin`: `list_organizations`,
+- for an `agent-platform:organizations-admin`:
   `get_organization` (with what a delete erases), `create_organization`,
   `update_organization` and `delete_organization`. A create asks first, with
   SelfSubjectAccessReviews as the caller, whether the caller may create the
-  object and bind `agent-platform:admin` in the parent (the operator mirrors
-  the parent's organizations-admin bindings into the new namespace), dry-runs
-  the object, writes it, waits for the operator's `Ready`, then writes the
-  first admins as the RoleBinding `organization-admins`. An organization that
-  is not Ready in time keeps its first admins for a second call with the same
-  arguments. A delete answers what it erases until the caller passes
-  `confirm: <parent>/<name>`, then marks the object
+  object and bind `agent-platform:admin` in the parent, then whether that
+  right will reach the new namespace: it does when the caller may bind there
+  cluster-wide, or when a RoleBinding in the parent that the operator mirrors
+  now (`adminmirror.Mirrors` of agent-platform-operator: one to
+  `agent-platform:organizations-admin`, or rbac-operator's to `cluster-admin`,
+  and not being deleted, since the operator writes no mirror of a deleting
+  binding) names the caller as one of its mirrored Users or Groups
+  (`adminmirror.MirroredSubjects`). Otherwise it
+  refuses before any write, dry run included, naming the caller's bindings
+  and the two ways out (an `agent-platform:organizations-admin` RoleBinding
+  for the caller in the parent, or a cluster-admin creating it). A caller who
+  may not list the parent's RoleBindings is not checked there. Then it
+  dry-runs the object, writes it, waits for the operator's `Ready`, asks again
+  in the new namespace, and writes the first admins as the RoleBinding
+  `organization-admins`. An organization that is not Ready in time, or whose
+  namespace the caller's right has not reached yet (`pending`), keeps its
+  first admins for a second call with the same arguments. A caller who is a
+  ServiceAccount or another `system:` name is never mirrored: only a right
+  cluster-wide reaches the namespace for it. A delete answers what it erases
+  until the caller passes `confirm: <parent>/<name>`, then marks the object
   `kustomize.toolkit.fluxcd.io/prune: enabled` (the delete intent the
   admission policy requires) and deletes it; the operator erases it. An
   organization Flux applies from git is refused live (commit mode is
   giantswarm/agent-manager#292).
+- for an organization's members: `list_organization_members`, which needs
+  `list` on RoleBindings in the organization namespace; every member role
+  (`agent-platform:user`, `editor` or `admin`) holds it from agent-platform
+  chart 4.179.0 on, `agent-platform:admin` alone before.
 - for an organization's admins (`agent-platform:admin` in its namespace):
-  `list_organization_members`, `add_organization_member` and
+  `add_organization_member` and
   `remove_organization_member` (a group offered before a person; members
   of a role go into the RoleBinding `organization-<role>s`, and
   `organization-admins` is never emptied); `set_organization_model`
@@ -630,22 +678,36 @@ The organization tools (every name holds `organization`):
   `default: true` moves the mark, and a namespace with two marks takes no
   new model until one is chosen); `list_organization_connectors` and
   `set_organization_connector` (RemoteMCPServers);
-  `set_organization_egress_policy`; and `delete_organization_object`.
-- for everyone: `list_my_organizations`, the New agent picker's list: the
-  organization namespaces in which the caller may list Agents, asked with a
-  SelfSubjectAccessReview as the caller.
+  `set_organization_egress_policy`; `delete_organization_object`; and
+  `replace_organization_credential` (a new value for one key of a credential
+  Secret, for every object that reads it, writing the Secret only).
+- for everyone: `list_organizations`, the organizations the caller manages
+  or belongs to. agent-manager's ServiceAccount lists the
+  AgentPlatformOrganizations; SelfSubjectAccessReviews as the caller decide
+  each one's `permissions`: `manage` (update it in its parent), `member`
+  (list the Agents of its namespace, which every organization role grants)
+  and `createAgents` (create Agents in its namespace, which
+  `agent-platform:editor` and `agent-platform:admin` grant and
+  `agent-platform:user` does not; false while it has no namespace). An
+  organization with neither `manage` nor `member` is not listed; one the
+  caller only belongs to carries its status alone (namespace, `orphaned`,
+  `deleting`), and one the caller manages also its summary (`organization`).
+  A New agent can be created where `createAgents` is true.
 
 Every write is dry-run as the caller first, all of a call's writes before any
 of them, so RBAC, schemas and admission refuse before anything changes; a
 refusal names the role that is missing and who can grant it. No tool takes or
 returns a secret value: a model's key, a connector's and an egress policy's
 credential are Secrets named by reference (`tenant-credential-…`). When one is
-missing, or `replaceCredential` asks for a new value, `set_organization_model`,
-`set_organization_connector` and `set_organization_egress_policy` answer with
-an MCP URL elicitation of a client-owned credential UI. The server prepares
+missing, `set_organization_model`, `set_organization_connector` and
+`set_organization_egress_policy` answer with an MCP URL elicitation of a
+client-owned credential UI; `replace_organization_credential`, which takes the
+Secret and key and changes no object, answers with one for a new value. The server prepares
 the intended change without writing consumers, and supplies a user-bound
-operation ID through the configured `credentials.uiURL` template. A client
-without `elicitation.url` receives the link in `credentials[].next`. A dry run
+operation ID through the configured `credentials.uiURL` RFC 6570 template. A client
+without `elicitation.url` receives the result as `structuredContent`, declared
+by the tools' `outputSchema`, with a `resource_link` to the credential UI from
+protocol 2025-06-18 and the link in `credentials[].next`. A dry run
 creates no operation. Without a configured UI, a change requiring credential
 input is refused before writing resources.
 
@@ -685,8 +747,10 @@ operator's chart source.
 
 Every create records the caller as `agent-platform.giantswarm.io/created-by`
 on the HelmRelease and, through the chart's `annotations` value, on the
-Agent; an update keeps it and nobody can set or change it. `createdBy` on
-`get_agent` and `list_agents` is for display and filtering only, never for
+Agent, and the caller's display name, when the IdP gives one, as
+`agent-platform.giantswarm.io/created-by-name`; an update keeps both and
+nobody can set or change them. `createdBy` and `createdByName` on
+`get_agent` and `list_agents` are for display and filtering only, never for
 authorization. `get_info` lists in `namespaces.managed` only the managed
 namespaces in which the caller may create a HelmRelease.
 
@@ -783,7 +847,9 @@ and without the caller's token a session operation is `401 unauthenticated`.
   whole and the larger is clipped (`argsText`, `responseText`).
 - Both read conversations of up to 10000 turns; a longer one is `409
   conflict`, as its newest turns could not be named.
-- `list_sessions` is `SessionService/ListSessions` for one Agent.
+- `list_sessions` is `SessionService/ListSessions` for one Agent, at most
+  2000 sessions per answer. `nextPageToken` in the answer says more follow:
+  list again with it as `pageToken`.
 - `delete_session` is `SessionService/DeleteSession`: the controller ends the
   session's runtime, removes its state and answers it in
   `RUNTIME_STATE_DELETED`; it is gone from `list_sessions` and `get_session`
@@ -1062,7 +1128,7 @@ and to the GitHub API on 0.x → 1.x.
 the [`giantswarm/agent-platform`](https://github.com/giantswarm/agent-platform)
 meta chart sets for its `agent-manager` component: `kagent.namespace`,
 `harness.name`, `agentChart.*`, `muster.url`, `mcp.enabled`, `oauth.*`,
-`muster.mcpServer.*`, `skills.repositories`, and
+`muster.mcpServer.*`, `skillManager.url`, `skills.repositories`, and
 `flux.helmReleaseServiceAccount` (derived from `kagent.fluxServiceAccountName`).
 Optional, off by default: `muster.mcpServer.enabled` (renders an
 `mcpservers.muster.giantswarm.io` CR), `httpRoute.enabled`,

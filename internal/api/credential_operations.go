@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"mime"
 	"net/http"
@@ -83,8 +84,15 @@ func (h *REST) cancelCredentialOperation(w http.ResponseWriter, r *http.Request)
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// errIfMatchRequired answers a save or cancellation without If-Match: 428
+// Precondition Required (RFC 6585 §3).
+var errIfMatchRequired = errors.New("If-Match with the confirmation's ETag is required")
+
 func operationVersion(request *http.Request) (string, error) {
 	value := request.Header.Get("If-Match")
+	if value == "" {
+		return "", errIfMatchRequired
+	}
 	if len(value) < 3 || value[0] != '"' || value[len(value)-1] != '"' {
 		return "", errCredentialBody
 	}

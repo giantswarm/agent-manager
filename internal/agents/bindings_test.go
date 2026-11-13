@@ -152,7 +152,7 @@ func TestAFailedBindOfASessionWithoutAWorkspaceLeavesNoSession(t *testing.T) {
 	require.ErrorIs(t, err, ErrForbidden)
 	assert.Contains(t, err.Error(), "was not started")
 	assert.NotContains(t, calledMethods(ctrl), "SendStreamingMessage", "no turn ran unbound")
-	list, err := svc.ListSessions(ctx, "", "sre", false)
+	list, err := svc.ListSessions(ctx, "", "sre", false, "")
 	require.NoError(t, err)
 	assert.Empty(t, list.Sessions, "the session was deleted again")
 }
@@ -221,7 +221,7 @@ func TestAFailedBindFailsTheStartNamingMusterAndLeavesNoSession(t *testing.T) {
 			assert.Contains(t, err.Error(), "was not started")
 			assert.NotContains(t, calledMethods(ctrl), "SendStreamingMessage", "no turn ran unbound")
 			assert.Contains(t, calledMethods(ctrl), "DeleteSession")
-			list, err := svc.ListSessions(ctx, "", "sre", false)
+			list, err := svc.ListSessions(ctx, "", "sre", false, "")
 			require.NoError(t, err)
 			assert.Empty(t, list.Sessions, "the session was deleted again")
 		})

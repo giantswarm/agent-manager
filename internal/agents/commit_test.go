@@ -2,7 +2,9 @@ package agents
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"testing"
 
@@ -207,6 +209,22 @@ func TestApplyRefusesAGitOpsOwnedReleaseNamingTheTarget(t *testing.T) {
 	assert.ErrorIs(t, err, ErrGitOpsOwned)
 }
 
+func TestCommitRefusesAPlatformOwnedRelease(t *testing.T) {
+	f, fake, ctx := gitOpsFixture(t, true)
+	values := map[string]any{"agent": map[string]any{"name": "agent-manager-assistant"}, "modelConfig": map[string]any{"name": "default-model-config"}, ToolsetValuesKey: []any{"preset:agent-platform"}}
+	mustCreate(t, f, hrGVR, helmRelease("kagent", "agent-manager-assistant", values, true, map[string]any{PlatformManagedByLabel: PlatformManagedByValue, KustomizationNameLabel: "agents", KustomizationNamespaceLabel: "flux-system"}))
+	commit := WriteOptions{Mode: ModeCommit}
+
+	_, err := f.svc.Update(ctx, Update{Name: "agent-manager-assistant", Description: str("x"), WriteOptions: commit})
+	require.ErrorIs(t, err, ErrConflict)
+	assert.Contains(t, err.Error(), "ships with the Agent Platform")
+	_, err = f.svc.ValidateUpdate(ctx, Update{Name: "agent-manager-assistant", Description: str("x"), WriteOptions: commit})
+	require.ErrorIs(t, err, ErrConflict)
+	_, err = f.svc.Delete(ctx, In(""), "agent-manager-assistant", false, commit)
+	require.ErrorIs(t, err, ErrConflict)
+	assert.Empty(t, fake.PullRequests())
+}
+
 func TestValidateUpdateFollowsTheWriteModesOwnershipRule(t *testing.T) {
 	f, fake, ctx := gitOpsFixture(t, true)
 
@@ -296,6 +314,76 @@ func TestCommitDeleteOpensTheRemovingPullRequest(t *testing.T) {
 }
 
 func str(s string) *string { return &s }
+
+func TestCommitKeepsTheGrantRequiredApp(t *testing.T) {
+	fixture, forge, _ := gitOpsFixture(t, true)
+	fixture.svc.cfg.GitHubUser = func(context.Context) (*identity.GitHub, error) {
+		return nil, &GrantRequiredError{App: "github", Reason: "grant it"}
+	}
+	_, err := fixture.svc.Create(t.Context(), Spec{Name: "sre", ModelConfig: "default-model-config", Toolset: []string{"preset:read-only"}, WriteOptions: WriteOptions{Mode: ModeCommit}})
+	grant, ok := errors.AsType[*GrantRequiredError](err)
+	require.True(t, ok, "%v", err)
+	require.Equal(t, "github", grant.App)
+	require.ErrorIs(t, err, ErrAuthRequired)
+	require.Empty(t, forge.PullRequests())
+}
+
+func TestGitHubRefusalNamesWhatRenewsTheToken(t *testing.T) {
+	pinned := &identity.GitHub{Login: "alice", Token: "pinned"}
+	granted := &identity.GitHub{Login: "alice", Token: "granted", App: "manager-app"}
+
+	err := GitHubRefusal(pinned, &commit.AuthError{Op: "create branch", Status: 401})
+	require.ErrorIs(t, err, ErrAuthRequired)
+	require.ErrorContains(t, err, "core_auth_login server=agent-manager")
+	_, isGrant := errors.AsType[*GrantRequiredError](err)
+	require.False(t, isGrant)
+
+	err = GitHubRefusal(granted, &commit.AuthError{Op: "create branch", Status: 401})
+	grant, isGrant := errors.AsType[*GrantRequiredError](err)
+	require.True(t, isGrant)
+	require.Equal(t, "manager-app", grant.App)
+	require.Contains(t, grant.Reason, "core_auth_login app=manager-app")
+	require.NotContains(t, err.Error(), "server=agent-manager")
+
+	err = GitHubRefusal(granted, &commit.AuthError{Op: "open pull request", Status: 403})
+	require.ErrorIs(t, err, ErrForbidden)
+	require.NotErrorIs(t, err, ErrAuthRequired)
+	require.ErrorContains(t, err, "manager-app")
+	require.ErrorContains(t, err, "installed on the repository")
+	require.NotContains(t, err.Error(), "server=agent-manager")
+}
+
+// A 403 on a step that only reads is the App's permissions, which no new
+// sign-in or grant changes: the answer names the step and the App and asks
+// for no sign-in and no push access. A 401 on it still asks for the sign-in.
+func TestAReadRefusedWith403NamesTheAppsPermissions(t *testing.T) {
+	pinned := &identity.GitHub{Login: "alice", Token: "pinned"}
+	granted := &identity.GitHub{Login: "alice", Token: "granted", App: "manager-app"}
+	reads := []string{commit.OpStatus, commit.OpReadFile, commit.OpListFiles, commit.OpFindPullRequest, commit.OpMergedFiles}
+	for _, gh := range []*identity.GitHub{pinned, granted} {
+		for _, op := range reads {
+			t.Run(gh.Token+"/"+op, func(t *testing.T) {
+				err := GitHubRefusal(gh, &commit.AuthError{Op: op, Status: http.StatusForbidden})
+				require.ErrorIs(t, err, ErrForbidden)
+				require.NotErrorIs(t, err, ErrAuthRequired)
+				_, isGrant := errors.AsType[*GrantRequiredError](err)
+				require.False(t, isGrant)
+				require.ErrorContains(t, err, op)
+				require.ErrorContains(t, err, "permissions")
+				require.NotContains(t, err.Error(), "core_auth_login")
+				require.NotContains(t, err.Error(), "push")
+				if gh.App != "" {
+					require.ErrorContains(t, err, gh.App)
+				}
+			})
+		}
+	}
+
+	err := GitHubRefusal(pinned, &commit.AuthError{Op: commit.OpStatus, Status: http.StatusUnauthorized})
+	require.ErrorIs(t, err, ErrAuthRequired)
+	err = GitHubRefusal(pinned, &commit.AuthError{Op: commit.OpCommit, Status: http.StatusForbidden})
+	require.ErrorIs(t, err, ErrAuthRequired, "a write refused with 403 keeps its answer")
+}
 
 func TestCommitResolvesProviderAuthorizationWithoutAnMCPProviderBearer(t *testing.T) {
 	for _, authorized := range []bool{true, false} {
