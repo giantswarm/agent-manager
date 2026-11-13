@@ -1,4 +1,7 @@
 {{- $githubTokenExchange := include "agent-manager.githubTokenExchange" . }}
+{{- if and .Values.credentials.platformUIURL (not .Values.credentials.uiURL) }}
+{{- fail "credentials.platformUIURL requires credentials.uiURL and its authenticated credential-operation store" }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -88,6 +91,12 @@ spec:
             {{- with .Values.credentials.uiURL }}
             - {{ printf "--credential-ui-url=%s" . | quote }}
             - --credential-operations-namespace={{ include "agent-manager.credentialOperationsNamespace" $ }}
+            {{- end }}
+            {{- with .Values.credentials.platformUIURL }}
+            - {{ printf "--platform-credential-ui-url=%s" . | quote }}
+            {{- end }}
+            {{- with .Values.tenants.commit.platformModelsPath }}
+            - {{ printf "--platform-models-path=%s" . | quote }}
             {{- end }}
             {{- if $githubTokenExchange }}
             {{- with .Values.github.tokenExchange }}

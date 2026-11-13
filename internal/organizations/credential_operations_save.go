@@ -5,7 +5,6 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"path"
 	"reflect"
 	"slices"
 	"time"
@@ -81,7 +80,11 @@ func (s *Service) saveCredentialOperation(ctx context.Context, id, version strin
 		return &operation.Result, nil
 	}
 	if operation.Mode == agents.ModeCommit {
-		if s.cfg.Commit == nil || operation.GitTarget == nil || s.cfg.Commit.Objects.Repository.String() != operation.GitTarget.Repository || s.cfg.Commit.Objects.Branch != operation.GitTarget.Base || path.Join(s.cfg.Commit.ContentPrefix, operation.Namespace.Parent, operation.Namespace.Organization) != operation.GitTarget.Directory {
+		writer, err := s.contentWriter(ctx, operation.Namespace, operation.Mode)
+		if err != nil {
+			return nil, err
+		}
+		if s.cfg.Commit == nil || operation.GitTarget == nil || s.cfg.Commit.Objects.Repository.String() != operation.GitTarget.Repository || s.cfg.Commit.Objects.Branch != operation.GitTarget.Base || writer.dir.Path() != operation.GitTarget.Directory {
 			return nil, fmt.Errorf("%w: the credential Git target changed", agents.ErrConflict)
 		}
 	}
@@ -127,6 +130,9 @@ func (s *Service) saveCredentialOperation(ctx context.Context, id, version strin
 		// else is wrong with them: the person must see them again.
 		if operation.Result.Kind == KindCredential && !sameConsumers(references, operation.Consumers) {
 			return nil, errConsumersChanged(operation.Namespace.Name, credential.Secret)
+		}
+		if err := validateCredentialModels(operation, live, credential, values[index].Value); err != nil {
+			return nil, err
 		}
 		// The preparation stored at least one consumer of the key and none of
 		// another key, so for a replacement the comparison above already

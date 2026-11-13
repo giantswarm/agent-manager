@@ -1577,6 +1577,8 @@ components:
         name: { type: string }
         key: { type: string, description: The key of the Secret the object reads }
         provider: { type: string, description: "ModelConfig: the provider it sends the value to" }
+        projectID: { type: string, description: "Vertex AI project of the credential consumer" }
+        location: { type: string, description: "Vertex AI location of the credential consumer" }
         url: { type: string, description: "RemoteMCPServer: where it sends the value; a credential in the URL shows as REDACTED" }
         origins: { type: array, items: { type: string }, description: "EgressPolicy: the origins it sends the value to" }
         fromGit: { type: boolean, description: A Flux Kustomization applies the object from git }
@@ -1602,6 +1604,7 @@ components:
           type: object
           properties:
             namespace: { type: string }
+            scope: { type: string, enum: [platform], description: "Explicit installation model target; absent for an organization" }
             parent: { type: string }
             organization: { type: string }
         changes:
@@ -1640,6 +1643,7 @@ components:
             properties:
               secret: { type: string }
               key: { type: string }
+              inputFormat: { type: string, enum: [text, google-service-account-json], description: "Credential input control; absent means text" }
               state: { type: string, enum: [present, committed, missing, replace] }
               formUrl: { type: string }
               next: { type: string }

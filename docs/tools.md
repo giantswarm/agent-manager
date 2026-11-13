@@ -1083,7 +1083,7 @@ No model, connector or egress policy is written. Answers with a URL elicitation 
       "type": "string"
     },
     "namespace": {
-      "description": "The organization namespace, e.g. agents-payments-x7k2q (list_organizations, get_organization)",
+      "description": "Organization namespace, or the configured installation namespace for cluster admins",
       "type": "string"
     },
     "requestId": {
@@ -1260,7 +1260,7 @@ destinations replaces the whole list. A credentialHeader makes the egress gatewa
 ## `set_organization_model`
 
 ```text
-Create or change an organization's model (a ModelConfig) as you; its API key is a Secret named by reference.
+Create or change an organization or installation model as you; credentials are Secret references.
 
 The first model of an organization without a default becomes its default (annotation agent-platform.giantswarm.io/is-default-model-config); default true moves the mark here. A new Anthropic model caches prompts (5m) unless promptCaching is false; an omitted argument keeps the stored value. Never pass a key: a missing one is a URL elicitation of the credential UI, link in credentials[].next. list_model_configs lists the models and settings. Needs agent-platform:admin.
 ```
@@ -1277,7 +1277,7 @@ The first model of an organization without a default becomes its default (annota
       "type": "boolean"
     },
     "credentialKey": {
-      "description": "Key of that Secret; default apiKey",
+      "description": "Key of that Secret; default GOOGLE_APPLICATION_CREDENTIALS for Vertex AI, apiKey otherwise",
       "type": "string"
     },
     "credentialSecret": {
@@ -1295,6 +1295,18 @@ The first model of an organization without a default becomes its default (annota
     "dryRun": {
       "description": "Check every write with the API server as you and write nothing (default false)",
       "type": "boolean"
+    },
+    "endpoint": {
+      "description": "OpenAI/Anthropic base URL or Ollama host; empty removes an override",
+      "type": "string"
+    },
+    "insecureSkipTLSVerify": {
+      "description": "Disable model endpoint certificate verification; default false",
+      "type": "boolean"
+    },
+    "location": {
+      "description": "Vertex AI location: global, us, eu or a Google region",
+      "type": "string"
     },
     "maxTokens": {
       "description": "Token limit of an answer (Anthropic, Mistral, OpenAI); 0 removes it: the provider's default",
@@ -1317,7 +1329,15 @@ The first model of an organization without a default becomes its default (annota
       "type": "string"
     },
     "namespace": {
-      "description": "The organization namespace, e.g. agents-payments-x7k2q (list_organizations, get_organization)",
+      "description": "Organization namespace, or the configured installation namespace for cluster admins",
+      "type": "string"
+    },
+    "noCredential": {
+      "description": "The endpoint requires no credential; never valid for Vertex AI",
+      "type": "boolean"
+    },
+    "projectID": {
+      "description": "Vertex AI Google project ID; required to create a Vertex model",
       "type": "string"
     },
     "promptCaching": {

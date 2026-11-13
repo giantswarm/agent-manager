@@ -109,9 +109,7 @@ func TestSetModelProviderChangeWithANewSecret(t *testing.T) {
 	require.Equal(t, 1, consumerWrites(fixture))
 }
 
-// A model that names no credential Secret has no key to send to another
-// provider: its provider change is not refused. The Secret defaults to
-// tenant-credential-<name>, as for a new model.
+// A keyless model keeps no credential reference when its provider changes.
 func TestSetModelProviderChangeWithoutAStoredSecretIsNotRefused(t *testing.T) {
 	existing := model("claude", true)
 	unstructured.RemoveNestedField(existing.Object, "spec", "apiKeySecret")
@@ -121,7 +119,7 @@ func TestSetModelProviderChangeWithoutAStoredSecretIsNotRefused(t *testing.T) {
 	text, failed := fixture.call(t, ToolSetOrganizationModel, map[string]any{"namespace": orgNS, "name": "claude", "provider": "OpenAI", "model": "gpt-5"})
 	require.False(t, failed, text)
 	require.Equal(t, "OpenAI", liveModelField(t, fixture, "provider"))
-	require.Equal(t, "tenant-credential-claude", liveModelField(t, fixture, "apiKeySecret"))
+	require.Empty(t, liveModelField(t, fixture, "apiKeySecret"))
 }
 
 // The stored provider in another case is no provider change: the refusal

@@ -148,6 +148,7 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service, l
 	parentProp := mcp.WithString(argNamespace, mcp.Required(), mcp.Description("The parent namespace the organization lives in, e.g. org-acme"))
 	orgNameProp := mcp.WithString(argName, mcp.Required(), mcp.Description("The organization's name (at most 50 characters, no dot)"))
 	orgNSProp := mcp.WithString(argNamespace, mcp.Required(), mcp.Description("The organization namespace, e.g. agents-payments-x7k2q (list_organizations, get_organization)"))
+	modelNSProp := mcp.WithString(argNamespace, mcp.Required(), mcp.Description("Organization namespace, or the configured installation namespace for cluster admins"))
 	dryRun := mcp.WithBoolean(argDryRun, mcp.Description("Check every write with the API server as you and write nothing (default false)"))
 	modeProp := mcp.WithString(argMode, mcp.Enum(agents.ModeApply, agents.ModeCommit), mcp.Description("apply (default): write live as you; refused with gitops_owned for what git applies. commit: dry-run as you, then open a pull request as you"))
 	credentialRequestID := mcp.WithString(argRequestID, mcp.Description("Idempotency key, at most 128 characters. Reuse on retries; use a fresh key for another save or a refreshed confirmation."))
@@ -302,14 +303,19 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service, l
 	}))
 
 	s.AddTool(mcp.NewTool(ToolSetOrganizationModel,
-		tooldesc.Describe("Create or change an organization's model (a ModelConfig) as you; its API key is a Secret named by reference.",
+		tooldesc.Describe("Create or change an organization or installation model as you; credentials are Secret references.",
 			"The first model of an organization without a default becomes its default (annotation "+apov1alpha1.DefaultModelConfigAnnotation+"); default true moves the mark here. A new Anthropic model caches prompts ("+agents.DefaultCacheTTL+") unless promptCaching is false; an omitted argument keeps the stored value. Never pass a key: a missing one is a URL elicitation of the credential UI, link in credentials[].next. list_model_configs lists the models and settings. Needs agent-platform:admin."),
-		orgNSProp,
+		modelNSProp,
 		mcp.WithString(argName, mcp.Required(), mcp.Description("ModelConfig name")),
 		mcp.WithString(argProvider, mcp.Description("Provider as kagent's ModelConfig takes it, e.g. Anthropic, OpenAI; required to create; a change needs a new credentialSecret too")),
 		mcp.WithString(argModel, mcp.Description("Model id, e.g. claude-sonnet-4-6; required to create")),
+		mcp.WithString("projectID", mcp.Description("Vertex AI Google project ID; required to create a Vertex model")),
+		mcp.WithString("location", mcp.Description("Vertex AI location: global, us, eu or a Google region")),
+		mcp.WithString("endpoint", mcp.Description("OpenAI/Anthropic base URL or Ollama host; empty removes an override")),
+		mcp.WithBoolean("insecureSkipTLSVerify", mcp.Description("Disable model endpoint certificate verification; default false")),
+		mcp.WithBoolean("noCredential", mcp.Description("The endpoint requires no credential; never valid for Vertex AI")),
 		mcp.WithString(argCredentialSecret, mcp.Description(credSecretDesc+"; default tenant-credential-<name>")),
-		mcp.WithString(argCredentialKey, mcp.Description("Key of that Secret; default apiKey")),
+		mcp.WithString(argCredentialKey, mcp.Description("Key of that Secret; default GOOGLE_APPLICATION_CREDENTIALS for Vertex AI, apiKey otherwise")),
 		mcp.WithBoolean(argDefault, mcp.Description("Make this the organization's default model, moving the mark (default false)")),
 		mcp.WithBoolean(argCreate, mcp.Description("Only create: a model of that name, live or in git, is refused with already_exists, not changed (default false: create or change)")),
 		mcp.WithString(argDisplayName, mcp.Description("Name people see; \"\" removes it")),
@@ -324,20 +330,25 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service, l
 		mcp.WithOpenWorldHintAnnotation(false),
 	), t.runWrite(func(ctx context.Context, req mcp.CallToolRequest) (*organizations.ResourceResult, error) {
 		var in struct {
-			Namespace        string  `json:"namespace"`
-			Name             string  `json:"name"`
-			Provider         string  `json:"provider"`
-			Model            string  `json:"model"`
-			CredentialSecret string  `json:"credentialSecret"`
-			CredentialKey    string  `json:"credentialKey"`
-			Default          bool    `json:"default"`
-			Create           bool    `json:"create"`
-			DryRun           bool    `json:"dryRun"`
-			Mode             string  `json:"mode"`
-			DisplayName      *string `json:"displayName"`
-			MaxTokens        *int64  `json:"maxTokens"`
-			PromptCaching    *bool   `json:"promptCaching"`
-			CacheTTL         string  `json:"cacheTTL"`
+			Namespace             string  `json:"namespace"`
+			Name                  string  `json:"name"`
+			Provider              string  `json:"provider"`
+			Model                 string  `json:"model"`
+			ProjectID             string  `json:"projectID"`
+			Location              string  `json:"location"`
+			Endpoint              *string `json:"endpoint"`
+			InsecureSkipTLSVerify *bool   `json:"insecureSkipTLSVerify"`
+			NoCredential          bool    `json:"noCredential"`
+			CredentialSecret      string  `json:"credentialSecret"`
+			CredentialKey         string  `json:"credentialKey"`
+			Default               bool    `json:"default"`
+			Create                bool    `json:"create"`
+			DryRun                bool    `json:"dryRun"`
+			Mode                  string  `json:"mode"`
+			DisplayName           *string `json:"displayName"`
+			MaxTokens             *int64  `json:"maxTokens"`
+			PromptCaching         *bool   `json:"promptCaching"`
+			CacheTTL              string  `json:"cacheTTL"`
 		}
 		if err := bindArgs(req, &in); err != nil {
 			return nil, err
@@ -437,7 +448,7 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service, l
 	s.AddTool(mcp.NewTool(ToolReplaceOrganizationCredential,
 		tooldesc.Describe("Replace an organization's credential by its Secret and key, as you, writing only the Secret.",
 			"No model, connector or egress policy is written. Answers with a URL elicitation of the credential UI, link in credentials[].next; the form lists every object that uses the Secret and where each sends the value. Refused when nothing uses that key of the Secret, and when an object reads another key of it: the Secret is written whole, holding the one key. A credential whose consumer git applies is replaced with mode commit. Never pass a value. Needs agent-platform:admin."),
-		orgNSProp,
+		modelNSProp,
 		mcp.WithString(argSecret, mcp.Required(), mcp.Description(credSecretDesc)),
 		mcp.WithString(argKey, mcp.Required(), mcp.Description("Key of that Secret the objects read, e.g. apiKey or token")),
 		credentialRequestID, dryRun, modeProp,
