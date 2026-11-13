@@ -303,10 +303,14 @@ func TestTheDeleteInCommitModeReadsNoStatusesOrChecks(t *testing.T) {
 	assert.Nil(t, f.get(t, orgGVR, "org-acme", "payments"))
 }
 
-// The recovery from a listing that keeps failing: restore the file and open
-// the delete again. While the file is in git the earlier pull request's
-// files are not needed, so a listing that fails does not stop the new delete
-// pull request.
+// The recovery from a listing that keeps failing, such as a delete pull
+// request of more than 3000 files, which GitHub never lists whole: the
+// erase is refused and names the way forward, which is to restore the
+// object's file alone and open the delete again. While the file is in git
+// the earlier pull request's files are not needed, so a listing that fails
+// does not stop the new delete pull request; the content path is gone
+// already, so the new one changes the objects path only, and its files
+// list.
 func TestARestoredFileOpensANewDeleteWhenTheListingKeepsFailing(t *testing.T) {
 	ctx := context.Background()
 	f, fake := gitOrganization(t)
@@ -317,15 +321,70 @@ func TestARestoredFileOpensANewDeleteWhenTheListingKeepsFailing(t *testing.T) {
 	require.Len(t, fake.PullRequests(), 1)
 	first := fake.PullRequests()[0]
 	require.NoError(t, fake.Merge(ctx, first.PullRequest))
-	fake.Fail[commit.OpMergedFiles] = errors.New("GitHub listed 3000 of 3001 changed files")
+	fake.Fail[commit.OpMergedFiles] = errors.New("list merged files giantswarm/gazelle-config#1: GitHub listed 3000 of 3001 changed files (it lists at most 3000)")
+
+	erase := map[string]any{"namespace": "org-acme", "name": "payments", "mode": "commit", "confirm": "org-acme/payments"}
+	text, isErr = f.call(t, ToolDeleteOrganization, erase)
+	require.True(t, isErr)
+	assert.Contains(t, text, "nothing was erased")
+	assert.Contains(t, text, "listed 3000 of 3001", "the cause is named")
+	assert.Contains(t, text, "restore only "+paymentsFile)
+	assert.NotNil(t, f.get(t, orgGVR, "org-acme", "payments"))
 
 	require.NoError(t, fake.Commit(ctx, mcRepo, "main", "restore", map[string][]byte{paymentsFile: file}))
+	before := fake.Files(mcRepo, "main")
 	text, isErr = f.call(t, ToolDeleteOrganization, del)
 	require.False(t, isErr, text)
 	require.Len(t, fake.PullRequests(), 2)
 	second := fake.PullRequests()[1]
-	assert.NotContains(t, fake.Files(mcRepo, second.Head), paymentsFile)
+	head := fake.Files(mcRepo, second.Head)
+	assert.NotContains(t, head, paymentsFile)
+	for p, c := range before {
+		assert.False(t, strings.HasPrefix(p, paymentsPath+"/"), "the content path is gone already: %s", p)
+		if string(head[p]) != string(c) {
+			assert.True(t, strings.HasPrefix(p, objectsPath+"/"), "the new delete changes the objects path only, not %s", p)
+		}
+	}
 	assert.Equal(t, second.URL, f.get(t, orgGVR, "org-acme", "payments").GetAnnotations()[organizations.DeletePullRequestAnnotation])
+
+	// Its files list, and it erases.
+	delete(fake.Fail, commit.OpMergedFiles)
+	require.NoError(t, fake.Merge(ctx, second.PullRequest))
+	text, isErr = f.call(t, ToolDeleteOrganization, erase)
+	require.False(t, isErr, text)
+	assert.Equal(t, true, decode(t, text)["deleted"])
+}
+
+// A delete pull request that also adds or changes files under the objects
+// path erases, when none of them defines the organization: another
+// organization's file, or one of this name under another parent.
+func TestADeleteThatAddsOtherOrganizationsStillErases(t *testing.T) {
+	ctx := context.Background()
+	f, fake := gitOrganization(t)
+	text, isErr := f.call(t, ToolDeleteOrganization, map[string]any{"namespace": "org-acme", "name": "payments", "mode": "commit"})
+	require.False(t, isErr, text)
+	pr := fake.PullRequests()[0]
+	other := func(ns, name string) []byte {
+		o := organization(ns, name, nil)
+		delete(o.Object, "status")
+		raw, err := yaml.Marshal(o.Object)
+		require.NoError(t, err)
+		return raw
+	}
+	require.NoError(t, fake.Commit(ctx, mcRepo, pr.Head, "add others", map[string][]byte{
+		objectsPath + "/org-acme/billing.yaml":  other("org-acme", "billing"),
+		objectsPath + "/org-beta/payments.yaml": append(append([]byte("kind: ConfigMap\nmetadata:\n  name: payments\n---\n"), other("org-beta", "payments")...), []byte("---\n")...),
+		objectsPath + "/README.md":              []byte("not: [yaml"),
+	}))
+	merge := pr.PullRequest
+	st, err := fake.Status(ctx, merge)
+	require.NoError(t, err)
+	merge.HeadSHA = st.HeadSHA
+	require.NoError(t, fake.Merge(ctx, merge))
+
+	text, isErr = f.call(t, ToolDeleteOrganization, map[string]any{"namespace": "org-acme", "name": "payments", "mode": "commit", "confirm": "org-acme/payments"})
+	require.False(t, isErr, text)
+	assert.Equal(t, true, decode(t, text)["deleted"])
 }
 
 // A merged pull request counts as the organization's delete only when the
@@ -396,6 +455,17 @@ func TestAMergedDeleteThatDidNotRemoveTheFileErasesNothing(t *testing.T) {
 				require.NoError(t, fake.Commit(ctx, mcRepo, head, "move it", map[string][]byte{objectsPath + "/archive/payments.yaml": file}))
 			},
 			want: []string{"conflict:", "moved its file to " + objectsPath + "/archive/payments.yaml", "move the file back"},
+		},
+		{
+			// GitHub reports a move whose content changed much as one removed
+			// file and one added file.
+			name: "the file was moved and changed",
+			edit: func(t *testing.T, fake *commit.Fake, head string, file []byte) {
+				moved := append([]byte("# archived\n"), file...)
+				require.NoError(t, fake.Commit(ctx, mcRepo, head, "move it", map[string][]byte{objectsPath + "/archive/payments.yaml": moved}))
+			},
+			want:      []string{"conflict:", objectsPath + "/archive/payments.yaml", "still defines it", "move the file back"},
+			noConfirm: true,
 		},
 		{
 			name: "the files cannot be listed",

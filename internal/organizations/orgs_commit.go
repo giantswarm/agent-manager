@@ -1,9 +1,11 @@
 package organizations
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/url"
 	"path"
 	"strconv"
@@ -15,6 +17,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	kubeyaml "k8s.io/apimachinery/pkg/util/yaml"
 
 	"github.com/giantswarm/agent-manager/internal/agents"
 	"github.com/giantswarm/agent-manager/internal/identity"
@@ -260,11 +263,18 @@ func (s *Service) deleteCommit(ctx context.Context, c kube.Client, u *unstructur
 	case prURL == "":
 		return false, fmt.Errorf("%w: %s is gone from git (%s) but no delete pull request of agent-manager removed it: it is Missing from git, not pending erase, and is not erased; restore its file, or open the delete with mode commit once it is back", agents.ErrConflict, what, p)
 	case listErr != nil:
-		return false, fmt.Errorf("%w (nothing was erased: the files of the delete pull request %s could not be listed, so whether it removed %s is unknown; call delete_organization again with mode commit and confirm to retry, and if the listing keeps failing, restore %s and open a new delete with mode commit and no confirm)", commitError(cm.gh, listErr), pr.URL, p, p)
+		// A pull request of more than 3000 files never lists whole: GitHub
+		// lists at most 3000. The way forward is a new delete that is small:
+		// the merge removed the content path already, so a delete opened
+		// once the object's file alone is back changes the objects path only.
+		return false, fmt.Errorf("%w (nothing was erased: the files of the delete pull request %s could not be listed, so whether it removed %s is unknown. If the listing failed for a while, call delete_organization again with mode commit and confirm to retry. If it keeps failing, as it does for a pull request of more than 3000 files, which GitHub never lists whole, restore only %s, not the content path, and call delete_organization with mode commit and no confirm: the new delete pull request changes the objects path only, so its files list)", commitError(cm.gh, listErr), pr.URL, p, p)
 	case !merged:
 		return false, fmt.Errorf("%w: %s is gone from git (%s), but its delete pull request %s is not merged: it is Missing from git, not pending erase, and is not erased; restore its file", agents.ErrConflict, what, p, prURL)
 	}
 	if err := removedBy(changes, pr, what, p); err != nil {
+		return false, err
+	}
+	if err := cm.definedElsewhere(ctx, changes, pr, req.Parent, req.Name, what, p); err != nil {
 		return false, err
 	}
 	if req.Confirm != req.Parent+"/"+req.Name {
@@ -280,22 +290,84 @@ func (s *Service) deleteCommit(ctx context.Context, c kube.Client, u *unstructur
 // that GitHub reports as a rename is refused although commit.Removes counts
 // it: the moved file may still define the organization in git. A move
 // whose content changed so much that GitHub reports a removal and an
-// addition is not detected. The object's file alone decides: the content
-// path is applied by the organization's own Kustomization, which the erase
-// removes, and a create refuses a content path an earlier organization
-// left. changes are the merged pull request's files; the caller erases
-// nothing when they could not be listed.
+// addition is refused by definedElsewhere. The object's file alone decides:
+// the content path is applied by the organization's own Kustomization,
+// which the erase removes, and a create refuses a content path an earlier
+// organization left. changes are the merged pull request's files; the
+// caller erases nothing when they could not be listed.
 func removedBy(changes []commit.FileChange, pr commit.PullRequest, what, p string) error {
-	const next = "then call delete_organization again with mode commit and no confirm to open a new delete pull request"
 	for _, c := range changes {
 		if c.Kind == commit.FileRenamed && c.PreviousPath == p {
-			return fmt.Errorf("%w: %s: its merged delete pull request %s moved its file to %s instead of removing it, so the organization may still be in git; it is not pending erase and is not erased; move the file back to %s, %s", agents.ErrConflict, what, pr.URL, c.Path, p, next)
+			return fmt.Errorf("%w: %s: its merged delete pull request %s moved its file to %s instead of removing it, so the organization may still be in git; it is not pending erase and is not erased; move the file back to %s, %s", agents.ErrConflict, what, pr.URL, c.Path, p, nextDelete)
 		}
 	}
 	if !commit.Removes(changes, p) {
-		return fmt.Errorf("%w: %s is gone from git (%s), but its merged delete pull request %s did not remove it: it is Missing from git, not pending erase, and is not erased; restore its file, %s", agents.ErrConflict, what, p, pr.URL, next)
+		return fmt.Errorf("%w: %s is gone from git (%s), but its merged delete pull request %s did not remove it: it is Missing from git, not pending erase, and is not erased; restore its file, %s", agents.ErrConflict, what, p, pr.URL, nextDelete)
 	}
 	return nil
+}
+
+// nextDelete is the way forward after a merged delete pull request that did
+// not take the organization out of git.
+const nextDelete = "then call delete_organization again with mode commit and no confirm to open a new delete pull request"
+
+// definedElsewhere refuses the erase when a file the merged delete pull
+// request added or changed under the objects path still defines the
+// organization parent/name on the base branch: a move that GitHub reports
+// as a removal and an addition, or a definition the pull request wrote into
+// another file. The installation's Kustomization applies the objects path
+// alone, so a definition anywhere else does not re-create the object. Only
+// those files are read, each as it is on the base now (a file a later
+// commit removed defines nothing); agent-manager's own delete changes a
+// kustomization.yaml there at most. A YAML or JSON file that does not parse
+// erases nothing: whether it defines the organization is unknown.
+func (c *orgCommit) definedElsewhere(ctx context.Context, changes []commit.FileChange, pr commit.PullRequest, parent, name, what, p string) error {
+	for _, ch := range changes {
+		if ch.Kind == commit.FileRemoved || !within(c.cfg.Objects.Directory, ch.Path) {
+			continue
+		}
+		switch path.Ext(ch.Path) {
+		case ".yaml", ".yml", ".json":
+		default:
+			continue
+		}
+		raw, err := c.remote.ReadFile(ctx, c.cfg.Objects.Repository, c.cfg.Objects.Branch, ch.Path)
+		if errors.Is(err, commit.ErrFileNotFound) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("%w (nothing was erased: %s, which the delete pull request %s changed, could not be read, so whether it defines the organization is unknown; call delete_organization again with mode commit and confirm to retry)", commitError(c.gh, err), ch.Path, pr.URL)
+		}
+		defines, err := definesOrganization(raw, parent, name)
+		if err != nil {
+			return fmt.Errorf("%w: %s: %s in %s, which its merged delete pull request %s changed, does not parse (%v), so whether it defines the organization is unknown; it is not pending erase and is not erased; fix the file, then call delete_organization again with mode commit and confirm", agents.ErrConflict, what, ch.Path, c.cfg.Objects.Repository, pr.URL, err)
+		}
+		if defines {
+			return fmt.Errorf("%w: %s: its merged delete pull request %s removed %s, but %s in %s still defines it (a move that GitHub reports as a removal and an addition, or a definition the pull request added), so the organization is still in git; it is not pending erase and is not erased; move the file back to %s, %s", agents.ErrConflict, what, pr.URL, p, ch.Path, c.cfg.Objects.Repository, p, nextDelete)
+		}
+	}
+	return nil
+}
+
+// definesOrganization reports whether one of raw's YAML or JSON documents is
+// the AgentPlatformOrganization parent/name. A document without a namespace
+// counts: a Kustomization may set it.
+func definesOrganization(raw []byte, parent, name string) (bool, error) {
+	dec := kubeyaml.NewYAMLOrJSONDecoder(bytes.NewReader(raw), 4096)
+	for {
+		var doc map[string]any
+		err := dec.Decode(&doc)
+		if errors.Is(err, io.EOF) {
+			return false, nil
+		}
+		if err != nil {
+			return false, err
+		}
+		u := unstructured.Unstructured{Object: doc}
+		if u.GetKind() == orgKind && u.GroupVersionKind().Group == GVR.Group && u.GetName() == name && (u.GetNamespace() == parent || u.GetNamespace() == "") {
+			return true, nil
+		}
+	}
 }
 
 // openDelete opens the pull request that removes the organization's file

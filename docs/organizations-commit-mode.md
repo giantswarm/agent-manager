@@ -97,8 +97,10 @@ giantswarm/agent-platform-operator#15 is the long-term fix.
    agent-platform-operator reports the organization `Orphaned` with reason
    `DeleteMerged` once the file has left the installation Kustomization's inventory.
 2. After the merge, the organization is pending erase once agent-manager has read the
-   merged pull request's files and found the object's file removed by it (a move that
-   GitHub reports as a rename does not count). Without `confirm` the call
+   merged pull request's files, found the object's file removed by it (a move that
+   GitHub reports as a rename does not count), and found that no YAML or JSON file the
+   pull request added or changed under the objects path still defines the organization
+   on the base branch. Without `confirm` the call
    answers what is erased. With `confirm: <parent>/<name>` (Erase now) it sets
    `kustomize.toolkit.fluxcd.io/prune: enabled` on the live object and deletes it; the
    operator erases it.
@@ -116,15 +118,26 @@ The erase is refused:
   before its merge, and another merge removed the file (Missing from git), or it moved
   the file to another path (a rename on GitHub), which may still define the
   organization in git. Restore the file, or move it back, and open the delete again with
-  `mode: commit` and no `confirm`. A move whose content changed so much that GitHub
-  reports a removal and an addition is not detected;
-- when GitHub cannot list the merged pull request's files (it lists at most 3000, or
-  the call fails): whether it removed the file is unknown, so nothing is erased. Call
-  again to retry; if the listing keeps failing, restore the file and open the delete
-  again.
+  `mode: commit` and no `confirm`;
+- when a YAML or JSON file that the merged delete pull request added or changed under
+  the objects path still defines the organization on the base branch (an
+  `AgentPlatformOrganization` of its name, in its parent or without a namespace): a
+  move whose content changed so much that GitHub reports a removal and an addition, or
+  a definition the pull request added to another file. The answer names the file. Move
+  it back and open the delete again. Such a file that does not parse also erases
+  nothing;
+- when GitHub cannot list the merged pull request's files: whether it removed the file
+  is unknown, so nothing is erased. Call again to retry. A pull request of more than
+  3000 files never lists, since GitHub lists at most 3000: restore only the object's
+  file, not the content path, and open the delete again. The merge removed the content
+  path already, so the new delete pull request changes the objects path only, and its
+  files list.
 
-agent-manager reads the delete pull request with pull request reads only: whether it is
-merged, and its files. It does not read its reviews, or the commit statuses and check
-runs of its head, so the GitHub App needs no permission beyond contents and pull
-requests. When GitHub refuses a step that only reads with 403, the answer names the
-step and the App's permissions: a new sign-in does not change them.
+To erase, agent-manager reads the delete pull request with pull request reads only:
+whether it is merged (one read), and its files (one read for each 100 files). It does
+not read its reviews, or the commit statuses and check runs of its head. Then it reads,
+on the base branch, each YAML or JSON file that the pull request added or changed under
+the objects path, two contents reads for each; agent-manager's own delete changes one
+`kustomization.yaml` there at most. The GitHub App needs no permission beyond contents
+and pull requests. When GitHub refuses a step that only reads with 403, the answer
+names the step and the App's permissions: a new sign-in does not change them.
