@@ -519,6 +519,18 @@ func TestAMergedDeleteThatDidNotRemoveTheFileErasesNothing(t *testing.T) {
 			noConfirm: true,
 		},
 		{
+			// Another kustomization may list a file of a kustomization's name
+			// as a resource file.
+			name: "the file was moved into a resource file named kustomization.yaml",
+			edit: func(t *testing.T, fake *commit.Fake, head string, _ []byte) {
+				org, err := yaml.Marshal(orgDocument(t, "org-acme"))
+				require.NoError(t, err)
+				require.NoError(t, fake.Commit(ctx, mcRepo, head, "move it", map[string][]byte{objectsPath + "/archive/kustomization.yaml": org}))
+			},
+			want:      []string{"conflict:", objectsPath + "/archive/kustomization.yaml", "still defines it"},
+			noConfirm: true,
+		},
+		{
 			name: "the objects path cannot be read",
 			after: func(t *testing.T, fake *commit.Fake) {
 				fake.Fail[commit.OpListFiles] = errors.New("the repository's tree is too large for one read")

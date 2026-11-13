@@ -322,9 +322,8 @@ const nextDelete = "then call delete_organization again with mode commit and no 
 // file that does not parse defines nothing, since Kustomize cannot apply
 // it either. A read that fails, or a tree too large for one read, erases
 // nothing. The scan gives an early, clear answer; it runs no Kustomize, so
-// a sibling overlay that sets the namespace, a resource file named
-// kustomization.yaml (giantswarm/agent-manager#399) and a move between its
-// reads (giantswarm/gitops-commit#70) pass it. The admission policy
+// a sibling overlay that sets the namespace (giantswarm/agent-manager#399)
+// and a move between its reads (giantswarm/gitops-commit#70) pass it. The admission policy
 // agent-platform-organization-delete-intent still refuses those erases: it
 // needs Orphaned DeleteMerged, which the operator sets from the inventory
 // of Flux's own build (docs/organizations-commit-mode.md).
@@ -348,11 +347,12 @@ func (c *orgCommit) stillInGit(ctx context.Context, pr commit.PullRequest, paren
 			return unknown(err, f)
 		}
 		parsed := documents(raw)
-		if kustomizationFiles[path.Base(f)] {
-			if len(parsed) > 0 {
-				renames[path.Dir(f)] = renamingOf(parsed[0])
-			}
-			continue
+		// A file of a kustomization's name is read both ways: as the
+		// kustomization of its directory, and as a resource file, since
+		// another kustomization may list it as one. A kustomization's own
+		// document never is an organization.
+		if kustomizationFiles[path.Base(f)] && len(parsed) > 0 {
+			renames[path.Dir(f)] = renamingOf(parsed[0])
 		}
 		docs[f] = parsed
 	}

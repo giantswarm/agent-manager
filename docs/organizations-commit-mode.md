@@ -141,15 +141,14 @@ The erase is refused:
 
 The scan of the objects path gives an early, clear answer for the usual mistake: a
 delete pull request that moved the organization's file instead of removing it, or a
-later commit that wrote it again. It reads the files as they are, it does not run
-Kustomize, so it does not find these three cases:
+later commit that wrote it again. A file named `kustomization.yaml` (`.yml`,
+`Kustomization`) is read both as its directory's kustomization and as a resource file,
+since another kustomization may list it as one. The scan reads the files as they are
+and does not run Kustomize, so it does not find these two cases:
 
 - an overlay in a sibling directory that refers to the file (for one, `../../base`)
   and sets `namespace`, so that Kustomize applies the organization into its parent
   from a document with another namespace (giantswarm/agent-manager#399);
-- a resource file named `kustomization.yaml` that another kustomization lists as a
-  resource: the scan reads every file of that name as a kustomization only
-  (giantswarm/agent-manager#399);
 - a commit that moves the definition between the scan's tree read and its file reads,
   a few seconds: each read takes the branch's head again (giantswarm/gitops-commit#70).
 
@@ -166,7 +165,10 @@ from the Kustomization's last applied revision. So while a revision that Flux ap
 still builds the organization, by whichever path, the condition is `False`
 (`InInventory`) and the API server refuses the erase. The limit is the same as Flux's:
 a definition written after Flux applied the delete counts only once Flux has applied
-that later revision.
+that later revision. While Flux applies no new revision (the Kustomization is
+suspended), the condition follows the last applied one, and while the Kustomization is
+not settled (reconciling, or not `Ready`) the operator keeps the condition it had. In
+both cases an earlier `DeleteMerged` still permits the erase.
 
 ### Reads
 
