@@ -2,6 +2,7 @@ package organizations
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -154,7 +155,9 @@ func (s *Service) List(ctx context.Context, parent string) (*Listing, error) {
 
 // allowed asks the API server whether the caller may do what attributes
 // name; known is false when the review failed. A refused token is an error;
-// any other failure is logged and answers allowed and known false.
+// any other failure is logged and answers allowed and known false. A review
+// that neither allows nor denies and carries an evaluation error (a failed
+// authorization webhook, for one) failed too.
 func (s *Service) allowed(ctx context.Context, c kube.Client, attributes authorizationv1.ResourceAttributes) (allowed, known bool, err error) {
 	review := &authorizationv1.SelfSubjectAccessReview{Spec: authorizationv1.SelfSubjectAccessReviewSpec{ResourceAttributes: &attributes}}
 	res, err := c.Typed().AuthorizationV1().SelfSubjectAccessReviews().Create(ctx, review, metav1.CreateOptions{})
@@ -163,8 +166,11 @@ func (s *Service) allowed(ctx context.Context, c kube.Client, attributes authori
 		// answer. The error names nothing the ServiceAccount found.
 		return false, false, errTokenRefused
 	}
+	if err == nil && !res.Status.Allowed && !res.Status.Denied && res.Status.EvaluationError != "" {
+		err = errors.New(res.Status.EvaluationError)
+	}
 	if err != nil {
-		s.log.Debug("access review failed; answering not known", identity.LogAttr(ctx), "namespace", attributes.Namespace, "verb", attributes.Verb, "resource", attributes.Resource, "error", err)
+		s.log.Debug("access review failed", identity.LogAttr(ctx), "namespace", attributes.Namespace, "verb", attributes.Verb, "resource", attributes.Resource, "error", err)
 		return false, false, nil
 	}
 	return res.Status.Allowed, true, nil

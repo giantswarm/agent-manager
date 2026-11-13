@@ -156,7 +156,7 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service, l
 
 	s.AddTool(mcp.NewTool(ToolListOrganizations,
 		tooldesc.Describe("List the organizations you manage or belong to, of one parent namespace or of all.",
-			"Each with its namespace, Orphaned condition, deleting, and permissions (manage, member, createAgents), asked as you; a New agent goes where createAgents is true; a missing createAgents is not known. Where you manage it, organization is its summary: harnesses, workers, Ready, DefaultModelConfigured, the last revision Flux applied (lastAppliedRevision) and in mode commit its commit and the organization's file (lastAppliedRevisionUrl, lastAppliedFile, lastAppliedFileUrl). none, when empty, says who can add you."),
+			"Each with its namespace, Orphaned condition, deleting, and permissions (manage, member, createAgents), asked as you; a New agent goes where createAgents is true; a missing createAgents is not known. Where you manage it, organization is its summary: harnesses, workers, Ready, DefaultModelConfigured, the last revision Flux applied (lastAppliedRevision) and in mode commit its commit and file (lastAppliedRevisionUrl, lastAppliedFile, lastAppliedFileUrl). none (no organization) says who can add you."),
 		mcp.WithString(argNamespace, mcp.Description("Parent namespace; omit for all")),
 		mcp.WithReadOnlyHintAnnotation(true),
 		mcp.WithDestructiveHintAnnotation(false),

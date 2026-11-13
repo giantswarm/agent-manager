@@ -660,6 +660,18 @@ func TestListOrganizationsLeavesOutCreateAgentsItCouldNotAsk(t *testing.T) {
 				return false, nil, nil
 			})
 		}, map[string]any{"manage": true, "member": true}},
+		// A failed authorization webhook: the review answers, but neither
+		// allows nor denies.
+		{"evaluation error", func(f *orgFixture) {
+			f.typed.PrependReactor("create", "selfsubjectaccessreviews", func(a k8stesting.Action) (bool, runtime.Object, error) {
+				review := a.(k8stesting.CreateAction).GetObject().(*authorizationv1.SelfSubjectAccessReview)
+				if ra := review.Spec.ResourceAttributes; ra.Verb == "create" && ra.Resource == "agents" {
+					review.Status = authorizationv1.SubjectAccessReviewStatus{EvaluationError: "webhook timeout"}
+					return true, review, nil
+				}
+				return false, nil, nil
+			})
+		}, map[string]any{"manage": true, "member": true}},
 		{"denied", func(f *orgFixture) {
 			f.deny = func(_, verb, resource, _ string) bool { return resource == "agents" && verb == "create" }
 		}, map[string]any{"manage": true, "member": true, "createAgents": false}},
