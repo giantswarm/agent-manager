@@ -390,8 +390,8 @@ func runServe(ctx context.Context, o *serveOptions) error {
 			return err
 		}
 	}
-	if o.multiTenant {
-		if !o.downstreamOAuth {
+	if o.multiTenant || (o.oauthEnabled && o.downstreamOAuth) {
+		if o.multiTenant && !o.downstreamOAuth {
 			return fmt.Errorf("--multi-tenant needs --downstream-oauth: a request in an organization namespace, and every organization tool, runs as the caller")
 		}
 		var orgsCommit *organizations.CommitConfig
@@ -407,8 +407,11 @@ func runServe(ctx context.Context, o *serveOptions) error {
 			credentialOperations = organizations.NewCredentialOperations(clients.Typed().CoreV1().ConfigMaps(o.credentialOperationsNamespace))
 			go credentialOperations.Expire(ctx)
 		}
-		orgNamespaces = organizations.NewNamespaces(clients.Typed(), clients.Dynamic(), o.kagentNamespace)
+		if o.multiTenant {
+			orgNamespaces = organizations.NewNamespaces(clients.Typed(), clients.Dynamic(), o.kagentNamespace)
+		}
 		orgs = organizations.New(provider, organizations.Config{
+			PlatformNamespace:       o.kagentNamespace,
 			Namespaces:              orgNamespaces,
 			KagentAPIVersion:        kagentVersion,
 			HelmReleaseAPIVersion:   helmReleaseAPI,
@@ -419,7 +422,7 @@ func runServe(ctx context.Context, o *serveOptions) error {
 			Sessions:                sessions,
 		}, log)
 	} else if o.orgsRepository != "" {
-		return fmt.Errorf("--organizations-repository needs --multi-tenant: it is where the organization tools commit")
+		return fmt.Errorf("--organizations-repository requires OAuth and downstream authorization")
 	}
 
 	var bindings agents.SessionBinder
@@ -665,8 +668,8 @@ func validateCredentialOptions(options *serveOptions) error {
 		if err := organizations.ValidateCredentialUIURL(options.platformCredentialUIURL); err != nil {
 			return err
 		}
-		if options.credentialUIURL == "" {
-			return errors.New("--platform-credential-ui-url requires --credential-ui-url")
+		if !options.oauthEnabled || !options.downstreamOAuth || options.credentialOperationsNamespace == "" {
+			return errors.New("--platform-credential-ui-url requires OAuth, downstream OAuth and a credential operation namespace")
 		}
 	}
 	if options.credentialUIURL != "" {

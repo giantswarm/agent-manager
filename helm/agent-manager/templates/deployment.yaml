@@ -1,7 +1,4 @@
 {{- $githubTokenExchange := include "agent-manager.githubTokenExchange" . }}
-{{- if and .Values.credentials.platformUIURL (not .Values.credentials.uiURL) }}
-{{- fail "credentials.platformUIURL requires credentials.uiURL and its authenticated credential-operation store" }}
-{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -81,15 +78,17 @@ spec:
             {{- end }}
             {{- if .Values.tenants.enabled }}
             - --multi-tenant=true
+            {{- end }}
             {{- with .Values.tenants.commit.repository }}
             - {{ printf "--organizations-repository=%s" . | quote }}
             - {{ printf "--organizations-branch=%s" $.Values.tenants.commit.branch | quote }}
             - {{ printf "--organizations-objects-path=%s" (required "tenants.commit.objectsPath is required with tenants.commit.repository: the directory the installation's Kustomization applies the organization objects from" $.Values.tenants.commit.objectsPath) | quote }}
             - {{ printf "--organizations-content-prefix=%s" $.Values.tenants.commit.contentPrefix | quote }}
             {{- end }}
-            {{- end }}
             {{- with .Values.credentials.uiURL }}
             - {{ printf "--credential-ui-url=%s" . | quote }}
+            {{- end }}
+            {{- if or .Values.credentials.uiURL .Values.credentials.platformUIURL }}
             - --credential-operations-namespace={{ include "agent-manager.credentialOperationsNamespace" $ }}
             {{- end }}
             {{- with .Values.credentials.platformUIURL }}

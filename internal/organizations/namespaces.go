@@ -14,8 +14,9 @@ import (
 	"k8s.io/client-go/kubernetes"
 )
 
-// Namespace is an organization namespace as its labels describe it.
+// Namespace identifies an organization or installation model target.
 type Namespace struct {
+	// Scope is platform for installation models and empty for organizations.
 	Scope string `json:"scope,omitempty"`
 	// Name is the namespace.
 	Name string `json:"namespace"`

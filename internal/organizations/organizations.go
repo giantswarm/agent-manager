@@ -75,6 +75,7 @@ var rbacGVR = schema.GroupVersionResource{Group: "rbac.authorization.k8s.io", Ve
 
 // Config is what the tools need besides the caller's client.
 type Config struct {
+	PlatformNamespace       string
 	PlatformCredentialUIURL string
 	CredentialUIURL         string
 	CredentialOperations    *CredentialOperations
@@ -114,6 +115,9 @@ type Service struct {
 
 // New builds the tools on the caller's client provider.
 func New(k kube.Provider, cfg Config, log *slog.Logger) *Service {
+	if cfg.PlatformNamespace == "" && cfg.Namespaces != nil {
+		cfg.PlatformNamespace = cfg.Namespaces.platform
+	}
 	if log == nil {
 		log = slog.Default()
 	}
@@ -131,6 +135,9 @@ func New(k kube.Provider, cfg Config, log *slog.Logger) *Service {
 	}
 	return &Service{kube: k, cfg: cfg, log: log}
 }
+
+// OrganizationToolsEnabled reports whether organization discovery and management are configured.
+func (s *Service) OrganizationToolsEnabled() bool { return s.cfg.Namespaces != nil }
 
 func (s *Service) kagentGVR(resource string) schema.GroupVersionResource {
 	return schema.GroupVersionResource{Group: agents.KagentAPIGroup, Version: s.cfg.KagentAPIVersion, Resource: resource}

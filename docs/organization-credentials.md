@@ -11,8 +11,9 @@ cluster-admin authorization again when an operation is read or saved. Its target
 declares `scope: platform`, without a synthetic organization. Connector and egress
 operations remain organization-scoped. Installation models require
 `credentials.platformUIURL`, an HTTPS template with `{operation}` and optional
-`{namespace}`, alongside the organization form URL. The organization tools,
-OAuth and downstream authorization must be enabled.
+`{namespace}`. OAuth and downstream authorization are required; the installation
+form and model tools also work with tenancy disabled and no organization form
+URL. Tenant management tools stay disabled, and organization discovery is empty.
 
 Native `AnthropicVertexAI` and `GeminiVertexAI` take nonsecret `projectID` and
 `location`; their credential key defaults to `GOOGLE_APPLICATION_CREDENTIALS`.

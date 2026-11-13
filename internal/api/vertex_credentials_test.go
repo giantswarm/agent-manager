@@ -117,6 +117,8 @@ func TestVertexCredentialSavePreservesConsumerStatus(t *testing.T) {
 
 func TestInstallationModelCredentialAuthorization(t *testing.T) {
 	fixture := newOrgFixtureWith(t, func(configuration *organizations.Config) {
+		configuration.Namespaces = nil
+		configuration.PlatformNamespace = "kagent"
 		configuration.PlatformCredentialUIURL = "https://portal.example.com/model-credentials/{namespace}/{operation}"
 	})
 	result := prepareModelOperation(t, fixture, map[string]any{"namespace": "kagent"})
@@ -125,6 +127,8 @@ func TestInstallationModelCredentialAuthorization(t *testing.T) {
 	require.Empty(t, confirmation.Organization.Organization)
 	require.Contains(t, result.Credentials[0].FormURL, "/kagent/")
 	fixture.deny = func(namespace, verb, resource, name string) bool { return resource == "*" }
+	readStatus, _, _ := operationHTTP(t, fixture, http.MethodGet, result.CredentialOperation, "", "", nil)
+	require.Equal(t, http.StatusForbidden, readStatus)
 	status, _, _ := operationHTTP(t, fixture, http.MethodPost, result.CredentialOperation, confirmation.Version, valuesBody(t, result, "installation-test-key"), nil)
 	require.Equal(t, http.StatusForbidden, status)
 	require.Nil(t, fixture.get(t, secretGVR, "kagent", result.Credentials[0].Secret))
@@ -134,6 +138,8 @@ func TestInstallationModelCredentialAuthorization(t *testing.T) {
 
 func TestInstallationModelCredentialSave(t *testing.T) {
 	fixture := newOrgFixtureWith(t, func(configuration *organizations.Config) {
+		configuration.Namespaces = nil
+		configuration.PlatformNamespace = "kagent"
 		configuration.PlatformCredentialUIURL = "https://portal.example.com/model-credentials/{namespace}/{operation}"
 	})
 	result := prepareModelOperation(t, fixture, map[string]any{"namespace": "kagent", "provider": "GeminiVertexAI", "projectID": "vertex-test", "location": "global"})
@@ -143,9 +149,35 @@ func TestInstallationModelCredentialSave(t *testing.T) {
 	status, answer, _ := operationHTTP(t, fixture, http.MethodPost, result.CredentialOperation, confirmation.Version, valuesBody(t, result, string(encoded)), nil)
 	require.Equal(t, http.StatusOK, status, answer)
 	require.NotNil(t, fixture.get(t, mcGVR, "kagent", "claude"))
+	edit, failed := fixture.call(t, ToolSetOrganizationModel, map[string]any{"namespace": "kagent", "name": "claude", "model": "gemini-2.5-flash", "default": true})
+	require.False(t, failed, edit)
 	text, failed := fixture.call(t, ToolReplaceOrganizationCredential, map[string]any{"namespace": "kagent", "secret": result.Credentials[0].Secret, "key": result.Credentials[0].Key})
 	require.False(t, failed, text)
 	var replacement organizations.ResourceResult
 	require.NoError(t, json.Unmarshal([]byte(text), &replacement))
 	require.Equal(t, "google-service-account-json", replacement.Credentials[0].InputFormat)
+	confirmation = confirmOperation(t, fixture, replacement.CredentialOperation)
+	status, answer, _ = operationHTTP(t, fixture, http.MethodPost, replacement.CredentialOperation, confirmation.Version, valuesBody(t, replacement, string(encoded)), nil)
+	require.Equal(t, http.StatusOK, status, answer)
+	deleted, failed := fixture.call(t, ToolDeleteOrganizationObject, map[string]any{"namespace": "kagent", "kind": "model", "name": "claude"})
+	require.False(t, failed, deleted)
+	require.Nil(t, fixture.get(t, mcGVR, "kagent", "claude"))
+	require.NotNil(t, fixture.get(t, secretGVR, "kagent", result.Credentials[0].Secret))
+}
+
+func TestInstallationModelToolsKeepOrganizationManagementDisabled(t *testing.T) {
+	fixture := newOrgFixtureWith(t, func(configuration *organizations.Config) {
+		configuration.Namespaces = nil
+		configuration.PlatformNamespace = "kagent"
+	})
+	answer, failed := fixture.call(t, ToolListOrganizations, nil)
+	require.False(t, failed, answer)
+	require.JSONEq(t, `{"organizations":[]}`, answer)
+	for _, tool := range []string{ToolCreateOrganization, ToolSetOrganizationConnector, ToolSetOrganizationEgress} {
+		answer, failed := fixture.call(t, tool, map[string]any{"namespace": orgNS, "name": "blocked"})
+		require.True(t, failed, answer)
+	}
+	answer, failed = fixture.call(t, ToolSetOrganizationModel, map[string]any{"namespace": orgNS, "name": "blocked", "provider": "Ollama", "model": "test", "noCredential": true})
+	require.True(t, failed, answer)
+	require.Empty(t, fixture.dyn.Actions())
 }

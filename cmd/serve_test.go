@@ -70,3 +70,29 @@ func TestValidateGitHubTokenExchangeOptions(t *testing.T) {
 
 	require.ErrorContains(t, validateCredentialOptions(&serveOptions{githubExchangeClientFile: "/etc/agent-manager/github-token-exchange/client-id"}), "--github-token-exchange-endpoint")
 }
+
+func TestPlatformCredentialOptionsWithoutTenants(t *testing.T) {
+	options := serveOptions{ // #nosec G101 -- URL fixture with no credential values.
+		oauthEnabled:                  true,
+		downstreamOAuth:               true,
+		platformCredentialUIURL:       "https://portal.example.com/customize/models/credentials/test/{namespace}/{operation}",
+		credentialOperationsNamespace: "model-operations",
+	}
+	require.False(t, options.multiTenant)
+	require.Empty(t, options.credentialUIURL)
+	require.NoError(t, validateCredentialOptions(&options))
+	for _, missing := range []string{"OAuth", "downstream", "namespace"} {
+		incomplete := options
+		switch missing {
+		case "OAuth":
+			incomplete.oauthEnabled = false
+		case "downstream":
+			incomplete.downstreamOAuth = false
+		case "namespace":
+			incomplete.credentialOperationsNamespace = ""
+		}
+		require.Error(t, validateCredentialOptions(&incomplete), missing)
+	}
+	options.credentialUIURL = "https://portal.example.com/organizations/{parent}/{organization}/{operation}"
+	require.ErrorContains(t, validateCredentialOptions(&options), "multi-tenant")
+}

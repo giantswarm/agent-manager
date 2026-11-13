@@ -49,6 +49,9 @@ type CredentialUse struct {
 }
 
 func (s *Service) orgNamespace(ctx context.Context, parent, organization string) (Namespace, error) {
+	if s.cfg.Namespaces == nil {
+		return Namespace{}, fmt.Errorf("%w: organization management is disabled", agents.ErrUnsupported)
+	}
 	if parent == "" || organization == "" {
 		return Namespace{}, invalidf("parent and organization are required")
 	}
