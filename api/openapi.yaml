@@ -1170,7 +1170,7 @@ components:
         deleting: { type: boolean, description: helm-controller is uninstalling the release (absent when not) }
         releaseReason: { type: string, description: The HelmRelease's Ready reason, when it is not Ready }
         releaseMessage: { type: string, description: The HelmRelease's Ready message, when it is not Ready }
-        releaseWithheld: { type: string, description: "Set when the caller may not read the Flux HelmReleases and OCIRepositories: why the release fields are absent and managed is unknown unless the Agent is platform-owned and, for a release in the agent's own namespace, the role that may read them (agent-platform:editor)" }
+        releaseWithheld: { type: string, description: "Set when a required Flux read is forbidden: release fields are absent and managed is unknown unless the Agent is platform-owned. Names the owning release's namespace and, within the site's Flux namespace, the role that grants the reads (agent-platform:editor)" }
     Agent:
       type: object
       properties:
@@ -1201,7 +1201,7 @@ components:
         default: { type: boolean, description: "The installation's default agent (label agent-platform.giantswarm.io/default); clients preselect it. Absent when not" }
         helmRelease: { $ref: "#/components/schemas/HelmReleaseRef" }
         values: { type: object, description: The HelmRelease's inline values (the chart contract) }
-        releaseWithheld: { type: string, description: "Set when the caller may not read the Flux HelmReleases and OCIRepositories: why the release fields are absent and managed is unknown unless the Agent is platform-owned and, for a release in the agent's own namespace, the role that may read them (agent-platform:editor)" }
+        releaseWithheld: { type: string, description: "Set when a required Flux read is forbidden: release fields are absent and managed is unknown unless the Agent is platform-owned. Names the owning release's namespace and, within the site's Flux namespace, the role that grants the reads (agent-platform:editor)" }
     Manifests:
       type: object
       properties:
@@ -1316,7 +1316,7 @@ components:
                   status: { type: string }
                   lastDeployed: { type: string }
             lastAttemptedRevision: { type: string }
-        releaseWithheld: { type: string, description: "Set when the caller may not read the agent's HelmRelease: helmRelease is absent, the verdict comes from the Agent alone and, for a release in the agent's own namespace, it names the role that may read it (agent-platform:editor)" }
+        releaseWithheld: { type: string, description: "Set when the caller may not read the agent's HelmRelease: helmRelease is absent and the verdict comes from the Agent alone. The summary states that HelmRelease state was not read. Names the release's namespace and, within the site's Flux namespace, the role that grants the read (agent-platform:editor)" }
         events:
           type: array
           description: Recent Warning events on the agent's objects (Agent, RemoteMCPServer, HelmRelease)

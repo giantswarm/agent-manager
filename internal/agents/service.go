@@ -516,10 +516,9 @@ func (s *Service) List(ctx context.Context, loc Location, filter tags.Filter) ([
 	for i := range servers.Items {
 		serverByName[servers.Items[i].GetName()] = &servers.Items[i]
 	}
-	withheld := ""
 	hrs, err := s.agentHelmReleases(ctx, st)
-	if errorsIs(err, ErrForbidden) {
-		withheld = releaseWithheld(st.fluxNS, true)
+	fluxReadDenied := errors.Is(err, ErrForbidden)
+	if fluxReadDenied {
 		hrs, err = nil, nil
 	}
 	if err != nil {
@@ -530,16 +529,25 @@ func (s *Service) List(ctx context.Context, loc Location, filter tags.Filter) ([
 		obj := &objects.Items[i]
 		a := agentFromObject(obj, serverByName[obj.GetName()], s.cfg.Tags)
 		a.Target = st.loc.Target
-		if withheld != "" {
-			withholdRelease(&a, withheld)
-		} else if hrName, hrNs := ownerOf(obj); hrName != "" {
+		hrName, releaseNamespace := ownerOf(obj)
+		releaseNamespace = orDefault(releaseNamespace, st.fluxNS)
+		if fluxReadDenied {
+			withholdRelease(&a, releaseWithheld(releaseNamespace, releaseNamespace == st.fluxNS))
+		} else if hrName != "" {
 			hr := hrs[hrName]
-			if hr == nil || hrNs != st.fluxNS {
-				hr, _ = s.getHelmRelease(ctx, st.flux, orDefault(hrNs, st.fluxNS), hrName)
+			if hr == nil || releaseNamespace != st.fluxNS {
+				hr, err = s.getHelmRelease(ctx, st.flux, releaseNamespace, hrName)
+				if errors.Is(err, ErrForbidden) {
+					withholdRelease(&a, releaseWithheld(releaseNamespace, releaseNamespace == st.fluxNS))
+				} else if err != nil {
+					return nil, err
+				}
 			}
 			if hr != nil {
 				applyHelmRelease(&a, hr, s.cfg.Tags)
-				delete(hrs, hrName)
+				if hr.GetNamespace() == st.fluxNS {
+					delete(hrs, hrName)
+				}
 			}
 		}
 		byName[a.Name] = &a
@@ -553,7 +561,7 @@ func (s *Service) List(ctx context.Context, loc Location, filter tags.Filter) ([
 		if existing, ok := byName[a.Name]; ok {
 			// A HelmRelease whose Agent carries no provenance labels (an
 			// older helm-controller): attach by name.
-			if existing.HelmRelease == nil {
+			if existing.HelmRelease == nil && existing.ReleaseWithheld == "" {
 				applyHelmRelease(existing, hr, s.cfg.Tags)
 			}
 			continue
@@ -642,7 +650,7 @@ func (s *Service) markToolsetBound(a *Agent) {
 // agentObjects reads an agent's Agent object and its owning HelmRelease
 // (either may be nil, not both): the release its provenance labels name,
 // else the one named after the agent at the site. A HelmRelease the caller
-// may not read is a *releaseUnreadableError carrying the Agent object.
+// may not read is a *helmReleaseForbiddenError carrying the Agent object.
 func (s *Service) agentObjects(ctx context.Context, st *site, name string) (obj, hr *unstructured.Unstructured, err error) {
 	if obj, err = s.getAgentObject(ctx, st.agent, st.ns(), name); err != nil {
 		return nil, nil, err
@@ -655,7 +663,7 @@ func (s *Service) agentObjects(ctx context.Context, st *site, name string) (obj,
 	}
 	if hr, err = s.getHelmRelease(ctx, st.flux, hrNs, hrName); err != nil {
 		if errorsIs(err, ErrForbidden) {
-			return nil, nil, &releaseUnreadableError{err: err, agent: obj, ns: hrNs, editorReads: hrNs == st.fluxNS}
+			return nil, nil, &helmReleaseForbiddenError{err: err, agent: obj, ns: hrNs, editorRoleGrantsRead: hrNs == st.fluxNS}
 		}
 		return nil, nil, err
 	}
@@ -670,9 +678,8 @@ func (s *Service) agentObjects(ctx context.Context, st *site, name string) (obj,
 // why (Agent.ReleaseWithheld).
 func (s *Service) readAgentObjects(ctx context.Context, st *site, name string) (obj, hr *unstructured.Unstructured, withheld string, err error) {
 	obj, hr, err = s.agentObjects(ctx, st, name)
-	var unreadable *releaseUnreadableError
-	if errors.As(err, &unreadable) && unreadable.agent != nil {
-		return unreadable.agent, nil, releaseWithheld(unreadable.ns, unreadable.editorReads), nil
+	if unreadable, ok := errors.AsType[*helmReleaseForbiddenError](err); ok && unreadable.agent != nil {
+		return unreadable.agent, nil, releaseWithheld(unreadable.ns, unreadable.editorRoleGrantsRead), nil
 	}
 	return obj, hr, "", err
 }
@@ -703,33 +710,30 @@ func (s *Service) getObject(ctx context.Context, dyn dynamic.Interface, gvr sche
 	return obj, nil
 }
 
-// releaseUnreadableError is a Forbidden read of an agent's HelmRelease in
-// ns. It unwraps to ErrForbidden. editorReads is true when ns is the site's
-// Flux namespace, where RoleEditor is bound and grants the read; a release
-// elsewhere, such as the fleet's in flux-giantswarm, is outside the
-// agent-platform roles.
-type releaseUnreadableError struct {
-	err         error
-	agent       *unstructured.Unstructured
-	ns          string
-	editorReads bool
+// helmReleaseForbiddenError preserves the Agent object on a denied release
+// read. RoleEditor grants access in the site's Flux namespace only.
+type helmReleaseForbiddenError struct {
+	err                  error
+	agent                *unstructured.Unstructured
+	ns                   string
+	editorRoleGrantsRead bool
 }
 
-func (e *releaseUnreadableError) Error() string {
-	if !e.editorReads {
+func (e *helmReleaseForbiddenError) Error() string {
+	if !e.editorRoleGrantsRead {
 		return e.err.Error()
 	}
-	return fmt.Sprintf("%v (reading it needs the %s role)", e.err, RoleEditor)
+	return fmt.Sprintf("%v (the %s role grants this read in the release namespace)", e.err, RoleEditor)
 }
 
-func (e *releaseUnreadableError) Unwrap() error { return e.err }
+func (e *helmReleaseForbiddenError) Unwrap() error { return e.err }
 
 // releaseWithheld is Agent.ReleaseWithheld for a caller who may not read the
-// Flux objects in ns; it names RoleEditor only when editorReads.
-func releaseWithheld(ns string, editorReads bool) string {
-	msg := fmt.Sprintf("you may not read the Flux HelmReleases and OCIRepositories in %s, so the release state, its values and how the agent is managed are not shown", ns)
-	if editorReads {
-		msg += fmt.Sprintf("; reading them needs the %s role", RoleEditor)
+// Flux objects in ns; it names RoleEditor only when editorRoleGrantsRead.
+func releaseWithheld(ns string, editorRoleGrantsRead bool) string {
+	msg := fmt.Sprintf("HelmRelease state and values are not shown because a required Flux read was forbidden; the release namespace is %s", ns)
+	if editorRoleGrantsRead {
+		msg += fmt.Sprintf("; the %s role grants these reads in this namespace", RoleEditor)
 	}
 	return msg
 }
