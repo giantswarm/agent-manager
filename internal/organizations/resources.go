@@ -192,6 +192,14 @@ func (s *Service) SetModel(ctx context.Context, req ModelRequest) (*ResourceResu
 			return nil, err
 		}
 	}
+	// The provider before the write: a file in git may leave it out, and then
+	// the live object says what the API server defaulted it to.
+	previous := storedProvider(obj, find(items, req.Name))
+	providerChanged := !res.Created && req.Provider != "" && !strings.EqualFold(req.Provider, previous)
+	var carried map[string]any
+	if providerChanged {
+		carried = dropProviderBlocks(obj, previous, req.Provider)
+	}
 	if req.Provider != "" {
 		_ = unstructured.SetNestedField(obj.Object, req.Provider, "spec", "provider")
 	}
@@ -207,7 +215,8 @@ func (s *Service) SetModel(ctx context.Context, req ModelRequest) (*ResourceResu
 	}
 	_ = unstructured.SetNestedField(obj.Object, secret, "spec", "apiKeySecret")
 	_ = unstructured.SetNestedField(obj.Object, key, "spec", "apiKeySecretKey")
-	if err := setModelSettings(obj, req, res.Created); err != nil {
+	provider := firstOf(req.Provider, previous)
+	if err := setModelSettings(obj, req, provider, res.Created || providerChanged, carried); err != nil {
 		return nil, err
 	}
 
@@ -297,12 +306,16 @@ func refuseProviderChangeOnSameSecret(obj *unstructured.Unstructured, req ModelR
 
 // setModelSettings writes the display name, the token limit and the prompt
 // caching of req into the model obj, in the block of its provider (after
-// the write). A setting req omits keeps its stored value; a new Anthropic
-// model caches by default, as the platform's models do. A setting the
-// provider's block does not have is refused: the API server would prune it
-// and the model would run without it in silence. The values themselves (the
-// cacheTTL enum, a minimum) are judged by the API server's dry run.
-func setModelSettings(obj *unstructured.Unstructured, req ModelRequest, created bool) error {
+// the write). A setting req omits keeps its stored value. fresh says the
+// provider's block is new (a new model, or a provider change): a new
+// Anthropic block caches by default, as the platform's models do, and the
+// token limit of the old block, carried, moves into it when req gives none.
+// Caching that is on gets agents.DefaultCacheTTL when no cache time is
+// stored or given. A setting the provider's block does not have is refused:
+// the API server would prune it and the model would run without it in
+// silence. The values themselves (the cacheTTL enum, a minimum) are judged
+// by the API server's dry run.
+func setModelSettings(obj *unstructured.Unstructured, req ModelRequest, provider string, fresh bool, carried map[string]any) error {
 	if req.DisplayName != nil {
 		annotations := obj.GetAnnotations()
 		if *req.DisplayName == "" {
@@ -315,8 +328,10 @@ func setModelSettings(obj *unstructured.Unstructured, req ModelRequest, created 
 		}
 		obj.SetAnnotations(annotations)
 	}
-	provider, _, _ := unstructured.NestedString(obj.Object, "spec", "provider")
 	block, _ := agents.SettingsBlockOf(provider)
+	if limit := agents.IntValue(carried["maxTokens"]); limit > 0 && req.MaxTokens == nil && block.MaxTokens {
+		_ = unstructured.SetNestedField(obj.Object, limit, "spec", block.Key, "maxTokens")
+	}
 	if req.MaxTokens != nil {
 		switch {
 		case *req.MaxTokens < 0:
@@ -330,7 +345,7 @@ func setModelSettings(obj *unstructured.Unstructured, req ModelRequest, created 
 		}
 	}
 	caching := req.PromptCaching
-	if caching == nil && created && agents.IsAnthropic(provider) {
+	if caching == nil && fresh && agents.IsAnthropic(provider) {
 		on := true
 		caching = &on
 	}
@@ -341,13 +356,40 @@ func setModelSettings(obj *unstructured.Unstructured, req ModelRequest, created 
 		_ = unstructured.SetNestedField(obj.Object, *caching, "spec", block.Key, "promptCaching")
 	}
 	ttl := req.CacheTTL
-	if ttl == "" && created && caching != nil && *caching {
+	if stored, _, _ := unstructured.NestedString(obj.Object, "spec", block.Key, "cacheTTL"); ttl == "" && stored == "" && caching != nil && *caching {
 		ttl = agents.DefaultCacheTTL
 	}
 	if ttl != "" {
 		_ = unstructured.SetNestedField(obj.Object, ttl, "spec", block.Key, "cacheTTL")
 	}
 	return nil
+}
+
+// storedProvider is the provider of the model obj (live, or its file in git)
+// before the write; a file that leaves it out has the one the API server
+// defaulted on the live object, live.
+func storedProvider(obj, live *unstructured.Unstructured) string {
+	provider, _, _ := unstructured.NestedString(obj.Object, "spec", "provider")
+	if provider == "" && live != nil {
+		provider, _, _ = unstructured.NestedString(live.Object, "spec", "provider")
+	}
+	return provider
+}
+
+// dropProviderBlocks removes from the model obj every provider block but
+// the one of provider: kagent's ModelConfig refuses a block of another
+// provider than spec.provider, so the old provider's block goes with a
+// provider change. It answers the old provider's block, whose settings the
+// new block may take.
+func dropProviderBlocks(obj *unstructured.Unstructured, previous, provider string) map[string]any {
+	old, _, _ := unstructured.NestedMap(obj.Object, "spec", agents.ProviderBlockKey(previous))
+	keep := agents.ProviderBlockKey(provider)
+	for _, key := range agents.ProviderBlockKeys() {
+		if key != keep {
+			unstructured.RemoveNestedField(obj.Object, "spec", key)
+		}
+	}
+	return old
 }
 
 // removeBlockField removes field from the provider block key of obj, and the

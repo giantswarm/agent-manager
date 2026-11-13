@@ -141,6 +141,81 @@ func TestSetModelSettingsInCommitMode(t *testing.T) {
 	assert.Equal(t, "Claude Sonnet", file.GetAnnotations()[agents.DisplayNameAnnotation])
 }
 
+// withoutSecret is m without a credential reference: its provider change is
+// not refused, and the Secret defaults to tenant-credential-<name>.
+func withoutSecret(m *unstructured.Unstructured) *unstructured.Unstructured {
+	unstructured.RemoveNestedField(m.Object, "spec", "apiKeySecret")
+	unstructured.RemoveNestedField(m.Object, "spec", "apiKeySecretKey")
+	return m
+}
+
+// A provider change removes the old provider's block, which kagent refuses
+// beside another provider; the token limit moves when the new block has one,
+// and a new Anthropic block caches by default. In apply and commit mode.
+func TestSetModelProviderChangeMovesTheSettings(t *testing.T) {
+	fixture := newOrgFixture(t, withoutSecret(withSettings()))
+	seedSecret(t, fixture, "tenant-credential-claude", "apiKey")
+	text, failed := fixture.call(t, ToolSetOrganizationModel, map[string]any{"namespace": orgNS, "name": "claude", "provider": "OpenAI", "model": "gpt-5"})
+	require.False(t, failed, text)
+	live := fixture.get(t, mcGVR, orgNS, "claude")
+	assert.Nil(t, modelBlock(t, live, "anthropic"))
+	assert.Equal(t, map[string]any{"maxTokens": int64(32000)}, modelBlock(t, live, "openAI"))
+
+	openai := withoutSecret(model("claude", true))
+	_ = unstructured.SetNestedField(openai.Object, "OpenAI", "spec", "provider")
+	_ = unstructured.SetNestedField(openai.Object, map[string]any{"maxTokens": int64(32000), "baseUrl": "http://llm/v1"}, "spec", "openAI")
+	fixture = newOrgFixture(t, openai)
+	seedSecret(t, fixture, "tenant-credential-claude", "apiKey")
+	text, failed = fixture.call(t, ToolSetOrganizationModel, map[string]any{"namespace": orgNS, "name": "claude", "provider": "Anthropic", "model": "claude-sonnet-5-5"})
+	require.False(t, failed, text)
+	live = fixture.get(t, mcGVR, orgNS, "claude")
+	assert.Nil(t, modelBlock(t, live, "openAI"))
+	assert.Equal(t, map[string]any{"maxTokens": int64(32000), "promptCaching": true, "cacheTTL": "5m"}, modelBlock(t, live, "anthropic"))
+
+	path := paymentsPath + "/modelconfig-claude.yaml"
+	inGit := withoutSecret(withSettings())
+	livePrevious := withoutSecret(withSettings())
+	livePrevious.SetLabels(fromGitLabels("payments"))
+	fixture, forge := commitFixture(t, map[string][]byte{path: gitManifest(t, inGit)}, livePrevious)
+	seedSecret(t, fixture, "tenant-credential-claude", "apiKey")
+	text, failed = fixture.call(t, ToolSetOrganizationModel, map[string]any{"namespace": orgNS, "name": "claude", "provider": "Mistral", "model": "mistral-large", "mode": "commit"})
+	require.False(t, failed, text)
+	require.Len(t, forge.PullRequests(), 1)
+	file := parseFile(t, forge.Files(mcRepo, forge.PullRequests()[0].Head)[path])
+	assert.Nil(t, modelBlock(t, file, "anthropic"))
+	assert.Equal(t, map[string]any{"maxTokens": int64(32000)}, normalized(t, modelBlock(t, file, "mistral")))
+}
+
+// A model's file in git may leave the provider out: the live object says
+// what the API server defaulted it to, and the settings follow that one.
+func TestSetModelInCommitModeTakesTheDefaultedProvider(t *testing.T) {
+	path := paymentsPath + "/modelconfig-claude.yaml"
+	inGit := model("claude", true)
+	unstructured.RemoveNestedField(inGit.Object, "spec", "provider")
+	live := model("claude", true)
+	_ = unstructured.SetNestedField(live.Object, "OpenAI", "spec", "provider")
+	live.SetLabels(fromGitLabels("payments"))
+	fixture, forge := commitFixture(t, map[string][]byte{path: gitManifest(t, inGit)}, live)
+	seedSecret(t, fixture, "tenant-credential-claude", "apiKey")
+	text, failed := fixture.call(t, ToolSetOrganizationModel, map[string]any{"namespace": orgNS, "name": "claude", "maxTokens": 4096, "mode": "commit"})
+	require.False(t, failed, text)
+	require.Len(t, forge.PullRequests(), 1)
+	file := parseFile(t, forge.Files(mcRepo, forge.PullRequests()[0].Head)[path])
+	assert.Equal(t, map[string]any{"maxTokens": int64(4096)}, normalized(t, modelBlock(t, file, "openAI")))
+	provider, _, _ := unstructured.NestedString(file.Object, "spec", "provider")
+	assert.Empty(t, provider, "the file keeps leaving it to the default")
+}
+
+// Caching turned on in an update of a model that stores no cache time gets
+// the default one, so the file in git says it.
+func TestSetModelCachingTurnedOnGetsTheDefaultCacheTime(t *testing.T) {
+	fixture := newOrgFixture(t, model("claude", true))
+	seedSecret(t, fixture, "tenant-credential-claude", "apiKey")
+	text, failed := fixture.call(t, ToolSetOrganizationModel, map[string]any{"namespace": orgNS, "name": "claude", "promptCaching": true})
+	require.False(t, failed, text)
+	assert.Equal(t, map[string]any{"promptCaching": true, "cacheTTL": "5m"}, modelBlock(t, fixture.get(t, mcGVR, orgNS, "claude"), "anthropic"))
+}
+
 // normalized is block with its numbers as int64, whatever the YAML decoder
 // gave.
 func normalized(t *testing.T, block map[string]any) map[string]any {

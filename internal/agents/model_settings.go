@@ -1,6 +1,7 @@
 package agents
 
 import (
+	"slices"
 	"strings"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -33,6 +34,28 @@ var modelSettingsBlocks = map[string]ModelSettingsBlock{
 	"openai":            {Key: "openAI", MaxTokens: true},
 }
 
+// providerBlockKeys are the keys of kagent's ModelConfigSpec provider
+// blocks, by provider in lower case.
+var providerBlockKeys = map[string]string{
+	"anthropic": "anthropic", "anthropicvertexai": "anthropicVertexAI", "azureopenai": "azureOpenAI",
+	"bedrock": "bedrock", "foundry": "foundry", "gemini": "gemini", "geminivertexai": "geminiVertexAI",
+	"mistral": "mistral", "ollama": "ollama", "openai": "openAI", "sapaicore": "sapAICore",
+}
+
+// ProviderBlockKey is the key of provider's block in a ModelConfig spec, in
+// any case; "" for a provider kagent does not know.
+func ProviderBlockKey(provider string) string { return providerBlockKeys[strings.ToLower(provider)] }
+
+// ProviderBlockKeys are the keys of every provider block, sorted.
+func ProviderBlockKeys() []string {
+	keys := make([]string, 0, len(providerBlockKeys))
+	for _, key := range providerBlockKeys {
+		keys = append(keys, key)
+	}
+	slices.Sort(keys)
+	return keys
+}
+
 // SettingsBlockOf is the settings block of provider; ok is false for a
 // provider that has none of the settings.
 func SettingsBlockOf(provider string) (ModelSettingsBlock, bool) {
@@ -56,7 +79,7 @@ func modelSettings(item *unstructured.Unstructured, mc *ModelConfig) {
 	}
 	spec, _, _ := unstructured.NestedMap(item.Object, "spec", block.Key)
 	if block.MaxTokens {
-		mc.MaxTokens = intValue(spec["maxTokens"])
+		mc.MaxTokens = IntValue(spec["maxTokens"])
 	}
 	if block.Caching {
 		caching, _ := spec["promptCaching"].(bool)
@@ -67,9 +90,9 @@ func modelSettings(item *unstructured.Unstructured, mc *ModelConfig) {
 	}
 }
 
-// intValue is a JSON number of an unstructured object as an int64: the API
+// IntValue is a JSON number of an unstructured object as an int64: the API
 // server's decoder gives int64, a YAML or test object may give another type.
-func intValue(v any) int64 {
+func IntValue(v any) int64 {
 	switch n := v.(type) {
 	case int64:
 		return n

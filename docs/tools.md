@@ -1297,7 +1297,7 @@ The first model of an organization without a default becomes its default (annota
       "type": "boolean"
     },
     "maxTokens": {
-      "description": "Token limit of an answer (Anthropic, AnthropicVertexAI, AzureOpenAI, Mistral, OpenAI); 0 removes it: the provider's default",
+      "description": "Token limit of an answer (Anthropic, Mistral, OpenAI); 0 removes it: the provider's default",
       "type": "number"
     },
     "mode": {
@@ -1321,7 +1321,7 @@ The first model of an organization without a default becomes its default (annota
       "type": "string"
     },
     "promptCaching": {
-      "description": "Prompt caching (Anthropic, Bedrock); a new Anthropic model has it on, false turns it off",
+      "description": "Prompt caching (Anthropic); a new Anthropic model has it on, false turns it off",
       "type": "boolean"
     },
     "provider": {

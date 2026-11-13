@@ -11,9 +11,15 @@ settings.
 | Argument | Where it is written | On a new model | On an update |
 |---|---|---|---|
 | `displayName` | annotation `ui.giantswarm.io/display-name`, the key the platform's models use | none unless given | omitted: kept; `""`: removed |
-| `maxTokens` | `spec.<provider>.maxTokens`: `anthropic`, `anthropicVertexAI`, `azureOpenAI`, `mistral` or `openAI` | none unless given (the provider's default) | omitted: kept; `0`: removed |
-| `promptCaching` | `spec.<provider>.promptCaching`: `anthropic` or `bedrock` | `true` for an Anthropic model, unless `false` is given | omitted: kept |
-| `cacheTTL` | `spec.<provider>.cacheTTL`: `5m` or `1h` | `5m` with prompt caching on an Anthropic model | omitted: kept |
+| `maxTokens` | `spec.<provider>.maxTokens`: `anthropic`, `mistral` or `openAI` | none unless given (the provider's default) | omitted: kept; `0`: removed |
+| `promptCaching` | `spec.anthropic.promptCaching` | `true` for an Anthropic model, unless `false` is given | omitted: kept |
+| `cacheTTL` | `spec.anthropic.cacheTTL`: `5m` or `1h` | `5m` with prompt caching | omitted: kept; `5m` when caching is turned on and none is stored |
+
+These are the providers the platform's LLM listener serves for an
+organization model. kagent has the same fields for a few more providers
+(`maxTokens` for AnthropicVertexAI and AzureOpenAI, prompt caching for
+Bedrock), but those need fields the tool does not write, and an organization
+namespace admits only the providers the listener serves.
 
 - A new Anthropic model caches its prompts, as the platform's Anthropic
   models do: a turn with a long system prompt or a long history reads them
@@ -23,7 +29,13 @@ settings.
   apart.
 - An update writes only the arguments it is given. A model that has caching
   off stays without caching, also one written before this setting existed:
-  give `promptCaching: true` to turn it on.
+  give `promptCaching: true` to turn it on. A `cacheTTL` given while caching
+  is off is stored and has no effect until caching is on.
+- A change of the provider (which needs a new `credentialSecret`) removes the
+  old provider's block: kagent refuses a block of another provider. The token
+  limit moves to the new provider's block when that block has one and the
+  call gives none; a new Anthropic block caches by default, as a new model
+  does.
 - A setting that the provider's block does not have (prompt caching on an
   OpenAI model, a token limit on an Ollama model) is refused with
   `invalid_request`: the API server would drop it and the model would run
