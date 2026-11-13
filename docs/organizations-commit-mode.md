@@ -98,9 +98,8 @@ giantswarm/agent-platform-operator#15 is the long-term fix.
    `DeleteMerged` once the file has left the installation Kustomization's inventory.
 2. After the merge, the organization is pending erase once agent-manager has read the
    merged pull request's files, found the object's file removed by it (a move that
-   GitHub reports as a rename does not count), and found that no YAML or JSON file the
-   pull request added or changed under the objects path still defines the organization
-   on the base branch. Without `confirm` the call
+   GitHub reports as a rename does not count), and found that no file under the objects
+   path still defines the organization on the base branch. Without `confirm` the call
    answers what is erased. With `confirm: <parent>/<name>` (Erase now) it sets
    `kustomize.toolkit.fluxcd.io/prune: enabled` on the live object and deletes it; the
    operator erases it.
@@ -119,13 +118,18 @@ The erase is refused:
   the file to another path (a rename on GitHub), which may still define the
   organization in git. Restore the file, or move it back, and open the delete again with
   `mode: commit` and no `confirm`;
-- when a YAML or JSON file that the merged delete pull request added or changed under
-  the objects path still defines the organization on the base branch (an
-  `AgentPlatformOrganization` of its name, in its parent or without a namespace): a
-  move whose content changed so much that GitHub reports a removal and an addition, or
-  a definition the pull request added to another file. The answer names the file. Move
-  it back and open the delete again. Such a file that does not parse also erases
-  nothing;
+- when a file under the objects path, whatever its name, still defines the
+  organization on the base branch: a move whose content changed so much that GitHub
+  reports a removal and an addition, or a definition that the pull request or a later
+  commit wrote there. A document defines it when it is an `AgentPlatformOrganization`
+  of its name in its parent or without a namespace, also as an item of a `List`. Where
+  a `kustomization.yaml` above the file sets `namespace`, `namePrefix` or `nameSuffix`,
+  or SOPS encrypted the value, the document's own namespace or name does not count, and
+  it is taken as a match. The answer names the file: remove that definition and erase
+  again, or move the file back and open the delete again. A file that does not parse
+  defines nothing, since Kustomize cannot apply it either. When the objects path cannot
+  be read (a read fails, or the repository's tree is too large for one read), nothing
+  is erased;
 - when GitHub cannot list the merged pull request's files: whether it removed the file
   is unknown, so nothing is erased. Call again to retry. A pull request of more than
   3000 files never lists, since GitHub lists at most 3000: restore only the object's
@@ -135,9 +139,10 @@ The erase is refused:
 
 To erase, agent-manager reads the delete pull request with pull request reads only:
 whether it is merged (one read), and its files (one read for each 100 files). It does
-not read its reviews, or the commit statuses and check runs of its head. Then it reads,
-on the base branch, each YAML or JSON file that the pull request added or changed under
-the objects path, two contents reads for each; agent-manager's own delete changes one
-`kustomization.yaml` there at most. The GitHub App needs no permission beyond contents
-and pull requests. When GitHub refuses a step that only reads with 403, the answer
+not read its reviews, or the commit statuses and check runs of its head. Then it reads
+the objects path on the base branch: one read of the repository's tree, and two
+contents reads for each file under the objects path (about two for each organization
+and for each parent's `kustomization.yaml`). The erase is rare, so these reads are
+taken on each erase and on each answer of pending erase. The GitHub App needs no
+permission beyond contents and pull requests. When GitHub refuses a step that only reads with 403, the answer
 names the step and the App's permissions: a new sign-in does not change them.

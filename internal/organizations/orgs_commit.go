@@ -274,7 +274,7 @@ func (s *Service) deleteCommit(ctx context.Context, c kube.Client, u *unstructur
 	if err := removedBy(changes, pr, what, p); err != nil {
 		return false, err
 	}
-	if err := cm.definedElsewhere(ctx, changes, pr, req.Parent, req.Name, what, p); err != nil {
+	if err := cm.stillInGit(ctx, pr, req.Parent, req.Name, what, p); err != nil {
 		return false, err
 	}
 	if req.Confirm != req.Parent+"/"+req.Name {
@@ -290,7 +290,7 @@ func (s *Service) deleteCommit(ctx context.Context, c kube.Client, u *unstructur
 // that GitHub reports as a rename is refused although commit.Removes counts
 // it: the moved file may still define the organization in git. A move
 // whose content changed so much that GitHub reports a removal and an
-// addition is refused by definedElsewhere. The object's file alone decides:
+// addition is refused by stillInGit. The object's file alone decides:
 // the content path is applied by the organization's own Kustomization,
 // which the erase removes, and a create refuses a content path an earlier
 // organization left. changes are the merged pull request's files; the
@@ -311,63 +311,118 @@ func removedBy(changes []commit.FileChange, pr commit.PullRequest, what, p strin
 // not take the organization out of git.
 const nextDelete = "then call delete_organization again with mode commit and no confirm to open a new delete pull request"
 
-// definedElsewhere refuses the erase when a file the merged delete pull
-// request added or changed under the objects path still defines the
-// organization parent/name on the base branch: a move that GitHub reports
-// as a removal and an addition, or a definition the pull request wrote into
-// another file. The installation's Kustomization applies the objects path
-// alone, so a definition anywhere else does not re-create the object. Only
-// those files are read, each as it is on the base now (a file a later
-// commit removed defines nothing); agent-manager's own delete changes a
-// kustomization.yaml there at most. A YAML or JSON file that does not parse
-// erases nothing: whether it defines the organization is unknown.
-func (c *orgCommit) definedElsewhere(ctx context.Context, changes []commit.FileChange, pr commit.PullRequest, parent, name, what, p string) error {
-	for _, ch := range changes {
-		if ch.Kind == commit.FileRemoved || !within(c.cfg.Objects.Directory, ch.Path) {
-			continue
-		}
-		switch path.Ext(ch.Path) {
-		case ".yaml", ".yml", ".json":
-		default:
-			continue
-		}
-		raw, err := c.remote.ReadFile(ctx, c.cfg.Objects.Repository, c.cfg.Objects.Branch, ch.Path)
+// stillInGit refuses the erase while a file under the objects path on the
+// base branch still defines the organization parent/name: a move that
+// GitHub reports as a removal and an addition, a definition the delete pull
+// request wrote into another file, or one a later commit wrote or moved.
+// The installation's Kustomization applies the objects path alone, so a
+// definition anywhere else does not re-create the object. Every file under
+// the objects path is read, whatever its name, since Kustomize loads a
+// resource file by any name: one tree read, and two reads for each file. A
+// file that does not parse defines nothing, since Kustomize cannot apply
+// it either. A read that fails, or a tree too large for one read, erases
+// nothing.
+func (c *orgCommit) stillInGit(ctx context.Context, pr commit.PullRequest, parent, name, what, p string) error {
+	repo, base, dir := c.cfg.Objects.Repository, c.cfg.Objects.Branch, c.cfg.Objects.Directory
+	unknown := func(err error, step string) error {
+		return fmt.Errorf("%w (nothing was erased: %s could not be read, so whether the organization is still defined in git is unknown; call delete_organization again with mode commit and confirm to retry)", commitError(c.gh, err), step)
+	}
+	files, err := c.remote.ListFiles(ctx, repo, base, dir)
+	if err != nil {
+		return unknown(err, "the objects path "+dir)
+	}
+	docs := map[string][]map[string]any{}
+	renames := map[string]renaming{}
+	for _, f := range files {
+		raw, err := c.remote.ReadFile(ctx, repo, base, f)
 		if errors.Is(err, commit.ErrFileNotFound) {
 			continue
 		}
 		if err != nil {
-			return fmt.Errorf("%w (nothing was erased: %s, which the delete pull request %s changed, could not be read, so whether it defines the organization is unknown; call delete_organization again with mode commit and confirm to retry)", commitError(c.gh, err), ch.Path, pr.URL)
+			return unknown(err, f)
 		}
-		defines, err := definesOrganization(raw, parent, name)
-		if err != nil {
-			return fmt.Errorf("%w: %s: %s in %s, which its merged delete pull request %s changed, does not parse (%v), so whether it defines the organization is unknown; it is not pending erase and is not erased; fix the file, then call delete_organization again with mode commit and confirm", agents.ErrConflict, what, ch.Path, c.cfg.Objects.Repository, pr.URL, err)
+		parsed := documents(raw)
+		if kustomizationFiles[path.Base(f)] {
+			if len(parsed) > 0 {
+				renames[path.Dir(f)] = renamingOf(parsed[0])
+			}
+			continue
 		}
-		if defines {
-			return fmt.Errorf("%w: %s: its merged delete pull request %s removed %s, but %s in %s still defines it (a move that GitHub reports as a removal and an addition, or a definition the pull request added), so the organization is still in git; it is not pending erase and is not erased; move the file back to %s, %s", agents.ErrConflict, what, pr.URL, p, ch.Path, c.cfg.Objects.Repository, p, nextDelete)
+		docs[f] = parsed
+	}
+	for _, f := range files {
+		// A kustomization above the file that sets a namespace, a name
+		// prefix or a name suffix changes what its documents say: their
+		// raw namespace or name then does not tell.
+		var r renaming
+		for d := path.Dir(f); within(dir, d); d = path.Dir(d) {
+			r.namespace = r.namespace || renames[d].namespace
+			r.name = r.name || renames[d].name
+		}
+		for _, doc := range docs[f] {
+			if definesOrganization(doc, parent, name, r) {
+				return fmt.Errorf("%w: %s: its merged delete pull request %s removed %s, but %s in %s still defines it (moved there, or written there by the pull request or a later commit), so the organization is still in git; it is not pending erase and is not erased; remove that definition from %s and call delete_organization again with mode commit and confirm %q, or move it back to %s, %s", agents.ErrConflict, what, pr.URL, p, f, repo, f, parent+"/"+name, p, nextDelete)
+			}
 		}
 	}
 	return nil
 }
 
-// definesOrganization reports whether one of raw's YAML or JSON documents is
-// the AgentPlatformOrganization parent/name. A document without a namespace
-// counts: a Kustomization may set it.
-func definesOrganization(raw []byte, parent, name string) (bool, error) {
+// kustomizationFiles are the names Kustomize reads a kustomization from.
+var kustomizationFiles = map[string]bool{"kustomization.yaml": true, "kustomization.yml": true, "Kustomization": true}
+
+// renaming is what a kustomization changes of its resources' identity.
+type renaming struct{ namespace, name bool }
+
+func renamingOf(k map[string]any) renaming {
+	set := func(field string) bool { s, _ := k[field].(string); return s != "" }
+	return renaming{namespace: set("namespace"), name: set("namePrefix") || set("nameSuffix")}
+}
+
+// documents parses raw's YAML or JSON documents; nil when one does not
+// parse, since Kustomize cannot apply such a file.
+func documents(raw []byte) []map[string]any {
 	dec := kubeyaml.NewYAMLOrJSONDecoder(bytes.NewReader(raw), 4096)
+	var out []map[string]any
 	for {
 		var doc map[string]any
 		err := dec.Decode(&doc)
 		if errors.Is(err, io.EOF) {
-			return false, nil
+			return out
 		}
 		if err != nil {
-			return false, err
+			return nil
 		}
-		u := unstructured.Unstructured{Object: doc}
-		if u.GetKind() == orgKind && u.GroupVersionKind().Group == GVR.Group && u.GetName() == name && (u.GetNamespace() == parent || u.GetNamespace() == "") {
-			return true, nil
+		if doc != nil {
+			out = append(out, doc)
 		}
 	}
+}
+
+// definesOrganization reports whether doc is, or as a list (kind *List)
+// holds in its items, the AgentPlatformOrganization parent/name, as
+// Kustomize applies it. A document without a namespace counts, and so does
+// one whose namespace or name r says a kustomization changes. A value SOPS
+// encrypted (ENC[...]) is not known, so it counts too.
+func definesOrganization(doc map[string]any, parent, name string, r renaming) bool {
+	u := unstructured.Unstructured{Object: doc}
+	if items, ok := doc["items"].([]any); ok && strings.HasSuffix(u.GetKind(), "List") {
+		for _, it := range items {
+			if m, ok := it.(map[string]any); ok && definesOrganization(m, parent, name, r) {
+				return true
+			}
+		}
+		return false
+	}
+	sealed := func(s string) bool { return strings.HasPrefix(s, "ENC[") }
+	kind := u.GetKind() == orgKind && u.GroupVersionKind().Group == GVR.Group
+	if _, sops := doc["sops"]; sops && (sealed(u.GetKind()) || sealed(u.GetAPIVersion())) {
+		kind = true
+	}
+	ns := u.GetNamespace()
+	return kind &&
+		(r.name || u.GetName() == name || sealed(u.GetName())) &&
+		(r.namespace || ns == "" || ns == parent || sealed(ns))
 }
 
 // openDelete opens the pull request that removes the organization's file

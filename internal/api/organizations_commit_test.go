@@ -355,9 +355,23 @@ func TestARestoredFileOpensANewDeleteWhenTheListingKeepsFailing(t *testing.T) {
 	assert.Equal(t, true, decode(t, text)["deleted"])
 }
 
-// A delete pull request that also adds or changes files under the objects
-// path erases, when none of them defines the organization: another
-// organization's file, or one of this name under another parent.
+// orgDocument is payments' object as a file carries it, in namespace ns
+// (none when empty).
+func orgDocument(t *testing.T, ns string) map[string]any {
+	t.Helper()
+	o := organization("org-acme", "payments", nil)
+	delete(o.Object, "status")
+	if ns == "" {
+		unstructured.RemoveNestedField(o.Object, "metadata", "namespace")
+	} else {
+		o.SetNamespace(ns)
+	}
+	return o.Object
+}
+
+// Files under the objects path that do not define the organization do not
+// stop the erase: another organization's file, one of this name under
+// another parent, and files that do not parse, which Kustomize cannot apply.
 func TestADeleteThatAddsOtherOrganizationsStillErases(t *testing.T) {
 	ctx := context.Background()
 	f, fake := gitOrganization(t)
@@ -374,7 +388,8 @@ func TestADeleteThatAddsOtherOrganizationsStillErases(t *testing.T) {
 	require.NoError(t, fake.Commit(ctx, mcRepo, pr.Head, "add others", map[string][]byte{
 		objectsPath + "/org-acme/billing.yaml":  other("org-acme", "billing"),
 		objectsPath + "/org-beta/payments.yaml": append(append([]byte("kind: ConfigMap\nmetadata:\n  name: payments\n---\n"), other("org-beta", "payments")...), []byte("---\n")...),
-		objectsPath + "/README.md":              []byte("not: [yaml"),
+		objectsPath + "/README.md":              []byte("# Organizations\n\nOne file per organization.\n"),
+		objectsPath + "/org-acme/broken.yaml":   append(other("org-acme", "payments"), []byte("---\nmetadata: [payments\n")...),
 	}))
 	merge := pr.PullRequest
 	st, err := fake.Status(ctx, merge)
@@ -464,7 +479,51 @@ func TestAMergedDeleteThatDidNotRemoveTheFileErasesNothing(t *testing.T) {
 				moved := append([]byte("# archived\n"), file...)
 				require.NoError(t, fake.Commit(ctx, mcRepo, head, "move it", map[string][]byte{objectsPath + "/archive/payments.yaml": moved}))
 			},
-			want:      []string{"conflict:", objectsPath + "/archive/payments.yaml", "still defines it", "move the file back"},
+			want:      []string{"conflict:", objectsPath + "/archive/payments.yaml", "still defines it", "remove that definition", "move it back to " + paymentsFile},
+			noConfirm: true,
+		},
+		{
+			name: "the moved file was moved again after the merge",
+			edit: func(t *testing.T, fake *commit.Fake, head string, file []byte) {
+				moved := append([]byte("# archived\n"), file...)
+				require.NoError(t, fake.Commit(ctx, mcRepo, head, "move it", map[string][]byte{objectsPath + "/archive/payments.yaml": moved}))
+			},
+			after: func(t *testing.T, fake *commit.Fake) {
+				moved := fake.Files(mcRepo, "main")[objectsPath+"/archive/payments.yaml"]
+				require.NoError(t, fake.Commit(ctx, mcRepo, "main", "move it again", map[string][]byte{objectsPath + "/archive/payments.yaml": nil, objectsPath + "/old/current": moved}))
+			},
+			want:      []string{"conflict:", objectsPath + "/old/current", "still defines it"},
+			noConfirm: true,
+		},
+		{
+			name: "the file was moved into a list without a namespace",
+			edit: func(t *testing.T, fake *commit.Fake, head string, _ []byte) {
+				list, err := yaml.Marshal(map[string]any{"apiVersion": "v1", "kind": "List", "items": []any{orgDocument(t, "")}})
+				require.NoError(t, err)
+				require.NoError(t, fake.Commit(ctx, mcRepo, head, "move it", map[string][]byte{objectsPath + "/archive/bundle.yaml": list}))
+			},
+			want:      []string{"conflict:", objectsPath + "/archive/bundle.yaml", "still defines it"},
+			noConfirm: true,
+		},
+		{
+			name: "the file was moved under a kustomization that sets its namespace",
+			edit: func(t *testing.T, fake *commit.Fake, head string, _ []byte) {
+				org, err := yaml.Marshal(orgDocument(t, "org-template"))
+				require.NoError(t, err)
+				require.NoError(t, fake.Commit(ctx, mcRepo, head, "move it", map[string][]byte{
+					objectsPath + "/archive/payments.manifest":  org,
+					objectsPath + "/archive/kustomization.yaml": []byte("namespace: org-acme\nresources:\n  - payments.manifest\n"),
+				}))
+			},
+			want:      []string{"conflict:", objectsPath + "/archive/payments.manifest", "still defines it"},
+			noConfirm: true,
+		},
+		{
+			name: "the objects path cannot be read",
+			after: func(t *testing.T, fake *commit.Fake) {
+				fake.Fail[commit.OpListFiles] = errors.New("the repository's tree is too large for one read")
+			},
+			want:      []string{"nothing was erased", "too large", "whether the organization is still defined in git is unknown"},
 			noConfirm: true,
 		},
 		{
