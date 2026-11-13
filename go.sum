@@ -197,8 +197,8 @@ github.com/giantswarm/agent-platform-operator v0.3.1 h1:SCP3FoLfoaH3Y/f6bsM0IN7P
 github.com/giantswarm/agent-platform-operator v0.3.1/go.mod h1:UBFQadTbhILiR4o8S9TTzyz4OGnfNz122/6gqg5iYP8=
 github.com/giantswarm/gitops-commit v0.12.0-rc.7 h1:ScW5+1n5Wucl932R6TBUfNP5voEX7cuqQQRxCkw7XKY=
 github.com/giantswarm/gitops-commit v0.12.0-rc.7/go.mod h1:ytq7tYCrBVBJq5FnWJdn7MwPa+UJXDZrb3uqaQCEuQw=
-github.com/giantswarm/mcp-oauth v1.13.8 h1:kG5YfhpMaJC1AXVVo9AjrbYKN7mF4BYO0oYT9I9yJwc=
-github.com/giantswarm/mcp-oauth v1.13.8/go.mod h1:HJBNgKIPZ6zXvUd2XQur9Om9agW1vkcTkoepQtExnoA=
+github.com/giantswarm/mcp-oauth v1.13.10 h1:oAuqUoz3MM3MIEXjfJZArlWoH6RqoLgSUftTKE3EXM4=
+github.com/giantswarm/mcp-oauth v1.13.10/go.mod h1:HJBNgKIPZ6zXvUd2XQur9Om9agW1vkcTkoepQtExnoA=
 github.com/giantswarm/mcp-toolkit v0.5.3 h1:wfRRF3P+33XE0kfqFdrfVR2NThSKffekFScRMculo6g=
 github.com/giantswarm/mcp-toolkit v0.5.3/go.mod h1:m8dbpEeOg25kldNTnBh/al5ux4y5PYvbg2KhfHiUinc=
 github.com/go-jose/go-jose/v4 v4.1.9 h1:pKfeQkig1NmgK4hJrZYXLEYURXfoJB61Larw0uIW4gY=
