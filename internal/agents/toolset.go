@@ -23,8 +23,6 @@ const (
 	// ToolsetHeader is the header the chart renders on the agent's
 	// RemoteMCPServer (spec.headersFrom[]).
 	ToolsetHeader = "X-Muster-Toolset"
-	// MaxToolsetSelectors is the inline cap; a longer list belongs in a preset.
-	MaxToolsetSelectors = 32
 )
 
 // ShippedPresets are the presets every installation has: muster's built-ins
@@ -90,7 +88,7 @@ func (s *Service) sessionToolset(ctx context.Context, namespace, name string) ([
 }
 
 // ValidateToolset checks a declared toolset against the inline grammar:
-// non-empty, at most MaxToolsetSelectors selectors, each
+// non-empty selectors, each
 // preset:<name> | server:<name> | workflow:<name> | tool:<name>; `toolset:` is
 // reserved and `label:` exists inside presets only. A nil list is "absent":
 // refused when required (create), fine otherwise (update: unchanged).
@@ -103,9 +101,6 @@ func ValidateToolset(selectors []string, required bool) error {
 	}
 	if len(selectors) == 0 {
 		return invalidf("toolset is empty; use [\"preset:none\"] for an agent without tools (an empty list is refused so that \"no tools\" is never confused with implicit full access)")
-	}
-	if len(selectors) > MaxToolsetSelectors {
-		return invalidf("toolset has %d selectors, more than the inline cap of %d: define a preset (muster toolsetPresets) and reference it as preset:<name>", len(selectors), MaxToolsetSelectors)
 	}
 	for _, sel := range selectors {
 		if err := validateSelector(sel); err != nil {

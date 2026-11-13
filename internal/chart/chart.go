@@ -42,7 +42,7 @@ import (
 // `agent.egressPolicyRefs` names EgressPolicies of the agent's namespace;
 // `agent.platformPrompt.egressNote` appends the egress note to the prompt;
 // `agent.tags` takes tags checked against $defs/tag.schema.json.
-const EmbeddedSchemaVersion = "2.5.0"
+const EmbeddedSchemaVersion = "2.6.1"
 
 //go:embed embedded/agent.tgz
 var embeddedArchive []byte
