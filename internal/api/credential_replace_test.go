@@ -119,6 +119,26 @@ func TestReplaceCredentialWritesTheSharedSecretOnly(t *testing.T) {
 	require.Equal(t, want, destinations)
 }
 
+func TestReplaceSharedCredentialKeepsExternalModelConsumersUnchanged(t *testing.T) {
+	editable := sharedModel("token")
+	external := editable.DeepCopy()
+	external.SetName("chart-model")
+	external.SetLabels(map[string]string{"app.kubernetes.io/managed-by": "Helm"})
+	fixture := newOrgFixture(t, editable, external)
+	seedSecret(t, fixture, sharedSecret, "token")
+
+	result := replaceCredential(t, fixture, nil)
+	confirmation := confirmOperation(t, fixture, result.CredentialOperation)
+	require.Len(t, confirmation.References, 2)
+	status, answer, _ := operationHTTP(t, fixture, http.MethodPost, result.CredentialOperation, confirmation.Version, valuesBody(t, result, "rotated-value"), nil)
+	require.Equal(t, http.StatusOK, status, answer)
+	require.Zero(t, consumerWrites(fixture))
+	require.Equal(t, external.Object, fixture.get(t, mcGVR, orgNS, "chart-model").Object)
+	data, _, err := unstructured.NestedMap(fixture.get(t, secretGVR, orgNS, sharedSecret).Object, "data")
+	require.NoError(t, err)
+	require.Equal(t, map[string]any{"token": base64.StdEncoding.EncodeToString([]byte("rotated-value"))}, data)
+}
+
 func TestReplaceCredentialRefusals(t *testing.T) {
 	for _, scenario := range []struct {
 		name, key, prefix, contains string

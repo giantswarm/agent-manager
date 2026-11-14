@@ -492,10 +492,8 @@ func (s *Service) contentWriter(ctx context.Context, org Namespace, mode string)
 	return w, nil
 }
 
-// owned refuses a write to an object this mode may not change:
-// agent-platform-operator's copies always; in apply mode an object a Flux
-// Kustomization applies from git, which Flux would revert; in commit mode an
-// object written live, which no file in git defines.
+// owned protects operator copies and enforces where an object's content lives.
+// Apply mode cannot change objects applied by Flux; commit mode requires a Git source.
 func (w *contentWriter) owned(obj *unstructured.Unstructured, kind string) error {
 	if obj == nil {
 		return nil
@@ -522,6 +520,20 @@ func (w *contentWriter) source(ctx context.Context, obj *unstructured.Unstructur
 	}
 	if err := w.owned(obj, kind); err != nil {
 		return nil, err
+	}
+	if kind == kubeKindModelConfig {
+		owner := obj.GetLabels()[agents.ManagedByLabel]
+		for _, key := range []string{"meta.helm.sh/release-name", "meta.helm.sh/release-namespace"} {
+			if obj.GetAnnotations()[key] != "" {
+				owner = "Helm"
+			}
+		}
+		if obj.GetLabels()["helm.toolkit.fluxcd.io/name"] != "" || obj.GetLabels()["helm.toolkit.fluxcd.io/namespace"] != "" {
+			owner = "Helm"
+		}
+		if owner != "" && owner != agents.ManagedByValue && owner != "giantswarm-backstage" {
+			return nil, fmt.Errorf("%w: %s %s/%s is managed by %s: change it through that owner", agents.ErrGitOpsOwned, kind, obj.GetNamespace(), obj.GetName(), owner)
+		}
 	}
 	if w.mode != agents.ModeCommit {
 		return obj, nil
