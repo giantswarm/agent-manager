@@ -1297,7 +1297,7 @@ A new model becomes default when its namespace has none; default true moves the 
       "type": "boolean"
     },
     "endpoint": {
-      "description": "OpenAI/Anthropic base URL or Ollama host; empty removes an override",
+      "description": "OpenAI/Anthropic base URL or Ollama host, without user information, fragments or credential query parameters; empty removes an override",
       "type": "string"
     },
     "insecureSkipTLSVerify": {

@@ -13,6 +13,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
+	"github.com/giantswarm/agent-manager/internal/agents"
 	"github.com/giantswarm/agent-manager/internal/organizations"
 )
 
@@ -24,6 +25,77 @@ func vertexCredential(t *testing.T) map[string]any {
 	require.NoError(t, err)
 	// #nosec G101 -- the private key is generated for this test, not a stored credential.
 	return map[string]any{"type": "service_account", "project_id": "vertex-test", "client_email": "agent@vertex-test.iam.gserviceaccount.com", "private_key": string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: encoded})), "token_uri": "https://oauth2.googleapis.com/token"}
+}
+
+func TestInstallationModelEndpointRejectsCredentials(t *testing.T) {
+	for _, endpoint := range []string{
+		"https://user:synthetic-value@models.example/v1",
+		"https://models.example/v1?api_key=synthetic-value",
+		"https://models.example/v1?%61pi_key=synthetic-value",
+		"https://models.example/v1?api_key_synthetic-value",
+		"https://models.example/v1?safe=value;api_key=synthetic-value",
+		"https://models.example/v1#synthetic-value",
+	} {
+		t.Run(endpoint, func(t *testing.T) {
+			fixture := newOrgFixtureWith(t, func(configuration *organizations.Config) {
+				configuration.Namespaces = nil
+				configuration.PlatformNamespace = "kagent"
+			})
+			answer, failed := fixture.call(t, ToolSetOrganizationModel, map[string]any{
+				"namespace": "kagent", "name": "new-model", "provider": "OpenAI", "model": "test-model", "endpoint": endpoint, "noCredential": true,
+			})
+			require.True(t, failed)
+			require.NotContains(t, answer, "synthetic-value")
+			require.Nil(t, fixture.get(t, mcGVR, "kagent", "new-model"))
+		})
+	}
+}
+
+func TestInstallationDefaultMovePreservesExternalOwnership(t *testing.T) {
+	for _, owner := range []string{"Helm", "agentlab", "another-controller", "helm-annotations"} {
+		t.Run(owner, func(t *testing.T) {
+			previous := model("managed-default", true)
+			previous.SetNamespace("kagent")
+			if owner == "helm-annotations" {
+				annotations := previous.GetAnnotations()
+				annotations["meta.helm.sh/release-name"] = "platform-models"
+				previous.SetAnnotations(annotations)
+			} else {
+				previous.SetLabels(map[string]string{agents.ManagedByLabel: owner})
+			}
+			fixture := newOrgFixtureWith(t, func(configuration *organizations.Config) {
+				configuration.Namespaces = nil
+				configuration.PlatformNamespace = "kagent"
+			}, previous)
+			answer, failed := fixture.call(t, ToolSetOrganizationModel, map[string]any{
+				"namespace": "kagent", "name": "new-model", "provider": "OpenAI", "model": "test-model", "noCredential": true, "default": true,
+			})
+			require.True(t, failed, answer)
+			require.True(t, marked(fixture.get(t, mcGVR, "kagent", "managed-default")))
+			require.Nil(t, fixture.get(t, mcGVR, "kagent", "new-model"))
+		})
+	}
+}
+
+func TestInstallationDefaultMoveAllowsOwnedAndUnmanagedModels(t *testing.T) {
+	for _, owner := range []string{"", agents.ManagedByValue, "giantswarm-backstage"} {
+		t.Run(owner, func(t *testing.T) {
+			previous := model("previous-default", true)
+			previous.SetNamespace("kagent")
+			previous.SetLabels(map[string]string{agents.ManagedByLabel: owner})
+			fixture := newOrgFixtureWith(t, func(configuration *organizations.Config) {
+				configuration.Namespaces = nil
+				configuration.PlatformNamespace = "kagent"
+			}, previous)
+			answer, failed := fixture.call(t, ToolSetOrganizationModel, map[string]any{
+				"namespace": "kagent", "name": "new-model", "provider": "OpenAI", "model": "test-model", "noCredential": true, "default": true,
+				"endpoint": "https://models.example/v1?api-version=2026-01-01",
+			})
+			require.False(t, failed, answer)
+			require.False(t, marked(fixture.get(t, mcGVR, "kagent", "previous-default")))
+			require.True(t, marked(fixture.get(t, mcGVR, "kagent", "new-model")))
+		})
+	}
 }
 
 func TestVertexCredentialOperations(t *testing.T) {

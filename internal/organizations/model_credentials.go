@@ -100,6 +100,11 @@ func configureModel(model *unstructured.Unstructured, request ModelRequest) erro
 		return invalidf("projectID and location apply only to Vertex AI models")
 	}
 	if request.Endpoint != nil {
+		if *request.Endpoint != "" {
+			if err := refuseCredentialInURL(*request.Endpoint); err != nil {
+				return err
+			}
+		}
 		block, field := "", "baseUrl"
 		switch provider {
 		case "OpenAI":
