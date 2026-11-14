@@ -837,19 +837,21 @@ func (s *Service) DeleteResource(ctx context.Context, ns, kind, name string, dry
 	if err != nil {
 		return nil, err
 	}
-	w, err := s.contentWriter(ctx, org, mode)
-	if err != nil {
-		return nil, err
-	}
 	c, err := s.caller(ctx)
 	if err != nil {
 		return nil, err
 	}
 	gvr := s.kagentGVR(info.resource)
 	what := info.kubeKind + " " + ns + "/" + name
+	// The caller reads first: one who may not gets forbidden, not the
+	// organization's state.
 	obj, err := c.Dynamic().Resource(gvr).Namespace(ns).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
 		return nil, kubeErr(err, "get "+what, wayOrganizationAdmin(ns))
+	}
+	w, err := s.contentWriter(ctx, org, mode)
+	if err != nil {
+		return nil, err
 	}
 	if _, err := w.source(ctx, obj, info.kubeKind); err != nil {
 		return nil, err
