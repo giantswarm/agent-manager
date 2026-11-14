@@ -960,6 +960,13 @@ func skillsTagged(list []skills.Skill, filter tags.Filter) []skills.Skill {
 	return kept
 }
 
+// ToolsetMaxItems returns the inline count the resolved chart schema accepts.
+func (s *Service) ToolsetMaxItems(ctx context.Context) int {
+	document, _ := s.chart.Schema(ctx).Document.(map[string]any)
+	maximum, _, _ := unstructured.NestedFloat64(document, "properties", ToolsetValuesKey, "maxItems")
+	return int(maximum)
+}
+
 // chartTakesTags reports whether the agent chart that validates the agents
 // declares agent.tags (2.5.0 on); an older chart's schema refuses the key.
 func (s *Service) chartTakesTags(ctx context.Context) bool {
