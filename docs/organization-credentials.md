@@ -1,10 +1,32 @@
-# Organization credential operations
+# Model and organization credential operations
 
 Models, connectors and EgressPolicies name credential Secrets by reference. The
 organization tools accept no credential values. A missing credential prepares
 an operation before writing any consumer. Ordinary edits with existing
 credentials do not prepare an operation or change the Secret; a new value for
 an existing credential goes through `replace_organization_credential`.
+
+Model operations also accept the configured installation namespace, requiring
+cluster-admin authorization again when an operation is read or saved. Its target
+declares `scope: platform`, without a synthetic organization. Connector and egress
+operations remain organization-scoped. Installation models require
+`credentials.platformUIURL`, an HTTPS template with `{operation}` and optional
+`{namespace}`. OAuth and downstream authorization are required; the installation
+form and model tools also work with tenancy disabled and no organization form
+URL. Tenant management tools stay disabled, and organization discovery is empty.
+
+Native `AnthropicVertexAI` and `GeminiVertexAI` take nonsecret `projectID` and
+`location`; their credential key defaults to `GOOGLE_APPLICATION_CREDENTIALS`.
+Their confirmation declares `inputFormat: google-service-account-json`. Other
+credentials use `text`; an omitted format also means text. The client presents
+the uploader on the credential page. The server checks the service-account type,
+Google project, RSA private key and Google OAuth token endpoint before writing.
+Replacement validates every Vertex consumer; project or location changes
+invalidate the confirmation. `noCredential: true` supports keyless endpoints,
+excluding Vertex. Model deletion retains its Secret.
+
+Installation commit mode requires an explicit `tenants.commit.platformModelsPath`
+in the trusted repository and never derives a directory from an organization.
 
 `set_organization_model`, `set_organization_connector` and
 `set_organization_egress_policy` with `create: true` only create: a model,
@@ -69,7 +91,7 @@ credentials:
 
 The template is an [RFC 6570](https://www.rfc-editor.org/rfc/rfc6570) URI
 template. One `{operation}` expression is required in the path or query
-(`{?operation}` works too). `{parent}` and `{organization}` are optional; the
+(`{?operation}` works too). `{parent}`, `{organization}` and `{namespace}` are optional; the
 scheme and host are fixed, and no other variable is accepted. Routes and the
 installation name belong to the UI configuration. Agent-manager neither hosts a
 form nor constructs a Backstage route. The operation ID grants no authority.

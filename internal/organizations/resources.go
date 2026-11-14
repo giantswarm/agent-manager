@@ -102,7 +102,7 @@ func find(items []unstructured.Unstructured, name string) *unstructured.Unstruct
 func newObject(apiVersion, kind, ns, name string) *unstructured.Unstructured {
 	return &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": apiVersion, "kind": kind,
-		fieldMetadata: map[string]any{"name": name, "namespace": ns, "labels": map[string]any{agents.ManagedByLabel: agents.ManagedByValue}},
+		fieldMetadata: map[string]any{"name": name, fieldNamespace: ns, "labels": map[string]any{agents.ManagedByLabel: agents.ManagedByValue}},
 		"spec":        map[string]any{},
 	}}
 }
@@ -114,10 +114,15 @@ func (s *Service) apiVersion() string { return agents.KagentAPIGroup + "/" + s.c
 // ModelRequest is set_organization_model's arguments. On an existing model an
 // empty field keeps its value.
 type ModelRequest struct {
-	Namespace string
-	Name      string
-	Provider  string
-	Model     string
+	Namespace             string
+	Name                  string
+	Provider              string
+	Model                 string
+	ProjectID             string
+	Location              string
+	Endpoint              *string
+	InsecureSkipTLSVerify *bool
+	NoCredential          bool
 	// CredentialSecret and CredentialKey name the Secret that holds the API
 	// key; default tenant-credential-<name> and apiKey.
 	CredentialSecret string
@@ -152,7 +157,7 @@ func (s *Service) SetModel(ctx context.Context, req ModelRequest) (*ResourceResu
 	if req.Name == "" {
 		return nil, invalidf("name is required")
 	}
-	org, err := s.organization(ctx, req.Namespace)
+	org, err := s.modelNamespace(ctx, req.Namespace)
 	if err != nil {
 		return nil, err
 	}
@@ -206,11 +211,24 @@ func (s *Service) SetModel(ctx context.Context, req ModelRequest) (*ResourceResu
 	if req.Model != "" {
 		_ = unstructured.SetNestedField(obj.Object, req.Model, "spec", "model")
 	}
+	if err := configureModel(obj, req); err != nil {
+		return nil, err
+	}
 	secret, _, _ := unstructured.NestedString(obj.Object, "spec", "apiKeySecret")
 	key, _, _ := unstructured.NestedString(obj.Object, "spec", "apiKeySecretKey")
+	if !res.Created && secret == "" && req.CredentialSecret == "" {
+		req.NoCredential = true
+	}
+	if previous := find(items, req.Name); previous != nil && isVertexModel(previous) && isVertexModel(obj) {
+		previousProject, _, _ := unstructured.NestedString(previous.Object, "spec", vertexBlock(previous), "projectID")
+		project, _, _ := unstructured.NestedString(obj.Object, "spec", vertexBlock(obj), "projectID")
+		if previousProject != project && (req.CredentialSecret == "" || req.CredentialSecret == secret) {
+			return nil, invalidf("changing a Vertex project requires a new credentialSecret; its key must belong to that project")
+		}
+	}
 	secret = firstOf(req.CredentialSecret, secret, CredentialPrefix+req.Name)
-	key = firstOf(req.CredentialKey, key, defaultModelKey)
-	if err := credentialRef(secret, key); err != nil {
+	key = firstOf(req.CredentialKey, key, modelCredentialKey(obj))
+	if err := modelCredentialRef(org, secret, key); err != nil {
 		return nil, err
 	}
 	_ = unstructured.SetNestedField(obj.Object, secret, "spec", "apiKeySecret")
@@ -218,6 +236,13 @@ func (s *Service) SetModel(ctx context.Context, req ModelRequest) (*ResourceResu
 	provider := firstOf(req.Provider, previous)
 	if err := setModelSettings(obj, req, provider, res.Created || providerChanged, carried); err != nil {
 		return nil, err
+	}
+	if req.NoCredential {
+		if isVertexModel(obj) {
+			return nil, invalidf("Vertex AI requires a service account credential")
+		}
+		unstructured.RemoveNestedField(obj.Object, "spec", "apiKeySecret")
+		unstructured.RemoveNestedField(obj.Object, "spec", "apiKeySecretKey")
 	}
 
 	var marks []string
@@ -264,6 +289,10 @@ func (s *Service) SetModel(ctx context.Context, req ModelRequest) (*ResourceResu
 	case len(marks) > 1:
 		res.Note = fmt.Sprintf("the namespace has %d models marked as its default (%s), so it has none: set_organization_model with default true on one of them", len(marks), strings.Join(marks, ", "))
 	}
+	if req.NoCredential {
+		err = s.landResource(ctx, w, writes, res, "model-"+req.Name, "chore(models): set model "+req.Name)
+		return res, createOnly(err, req.Create, "ModelConfig", ns, req.Name)
+	}
 	cred, err := s.credential(ctx, c, org, "ModelConfig", req.Name, secret, key)
 	if err != nil {
 		return nil, err
@@ -273,11 +302,14 @@ func (s *Service) SetModel(ctx context.Context, req ModelRequest) (*ResourceResu
 		cred.Next = s.next(cred, "ModelConfig "+req.Name)
 	}
 	res.Credentials = []Credential{cred}
+	if isVertexModel(obj) {
+		res.Credentials[0].InputFormat = "google-service-account-json"
+	}
 	if err = s.landResource(ctx, w, writes, res, "model-"+req.Name, "chore(organizations): set model "+req.Name); err != nil {
 		return nil, createOnly(err, req.Create, "ModelConfig", ns, req.Name)
 	}
 	if !req.DryRun && res.Commit == nil && res.CredentialOperation == "" {
-		s.log.Info("organization model written", identity.LogAttr(ctx), "namespace", ns, "name", req.Name, "created", res.Created, "default", agents.IsMarkedDefault(obj))
+		s.log.Info("organization model written", identity.LogAttr(ctx), fieldNamespace, ns, "name", req.Name, "created", res.Created, "default", agents.IsMarkedDefault(obj))
 	}
 	return res, nil
 }
@@ -674,7 +706,7 @@ func (s *Service) SetConnector(ctx context.Context, req ConnectorRequest) (*Reso
 		return nil, createOnly(err, req.Create, "RemoteMCPServer", ns, req.Name)
 	}
 	if !req.DryRun && res.Commit == nil && res.CredentialOperation == "" {
-		s.log.Info("organization connector written", identity.LogAttr(ctx), "namespace", ns, "name", req.Name, "created", res.Created)
+		s.log.Info("organization connector written", identity.LogAttr(ctx), fieldNamespace, ns, "name", req.Name, "created", res.Created)
 	}
 	return res, nil
 }
@@ -815,7 +847,7 @@ func (s *Service) SetEgressPolicy(ctx context.Context, req EgressRequest) (*Reso
 		return nil, createOnly(err, req.Create, "EgressPolicy", ns, req.Name)
 	}
 	if !req.DryRun && res.Commit == nil && res.CredentialOperation == "" {
-		s.log.Info("organization egress policy written", identity.LogAttr(ctx), "namespace", ns, "name", req.Name, "created", res.Created)
+		s.log.Info("organization egress policy written", identity.LogAttr(ctx), fieldNamespace, ns, "name", req.Name, "created", res.Created)
 	}
 	return res, nil
 }
@@ -833,7 +865,13 @@ func (s *Service) DeleteResource(ctx context.Context, ns, kind, name string, dry
 	if name == "" {
 		return nil, invalidf("name is required")
 	}
-	org, err := s.organization(ctx, ns)
+	var org Namespace
+	var err error
+	if kind == KindModel {
+		org, err = s.modelNamespace(ctx, ns)
+	} else {
+		org, err = s.organization(ctx, ns)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -867,7 +905,7 @@ func (s *Service) DeleteResource(ctx context.Context, ns, kind, name string, dry
 		res.Note = "it was the organization's default model, so the organization has none now: set_organization_model with default true on another; " + res.Note
 	}
 	if !dryRun && committed == nil {
-		s.log.Info("organization object deleted", identity.LogAttr(ctx), "namespace", ns, "kind", kind, "name", name)
+		s.log.Info("organization object deleted", identity.LogAttr(ctx), fieldNamespace, ns, "kind", kind, "name", name)
 	}
 	return res, nil
 }
@@ -875,22 +913,25 @@ func (s *Service) DeleteResource(ctx context.Context, ns, kind, name string, dry
 // credentialQuery matches a query parameter name that carries a credential.
 var credentialQuery = regexp.MustCompile(`(?i)(key|token|secret|password|passwd|auth|sig|credential)`)
 
-// refuseCredentialInURL refuses a connector URL that carries a credential:
+// refuseCredentialInURL refuses a destination URL that carries a credential:
 // userinfo, or a query parameter named like one. A URL or a query that does
 // not parse is refused too: what it hides cannot be checked. A credential
-// goes in a header from a Secret, so it never crosses MCP, and no refusal
+// is referenced through a Secret, and no refusal
 // echoes the URL or its parse error, which would carry it back.
 func refuseCredentialInURL(raw string) error {
-	const way = "a connector's credential goes in a header from a Secret (credentialHeader, credentialSecret), never in the URL"
+	const way = "credentials require a Secret reference, never a value in the URL"
 	u, err := url.Parse(raw)
 	if err != nil {
 		return invalidf("url: not a valid URL (the URL is not repeated here: it may carry a credential)")
+	}
+	if (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return invalidf("url: requires an absolute HTTP(S) URL")
 	}
 	if u.User != nil {
 		return invalidf("url: carries user information; %s", way)
 	}
 	if u.Fragment != "" || u.RawFragment != "" {
-		return invalidf("url: carries a fragment (#...), which an MCP endpoint does not use and which can hold a credential; %s", way)
+		return invalidf("url: carries a fragment (#...), which can hold a credential; %s", way)
 	}
 	query, err := url.ParseQuery(u.RawQuery)
 	if err != nil {
@@ -898,7 +939,7 @@ func refuseCredentialInURL(raw string) error {
 	}
 	for name := range query {
 		if credentialQuery.MatchString(name) {
-			return invalidf("url: query parameter %q looks like a credential; %s", name, way)
+			return invalidf("url: a query parameter looks like a credential; %s", way)
 		}
 	}
 	return nil

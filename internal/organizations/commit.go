@@ -71,7 +71,8 @@ type RemoteFor = agents.RemoteFor
 
 // CommitConfig is where commit mode writes an installation's organizations.
 type CommitConfig struct {
-	User func(context.Context) (*identity.GitHub, error)
+	PlatformModelsPath string
+	User               func(context.Context) (*identity.GitHub, error)
 	// GitHub builds the caller's remote.
 	GitHub RemoteFor
 	// Objects is the installation's repository, its branch, and the
@@ -516,20 +517,21 @@ func (s *Service) contentWriter(ctx context.Context, org Namespace, mode string)
 	if mode != agents.ModeCommit {
 		return w, nil
 	}
-	if org.Parent == "" || org.Organization == "" {
+	if org.Scope != scopePlatform && (org.Parent == "" || org.Organization == "") {
 		return nil, fmt.Errorf("%w: namespace %s does not name its organization (labels %s and %s): its content path is unknown", agents.ErrConflict, org.Name, "agent-platform.giantswarm.io/parent", "agent-platform.giantswarm.io/organization")
 	}
 	if w.commit, err = s.newCommit(ctx); err != nil {
 		return nil, err
 	}
-	w.dir = w.commit.contentDir(org.Parent, org.Organization)
+	w.dir, err = w.commit.credentialDirectory(org)
+	if err != nil {
+		return nil, err
+	}
 	return w, nil
 }
 
-// owned refuses a write to an object this mode may not change:
-// agent-platform-operator's copies always; in apply mode an object a Flux
-// Kustomization applies from git, which Flux would revert; in commit mode an
-// object written live, which no file in git defines.
+// owned protects operator copies and enforces where an object's content lives.
+// Apply mode cannot change objects applied by Flux; commit mode requires a Git source.
 func (w *contentWriter) owned(obj *unstructured.Unstructured, kind string) error {
 	if obj == nil {
 		return nil
@@ -556,6 +558,20 @@ func (w *contentWriter) source(ctx context.Context, obj *unstructured.Unstructur
 	}
 	if err := w.owned(obj, kind); err != nil {
 		return nil, err
+	}
+	if kind == kubeKindModelConfig {
+		owner := obj.GetLabels()[agents.ManagedByLabel]
+		for _, key := range []string{"meta.helm.sh/release-name", "meta.helm.sh/release-namespace"} {
+			if obj.GetAnnotations()[key] != "" {
+				owner = "Helm"
+			}
+		}
+		if obj.GetLabels()["helm.toolkit.fluxcd.io/name"] != "" || obj.GetLabels()["helm.toolkit.fluxcd.io/namespace"] != "" {
+			owner = "Helm"
+		}
+		if owner != "" && owner != agents.ManagedByValue && owner != "giantswarm-backstage" {
+			return nil, fmt.Errorf("%w: %s %s/%s is managed by %s: change it through that owner", agents.ErrGitOpsOwned, kind, obj.GetNamespace(), obj.GetName(), owner)
+		}
 	}
 	if w.mode != agents.ModeCommit {
 		return obj, nil

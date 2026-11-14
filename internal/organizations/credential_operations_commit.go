@@ -43,7 +43,10 @@ func credentialGitObject(raw []byte) (*unstructured.Unstructured, error) {
 }
 
 func (c *orgCommit) credentialSnapshot(ctx context.Context, operation *credentialOperation) (map[string]string, error) {
-	directory := c.contentDir(operation.Namespace.Parent, operation.Namespace.Organization)
+	directory, err := c.credentialDirectory(operation.Namespace)
+	if err != nil {
+		return nil, err
+	}
 	paths := []string{layout.SOPSConfigFile, directory.Path() + "/" + layout.KustomizationFile, path.Dir(directory.Path()) + "/" + layout.KustomizationFile}
 	for _, planned := range operation.Writes {
 		paths = append(paths, contentFile(directory, planned.Kind, planned.Name))
