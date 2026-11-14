@@ -175,6 +175,77 @@ func valuesBody(t *testing.T, result organizations.ResourceResult, value string)
 	return string(raw)
 }
 
+func TestCredentialOperationSavesEscapedValuesOverHTTP(t *testing.T) {
+	consumer := connector("gh", "tenant-credential-0", "token")
+	require.NoError(t, unstructured.SetNestedField(consumer.Object, "https://mcp.example.com/mcp", "spec", "url"))
+	headers := make([]any, 16)
+	for index := range headers {
+		headers[index] = map[string]any{
+			"name":      fmt.Sprintf("X-Credential-%d", index),
+			"valueFrom": map[string]any{"type": "Secret", "name": fmt.Sprintf("tenant-credential-%d", index), "key": "token"},
+		}
+	}
+	require.NoError(t, unstructured.SetNestedSlice(consumer.Object, headers, "spec", "headersFrom"))
+	fixture := newOrgFixture(t, consumer)
+	answer, failed := fixture.call(t, ToolSetOrganizationConnector, map[string]any{"namespace": orgNS, "name": "gh"})
+	require.False(t, failed, answer)
+	var operation organizations.ResourceResult
+	require.NoError(t, json.Unmarshal([]byte(answer), &operation))
+	require.Len(t, operation.Credentials, 16)
+	confirmation := confirmOperation(t, fixture, operation.CredentialOperation)
+	value := strings.Repeat("\x01", 16*1024)
+	body := valuesBody(t, operation, value)
+	require.Greater(t, len(body), maxBodyBytes)
+	require.Less(t, len(body), maxCredentialBodyBytes)
+	service, _ := newService(t)
+	mux := http.NewServeMux()
+	NewREST(service, nil, WithOrganizations(fixture.orgs)).Register(mux)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		mux.ServeHTTP(writer, request.WithContext(fixture.ctx))
+	}))
+	t.Cleanup(server.Close)
+	request, err := http.NewRequestWithContext(t.Context(), http.MethodPost, server.URL+Prefix+"/credential-operations/"+operation.CredentialOperation, strings.NewReader(body))
+	require.NoError(t, err)
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("If-Match", `"`+confirmation.Version+`"`)
+	response, err := server.Client().Do(request)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = response.Body.Close() })
+	require.Equal(t, http.StatusOK, response.StatusCode)
+	require.Equal(t, "no-store", response.Header.Get("Cache-Control"))
+	var result organizations.ResourceResult
+	require.NoError(t, json.NewDecoder(response.Body).Decode(&result))
+	require.False(t, result.Pending)
+	for _, credential := range operation.Credentials {
+		secret := fixture.get(t, secretGVR, orgNS, credential.Secret)
+		require.NotNil(t, secret)
+		stored, found, err := unstructured.NestedString(secret.Object, "data", credential.Key)
+		require.NoError(t, err)
+		require.True(t, found)
+		require.True(t, stored == base64.StdEncoding.EncodeToString([]byte(value)))
+	}
+}
+
+func TestCredentialOperationBodyLimit(t *testing.T) {
+	for _, size := range []int{maxCredentialBodyBytes, maxCredentialBodyBytes + 1} {
+		t.Run(strconv.Itoa(size), func(t *testing.T) {
+			fixture := newOrgFixture(t)
+			operation := prepareModelOperation(t, fixture, nil)
+			confirmation := confirmOperation(t, fixture, operation.CredentialOperation)
+			body := valuesBody(t, operation, "synthetic-value")
+			body += strings.Repeat(" ", size-len(body))
+			status, answer, headers := operationHTTP(t, fixture, http.MethodPost, operation.CredentialOperation, confirmation.Version, body, nil)
+			require.Equal(t, "no-store", headers.Get("Cache-Control"))
+			if size == maxCredentialBodyBytes {
+				require.Equal(t, http.StatusOK, status, answer)
+			} else {
+				require.Equal(t, http.StatusBadRequest, status)
+				require.Nil(t, fixture.get(t, secretGVR, orgNS, "tenant-credential-claude"))
+			}
+		})
+	}
+}
+
 func TestCredentialOperationCreatesAndRetriesWithoutAnotherWrite(t *testing.T) {
 	fixture := newOrgFixture(t)
 	result := prepareModelOperation(t, fixture, nil)

@@ -603,6 +603,16 @@ type ModelConfig struct {
 	// Default: the namespace default a create without a modelConfig takes,
 	// the one ModelConfig marked apov1alpha1.DefaultModelConfigAnnotation.
 	Default bool `json:"default"`
+	// DisplayName is the name people see, annotation DisplayNameAnnotation.
+	DisplayName string `json:"displayName,omitempty"`
+	// MaxTokens is the token limit of an answer, the provider block's
+	// maxTokens; 0 when unset (the provider's default).
+	MaxTokens int64 `json:"maxTokens,omitempty"`
+	// PromptCaching is the provider block's promptCaching (Anthropic and
+	// Bedrock), false when unset; nil for a provider without the setting.
+	// CacheTTL is its cache time, given while caching is on.
+	PromptCaching *bool  `json:"promptCaching,omitempty"`
+	CacheTTL      string `json:"cacheTTL,omitempty"`
 }
 
 // EgressPolicy is a kagent EgressPolicy as list_egress_policies reports it:
