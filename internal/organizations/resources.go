@@ -911,22 +911,25 @@ func (s *Service) DeleteResource(ctx context.Context, ns, kind, name string, dry
 // credentialQuery matches a query parameter name that carries a credential.
 var credentialQuery = regexp.MustCompile(`(?i)(key|token|secret|password|passwd|auth|sig|credential)`)
 
-// refuseCredentialInURL refuses a connector URL that carries a credential:
+// refuseCredentialInURL refuses a destination URL that carries a credential:
 // userinfo, or a query parameter named like one. A URL or a query that does
 // not parse is refused too: what it hides cannot be checked. A credential
-// goes in a header from a Secret, so it never crosses MCP, and no refusal
+// is referenced through a Secret, and no refusal
 // echoes the URL or its parse error, which would carry it back.
 func refuseCredentialInURL(raw string) error {
-	const way = "a connector's credential goes in a header from a Secret (credentialHeader, credentialSecret), never in the URL"
+	const way = "credentials require a Secret reference, never a value in the URL"
 	u, err := url.Parse(raw)
 	if err != nil {
 		return invalidf("url: not a valid URL (the URL is not repeated here: it may carry a credential)")
+	}
+	if (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return invalidf("url: requires an absolute HTTP(S) URL")
 	}
 	if u.User != nil {
 		return invalidf("url: carries user information; %s", way)
 	}
 	if u.Fragment != "" || u.RawFragment != "" {
-		return invalidf("url: carries a fragment (#...), which an MCP endpoint does not use and which can hold a credential; %s", way)
+		return invalidf("url: carries a fragment (#...), which can hold a credential; %s", way)
 	}
 	query, err := url.ParseQuery(u.RawQuery)
 	if err != nil {
@@ -934,7 +937,7 @@ func refuseCredentialInURL(raw string) error {
 	}
 	for name := range query {
 		if credentialQuery.MatchString(name) {
-			return invalidf("url: query parameter %q looks like a credential; %s", name, way)
+			return invalidf("url: a query parameter looks like a credential; %s", way)
 		}
 	}
 	return nil

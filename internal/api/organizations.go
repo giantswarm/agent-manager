@@ -321,7 +321,7 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service, l
 		mcp.WithString(argModel, mcp.Description("Model id, e.g. claude-sonnet-4-6; required to create")),
 		mcp.WithString("projectID", mcp.Description("Vertex AI Google project ID; required to create a Vertex model")),
 		mcp.WithString("location", mcp.Description("Vertex AI location: global, us, eu or a Google region")),
-		mcp.WithString("endpoint", mcp.Description("OpenAI/Anthropic base URL or Ollama host; empty removes an override")),
+		mcp.WithString("endpoint", mcp.Description("OpenAI/Anthropic base URL or Ollama host, without user information, fragments or credential query parameters; empty removes an override")),
 		mcp.WithBoolean("insecureSkipTLSVerify", mcp.Description("Disable model endpoint certificate verification; default false")),
 		mcp.WithBoolean("noCredential", mcp.Description("The endpoint requires no credential; never valid for Vertex AI")),
 		mcp.WithString(argCredentialSecret, mcp.Description(credSecretDesc+"; default tenant-credential-<name>")),
