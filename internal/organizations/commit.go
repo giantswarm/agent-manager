@@ -13,6 +13,8 @@ import (
 	"github.com/giantswarm/gitops-commit/layout"
 	"github.com/giantswarm/gitops-commit/provenance"
 	"github.com/giantswarm/gitops-commit/sopsenc"
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/yaml"
 
@@ -470,9 +472,45 @@ type contentWriter struct {
 	dir    layout.Directory
 }
 
+// writable refuses a write into the organization of org while it is being
+// deleted, or is in Pending erase: its delete pull request merged
+// (Orphaned, reason DeleteMerged) and Erase now removes what is in it. Every
+// write tool of an organization's contents builds a contentWriter, so this
+// is their one check; reads and delete_organization build none. A namespace
+// that does not name its organization, or whose organization is gone, is
+// not refused here.
+func (s *Service) writable(ctx context.Context, org Namespace) error {
+	if org.Parent == "" || org.Organization == "" {
+		return nil
+	}
+	o, ok, err := s.cfg.Namespaces.Organization(ctx, org.Parent, org.Organization)
+	if err != nil {
+		return fmt.Errorf("%w: %v", agents.ErrUnsupported, err)
+	}
+	if !ok {
+		return nil
+	}
+	what := "organization " + org.Parent + "/" + org.Organization
+	if o.DeletionTimestamp != nil {
+		return fmt.Errorf("%w: %s is being erased (%s): nothing is written into namespace %s; get_organization reports its erasure step until it is gone", agents.ErrConflict, what, orDefault(o.Status.ErasureStep, "starting"), org.Name)
+	}
+	c := meta.FindStatusCondition(o.Status.Conditions, apov1alpha1.ConditionOrphaned)
+	if c == nil || c.Status != metav1.ConditionTrue || c.Reason != apov1alpha1.ReasonDeleteMerged {
+		return nil
+	}
+	file := "its file"
+	if s.cfg.Commit != nil {
+		file += " " + s.cfg.Commit.objectFile(org.Parent, org.Organization)
+	}
+	return fmt.Errorf("%w: %s is in Pending erase: its delete pull request merged (Orphaned, reason %s), so nothing is written into namespace %s. Erase it with delete_organization, mode commit and confirm %q (Erase now), or restore %s in git to keep it", agents.ErrConflict, what, apov1alpha1.ReasonDeleteMerged, org.Name, org.Parent+"/"+org.Organization, file)
+}
+
 func (s *Service) contentWriter(ctx context.Context, org Namespace, mode string) (*contentWriter, error) {
 	mode, err := s.mode(mode)
 	if err != nil {
+		return nil, err
+	}
+	if err := s.writable(ctx, org); err != nil {
 		return nil, err
 	}
 	w := &contentWriter{mode: mode, org: org}

@@ -62,6 +62,23 @@ func (n *Namespaces) Organizations(ctx context.Context, parent string) ([]apov1a
 	return out, nil
 }
 
+// Organization reads the AgentPlatformOrganization parent/name: ok is false
+// when it does not exist.
+func (n *Namespaces) Organization(ctx context.Context, parent, name string) (*apov1alpha1.AgentPlatformOrganization, bool, error) {
+	u, err := n.dyn.Resource(GVR).Namespace(parent).Get(ctx, name, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("read AgentPlatformOrganization %s/%s: %w", parent, name, err)
+	}
+	org, err := organizationOf(u)
+	if err != nil {
+		return nil, false, err
+	}
+	return org, true, nil
+}
+
 // List is every organization namespace, labelled
 // agent-platform.giantswarm.io/organization, that is not terminating, sorted
 // by name. A Giant Swarm Organization's org-<name>, labelled
