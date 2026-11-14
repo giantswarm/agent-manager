@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/yosida95/uritemplate/v3"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
@@ -83,12 +84,13 @@ func expandCredentialUIURL(tpl *uritemplate.Template, operation, parent, organiz
 }
 
 type operationWrite struct {
-	Resource schema.GroupVersionResource `json:"resource"`
-	Kind     string                      `json:"kind"`
-	Action   string                      `json:"action"`
-	Object   map[string]any              `json:"object"`
-	Name     string                      `json:"name"`
-	Version  string                      `json:"version"`
+	Resource     schema.GroupVersionResource `json:"resource"`
+	Kind         string                      `json:"kind"`
+	Action       string                      `json:"action"`
+	Object       map[string]any              `json:"object"`
+	Name         string                      `json:"name"`
+	Version      string                      `json:"version"`
+	ConsumerHash string                      `json:"consumerHash,omitempty"`
 }
 
 type operationCredential struct {
@@ -99,23 +101,24 @@ type operationCredential struct {
 }
 
 type credentialOperation struct {
-	ID              string                `json:"id"`
-	Version         string                `json:"-"`
-	Issuer          string                `json:"issuer"`
-	Subject         string                `json:"subject"`
-	Request         credentialRequest     `json:"request"`
-	ElicitationID   string                `json:"elicitationId"`
-	ExpiresAt       time.Time             `json:"expiresAt"`
-	State           string                `json:"state"`
-	Namespace       Namespace             `json:"namespace"`
-	Mode            string                `json:"mode"`
-	Writes          []operationWrite      `json:"writes"`
-	Credentials     []operationCredential `json:"credentials"`
-	Result          ResourceResult        `json:"result"`
-	GitFiles        map[string]string     `json:"gitFiles,omitempty"`
-	WrittenFiles    map[string]string     `json:"writtenFiles,omitempty"`
-	GitTarget       *CredentialGitTarget  `json:"gitTarget,omitempty"`
-	AppliedVersions map[string]string     `json:"appliedVersions,omitempty"`
+	ID                    string                `json:"id"`
+	Version               string                `json:"-"`
+	Issuer                string                `json:"issuer"`
+	Subject               string                `json:"subject"`
+	Request               credentialRequest     `json:"request"`
+	ElicitationID         string                `json:"elicitationId"`
+	ExpiresAt             time.Time             `json:"expiresAt"`
+	State                 string                `json:"state"`
+	Namespace             Namespace             `json:"namespace"`
+	Mode                  string                `json:"mode"`
+	Writes                []operationWrite      `json:"writes"`
+	Credentials           []operationCredential `json:"credentials"`
+	Result                ResourceResult        `json:"result"`
+	GitFiles              map[string]string     `json:"gitFiles,omitempty"`
+	WrittenFiles          map[string]string     `json:"writtenFiles,omitempty"`
+	GitTarget             *CredentialGitTarget  `json:"gitTarget,omitempty"`
+	AppliedVersions       map[string]string     `json:"appliedVersions,omitempty"`
+	AppliedConsumerHashes map[string]string     `json:"appliedConsumerHashes,omitempty"`
 	// Consumers are, for a replace_organization_credential operation, the
 	// objects that read its Secret and where they send the value, as
 	// prepared.
@@ -325,7 +328,21 @@ func (s *Service) landResource(ctx context.Context, writer *contentWriter, write
 	operation := &credentialOperation{ID: id, Issuer: person.Issuer, Subject: person.Subject, Request: request, ElicitationID: uuid.NewString(), ExpiresAt: time.Now().Add(credentialOperationTTL), State: operationPending, Namespace: writer.org, Mode: writer.mode, Result: *result}
 	for _, planned := range writes {
 		object := unstructuredOf(planned.obj)
-		operation.Writes = append(operation.Writes, operationWrite{Resource: planned.gvr, Kind: planned.kind, Action: planned.op, Object: object.DeepCopy().Object, Name: planned.name, Version: object.GetResourceVersion()})
+		stored := operationWrite{Resource: planned.gvr, Kind: planned.kind, Action: planned.op, Object: object.DeepCopy().Object, Name: planned.name, Version: object.GetResourceVersion()}
+		if writer.mode == agents.ModeApply && planned.op == opUpdate {
+			current, err := caller.Dynamic().Resource(planned.gvr).Namespace(planned.ns).Get(ctx, planned.name, metav1.GetOptions{})
+			if err != nil {
+				return kubeErr(err, "read credential consumer", planned.reason)
+			}
+			if current.GetResourceVersion() != stored.Version {
+				return fmt.Errorf("%w: credential consumer changed; prepare it again", agents.ErrConflict)
+			}
+			stored.ConsumerHash, err = credentialConsumerHash(current)
+			if err != nil {
+				return err
+			}
+		}
+		operation.Writes = append(operation.Writes, stored)
 	}
 	for _, credential := range result.Credentials {
 		if credential.State != CredentialMissing && credential.State != CredentialReplace {

@@ -180,8 +180,10 @@ func (s *Service) saveCredentialOperation(ctx context.Context, id, version strin
 		data := map[string]any{credential.Key: base64.StdEncoding.EncodeToString([]byte(values[index].Value))}
 		writes = append([]write{credentialSecretWrite(operation.Namespace.Name, credential.Secret, action, data)}, writes...)
 	}
-	if err := apply(ctx, caller.Dynamic(), writes, true); err != nil {
-		return nil, err
+	for _, planned := range writes {
+		if _, err := doCredentialWrite(ctx, caller, operation, planned, dryRunAll); err != nil {
+			return nil, err
+		}
 	}
 	writer, err := s.contentWriter(ctx, operation.Namespace, operation.Mode)
 	if err != nil {
@@ -243,7 +245,11 @@ func (s *Service) removeCreatedSecrets(ctx context.Context, caller kube.Client, 
 	}
 }
 
-func operationVersionMatches(operation *credentialOperation, object *unstructured.Unstructured) bool {
+func appliedCredentialConsumerMatches(operation *credentialOperation, object *unstructured.Unstructured) bool {
+	if hash := operation.AppliedConsumerHashes[object.GetKind()+"/"+object.GetName()]; hash != "" && object.GetKind() != kindSecret {
+		current, err := credentialConsumerHash(object)
+		return err == nil && hash == current
+	}
 	version := operation.AppliedVersions[object.GetKind()+"/"+object.GetName()]
 	return version != "" && version == object.GetResourceVersion()
 }
@@ -253,7 +259,7 @@ func (s *Service) applyCredentialOperation(ctx context.Context, caller kube.Clie
 		marked := unstructuredOf(planned.obj).DeepCopy()
 		setAnnotation(marked, credentialOperationAnnotation, operation.ElicitationID)
 		planned.obj = marked.Object
-		object, err := do(ctx, caller.Dynamic(), planned, nil)
+		object, err := doCredentialWrite(ctx, caller, operation, planned, nil)
 		if err != nil {
 			return err
 		}
@@ -261,6 +267,16 @@ func (s *Service) applyCredentialOperation(ctx context.Context, caller kube.Clie
 			operation.AppliedVersions = map[string]string{}
 		}
 		operation.AppliedVersions[planned.kind+"/"+planned.name] = object.GetResourceVersion()
+		if planned.kind != kindSecret {
+			hash, err := credentialConsumerHash(object)
+			if err != nil {
+				return err
+			}
+			if operation.AppliedConsumerHashes == nil {
+				operation.AppliedConsumerHashes = map[string]string{}
+			}
+			operation.AppliedConsumerHashes[planned.kind+"/"+planned.name] = hash
+		}
 		if err := s.cfg.CredentialOperations.put(ctx, operation); err != nil {
 			return err
 		}
@@ -276,7 +292,7 @@ func remainingOperationWrites(ctx context.Context, caller kube.Client, operation
 			return nil, kubeErr(err, "read credential consumer", wayOrganizationAdmin(planned.ns))
 		}
 		if current != nil && operation.State == operationUncertain && current.GetAnnotations()[credentialOperationAnnotation] == operation.ElicitationID {
-			if !operationVersionMatches(operation, current) || !operationObjectApplied(current, planned.obj, operation.ElicitationID) {
+			if !appliedCredentialConsumerMatches(operation, current) || !operationObjectApplied(current, planned.obj, operation.ElicitationID) {
 				return nil, fmt.Errorf("%w: a partially written consumer changed or lacks a confirmed version", agents.ErrConflict)
 			}
 			continue
@@ -285,7 +301,7 @@ func remainingOperationWrites(ctx context.Context, caller kube.Client, operation
 		if planned.op == opCreate && !apierrors.IsNotFound(err) {
 			return nil, nameTaken{fmt.Errorf("%w: %s exists now; prepare it again", agents.ErrConflict, planned.what)}
 		}
-		if planned.op != opCreate && (current == nil || current.GetResourceVersion() != expected.GetResourceVersion()) {
+		if planned.op != opCreate && (current == nil || !confirmedCredentialConsumer(operation, planned, current)) {
 			return nil, fmt.Errorf("%w: credential consumer changed; prepare it again", agents.ErrConflict)
 		}
 		planned.obj = expected.DeepCopy().Object
@@ -299,7 +315,7 @@ func operationObjectApplied(current *unstructured.Unstructured, intended map[str
 		return false
 	}
 	for key, value := range intended {
-		if key == fieldMetadata {
+		if key == fieldMetadata || key == "status" {
 			continue
 		}
 		if !operationValueMatches(value, current.Object[key]) {
@@ -307,7 +323,7 @@ func operationObjectApplied(current *unstructured.Unstructured, intended map[str
 		}
 	}
 	for key, value := range unstructuredOf(intended).GetAnnotations() {
-		if current.GetAnnotations()[key] != value {
+		if key != credentialOperationAnnotation && current.GetAnnotations()[key] != value {
 			return false
 		}
 	}
@@ -351,7 +367,7 @@ func (s *Service) recoverAppliedCredential(ctx context.Context, operation *crede
 	}
 	for _, planned := range operationWrites(operation) {
 		current, err := caller.Dynamic().Resource(planned.gvr).Namespace(planned.ns).Get(ctx, planned.name, metav1.GetOptions{})
-		if err != nil || !operationVersionMatches(operation, current) || !operationObjectApplied(current, planned.obj, operation.ElicitationID) {
+		if err != nil || !appliedCredentialConsumerMatches(operation, current) || !operationObjectApplied(current, planned.obj, operation.ElicitationID) {
 			return nil, fmt.Errorf("%w: credential save is in progress; retry after it finishes", agents.ErrConflict)
 		}
 	}

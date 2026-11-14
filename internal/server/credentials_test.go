@@ -64,7 +64,7 @@ func TestTheCredentialBodyIsInNoTraceOrLog(t *testing.T) {
 	logs := &bytes.Buffer{}
 	log := slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	idp := newFakeIdP(t)
-	orgs := organizations.New(provider, organizations.Config{Namespaces: organizations.NewNamespaces(typed, nil, "kagent"), CredentialUIURL: "https://credentials.example.com/?operation={operation}", CredentialOperations: organizations.NewCredentialOperations(typed.CoreV1().ConfigMaps("credential-operations"))}, log) // #nosec G101 -- a fixture UI URL and fake ConfigMap store
+	orgs := organizations.New(provider, organizations.Config{Namespaces: organizations.NewNamespaces(typed, dyn, "kagent"), CredentialUIURL: "https://credentials.example.com/?operation={operation}", CredentialOperations: organizations.NewCredentialOperations(typed.CoreV1().ConfigMaps("credential-operations"))}, log) // #nosec G101 -- a fixture UI URL and fake ConfigMap store
 	ctx := identity.ContextWith(t.Context(), &identity.Identity{Issuer: idp.issuer, Subject: "sub-admin", Client: "fixture"})
 	ctx = organizations.ContextWithCredentialRequest(ctx, api.ToolSetOrganizationModel, "fixture-arguments", "fixture-client")
 	prepared, err := orgs.SetModel(ctx, organizations.ModelRequest{Namespace: "agents-payments-x7k2q", Name: "claude", Provider: "Anthropic", Model: "claude-sonnet-4-6"})

@@ -39,11 +39,13 @@ func (s *Service) ReplaceCredential(ctx context.Context, req CredentialRequest) 
 	if err != nil {
 		return nil, err
 	}
-	w, err := s.contentWriter(ctx, org, req.Mode)
+	// The caller reads first: one who may not gets forbidden, not the
+	// organization's state.
+	references, live, err := s.references(ctx, c, org.Name, req.Secret)
 	if err != nil {
 		return nil, err
 	}
-	references, live, err := s.references(ctx, c, org.Name, req.Secret)
+	w, err := s.contentWriter(ctx, org, req.Mode)
 	if err != nil {
 		return nil, err
 	}
