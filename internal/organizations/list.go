@@ -2,6 +2,7 @@ package organizations
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -20,17 +21,21 @@ import (
 // answer of a SelfSubjectAccessReview asked with the caller's own token.
 type Permissions struct {
 	// Manage: update the AgentPlatformOrganization in its parent namespace,
-	// the right of agent-platform:organizations-admin.
+	// the right of agent-platform:organizations-admin. A failed review
+	// answers false: Manage and Member decide whether the organization is
+	// listed at all.
 	Manage bool `json:"manage"`
 	// Member: list the Agents of its organization namespace, which every
-	// organization role grants.
+	// organization role grants. A failed review answers false, as for
+	// Manage.
 	Member bool `json:"member"`
 	// CreateAgents: create Agents in its organization namespace, which
 	// agent-platform:editor and agent-platform:admin grant and
-	// agent-platform:user does not. False while it has no namespace. It asks
+	// agent-platform:user does not. False while it has no namespace; nil,
+	// and left out of the answer, when its review failed: not known. It asks
 	// for the Agent, the resource a New agent makes; create_agent writes its
 	// HelmRelease, which the same roles grant.
-	CreateAgents bool `json:"createAgents"`
+	CreateAgents *bool `json:"createAgents,omitempty"`
 }
 
 // Listed is one organization of list_organizations: its status, what the
@@ -65,7 +70,8 @@ type Listing struct {
 // SelfSubjectAccessReviews with the caller's own token, run concurrently,
 // decide its Permissions, whether it is listed (manage or member) and what of
 // it: the API server decides on the caller's identity. A review that fails
-// answers no for its flag; a refused token fails the call.
+// answers no for manage and member, and leaves createAgents out (not known);
+// a refused token fails the call.
 func (s *Service) List(ctx context.Context, parent string) (*Listing, error) {
 	if s.cfg.Namespaces == nil {
 		return nil, fmt.Errorf("%w: agent-manager serves the organization tools without a ServiceAccount to list them", agents.ErrUnsupported)
@@ -82,11 +88,22 @@ func (s *Service) List(ctx context.Context, parent string) (*Listing, error) {
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(8)
 	// ask answers one review into one flag; each flag is written by one
-	// review only.
+	// review only. A failed review answers no.
 	ask := func(flag *bool, attributes authorizationv1.ResourceAttributes) {
 		g.Go(func() error {
-			allowed, err := s.allowed(gctx, c, attributes)
+			allowed, _, err := s.allowed(gctx, c, attributes)
 			*flag = allowed
+			return err
+		})
+	}
+	// askKnown answers one review into a flag that a failed review leaves
+	// nil: not known.
+	askKnown := func(flag **bool, attributes authorizationv1.ResourceAttributes) {
+		g.Go(func() error {
+			allowed, known, err := s.allowed(gctx, c, attributes)
+			if known {
+				*flag = &allowed
+			}
 			return err
 		})
 	}
@@ -101,9 +118,11 @@ func (s *Service) List(ctx context.Context, parent string) (*Listing, error) {
 			ask(&p.Member, authorizationv1.ResourceAttributes{
 				Namespace: ns, Verb: "list", Group: agentsGVR.Group, Resource: agentsGVR.Resource,
 			})
-			ask(&p.CreateAgents, authorizationv1.ResourceAttributes{
+			askKnown(&p.CreateAgents, authorizationv1.ResourceAttributes{
 				Namespace: ns, Verb: "create", Group: agentsGVR.Group, Resource: agentsGVR.Resource,
 			})
+		} else {
+			p.CreateAgents = new(bool)
 		}
 	}
 	if err := g.Wait(); err != nil {
@@ -135,18 +154,24 @@ func (s *Service) List(ctx context.Context, parent string) (*Listing, error) {
 }
 
 // allowed asks the API server whether the caller may do what attributes
-// name. A refused token is an error; any other failure is a no, logged.
-func (s *Service) allowed(ctx context.Context, c kube.Client, attributes authorizationv1.ResourceAttributes) (bool, error) {
+// name; known is false when the review failed. A refused token is an error;
+// any other failure is logged and answers allowed and known false. A review
+// that neither allows nor denies and carries an evaluation error (a failed
+// authorization webhook, for one) failed too.
+func (s *Service) allowed(ctx context.Context, c kube.Client, attributes authorizationv1.ResourceAttributes) (allowed, known bool, err error) {
 	review := &authorizationv1.SelfSubjectAccessReview{Spec: authorizationv1.SelfSubjectAccessReviewSpec{ResourceAttributes: &attributes}}
 	res, err := c.Typed().AuthorizationV1().SelfSubjectAccessReviews().Create(ctx, review, metav1.CreateOptions{})
 	if apierrors.IsUnauthorized(err) {
 		// No review answers, and "no organization" would be the wrong
 		// answer. The error names nothing the ServiceAccount found.
-		return false, errTokenRefused
+		return false, false, errTokenRefused
+	}
+	if err == nil && !res.Status.Allowed && !res.Status.Denied && res.Status.EvaluationError != "" {
+		err = errors.New(res.Status.EvaluationError)
 	}
 	if err != nil {
-		s.log.Debug("access review failed; answering no", identity.LogAttr(ctx), "namespace", attributes.Namespace, "verb", attributes.Verb, "resource", attributes.Resource, "error", err)
-		return false, nil
+		s.log.Debug("access review failed", identity.LogAttr(ctx), "namespace", attributes.Namespace, "verb", attributes.Verb, "resource", attributes.Resource, "error", err)
+		return false, false, nil
 	}
-	return res.Status.Allowed, nil
+	return res.Status.Allowed, true, nil
 }

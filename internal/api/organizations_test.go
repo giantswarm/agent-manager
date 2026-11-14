@@ -642,6 +642,53 @@ func TestListOrganizationsSaysWhoMayCreateAgents(t *testing.T) {
 	})
 }
 
+// A failed createAgents review (an error, not a denial) leaves createAgents
+// out: not known, so the Dev Portal does not show an editor as unable to
+// create agents. A denial answers false and an allowance true.
+func TestListOrganizationsLeavesOutCreateAgentsItCouldNotAsk(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		review func(f *orgFixture)
+		want   map[string]any
+	}{
+		{"failed", func(f *orgFixture) {
+			f.typed.PrependReactor("create", "selfsubjectaccessreviews", func(a k8stesting.Action) (bool, runtime.Object, error) {
+				ra := a.(k8stesting.CreateAction).GetObject().(*authorizationv1.SelfSubjectAccessReview).Spec.ResourceAttributes
+				if ra.Verb == "create" && ra.Resource == "agents" {
+					return true, nil, apierrors.NewInternalError(errors.New("etcd timeout"))
+				}
+				return false, nil, nil
+			})
+		}, map[string]any{"manage": true, "member": true}},
+		// A failed authorization webhook: the review answers, but neither
+		// allows nor denies.
+		{"evaluation error", func(f *orgFixture) {
+			f.typed.PrependReactor("create", "selfsubjectaccessreviews", func(a k8stesting.Action) (bool, runtime.Object, error) {
+				review := a.(k8stesting.CreateAction).GetObject().(*authorizationv1.SelfSubjectAccessReview)
+				if ra := review.Spec.ResourceAttributes; ra.Verb == "create" && ra.Resource == "agents" {
+					review.Status = authorizationv1.SubjectAccessReviewStatus{EvaluationError: "webhook timeout"}
+					return true, review, nil
+				}
+				return false, nil, nil
+			})
+		}, map[string]any{"manage": true, "member": true}},
+		{"denied", func(f *orgFixture) {
+			f.deny = func(_, verb, resource, _ string) bool { return resource == "agents" && verb == "create" }
+		}, map[string]any{"manage": true, "member": true, "createAgents": false}},
+		{"allowed", func(*orgFixture) {}, map[string]any{"manage": true, "member": true, "createAgents": true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newOrgFixture(t, organization("org-acme", "payments", nil))
+			tc.review(f)
+			text, isErr := f.call(t, ToolListOrganizations, nil)
+			require.False(t, isErr, text)
+			listed := decode(t, text)["organizations"].([]any)
+			require.Len(t, listed, 1, text)
+			assert.Equal(t, tc.want, listed[0].(map[string]any)["permissions"])
+		})
+	}
+}
+
 // recordAccessReviews records the attributes of every
 // SelfSubjectAccessReview the caller asks, and leaves the answer to the
 // fixture.
