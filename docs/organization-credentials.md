@@ -10,7 +10,7 @@ Model operations also accept the configured installation namespace, requiring
 cluster-admin authorization again when an operation is read or saved. Its target
 declares `scope: platform`, without a synthetic organization. Connector and egress
 operations remain organization-scoped. Installation models require
-`credentials.platformUIURL`, an HTTPS template with `{operation}` and optional
+`credentials.platformUIURL`, an HTTPS template with `{operation}` and
 `{namespace}`. OAuth and downstream authorization are required; the installation
 form and model tools also work with tenancy disabled and no organization form
 URL. Tenant management tools stay disabled, and organization discovery is empty.

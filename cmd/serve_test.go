@@ -113,6 +113,24 @@ func TestPlatformCredentialOptionsWithoutTenants(t *testing.T) {
 func TestOrganizationToolsNeedTenancyOrAnInstallationForm(t *testing.T) {
 	require.False(t, organizationToolsEnabled(&serveOptions{oauthEnabled: true, downstreamOAuth: true}))
 	require.True(t, organizationToolsEnabled(&serveOptions{multiTenant: true, downstreamOAuth: true}))
-	withForm := serveOptions{oauthEnabled: true, downstreamOAuth: true, platformCredentialUIURL: "https://portal.example.com/customize/models/credentials/test/{operation}"} // #nosec G101 -- URL fixture with no credential values.
+	withForm := serveOptions{oauthEnabled: true, downstreamOAuth: true, platformCredentialUIURL: "https://portal.example.com/customize/models/credentials/test/{namespace}/{operation}"} // #nosec G101 -- URL fixture with no credential values.
 	require.True(t, organizationToolsEnabled(&withForm))
+}
+
+func TestPlatformCredentialUIURLNamesTheNamespace(t *testing.T) {
+	options := serveOptions{oauthEnabled: true, downstreamOAuth: true, credentialOperationsNamespace: "model-operations"}
+	for template, valid := range map[string]bool{
+		"https://portal.example.com/models/{namespace}/{operation}":              true,
+		"https://portal.example.com/models?namespace={namespace}&op={operation}": true,
+		"https://portal.example.com/models/{operation}":                          false,
+		"https://portal.example.com/models/{parent}/{namespace}/{operation}":     false,
+		"https://portal.example.com/models/{namespace}":                          false,
+	} {
+		options.platformCredentialUIURL = template
+		if valid {
+			require.NoError(t, validateCredentialOptions(&options), template)
+		} else {
+			require.ErrorContains(t, validateCredentialOptions(&options), "{namespace}", template)
+		}
+	}
 }

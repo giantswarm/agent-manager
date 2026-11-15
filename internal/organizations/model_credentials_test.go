@@ -1,6 +1,12 @@
 package organizations
 
 import (
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"encoding/json"
+	"encoding/pem"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -35,4 +41,19 @@ func TestVertexLocationAndProject(t *testing.T) {
 	for _, project := range []string{"", "short", "1project", "project-", "Project-id", "project/id", "a-project-id-that-is-far-too-long-x"} {
 		require.Error(t, configure("eu", project), project)
 	}
+}
+
+func TestGoogleCredentialSizeLimit(t *testing.T) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+	encoded, err := x509.MarshalPKCS8PrivateKey(key)
+	require.NoError(t, err)
+	// #nosec G101 -- the private key is generated for this test, not a stored credential.
+	document, err := json.Marshal(map[string]any{"type": "service_account", "project_id": "vertex-test", "client_email": "agent@vertex-test.iam.gserviceaccount.com", "private_key": string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: encoded}))})
+	require.NoError(t, err)
+	padded := func(size int) string {
+		return string(document[:len(document)-1]) + strings.Repeat(" ", size-len(document)) + "}"
+	}
+	require.NoError(t, validateGoogleCredential(padded(64*1024), "vertex-test"))
+	require.Error(t, validateGoogleCredential(padded(64*1024+1), "vertex-test"))
 }

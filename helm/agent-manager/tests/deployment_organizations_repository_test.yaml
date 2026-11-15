@@ -35,7 +35,7 @@ tests:
           content: --organizations-repository=giantswarm/example-installation
   - it: passes the repository with an installation form
     set:
-      credentials.platformUIURL: https://portal.example.com/customize/models/credentials/test/{operation}
+      credentials.platformUIURL: https://portal.example.com/customize/models/credentials/test/{namespace}/{operation}
       credentials.operationsNamespace: model-operations
     asserts:
       - contains:
@@ -43,4 +43,4 @@ tests:
           content: --organizations-repository=giantswarm/example-installation
       - contains:
           path: spec.template.spec.containers[0].args
-          content: --platform-credential-ui-url=https://portal.example.com/customize/models/credentials/test/{operation}
+          content: --platform-credential-ui-url=https://portal.example.com/customize/models/credentials/test/{namespace}/{operation}

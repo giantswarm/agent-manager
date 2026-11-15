@@ -222,14 +222,25 @@ func (s *Service) SetModel(ctx context.Context, req ModelRequest) (*ResourceResu
 	}
 	secret, _, _ := unstructured.NestedString(obj.Object, "spec", "apiKeySecret")
 	key, _, _ := unstructured.NestedString(obj.Object, "spec", "apiKeySecretKey")
-	if !res.Created && !providerChanged && secret == "" && req.CredentialSecret == "" {
+	// A keyless edit stays keyless only for an installation model: an
+	// organization model, and any Vertex model, without a Secret would fall
+	// back to the runtime's ambient credentials (Google ADC: the node's
+	// identity), so it gets a credential form instead.
+	if !res.Created && !providerChanged && secret == "" && req.CredentialSecret == "" && org.Scope == scopePlatform && !isVertexModel(obj) {
 		req.NoCredential = true
 	}
+	// A Vertex key is checked against the model's project only when it is
+	// saved through the form, so a new project or a change to Vertex needs a
+	// Secret the form writes.
+	vertexKeyUnchecked := isVertexModel(obj) && providerChanged
 	if previous := find(items, req.Name); previous != nil && isVertexModel(previous) && isVertexModel(obj) {
 		previousProject, _, _ := unstructured.NestedString(previous.Object, "spec", vertexBlock(previous), "projectID")
 		project, _, _ := unstructured.NestedString(obj.Object, "spec", vertexBlock(obj), "projectID")
-		if previousProject != project && (req.CredentialSecret == "" || req.CredentialSecret == secret) {
-			return nil, invalidf("changing a Vertex project requires a new credentialSecret; its key must belong to that project")
+		if previousProject != project {
+			if req.CredentialSecret == "" || req.CredentialSecret == secret {
+				return nil, invalidf("changing a Vertex project requires a new credentialSecret; its key must belong to that project")
+			}
+			vertexKeyUnchecked = true
 		}
 	}
 	secret = firstOf(req.CredentialSecret, secret, CredentialPrefix+req.Name)
@@ -309,6 +320,9 @@ func (s *Service) SetModel(ctx context.Context, req ModelRequest) (*ResourceResu
 	if cred.State == CredentialPresent && modelKeyNotFound(find(items, req.Name), secret, key) {
 		cred.State = CredentialMissing
 		cred.Next = s.next(cred, "ModelConfig "+req.Name)
+	}
+	if vertexKeyUnchecked && cred.State == CredentialPresent {
+		return nil, invalidf("a Vertex model on a new project or provider needs a credentialSecret that does not exist yet: the form checks its key against the project")
 	}
 	if cred.State == CredentialMissing {
 		if err := writableModelCredential(org, secret); err != nil {

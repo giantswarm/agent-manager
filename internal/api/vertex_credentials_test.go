@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -362,4 +363,157 @@ func TestVertexCredentialOperationsStayInTheirOrganization(t *testing.T) {
 	require.NotContains(t, answer, "PRIVATE KEY")
 	require.Nil(t, fixture.get(t, mcGVR, orgNS, "claude"))
 	require.Nil(t, fixture.get(t, secretGVR, orgNS, result.Credentials[0].Secret))
+}
+
+func keylessModel(namespace, provider string) *unstructured.Unstructured {
+	spec := map[string]any{"provider": provider, "model": "m"}
+	switch provider {
+	case "GeminiVertexAI":
+		spec["geminiVertexAI"] = map[string]any{"projectID": "vertex-test", "location": "europe-west1"}
+	case "AnthropicVertexAI":
+		spec["anthropicVertexAI"] = map[string]any{"projectID": "vertex-test", "location": "europe-west1"}
+	}
+	return &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "api.kagent.dev/v1alpha3", "kind": "ModelConfig",
+		"metadata": map[string]any{"name": "claude", "namespace": namespace},
+		"spec":     spec,
+	}}
+}
+
+func TestKeylessEditsOpenAFormOutsideInstallationModels(t *testing.T) {
+	for _, test := range []struct{ namespace, provider string }{
+		{orgNS, "GeminiVertexAI"},
+		{orgNS, "AnthropicVertexAI"},
+		{orgNS, "Anthropic"},
+		{"kagent", "GeminiVertexAI"},
+	} {
+		t.Run(test.namespace+"/"+test.provider, func(t *testing.T) {
+			fixture := newOrgFixtureWith(t, func(configuration *organizations.Config) {
+				if test.namespace == "kagent" {
+					configuration.Namespaces = nil
+					configuration.PlatformNamespace = "kagent"
+					configuration.PlatformCredentialUIURL = "https://portal.example.com/model-credentials/{namespace}/{operation}"
+				}
+			}, keylessModel(test.namespace, test.provider))
+			answer, failed := fixture.call(t, ToolSetOrganizationModel, map[string]any{"namespace": test.namespace, "name": "claude", "displayName": "Edited"})
+			require.False(t, failed, answer)
+			var result organizations.ResourceResult
+			require.NoError(t, json.Unmarshal([]byte(answer), &result))
+			require.NotEmpty(t, result.CredentialOperation, answer)
+			require.Equal(t, organizations.CredentialPrefix+"claude", result.Credentials[0].Secret)
+			stored := fixture.get(t, mcGVR, test.namespace, "claude")
+			secret, _, _ := unstructured.NestedString(stored.Object, "spec", "apiKeySecret")
+			require.Empty(t, secret)
+			require.Empty(t, stored.GetAnnotations()["ui.giantswarm.io/display-name"])
+		})
+	}
+}
+
+func TestVertexProjectChangeNeedsAKeyCheckedAgainstTheNewProject(t *testing.T) {
+	fixture := newOrgFixture(t)
+	result := prepareModelOperation(t, fixture, map[string]any{"provider": "GeminiVertexAI", "projectID": "vertex-test", "location": "europe-west1"})
+	confirmation := confirmOperation(t, fixture, result.CredentialOperation)
+	key := vertexCredential(t)
+	encoded, err := json.Marshal(key)
+	require.NoError(t, err)
+	status, answer, _ := operationHTTP(t, fixture, http.MethodPost, result.CredentialOperation, confirmation.Version, valuesBody(t, result, string(encoded)), nil)
+	require.Equal(t, http.StatusOK, status, answer)
+	seedSecret(t, fixture, "tenant-credential-other", "GOOGLE_APPLICATION_CREDENTIALS")
+
+	for _, secret := range []string{"", result.Credentials[0].Secret, "tenant-credential-other"} {
+		arguments := map[string]any{"namespace": orgNS, "name": "claude", "projectID": "vertex-other"}
+		if secret != "" {
+			arguments["credentialSecret"] = secret
+		}
+		answer, failed := fixture.call(t, ToolSetOrganizationModel, arguments)
+		require.True(t, failed, secret+": "+answer)
+	}
+	project, _, _ := unstructured.NestedString(fixture.get(t, mcGVR, orgNS, "claude").Object, "spec", "geminiVertexAI", "projectID")
+	require.Equal(t, "vertex-test", project)
+
+	moved := prepareModelOperation(t, fixture, map[string]any{"provider": "", "model": "", "projectID": "vertex-other", "credentialSecret": "tenant-credential-claude-other"}) // #nosec G101 -- a Secret name, no value.
+	confirmation = confirmOperation(t, fixture, moved.CredentialOperation)
+	status, answer, _ = operationHTTP(t, fixture, http.MethodPost, moved.CredentialOperation, confirmation.Version, valuesBody(t, moved, string(encoded)), nil)
+	require.Equal(t, http.StatusBadRequest, status, answer)
+	require.Nil(t, fixture.get(t, secretGVR, orgNS, "tenant-credential-claude-other"))
+	key["project_id"] = "vertex-other"
+	encoded, err = json.Marshal(key)
+	require.NoError(t, err)
+	status, answer, _ = operationHTTP(t, fixture, http.MethodPost, moved.CredentialOperation, confirmation.Version, valuesBody(t, moved, string(encoded)), nil)
+	require.Equal(t, http.StatusOK, status, answer)
+	project, _, _ = unstructured.NestedString(fixture.get(t, mcGVR, orgNS, "claude").Object, "spec", "geminiVertexAI", "projectID")
+	require.Equal(t, "vertex-other", project)
+}
+
+func installationVertexOperation(t *testing.T, configure func(*organizations.Config)) (*orgFixture, organizations.ResourceResult, string) {
+	t.Helper()
+	fixture := newOrgFixtureWith(t, func(configuration *organizations.Config) {
+		configuration.Namespaces = nil
+		configuration.PlatformNamespace = "kagent"
+		configuration.PlatformCredentialUIURL = "https://portal.example.com/model-credentials/{namespace}/{operation}"
+		if configure != nil {
+			configure(configuration)
+		}
+	})
+	result := prepareModelOperation(t, fixture, map[string]any{"namespace": "kagent", "provider": "GeminiVertexAI", "projectID": "vertex-test", "location": "europe-west1"})
+	encoded, err := json.Marshal(vertexCredential(t))
+	require.NoError(t, err)
+	return fixture, result, valuesBody(t, result, string(encoded))
+}
+
+func TestInstallationVertexCredentialSizeLimitOverHTTP(t *testing.T) {
+	fixture, result, _ := installationVertexOperation(t, nil)
+	confirmation := confirmOperation(t, fixture, result.CredentialOperation)
+	key := vertexCredential(t)
+	key["padding"] = strings.Repeat("x", 64*1024)
+	encoded, err := json.Marshal(key)
+	require.NoError(t, err)
+	status, answer, _ := operationHTTP(t, fixture, http.MethodPost, result.CredentialOperation, confirmation.Version, valuesBody(t, result, string(encoded)), nil)
+	require.Equal(t, http.StatusBadRequest, status, answer)
+	require.NotContains(t, answer, "PRIVATE KEY")
+	require.Nil(t, fixture.get(t, mcGVR, "kagent", "claude"))
+	require.Nil(t, fixture.get(t, secretGVR, "kagent", result.Credentials[0].Secret))
+}
+
+func TestInstallationVertexCredentialReplayWritesOnce(t *testing.T) {
+	fixture, result, body := installationVertexOperation(t, nil)
+	confirmation := confirmOperation(t, fixture, result.CredentialOperation)
+	status, answer, _ := operationHTTP(t, fixture, http.MethodPost, result.CredentialOperation, confirmation.Version, body, nil)
+	require.Equal(t, http.StatusOK, status, answer)
+	require.NotNil(t, fixture.get(t, mcGVR, "kagent", "claude"))
+	require.NotNil(t, fixture.get(t, secretGVR, "kagent", result.Credentials[0].Secret))
+	before := len(fixture.dyn.Actions())
+	status, answer, _ = operationHTTP(t, fixture, http.MethodPost, result.CredentialOperation, confirmation.Version, body, nil)
+	require.Equal(t, http.StatusOK, status, answer)
+	for _, action := range fixture.dyn.Actions()[before:] {
+		require.NotContains(t, []string{"create", "update", "patch", "delete"}, action.GetVerb())
+	}
+	retry := prepareModelOperation(t, fixture, map[string]any{"namespace": "kagent", "provider": "GeminiVertexAI", "projectID": "vertex-test", "location": "europe-west1"})
+	require.Equal(t, result.CredentialOperation, retry.CredentialOperation)
+	require.Equal(t, organizations.CredentialPresent, retry.Credentials[0].State)
+}
+
+func TestInstallationVertexCredentialRecoversAnUnrecordedSave(t *testing.T) {
+	store := &refuseCredentialCompletion{ConfigMapInterface: operationMaps(t)}
+	fixture, result, body := installationVertexOperation(t, func(configuration *organizations.Config) {
+		configuration.CredentialOperations = organizations.NewCredentialOperations(store)
+	})
+	confirmation := confirmOperation(t, fixture, result.CredentialOperation)
+	status, _, _ := operationHTTP(t, fixture, http.MethodPost, result.CredentialOperation, confirmation.Version, body, nil)
+	require.GreaterOrEqual(t, status, 400)
+	require.True(t, store.refused)
+	require.NotNil(t, fixture.get(t, secretGVR, "kagent", result.Credentials[0].Secret))
+	confirmation = confirmOperation(t, fixture, result.CredentialOperation)
+	require.Equal(t, "saving", confirmation.State)
+	fixture.dyn.ClearActions()
+	status, answer, _ := operationHTTP(t, fixture, http.MethodPost, result.CredentialOperation, confirmation.Version, body, nil)
+	require.Equal(t, http.StatusOK, status, answer)
+	for _, action := range fixture.dyn.Actions() {
+		if action.GetResource().Resource == "secrets" {
+			require.NotContains(t, []string{"create", "update", "patch", "delete"}, action.GetVerb())
+		}
+	}
+	confirmation = confirmOperation(t, fixture, result.CredentialOperation)
+	require.Equal(t, "complete", confirmation.State)
+	require.NotNil(t, fixture.get(t, mcGVR, "kagent", "claude"))
 }
