@@ -78,7 +78,7 @@ func TestInstallationDefaultMovePreservesExternalOwnership(t *testing.T) {
 }
 
 func TestInstallationDefaultMoveAllowsOwnedAndUnmanagedModels(t *testing.T) {
-	for _, owner := range []string{"", agents.ManagedByValue, "giantswarm-backstage"} {
+	for _, owner := range []string{"", agents.ManagedByValue, agents.PortalManagedByValue} {
 		t.Run(owner, func(t *testing.T) {
 			previous := model("previous-default", true)
 			previous.SetNamespace("kagent")
@@ -252,4 +252,114 @@ func TestInstallationModelToolsKeepOrganizationManagementDisabled(t *testing.T) 
 	answer, failed = fixture.call(t, ToolSetOrganizationModel, map[string]any{"namespace": orgNS, "name": "blocked", "provider": "Ollama", "model": "test", "noCredential": true})
 	require.True(t, failed, answer)
 	require.Empty(t, fixture.dyn.Actions())
+}
+
+func TestInstallationCredentialWritesOnlyOwnedSecrets(t *testing.T) {
+	external := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "v1", "kind": "Secret", "type": "Opaque",
+		"metadata": map[string]any{"name": "kagent-vertex-credentials", "namespace": "kagent", "labels": map[string]any{"app.kubernetes.io/managed-by": "Helm"}},
+		"data":     map[string]any{"credentials.json": "e30=", "other": "e30="},
+	}}
+	fixture := newOrgFixtureWith(t, func(configuration *organizations.Config) {
+		configuration.Namespaces = nil
+		configuration.PlatformNamespace = "kagent"
+		configuration.PlatformCredentialUIURL = "https://portal.example.com/model-credentials/{namespace}/{operation}"
+	}, external)
+	vertex := map[string]any{"namespace": "kagent", "provider": "GeminiVertexAI", "model": "gemini-2.5-flash", "projectID": "vertex-test", "location": "europe-west1"}
+	withSecret := func(name, secret string) map[string]any {
+		arguments := map[string]any{"name": name, "credentialSecret": secret, "credentialKey": "credentials.json"}
+		for key, value := range vertex {
+			arguments[key] = value
+		}
+		return arguments
+	}
+
+	answer, failed := fixture.call(t, ToolSetOrganizationModel, withSecret("gitops-model", "kagent-vertex-credentials"))
+	require.False(t, failed, answer)
+	var result organizations.ResourceResult
+	require.NoError(t, json.Unmarshal([]byte(answer), &result))
+	require.Empty(t, result.CredentialOperation)
+	require.NotNil(t, fixture.get(t, mcGVR, "kagent", "gitops-model"))
+
+	answer, failed = fixture.call(t, ToolReplaceOrganizationCredential, map[string]any{"namespace": "kagent", "secret": "kagent-vertex-credentials", "key": "credentials.json"}) // #nosec G101 -- Secret and key names, no value.
+	require.True(t, failed, answer)
+	require.Contains(t, answer, "where it is managed")
+
+	answer, failed = fixture.call(t, ToolSetOrganizationModel, withSecret("missing-model", "external-missing"))
+	require.True(t, failed, answer)
+	require.Contains(t, answer, "where it is managed")
+	require.Nil(t, fixture.get(t, mcGVR, "kagent", "missing-model"))
+	require.Equal(t, external.Object["data"], fixture.get(t, secretGVR, "kagent", "kagent-vertex-credentials").Object["data"])
+}
+
+func TestOrganizationModelsRefuseInstallationSettings(t *testing.T) {
+	for name, extra := range map[string]map[string]any{
+		"endpoint":              {"endpoint": "https://models.example/v1"},
+		"insecureSkipTLSVerify": {"insecureSkipTLSVerify": true},
+		"noCredential":          {"noCredential": true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			fixture := newOrgFixture(t)
+			arguments := map[string]any{"namespace": orgNS, "name": "claude", "provider": "Anthropic", "model": "claude-sonnet-4-6"}
+			for key, value := range extra {
+				arguments[key] = value
+			}
+			answer, failed := fixture.call(t, ToolSetOrganizationModel, arguments)
+			require.True(t, failed, answer)
+			require.Contains(t, answer, "apply only to installation models")
+			require.Nil(t, fixture.get(t, mcGVR, orgNS, "claude"))
+		})
+	}
+	fixture := newOrgFixture(t)
+	result := prepareModelOperation(t, fixture, map[string]any{"endpoint": "", "insecureSkipTLSVerify": false, "noCredential": false})
+	require.NotEmpty(t, result.CredentialOperation)
+}
+
+func TestInstallationKeylessModelProviderChangeAsksForACredential(t *testing.T) {
+	keyless := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "api.kagent.dev/v1alpha3", "kind": "ModelConfig",
+		"metadata": map[string]any{"name": "local", "namespace": "kagent"},
+		"spec":     map[string]any{"provider": "Ollama", "model": "qwen3:0.6b", "ollama": map[string]any{"host": "http://ollama.models:11434"}},
+	}}
+	fixture := newOrgFixtureWith(t, func(configuration *organizations.Config) {
+		configuration.Namespaces = nil
+		configuration.PlatformNamespace = "kagent"
+		configuration.PlatformCredentialUIURL = "https://portal.example.com/model-credentials/{namespace}/{operation}"
+	}, keyless)
+
+	answer, failed := fixture.call(t, ToolSetOrganizationModel, map[string]any{"namespace": "kagent", "name": "local", "displayName": "Local model"})
+	require.False(t, failed, answer)
+	require.Contains(t, fixture.logs.String(), `"msg":"organization model written"`)
+	require.Contains(t, fixture.logs.String(), `"credential":false`)
+
+	answer, failed = fixture.call(t, ToolSetOrganizationModel, map[string]any{"namespace": "kagent", "name": "local", "provider": "OpenAI", "model": "gpt-5"})
+	require.False(t, failed, answer)
+	var result organizations.ResourceResult
+	require.NoError(t, json.Unmarshal([]byte(answer), &result))
+	require.NotEmpty(t, result.CredentialOperation, answer)
+	require.Equal(t, organizations.CredentialPrefix+"local", result.Credentials[0].Secret)
+	provider, _, _ := unstructured.NestedString(fixture.get(t, mcGVR, "kagent", "local").Object, "spec", "provider")
+	require.Equal(t, "Ollama", provider)
+}
+
+func TestVertexCredentialOperationsStayInTheirOrganization(t *testing.T) {
+	const billingNS = "agents-billing-a1b2c"
+	fixture := newOrgFixture(t)
+	fixture.deny = func(namespace, _, _, _ string) bool { return namespace == billingNS }
+	answer, failed := fixture.call(t, ToolSetOrganizationModel, map[string]any{
+		"namespace": billingNS, "name": "gemini", "provider": "GeminiVertexAI", "model": "gemini-2.5-flash", "projectID": "vertex-test", "location": "europe-west1",
+	})
+	require.True(t, failed, answer)
+	require.Nil(t, fixture.get(t, mcGVR, billingNS, "gemini"))
+
+	result := prepareModelOperation(t, fixture, map[string]any{"provider": "GeminiVertexAI", "projectID": "vertex-test", "location": "europe-west1"})
+	confirmation := confirmOperation(t, fixture, result.CredentialOperation)
+	fixture.deny = func(namespace, _, _, _ string) bool { return namespace == orgNS }
+	encoded, err := json.Marshal(vertexCredential(t))
+	require.NoError(t, err)
+	status, answer, _ := operationHTTP(t, fixture, http.MethodPost, result.CredentialOperation, confirmation.Version, valuesBody(t, result, string(encoded)), nil)
+	require.Equal(t, http.StatusForbidden, status, answer)
+	require.NotContains(t, answer, "PRIVATE KEY")
+	require.Nil(t, fixture.get(t, mcGVR, orgNS, "claude"))
+	require.Nil(t, fixture.get(t, secretGVR, orgNS, result.Credentials[0].Secret))
 }

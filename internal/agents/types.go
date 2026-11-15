@@ -113,6 +113,9 @@ const (
 	// OCIRepositories agent-manager created.
 	ManagedByLabel = "app.kubernetes.io/managed-by"
 	ManagedByValue = "agent-manager"
+	// PortalManagedByValue is the ManagedByLabel value on models the
+	// Backstage portal wrote: agent-manager may change them.
+	PortalManagedByValue = "giantswarm-backstage"
 	// OperatorObjectLabel marks what agent-platform-operator keeps in an
 	// organization namespace (the agent chart's OCIRepository and the curated
 	// copies among them): agent-manager never deletes or rewrites such an

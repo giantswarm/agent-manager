@@ -1091,7 +1091,7 @@ Only the Secret is written. The form (credentials[].next) lists its consumers an
       "type": "string"
     },
     "secret": {
-      "description": "Secret in the target namespace, by name; organizations require tenant-credential-...; never a value",
+      "description": "Secret in the target namespace, by name; organizations need tenant-credential-...; never a value",
       "type": "string"
     }
   },
@@ -1128,7 +1128,7 @@ A credential field sets the Secret-backed header it names (default: the only one
       "type": "string"
     },
     "credentialSecret": {
-      "description": "Secret in the target namespace, by name; organizations require tenant-credential-...; never a value",
+      "description": "Secret in the target namespace, by name; organizations need tenant-credential-...; never a value",
       "type": "string"
     },
     "description": {
@@ -1208,7 +1208,7 @@ destinations replaces the whole list. A credentialHeader makes the egress gatewa
             "type": "string"
           },
           "credentialSecret": {
-            "description": "Secret in the target namespace, by name; organizations require tenant-credential-...; never a value",
+            "description": "Secret in the target namespace, by name; organizations need tenant-credential-...; never a value",
             "type": "string"
           },
           "origin": {
@@ -1262,7 +1262,7 @@ destinations replaces the whole list. A credentialHeader makes the egress gatewa
 ```text
 Create or change an organization or installation model as you; credentials are Secret references.
 
-A new model becomes default when its namespace has none; default true moves the mark. New Anthropic models cache prompts (5m) unless promptCaching is false; omitted settings stay. Never pass a key: missing credentials open the form, link in credentials[].next; another login: 403 credential_operation_other_login. list_model_configs lists models and settings. Needs agent-platform:admin in an organization, cluster-admin for installation models.
+A new model becomes default when its namespace has none; default true moves the mark. New Anthropic models cache prompts (5m) unless promptCaching is false; omitted settings stay. Never pass a key: missing credentials open the form, link in credentials[].next; another login: 403 credential_operation_other_login. Vertex AI calls go to Google directly, without the LLM gateway's metering, rate limits or spend reporting. list_model_configs lists models and settings. Needs agent-platform:admin in an organization, cluster-admin for installation models.
 ```
 
 ```json
@@ -1281,7 +1281,7 @@ A new model becomes default when its namespace has none; default true moves the 
       "type": "string"
     },
     "credentialSecret": {
-      "description": "Secret in the target namespace, by name; organizations require tenant-credential-...; never a value; default tenant-credential-<name>",
+      "description": "Secret in the target namespace, by name; organizations need tenant-credential-...; never a value; default and only written: tenant-credential-<name>",
       "type": "string"
     },
     "default": {
@@ -1297,11 +1297,11 @@ A new model becomes default when its namespace has none; default true moves the 
       "type": "boolean"
     },
     "endpoint": {
-      "description": "OpenAI/Anthropic base URL or Ollama host, without user information, fragments or credential query parameters; empty removes an override",
+      "description": "Installation models only: OpenAI/Anthropic base URL or Ollama host, without userinfo, fragment or credential query; empty removes it",
       "type": "string"
     },
     "insecureSkipTLSVerify": {
-      "description": "Disable model endpoint certificate verification; default false",
+      "description": "Installation models only: disable model endpoint certificate verification; default false",
       "type": "boolean"
     },
     "location": {
@@ -1333,7 +1333,7 @@ A new model becomes default when its namespace has none; default true moves the 
       "type": "string"
     },
     "noCredential": {
-      "description": "The endpoint requires no credential; never valid for Vertex AI",
+      "description": "Installation models only: the endpoint requires no credential; never valid for Vertex AI",
       "type": "boolean"
     },
     "projectID": {

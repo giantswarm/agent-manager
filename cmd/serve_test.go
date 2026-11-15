@@ -109,3 +109,10 @@ func TestPlatformCredentialOptionsWithoutTenants(t *testing.T) {
 	options.credentialUIURL = "https://portal.example.com/organizations/{parent}/{organization}/{operation}"
 	require.ErrorContains(t, validateCredentialOptions(&options), "multi-tenant")
 }
+
+func TestOrganizationToolsNeedTenancyOrAnInstallationForm(t *testing.T) {
+	require.False(t, organizationToolsEnabled(&serveOptions{oauthEnabled: true, downstreamOAuth: true}))
+	require.True(t, organizationToolsEnabled(&serveOptions{multiTenant: true, downstreamOAuth: true}))
+	withForm := serveOptions{oauthEnabled: true, downstreamOAuth: true, platformCredentialUIURL: "https://portal.example.com/customize/models/credentials/test/{operation}"} // #nosec G101 -- URL fixture with no credential values.
+	require.True(t, organizationToolsEnabled(&withForm))
+}

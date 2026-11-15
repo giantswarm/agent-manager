@@ -390,7 +390,7 @@ func runServe(ctx context.Context, o *serveOptions) error {
 			return err
 		}
 	}
-	if o.multiTenant || (o.oauthEnabled && o.downstreamOAuth) {
+	if organizationToolsEnabled(o) {
 		if o.multiTenant && !o.downstreamOAuth {
 			return fmt.Errorf("--multi-tenant needs --downstream-oauth: a request in an organization namespace, and every organization tool, runs as the caller")
 		}
@@ -422,7 +422,7 @@ func runServe(ctx context.Context, o *serveOptions) error {
 			Sessions:                sessions,
 		}, log)
 	} else if o.orgsRepository != "" {
-		return fmt.Errorf("--organizations-repository requires OAuth and downstream authorization")
+		return fmt.Errorf("--organizations-repository needs --multi-tenant or --platform-credential-ui-url: it is where the organization and installation model tools commit")
 	}
 
 	var bindings agents.SessionBinder
@@ -661,6 +661,13 @@ func gitHubRemote(enabled bool, apiURL string) agents.RemoteFor {
 		}
 		return commit.NewGitHub(token, commit.WithBaseURL(apiURL))
 	}
+}
+
+// organizationToolsEnabled reports whether the organization and model tools
+// are served: in organization namespaces with --multi-tenant, in the kagent
+// namespace with an installation credential form.
+func organizationToolsEnabled(options *serveOptions) bool {
+	return options.multiTenant || options.platformCredentialUIURL != ""
 }
 
 func validateCredentialOptions(options *serveOptions) error {

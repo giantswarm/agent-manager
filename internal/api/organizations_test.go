@@ -1,10 +1,12 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"path"
 	"path/filepath"
 	"regexp"
@@ -81,6 +83,8 @@ type orgFixture struct {
 	user authenticationv1.UserInfo
 	ctx  context.Context
 	orgs *organizations.Service
+	// logs is what the organizations service logged.
+	logs *logBuffer
 	// cfg and provider build the tools again, with another logger.
 	cfg      organizations.Config
 	provider kube.Provider
@@ -178,12 +182,30 @@ func newOrgFixtureWith(t *testing.T, configure func(*organizations.Config), objs
 		configure(&cfg)
 	}
 	f.cfg, f.provider = cfg, callerOnly{c: kube.FromInterfaces(f.dyn, f.typed, f.typed.Discovery())}
-	orgs := organizations.New(f.provider, cfg, nil)
+	f.logs = &logBuffer{}
+	orgs := organizations.New(f.provider, cfg, slog.New(slog.NewJSONHandler(f.logs, nil)))
 	f.orgs = orgs
 	svc, _ := newService(t)
 	f.srv = NewMCPServer(svc, "test", WithOrganizations(orgs), WithLifecycle(t.Context()))
 	f.ctx = identity.ContextWith(t.Context(), &identity.Identity{Issuer: "https://identity.example.com", Client: "platform", Subject: "a", Email: "alice@example.com"})
 	return f
+}
+
+type logBuffer struct {
+	mu     sync.Mutex
+	buffer bytes.Buffer
+}
+
+func (l *logBuffer) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buffer.Write(p)
+}
+
+func (l *logBuffer) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buffer.String()
 }
 
 func namespace(name string, labels map[string]string) *corev1.Namespace {

@@ -175,7 +175,7 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service, l
 	modeProp := mcp.WithString(argMode, mcp.Enum(agents.ModeApply, agents.ModeCommit), mcp.Description("apply (default): write live as you; refused with gitops_owned for what git applies. commit: dry-run as you, then open a pull request as you"))
 	credentialRequestID := mcp.WithString(argRequestID, mcp.Description("Idempotency key, at most 128 characters. Reuse on retries; use a fresh key for another save or a refreshed confirmation."))
 	stringList := map[string]any{"type": "string"}
-	credSecretDesc := "Secret in the target namespace, by name; organizations require tenant-credential-...; never a value"
+	credSecretDesc := "Secret in the target namespace, by name; organizations need tenant-credential-...; never a value"
 
 	t.addTool(s, mcp.NewTool(ToolListOrganizations,
 		tooldesc.Describe("List the organizations you manage or belong to, of one parent namespace or of all.",
@@ -326,17 +326,17 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service, l
 
 	t.addTool(s, mcp.NewTool(ToolSetOrganizationModel,
 		tooldesc.Describe("Create or change an organization or installation model as you; credentials are Secret references.",
-			"A new model becomes default when its namespace has none; default true moves the mark. New Anthropic models cache prompts ("+agents.DefaultCacheTTL+") unless promptCaching is false; omitted settings stay. Never pass a key: missing credentials open the form, link in credentials[].next; another login: 403 credential_operation_other_login. list_model_configs lists models and settings. Needs agent-platform:admin in an organization, cluster-admin for installation models."),
+			"A new model becomes default when its namespace has none; default true moves the mark. New Anthropic models cache prompts ("+agents.DefaultCacheTTL+") unless promptCaching is false; omitted settings stay. Never pass a key: missing credentials open the form, link in credentials[].next; another login: 403 credential_operation_other_login. Vertex AI calls go to Google directly, without the LLM gateway's metering, rate limits or spend reporting. list_model_configs lists models and settings. Needs agent-platform:admin in an organization, cluster-admin for installation models."),
 		modelNSProp,
 		mcp.WithString(argName, mcp.Required(), mcp.Description("ModelConfig name")),
 		mcp.WithString(argProvider, mcp.Description("Provider as kagent's ModelConfig takes it, e.g. Anthropic, OpenAI; required to create; a change needs a new credentialSecret too")),
 		mcp.WithString(argModel, mcp.Description("Model id, e.g. claude-sonnet-4-6; required to create")),
 		mcp.WithString("projectID", mcp.Description("Vertex AI Google project ID; required to create a Vertex model")),
 		mcp.WithString("location", mcp.Description("Vertex AI location: global, us, eu or a Google region")),
-		mcp.WithString("endpoint", mcp.Description("OpenAI/Anthropic base URL or Ollama host, without user information, fragments or credential query parameters; empty removes an override")),
-		mcp.WithBoolean("insecureSkipTLSVerify", mcp.Description("Disable model endpoint certificate verification; default false")),
-		mcp.WithBoolean("noCredential", mcp.Description("The endpoint requires no credential; never valid for Vertex AI")),
-		mcp.WithString(argCredentialSecret, mcp.Description(credSecretDesc+"; default tenant-credential-<name>")),
+		mcp.WithString("endpoint", mcp.Description("Installation models only: OpenAI/Anthropic base URL or Ollama host, without userinfo, fragment or credential query; empty removes it")),
+		mcp.WithBoolean("insecureSkipTLSVerify", mcp.Description("Installation models only: disable model endpoint certificate verification; default false")),
+		mcp.WithBoolean("noCredential", mcp.Description("Installation models only: the endpoint requires no credential; never valid for Vertex AI")),
+		mcp.WithString(argCredentialSecret, mcp.Description(credSecretDesc+"; default and only written: tenant-credential-<name>")),
 		mcp.WithString(argCredentialKey, mcp.Description("Key of that Secret; default GOOGLE_APPLICATION_CREDENTIALS for Vertex AI, apiKey otherwise")),
 		mcp.WithBoolean(argDefault, mcp.Description("Make this the namespace's default model, moving the mark (default false)")),
 		mcp.WithBoolean(argCreate, mcp.Description("Only create: a model of that name, live or in git, is refused with already_exists, not changed (default false: create or change)")),

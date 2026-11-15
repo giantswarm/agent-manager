@@ -35,6 +35,9 @@ func (s *Service) ReplaceCredential(ctx context.Context, req CredentialRequest) 
 	if err := modelCredentialRef(org, req.Secret, req.Key); err != nil {
 		return nil, err
 	}
+	if err := writableModelCredential(org, req.Secret); err != nil {
+		return nil, err
+	}
 	c, err := s.caller(ctx)
 	if err != nil {
 		return nil, err

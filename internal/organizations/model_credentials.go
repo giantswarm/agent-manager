@@ -10,6 +10,7 @@ import (
 	"maps"
 	"net/url"
 	"path"
+	"regexp"
 	"strings"
 
 	"github.com/giantswarm/gitops-commit/layout"
@@ -43,6 +44,19 @@ func modelCredentialRef(target Namespace, secret, key string) error {
 	return nil
 }
 
+// writableModelCredential refuses a credential write to an installation
+// Secret agent-manager does not own. The write replaces the Secret whole and
+// never reads it, so another reader of the Secret (a Pod, a Helm release, a
+// key under another name) would lose its keys or get them back from Helm.
+// Owned Secrets carry CredentialPrefix; any other Secret is only referenced,
+// and its value is replaced where it is managed.
+func writableModelCredential(target Namespace, secret string) error {
+	if target.Scope != scopePlatform || strings.HasPrefix(secret, CredentialPrefix) {
+		return nil
+	}
+	return invalidf("agent-manager writes only %s* Secrets in the installation namespace: replace the value of Secret %s where it is managed", CredentialPrefix, secret)
+}
+
 func (c *orgCommit) credentialDirectory(target Namespace) (layout.Directory, error) {
 	if target.Scope != scopePlatform {
 		return c.contentDir(target.Parent, target.Organization), nil
@@ -58,6 +72,14 @@ func (c *orgCommit) credentialDirectory(target Namespace) (layout.Directory, err
 	location.Directory = path.Dir(configured)
 	return layout.Directory{Location: location, Name: path.Base(configured)}, nil
 }
+
+// kagent builds the Vertex host from location and the request path from
+// projectID, so both are held to Google's formats; the same patterns are in
+// the Agent Platform chart's ModelConfig admission.
+var (
+	vertexLocation  = regexp.MustCompile(`^(global|us|eu|[a-z]+-[a-z]+[0-9]+)$`)
+	googleProjectID = regexp.MustCompile(`^[a-z][a-z0-9-]{4,28}[a-z0-9]$`)
+)
 
 func vertexBlock(model *unstructured.Unstructured) string {
 	if model == nil {
@@ -93,8 +115,11 @@ func configureModel(model *unstructured.Unstructured, request ModelRequest) erro
 		}
 		project, _, _ := unstructured.NestedString(model.Object, "spec", block, "projectID")
 		location, _, _ := unstructured.NestedString(model.Object, "spec", block, "location")
-		if project == "" || location == "" {
-			return invalidf("Vertex AI requires projectID and location (global, us, eu or a Google region)")
+		if !vertexLocation.MatchString(location) {
+			return invalidf("Vertex AI requires a location: global, us, eu or a Google region such as europe-west1")
+		}
+		if !googleProjectID.MatchString(project) {
+			return invalidf("Vertex AI requires a Google project ID: 6 to 30 lowercase letters, digits or hyphens, starting with a letter")
 		}
 	} else if request.ProjectID != "" || request.Location != "" {
 		return invalidf("projectID and location apply only to Vertex AI models")

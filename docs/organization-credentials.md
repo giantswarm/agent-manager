@@ -21,9 +21,19 @@ Their confirmation declares `inputFormat: google-service-account-json`. Other
 credentials use `text`; an omitted format also means text. The client presents
 the uploader on the credential page. The server checks the service-account type,
 Google project, RSA private key and Google OAuth token endpoint before writing.
-Replacement validates every Vertex consumer; project or location changes
-invalidate the confirmation. `noCredential: true` supports keyless endpoints,
-excluding Vertex. Model deletion retains its Secret.
+`location` is `global`, `us`, `eu` or a Google region such as `europe-west1`;
+`projectID` is a Google project ID. Vertex AI calls go from the agent to Google
+directly: the LLM gateway's metering, rate limits and spend reporting do not
+apply to them. Replacement validates every Vertex consumer; project or location
+changes invalidate the confirmation. Model deletion retains its Secret.
+
+`endpoint`, `insecureSkipTLSVerify` and `noCredential: true` (keyless
+endpoints, excluding Vertex) apply to installation models only; an
+organization model with one of them is refused. In the installation namespace
+agent-manager writes only `tenant-credential-*` Secrets: a model may reference
+any existing Secret, such as one GitOps or Helm manages, and its value is
+replaced where it is managed. The installation form and model tools start only
+with `--multi-tenant` or `--platform-credential-ui-url`.
 
 Installation commit mode requires an explicit `tenants.commit.platformModelsPath`
 in the trusted repository and never derives a directory from an organization.

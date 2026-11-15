@@ -211,12 +211,18 @@ func (s *Service) SetModel(ctx context.Context, req ModelRequest) (*ResourceResu
 	if req.Model != "" {
 		_ = unstructured.SetNestedField(obj.Object, req.Model, "spec", "model")
 	}
+	if org.Scope != scopePlatform {
+		if (req.Endpoint != nil && *req.Endpoint != "") || (req.InsecureSkipTLSVerify != nil && *req.InsecureSkipTLSVerify) || req.NoCredential {
+			return nil, invalidf("endpoint, insecureSkipTLSVerify and noCredential apply only to installation models (namespace %s)", s.cfg.PlatformNamespace)
+		}
+		req.Endpoint, req.InsecureSkipTLSVerify = nil, nil
+	}
 	if err := configureModel(obj, req); err != nil {
 		return nil, err
 	}
 	secret, _, _ := unstructured.NestedString(obj.Object, "spec", "apiKeySecret")
 	key, _, _ := unstructured.NestedString(obj.Object, "spec", "apiKeySecretKey")
-	if !res.Created && secret == "" && req.CredentialSecret == "" {
+	if !res.Created && !providerChanged && secret == "" && req.CredentialSecret == "" {
 		req.NoCredential = true
 	}
 	if previous := find(items, req.Name); previous != nil && isVertexModel(previous) && isVertexModel(obj) {
@@ -290,8 +296,11 @@ func (s *Service) SetModel(ctx context.Context, req ModelRequest) (*ResourceResu
 		res.Note = fmt.Sprintf("the namespace has %d models marked as its default (%s), so it has none: set_organization_model with default true on one of them", len(marks), strings.Join(marks, ", "))
 	}
 	if req.NoCredential {
-		err = s.landResource(ctx, w, writes, res, "model-"+req.Name, "chore(models): set model "+req.Name)
-		return res, createOnly(err, req.Create, "ModelConfig", ns, req.Name)
+		if err = s.landResource(ctx, w, writes, res, "model-"+req.Name, "chore(organizations): set model "+req.Name); err != nil {
+			return nil, createOnly(err, req.Create, "ModelConfig", ns, req.Name)
+		}
+		s.logModelWritten(ctx, req, res, obj)
+		return res, nil
 	}
 	cred, err := s.credential(ctx, c, org, "ModelConfig", req.Name, secret, key)
 	if err != nil {
@@ -301,6 +310,11 @@ func (s *Service) SetModel(ctx context.Context, req ModelRequest) (*ResourceResu
 		cred.State = CredentialMissing
 		cred.Next = s.next(cred, "ModelConfig "+req.Name)
 	}
+	if cred.State == CredentialMissing {
+		if err := writableModelCredential(org, secret); err != nil {
+			return nil, err
+		}
+	}
 	res.Credentials = []Credential{cred}
 	if isVertexModel(obj) {
 		res.Credentials[0].InputFormat = "google-service-account-json"
@@ -308,10 +322,15 @@ func (s *Service) SetModel(ctx context.Context, req ModelRequest) (*ResourceResu
 	if err = s.landResource(ctx, w, writes, res, "model-"+req.Name, "chore(organizations): set model "+req.Name); err != nil {
 		return nil, createOnly(err, req.Create, "ModelConfig", ns, req.Name)
 	}
-	if !req.DryRun && res.Commit == nil && res.CredentialOperation == "" {
-		s.log.Info("organization model written", identity.LogAttr(ctx), fieldNamespace, ns, "name", req.Name, "created", res.Created, "default", agents.IsMarkedDefault(obj))
-	}
+	s.logModelWritten(ctx, req, res, obj)
 	return res, nil
+}
+
+func (s *Service) logModelWritten(ctx context.Context, req ModelRequest, res *ResourceResult, obj *unstructured.Unstructured) {
+	if req.DryRun || res.Commit != nil || res.CredentialOperation != "" {
+		return
+	}
+	s.log.Info("organization model written", identity.LogAttr(ctx), fieldNamespace, req.Namespace, "name", req.Name, "created", res.Created, "default", agents.IsMarkedDefault(obj), "credential", !req.NoCredential)
 }
 
 // refuseProviderChangeOnSameSecret refuses a change of the provider of the

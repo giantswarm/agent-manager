@@ -45,7 +45,7 @@ func ContextWithCredentialRequest(ctx context.Context, tool, intent, client stri
 // credentialUIVars are the variables a credential UI URL template may use.
 var credentialUIVars = []string{"operation", "parent", "organization", fieldNamespace}
 
-var errCredentialUIURL = errors.New("credential UI requires an HTTPS RFC 6570 URI template with one {operation} expression in its path or query, using only {operation}, {parent} and {organization}")
+var errCredentialUIURL = errors.New("credential UI requires an HTTPS RFC 6570 URI template with one {operation} expression in its path or query, using only {operation}, {parent}, {organization} and {namespace}")
 
 // ValidateCredentialUIURL keeps the origin fixed while allowing domain identifiers in the path or query.
 func ValidateCredentialUIURL(template string) error {

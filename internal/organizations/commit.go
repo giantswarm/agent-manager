@@ -577,7 +577,7 @@ func (w *contentWriter) source(ctx context.Context, obj *unstructured.Unstructur
 		if obj.GetLabels()["helm.toolkit.fluxcd.io/name"] != "" || obj.GetLabels()["helm.toolkit.fluxcd.io/namespace"] != "" {
 			owner = "Helm"
 		}
-		if owner != "" && owner != agents.ManagedByValue && owner != "giantswarm-backstage" {
+		if owner != "" && owner != agents.ManagedByValue && owner != agents.PortalManagedByValue {
 			return nil, fmt.Errorf("%w: %s %s/%s is managed by %s: change it through that owner", agents.ErrGitOpsOwned, kind, obj.GetNamespace(), obj.GetName(), owner)
 		}
 	}

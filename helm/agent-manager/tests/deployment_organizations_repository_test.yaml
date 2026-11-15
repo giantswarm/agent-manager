@@ -1,0 +1,46 @@
+# The organizations repository is passed only when a flag that starts the
+# organization and model tools is passed with it; otherwise the server
+# refuses to start.
+#
+# Run with: make helm-test (helm unittest helm/agent-manager)
+suite: deployment organizations repository
+templates:
+  - templates/deployment.yaml
+set:
+  oauth:
+    enabled: true
+    baseURL: https://agent-manager.example.com
+    dex:
+      issuerURL: https://identity.example.com
+      clientID: agent-platform
+    downstream:
+      enabled: true
+  tenants:
+    commit:
+      repository: giantswarm/example-installation
+      objectsPath: management-clusters/example/organizations
+tests:
+  - it: omits the repository without tenancy or an installation form
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --organizations-repository=giantswarm/example-installation
+  - it: passes the repository with tenancy
+    set:
+      tenants.enabled: true
+      flux.helmReleaseServiceAccount: agents-flux
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --organizations-repository=giantswarm/example-installation
+  - it: passes the repository with an installation form
+    set:
+      credentials.platformUIURL: https://portal.example.com/customize/models/credentials/test/{operation}
+      credentials.operationsNamespace: model-operations
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --organizations-repository=giantswarm/example-installation
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --platform-credential-ui-url=https://portal.example.com/customize/models/credentials/test/{operation}
