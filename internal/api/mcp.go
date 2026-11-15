@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	apov1alpha1 "github.com/giantswarm/agent-platform-operator/api/v1alpha1"
 	"github.com/giantswarm/mcp-toolkit/brand"
@@ -151,6 +152,26 @@ func reportProgress(next mcpserver.ToolHandlerFunc) mcpserver.ToolHandlerFunc {
 
 // NewMCPServer builds an MCP server exposing the same operations as the REST
 // API as tools. Results are JSON text with the same shapes as the REST bodies.
+// toolsetSchemaTimeout bounds the chart resolution behind the toolset's
+// maxItems at startup.
+const toolsetSchemaTimeout = 10 * time.Second
+
+// toolsetMaxItems is the toolset's maxItems in the tool schemas: the
+// resolved agent chart's, read once when the server starts. A later chart
+// with another limit is published after a restart; validation always uses the
+// chart resolved at the write.
+func toolsetMaxItems(lifecycle context.Context, svc *agents.Service) int {
+	if svc == nil {
+		return 0
+	}
+	if lifecycle == nil {
+		lifecycle = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(lifecycle, toolsetSchemaTimeout)
+	defer cancel()
+	return svc.ToolsetMaxItems(ctx)
+}
+
 func NewMCPServer(svc *agents.Service, version string, opts ...Option) *mcpserver.MCPServer {
 	var o serverOptions
 	for _, opt := range opts {
@@ -194,14 +215,12 @@ func NewMCPServer(svc *agents.Service, version string, opts ...Option) *mcpserve
 	skillsProp := mcp.WithArray(argSkills, mcp.Description(skillDesc), mcp.Items(skillEntry))
 	skillsReplaceProp := mcp.WithArray(argSkills, mcp.Description("Replaces the whole skill list: "+skillShape+"."), mcp.Items(skillEntry))
 	refreshSkillsProp := mcp.WithBoolean(argRefreshSkills, mcp.Description("Re-pin every git skill and git plugin to its default-branch head (with skill-manager: its source's ref); nothing else changes (default false)."))
-	selectorShape := "preset:, server:, workflow: or tool:; inline limits are validated by the agent chart"
+	selectorShape := "preset:, server:, workflow: or tool:; over the chart's inline limits, use a preset"
 	toolsetDesc := "Gateway tools the agent may use: " + selectorShape + "; preset:none means no tools."
 	presetsSentence := "Presets: " + strings.Join(agents.PresetSelectors(), ", ") + "."
 	toolsetOptions := []mcp.PropertyOption{mcp.Description(toolsetDesc), mcp.WithStringItems()}
-	if svc != nil {
-		if maximum := svc.ToolsetMaxItems(context.Background()); maximum > 0 {
-			toolsetOptions = append(toolsetOptions, mcp.MaxItems(maximum))
-		}
+	if maximum := toolsetMaxItems(o.lifecycle, svc); maximum > 0 {
+		toolsetOptions = append(toolsetOptions, mcp.MaxItems(maximum))
 	}
 	toolsetProp := mcp.WithArray(argToolset, toolsetOptions...)
 	toolsetRequiredProp := mcp.WithArray(argToolset, slices.Concat(toolsetOptions, []mcp.PropertyOption{mcp.Required()})...)

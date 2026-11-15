@@ -62,7 +62,7 @@ func TestValidateCreateToolsetLimits(t *testing.T) {
 	}{
 		{name: "36 selectors", toolset: selectors(36)},
 		{name: "128 selectors", toolset: selectors(128)},
-		{name: "129 selectors", toolset: selectors(129), invalid: "maxItems"},
+		{name: "129 selectors", toolset: selectors(129), invalid: "preset:<name>"},
 		{name: "8192 bytes", toolset: []string{"tool:" + strings.Repeat("x", 8187)}},
 		{name: "8193 bytes", toolset: []string{"tool:" + strings.Repeat("x", 8188)}, invalid: "8193 bytes"},
 		{name: "UTF-8 at limit", toolset: []string{"tool:" + strings.Repeat("é", 4093) + "x"}},

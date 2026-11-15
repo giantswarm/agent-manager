@@ -23,6 +23,9 @@ const (
 	// ToolsetHeader is the header the chart renders on the agent's
 	// RemoteMCPServer (spec.headersFrom[]).
 	ToolsetHeader = "X-Muster-Toolset"
+	// toolsetPresetHint is what to do with more selectors than a toolset
+	// takes inline.
+	toolsetPresetHint = "define a preset (muster toolsetPresets) and reference it as preset:<name>"
 )
 
 // ShippedPresets are the presets every installation has: muster's built-ins

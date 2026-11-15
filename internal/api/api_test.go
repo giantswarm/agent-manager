@@ -745,3 +745,10 @@ func TestNewMCPServer_AdvertisesTheGiantSwarmIcon(t *testing.T) {
 	assert.Equal(t, "agent-manager", resp.Result.ServerInfo.Name)
 	assert.Equal(t, []mcp.Icon{brand.GiantSwarmIcon()}, resp.Result.ServerInfo.Icons)
 }
+
+func TestToolsetMaxItemsUsesTheServerLifecycle(t *testing.T) {
+	require.Zero(t, toolsetMaxItems(t.Context(), nil))
+	svc, _ := newService(t)
+	require.Equal(t, 128, toolsetMaxItems(t.Context(), svc))
+	require.Equal(t, 128, toolsetMaxItems(nil, svc)) //nolint:staticcheck // nil is the unset WithLifecycle option.
+}
