@@ -384,11 +384,12 @@ func (c *orgCommit) stillInGit(ctx context.Context, pr commit.PullRequest, paren
 			if !definesOrganization(doc, parent, name, r) {
 				continue
 			}
-			why := ""
 			if !definesOrganization(doc, parent, name, renaming{}) {
-				why = fmt.Sprintf(" (taken as a definition: %s set a namespace, a name prefix or a name suffix, so what the document says of its own namespace and name does not tell; if the overlay does not make it %s, remove that setting or the overlay)", strings.Join(renamedBy, ", "), parent+"/"+name)
+				// The overlay alone makes the match: the document may be
+				// another organization, which must not be removed blindly.
+				return fmt.Errorf("%w: %s: its merged delete pull request %s removed %s, but %s in %s may still define it: %s set a namespace, a name prefix or a name suffix, so what the document says of its own namespace and name does not tell, and the scan, which runs no Kustomize, takes it as a definition; it is not pending erase and is not erased. Check the overlay first: if it does not make that document %s, remove that setting or the overlay from the objects path and call delete_organization again with mode commit and confirm %q; if it does, remove that definition", agents.ErrConflict, what, pr.URL, p, f, repo, strings.Join(renamedBy, ", "), parent+"/"+name, parent+"/"+name)
 			}
-			return fmt.Errorf("%w: %s: its merged delete pull request %s removed %s, but %s in %s still defines it%s (moved there, or written there by the pull request or a later commit), so the organization is still in git; it is not pending erase and is not erased; remove that definition from %s and call delete_organization again with mode commit and confirm %q, or move it back to %s, %s", agents.ErrConflict, what, pr.URL, p, f, repo, why, f, parent+"/"+name, p, nextDelete)
+			return fmt.Errorf("%w: %s: its merged delete pull request %s removed %s, but %s in %s still defines it (moved there, or written there by the pull request or a later commit), so the organization is still in git; it is not pending erase and is not erased; remove that definition from %s and call delete_organization again with mode commit and confirm %q, or move it back to %s, %s", agents.ErrConflict, what, pr.URL, p, f, repo, f, parent+"/"+name, p, nextDelete)
 		}
 	}
 	return nil

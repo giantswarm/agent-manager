@@ -162,14 +162,17 @@ read and the file reads cannot hide it (giantswarm/agent-manager#420).
 The scan reads the files as they are and does not run Kustomize. So it fails closed on
 what a kustomization changes: when any kustomization file under the objects path sets
 `namespace`, `namePrefix` or `nameSuffix`, wherever it is, every
-`AgentPlatformOrganization` document that could become the organization counts as
-still in git. That covers an overlay in a sibling directory that refers to the file
+`AgentPlatformOrganization` document that one of these three fields could make the
+organization counts as still in git. That covers an overlay in a sibling directory that refers to the file
 (for one, `../../base`) and sets `namespace`, so that Kustomize applies the
 organization into its parent from a document with another namespace
 (giantswarm/agent-manager#399). The cost: in a repository that uses such an overlay,
 an erase can be refused although Flux's build no longer holds the organization. The
 answer names the kustomization; a person then removes that setting, or the overlay,
 and erases again. The objects paths that agent-manager writes use no such overlay.
+The scan does not read the other ways Kustomize can change a namespace or a name (a
+`transformers` entry, a patch, `replacements`): only the second guard below covers
+those (giantswarm/agent-manager#423).
 
 The cluster has a second guard, which follows Flux's own Kustomize build. The
 admission policy `agent-platform-organization-delete-intent`

@@ -456,6 +456,8 @@ func TestAMergedDeleteThatDidNotRemoveTheFileErasesNothing(t *testing.T) {
 		edit  func(t *testing.T, fake *commit.Fake, head string, file []byte)
 		after func(t *testing.T, fake *commit.Fake)
 		want  []string
+		// notWant must not be in the answer.
+		notWant []string
 		// noConfirm: the call without confirm is refused too, and does not
 		// answer pending erase.
 		noConfirm bool
@@ -522,7 +524,7 @@ func TestAMergedDeleteThatDidNotRemoveTheFileErasesNothing(t *testing.T) {
 					objectsPath + "/archive/kustomization.yaml": []byte("namespace: org-acme\nresources:\n  - payments.manifest\n"),
 				}))
 			},
-			want:      []string{"conflict:", objectsPath + "/archive/payments.manifest", "still defines it"},
+			want:      []string{"conflict:", objectsPath + "/archive/payments.manifest", "may still define it", objectsPath + "/archive/kustomization.yaml", "Check the overlay first"},
 			noConfirm: true,
 		},
 		{
@@ -551,7 +553,7 @@ func TestAMergedDeleteThatDidNotRemoveTheFileErasesNothing(t *testing.T) {
 					objectsPath + "/overlays/prod/kustomization.yaml": []byte("namespace: org-acme\nresources:\n  - ../../base\n"),
 				}))
 			},
-			want:      []string{"conflict:", objectsPath + "/base/payments.yaml", "still defines it", objectsPath + "/overlays/prod/kustomization.yaml", "remove that setting or the overlay"},
+			want:      []string{"conflict:", objectsPath + "/base/payments.yaml", "may still define it", objectsPath + "/overlays/prod/kustomization.yaml", "Check the overlay first", "remove that setting or the overlay"},
 			noConfirm: true,
 		},
 		{
@@ -566,7 +568,24 @@ func TestAMergedDeleteThatDidNotRemoveTheFileErasesNothing(t *testing.T) {
 					objectsPath + "/overlays/prod/kustomization.yaml": []byte("nameSuffix: ments\nresources:\n  - ../../base/pay.yaml\n"),
 				}))
 			},
-			want:      []string{"conflict:", objectsPath + "/base/pay.yaml", "still defines it", objectsPath + "/overlays/prod/kustomization.yaml"},
+			want:      []string{"conflict:", objectsPath + "/base/pay.yaml", "may still define it", objectsPath + "/overlays/prod/kustomization.yaml"},
+			noConfirm: true,
+		},
+		{
+			// The cost of failing closed: another organization of the name
+			// counts while an overlay sets a namespace anywhere, and the
+			// answer sends the person to the overlay, not to that file.
+			name: "an overlay sets a namespace while another parent has an organization of the name",
+			after: func(t *testing.T, fake *commit.Fake) {
+				org, err := yaml.Marshal(orgDocument(t, "org-beta"))
+				require.NoError(t, err)
+				require.NoError(t, fake.Commit(ctx, mcRepo, "main", "another parent", map[string][]byte{
+					objectsPath + "/org-beta/payments.yaml":      org,
+					objectsPath + "/org-beta/kustomization.yaml": []byte("namespace: org-beta\nresources:\n  - payments.yaml\n"),
+				}))
+			},
+			want:      []string{"conflict:", objectsPath + "/org-beta/payments.yaml", "may still define it", objectsPath + "/org-beta/kustomization.yaml", "Check the overlay first"},
+			notWant:   []string{"remove that definition from", "moved there"},
 			noConfirm: true,
 		},
 		{
@@ -622,6 +641,9 @@ func TestAMergedDeleteThatDidNotRemoveTheFileErasesNothing(t *testing.T) {
 			require.True(t, isErr, text)
 			for _, w := range tc.want {
 				assert.Contains(t, text, w)
+			}
+			for _, w := range tc.notWant {
+				assert.NotContains(t, text, w)
 			}
 			live := f.get(t, orgGVR, "org-acme", "payments")
 			require.NotNil(t, live, "nothing is erased")
