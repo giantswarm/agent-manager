@@ -2,6 +2,8 @@ package organizations
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"path"
@@ -288,8 +290,10 @@ type fileChange struct {
 
 // open decides every change against the base (layout.Build) and lands them
 // as one pull request as the caller, or reports them on a dry run. Nothing
-// to change opens none.
-func (c *orgCommit) open(ctx context.Context, changes []fileChange, branch, title, body string, dryRun bool) (*CommitResult, error) {
+// to change opens none. object is the object's branch name (branch); the
+// pull request's head is a branch of this write's own (head).
+func (c *orgCommit) open(ctx context.Context, changes []fileChange, object, title, body string, dryRun bool) (*CommitResult, error) {
+	branch := head(object)
 	out := &CommitResult{Repository: c.cfg.Objects.Repository.String(), Base: c.cfg.Objects.Branch, Branch: branch, Author: c.gh.Login, Files: []agents.CommitFile{}, Review: reviewNote}
 	var landed []commit.Change
 	for _, ch := range changes {
@@ -339,11 +343,11 @@ func (c *orgCommit) open(ctx context.Context, changes []fileChange, branch, titl
 		out.Unchanged = true
 		return out, nil
 	}
-	// The files are decided against the base: a second change on the
-	// branch of an open pull request would undo the first in it.
-	if open, has, err := c.remote.FindPullRequest(ctx, c.cfg.Objects.Repository, branch); err != nil || has {
+	// The files are decided against the base: a second pull request of the
+	// same object would undo the first once both merge.
+	if open, has, err := c.openPullRequest(ctx, object); err != nil || has {
 		if err != nil {
-			return nil, commitError(c.gh, err)
+			return nil, err
 		}
 		return nil, fmt.Errorf("%w: the pull request %s for this object is open: merge or close it first, then call again", agents.ErrConflict, open.URL)
 	}
@@ -358,12 +362,11 @@ func (c *orgCommit) open(ctx context.Context, changes []fileChange, branch, titl
 // land is commit.Open for the one repository and base of c, with the files
 // creates must still be absent from the base once the branch is cut: a file
 // another commit added to the base after the plan was decided, and so before
-// the cut, is seen and refused (nameTaken) before anything is committed. The
-// base is read, not the branch: a branch of an earlier closed or merged pull
-// request of the same object keeps its own files when CreateBranch brings it
-// up to date, and the commit replaces them. A refused branch stays as cut,
-// without a commit: the remote deletes no branch, and the next write of the
-// object brings it up to date with the base.
+// the cut, is seen and refused (nameTaken) before anything is committed.
+// branch is this write's own (head), so CreateBranch cuts it new from the
+// base and no file of an earlier pull request of the object rides along. A
+// refused branch stays as cut, without a commit: the remote deletes no
+// branch, and no later write uses it.
 func (c *orgCommit) land(ctx context.Context, changes []commit.Change, creates []string, branch, title, body string) (commit.PullRequest, error) {
 	repo, base := c.cfg.Objects.Repository, c.cfg.Objects.Branch
 	files := map[string][]byte{}
@@ -409,9 +412,49 @@ func (c *orgCommit) absent(ctx context.Context, creates []string) error {
 	return nil
 }
 
-// branch is a pull request's head branch for a verb on an organization.
+// branch is the branch name of a verb on an organization: the name of the
+// object a write changes, which every write of it shares. Each write's pull
+// request has a head branch of its own (head); an older agent-manager used
+// this name itself as the head.
 func branch(verb, parent, name string) string {
 	return fmt.Sprintf("%s/%s-%s-%s", commitBranchPrefix, verb, parent, name)
+}
+
+// headSeparator ends an object's branch name before a write's suffix. No
+// part of the name carries it (Kubernetes names, verbs and slugs have no
+// underscore), so the prefix of one object never matches a head of another
+// whose name starts with the same characters (model-a, model-ab). It is not
+// "/": the branch of an older agent-manager, named like the object, would
+// block every ref below it.
+const headSeparator = "_"
+
+// head is a write's own head branch: the object's branch name, the
+// separator and a random suffix. A new name per write is cut from the base,
+// never from the branch of an earlier pull request.
+func head(object string) string {
+	// The suffix is for uniqueness, not secrecy; crypto/rand never fails.
+	suffix := make([]byte, 6)
+	_, _ = rand.Read(suffix)
+	return object + headSeparator + hex.EncodeToString(suffix)
+}
+
+// openPullRequest finds an open pull request of the object's branch name:
+// on a head of a write (the name, the separator and a suffix), or on the
+// name itself, the head an older agent-manager opened.
+func (c *orgCommit) openPullRequest(ctx context.Context, object string) (commit.PullRequest, bool, error) {
+	repo := c.cfg.Objects.Repository
+	prs, err := c.remote.FindPullRequestsByPrefix(ctx, repo, object+headSeparator)
+	if err != nil {
+		return commit.PullRequest{}, false, commitError(c.gh, err)
+	}
+	if len(prs) > 0 {
+		return prs[0], true, nil
+	}
+	pr, has, err := c.remote.FindPullRequest(ctx, repo, object)
+	if err != nil {
+		return commit.PullRequest{}, false, commitError(c.gh, err)
+	}
+	return pr, has, nil
 }
 
 // manifest renders obj as the file Flux applies: no status, no

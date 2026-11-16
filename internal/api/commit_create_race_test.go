@@ -2,11 +2,13 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
 	"github.com/giantswarm/gitops-commit/commit"
 	"github.com/stretchr/testify/require"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/giantswarm/agent-manager/internal/organizations"
@@ -21,20 +23,28 @@ type racingRemote struct {
 	file    string
 	content []byte
 	done    bool
+	// cut are the branches the write cut.
+	cut []string
 }
 
-func (r *racingRemote) FindPullRequest(ctx context.Context, repo commit.Repository, head string) (commit.PullRequest, bool, error) {
+func (r *racingRemote) FindPullRequestsByPrefix(ctx context.Context, repo commit.Repository, prefix string) ([]commit.PullRequest, error) {
 	if !r.done && r.file != "" {
 		r.done = true
 		if err := r.Commit(ctx, repo, "main", "another writer adds the object", map[string][]byte{r.file: r.content}); err != nil {
-			return commit.PullRequest{}, false, err
+			return nil, err
 		}
 	}
-	return r.Fake.FindPullRequest(ctx, repo, head)
+	return r.Fake.FindPullRequestsByPrefix(ctx, repo, prefix)
+}
+
+func (r *racingRemote) CreateBranch(ctx context.Context, repo commit.Repository, branch, base string) error {
+	r.cut = append(r.cut, branch)
+	return r.Fake.CreateBranch(ctx, repo, branch, base)
 }
 
 // commitRaceSubject is a set tool that creates an object of name, with the
-// arguments of a new one, its file and the file another writer adds.
+// arguments of a new one, its file, the file another writer adds and the
+// object's branch name, which starts each pull request's head branch.
 type commitRaceSubject struct {
 	tool, secret, key, file, branch string
 	arguments                       map[string]any
@@ -96,36 +106,93 @@ func TestCommitModeCreateRefusesAFileAddedBeforeTheBranch(t *testing.T) {
 				require.True(t, strings.HasPrefix(text, scenario.prefix), text)
 				require.Empty(t, forge.PullRequests())
 				require.Equal(t, otherFile, forge.Files(mcRepo, "main")[subject.file])
-				// The branch is cut and left without a commit of the write.
-				require.Equal(t, forge.Files(mcRepo, "main"), forge.Files(mcRepo, subject.branch))
+				// The write's own branch is cut and left without a commit of
+				// the write.
+				require.Len(t, remote.cut, 1)
+				require.True(t, strings.HasPrefix(remote.cut[0], subject.branch+"_"), remote.cut[0])
+				require.Equal(t, forge.Files(mcRepo, "main"), forge.Files(mcRepo, remote.cut[0]))
 			})
 		}
 	}
 }
 
-// The branch of an earlier pull request of the same object, closed without
-// a merge, still holds the object's file; a create of that object again is
-// not refused for it and opens a new pull request.
-func TestCommitModeCreateReusesTheBranchOfAClosedPullRequest(t *testing.T) {
+// A write of an object after its earlier pull request ended, closed without
+// a merge or merged, opens a pull request on a new branch of its own, cut
+// from the base: a commit that came onto the earlier branch after it ended
+// never rides along, and the new pull request changes only the files the
+// write reports.
+func TestCommitModeWriteAfterAnEndedPullRequestUsesANewBranch(t *testing.T) {
+	const stray = paymentsPath + "/stray.yaml"
 	for _, subject := range commitRaceSubjects() {
-		t.Run(subject.tool, func(t *testing.T) {
-			fixture, forge := commitFixture(t, nil)
-			seedSecret(t, fixture, subject.secret, subject.key)
-			arguments := map[string]any{"mode": "commit", "create": true}
-			for key, value := range subject.arguments {
-				arguments[key] = value
+		for _, merged := range []bool{false, true} {
+			name := subject.tool + "/closed"
+			if merged {
+				if subject.tool != ToolSetOrganizationModel {
+					// A second write after a merge changes the object; the
+					// model's arguments carry a field to change.
+					continue
+				}
+				name = subject.tool + "/merged"
 			}
-			text, failed := fixture.call(t, subject.tool, arguments)
-			require.False(t, failed, text)
-			require.Len(t, forge.PullRequests(), 1)
-			first := forge.PullRequests()[0]
-			require.NoError(t, forge.Close(t.Context(), first.PullRequest, false))
-			require.Contains(t, forge.Files(mcRepo, subject.branch), subject.file, "the closed pull request's branch keeps the file")
+			t.Run(name, func(t *testing.T) {
+				fixture, forge := commitFixture(t, nil)
+				seedSecret(t, fixture, subject.secret, subject.key)
+				arguments := map[string]any{"mode": "commit", "create": true}
+				for key, value := range subject.arguments {
+					arguments[key] = value
+				}
+				text, failed := fixture.call(t, subject.tool, arguments)
+				require.False(t, failed, text)
+				require.Len(t, forge.PullRequests(), 1)
+				first := forge.PullRequests()[0]
+				require.True(t, strings.HasPrefix(first.Head, subject.branch+"_"), first.Head)
+				if merged {
+					pr := first.PullRequest
+					sha, err := forge.Head(t.Context(), mcRepo, first.Head)
+					require.NoError(t, err)
+					pr.HeadSHA = sha
+					require.NoError(t, forge.Merge(t.Context(), pr))
+					// Flux applies the merged file; the next write changes
+					// the object.
+					live := subject.other.DeepCopy()
+					live.SetLabels(fromGitLabels("payments"))
+					_, err = fixture.dyn.Resource(mcGVR).Namespace(orgNS).Create(t.Context(), live, metav1.CreateOptions{})
+					require.NoError(t, err)
+					arguments["create"], arguments["model"] = false, "gpt-5-mini"
+				} else {
+					require.NoError(t, forge.Close(t.Context(), first.PullRequest, false))
+				}
+				// A commit lands on the ended pull request's branch, which
+				// GitHub keeps.
+				require.NoError(t, forge.Commit(t.Context(), mcRepo, first.Head, "a late commit", map[string][]byte{stray: []byte("kind: ConfigMap\n")}))
 
-			text, failed = fixture.call(t, subject.tool, arguments)
-			require.False(t, failed, text)
-			require.Len(t, forge.PullRequests(), 2)
-		})
+				text, failed = fixture.call(t, subject.tool, arguments)
+				require.False(t, failed, text)
+				require.Len(t, forge.PullRequests(), 2)
+				second := forge.PullRequests()[1]
+				require.NotEqual(t, first.Head, second.Head)
+				require.True(t, strings.HasPrefix(second.Head, subject.branch+"_"), second.Head)
+				files := changed(forge, second.Head)
+				require.NotContains(t, files, stray)
+				var result struct {
+					Commit struct {
+						Branch string `json:"branch"`
+						Files  []struct {
+							Path string `json:"path"`
+						} `json:"files"`
+					} `json:"commit"`
+				}
+				require.NoError(t, json.Unmarshal([]byte(text), &result), text)
+				require.Equal(t, second.Head, result.Commit.Branch)
+				reported := map[string]bool{}
+				for _, f := range result.Commit.Files {
+					reported[f.Path] = true
+				}
+				for p := range files {
+					require.True(t, reported[p], "the pull request changes %s, which the answer does not list", p)
+				}
+			})
+		}
 	}
 }
 
@@ -144,4 +211,44 @@ func TestCommitModeCreateOrganizationRefusesAFileAddedBeforeTheBranch(t *testing
 	require.Contains(t, text, "already and not applied yet")
 	require.Empty(t, forge.PullRequests())
 	require.Equal(t, other, forge.Files(mcRepo, "main")[paymentsFile])
+}
+
+// A write of an object is refused while a pull request of the object is
+// open: one of an earlier write on a head of its own, and one an older
+// agent-manager opened on the object's branch name without a suffix. No
+// second pull request opens.
+func TestCommitModeWriteIsRefusedWhileAPullRequestOfTheObjectIsOpen(t *testing.T) {
+	for _, subject := range commitRaceSubjects() {
+		for _, older := range []bool{false, true} {
+			name := subject.tool + "/earlier write"
+			if older {
+				name = subject.tool + "/older agent-manager"
+			}
+			t.Run(name, func(t *testing.T) {
+				fixture, forge := commitFixture(t, nil)
+				seedSecret(t, fixture, subject.secret, subject.key)
+				arguments := map[string]any{"mode": "commit", "create": true}
+				for key, value := range subject.arguments {
+					arguments[key] = value
+				}
+				if older {
+					require.NoError(t, forge.CreateBranch(t.Context(), mcRepo, subject.branch, "main"))
+					require.NoError(t, forge.Commit(t.Context(), mcRepo, subject.branch, "an older write", map[string][]byte{subject.file: gitManifest(t, subject.other)}))
+					_, err := forge.OpenPullRequest(t.Context(), mcRepo, subject.branch, "main", "an older write", "")
+					require.NoError(t, err)
+				} else {
+					text, failed := fixture.call(t, subject.tool, arguments)
+					require.False(t, failed, text)
+				}
+				require.Len(t, forge.PullRequests(), 1)
+				open := forge.PullRequests()[0]
+
+				text, failed := fixture.call(t, subject.tool, arguments)
+				require.True(t, failed, text)
+				require.True(t, strings.HasPrefix(text, "conflict:"), text)
+				require.Contains(t, text, "the pull request "+open.URL+" for this object is open: merge or close it first")
+				require.Len(t, forge.PullRequests(), 1)
+			})
+		}
+	}
 }
