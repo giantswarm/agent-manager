@@ -297,15 +297,20 @@ func apply(ctx context.Context, dyn dynamic.Interface, writes []write, dryRun bo
 	return nil
 }
 
+// do sends one write as the caller. A create and an update ask for strict
+// field validation: the API server refuses a field the object's schema does
+// not have (spec.openAI.promptCaching on a ModelConfig, say) with a bad
+// request that names it, where it would otherwise drop it in silence and the
+// object would run without it.
 func do(ctx context.Context, dyn dynamic.Interface, w write, dryRun []string) (*unstructured.Unstructured, error) {
 	res := dyn.Resource(w.gvr).Namespace(w.ns)
 	var err error
 	var object *unstructured.Unstructured
 	switch w.op {
 	case opCreate:
-		object, err = res.Create(ctx, unstructuredOf(w.obj), metav1.CreateOptions{FieldManager: agents.FieldManager, DryRun: dryRun})
+		object, err = res.Create(ctx, unstructuredOf(w.obj), metav1.CreateOptions{FieldManager: agents.FieldManager, DryRun: dryRun, FieldValidation: metav1.FieldValidationStrict})
 	case opUpdate:
-		object, err = res.Update(ctx, unstructuredOf(w.obj), metav1.UpdateOptions{FieldManager: agents.FieldManager, DryRun: dryRun})
+		object, err = res.Update(ctx, unstructuredOf(w.obj), metav1.UpdateOptions{FieldManager: agents.FieldManager, DryRun: dryRun, FieldValidation: metav1.FieldValidationStrict})
 	case opDelete:
 		err = res.Delete(ctx, w.name, metav1.DeleteOptions{DryRun: dryRun})
 	}

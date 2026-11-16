@@ -22,8 +22,8 @@ import (
 )
 
 // TestEnvtestDryRunAgainstTheAgentCRD runs create, update and their
-// validations against a kube-apiserver serving kagent's own Agent and
-// RemoteMCPServer CRDs (testdata/crds, from giantswarm/kagent-upstream's
+// validations against a kube-apiserver serving kagent's own Agent,
+// RemoteMCPServer and ModelConfig CRDs (testdata/crds, from giantswarm/kagent-upstream's
 // helm/kagent-crds): what the CRD accepts passes, what it refuses comes back
 // as the API server's field error, and a dry-run writes nothing. Skipped
 // without envtest binaries: run via `make test-envtest`.
@@ -36,7 +36,7 @@ func TestEnvtestDryRunAgainstTheAgentCRD(t *testing.T) {
 		ErrorIfCRDPathMissing: true,
 		CRDs: []*apiextensionsv1.CustomResourceDefinition{
 			openCRD(hrGVR, "HelmRelease"), openCRD(ociGVR, "OCIRepository"),
-			openCRD(harnessGVR, "Harness"), openCRD(mcGVR, "ModelConfig"),
+			openCRD(harnessGVR, "Harness"),
 		},
 	}
 	cfg, err := env.Start()
@@ -53,8 +53,19 @@ func TestEnvtestDryRunAgainstTheAgentCRD(t *testing.T) {
 	require.NoError(t, err)
 	_, err = typed.CoreV1().Namespaces().Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "kagent"}}, metav1.CreateOptions{})
 	require.NoError(t, err)
-	// No status subresource: the seeded status is stored as given.
-	_, err = dyn.Resource(mcGVR).Namespace("kagent").Create(ctx, modelConfig("kagent", "default-model-config", "Anthropic", "claude-sonnet-4-6"), metav1.CreateOptions{})
+	// kagent's ModelConfig CRD has a status subresource: the create drops the
+	// seeded status, so it is written again through the subresource, with the
+	// fields the schema requires of a condition.
+	seeded := modelConfig("kagent", "default-model-config", "Anthropic", "claude-sonnet-4-6")
+	created, err := dyn.Resource(mcGVR).Namespace("kagent").Create(ctx, seeded, metav1.CreateOptions{})
+	require.NoError(t, err)
+	conditions, _, _ := unstructured.NestedSlice(seeded.Object, "status", "conditions")
+	for _, c := range conditions {
+		c.(map[string]any)["lastTransitionTime"] = "2026-01-01T00:00:00Z"
+		c.(map[string]any)["message"] = ""
+	}
+	require.NoError(t, unstructured.SetNestedSlice(created.Object, conditions, "status", "conditions"))
+	_, err = dyn.Resource(mcGVR).Namespace("kagent").UpdateStatus(ctx, created, metav1.UpdateOptions{})
 	require.NoError(t, err)
 	_, err = dyn.Resource(harnessGVR).Namespace("kagent").Create(ctx, harness("kagent", "kagent", "kagent"), metav1.CreateOptions{})
 	require.NoError(t, err)
