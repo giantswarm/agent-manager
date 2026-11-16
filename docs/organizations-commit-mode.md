@@ -140,12 +140,13 @@ The erase is refused:
   reports a removal and an addition, or a definition that the pull request or a later
   commit wrote there. A document defines it when it is an `AgentPlatformOrganization`
   of its name in its parent or without a namespace, also as an item of a `List`. Where
-  any `kustomization.yaml` under the objects path sets `namespace`, `namePrefix` or
-  `nameSuffix`, or SOPS encrypted the value, the document's own namespace or name does
-  not count, and it is taken as a match. The answer names the file, and the
-  kustomization when that made the match: remove that definition and erase again, or
-  move the file back and open the delete again. A file that does not parse
-  defines nothing, since Kustomize cannot apply it either. When the objects path cannot
+  a kustomization under the objects path could make another document the organization
+  (the table in "What the scan is for" below gives the rule), that document is taken
+  as a match too. The answer names the file, and each kustomization that made the
+  match and why: remove that definition and erase again, or move the file back and
+  open the delete again. A resource file that does not parse defines nothing, since
+  Kustomize cannot apply it either; a kustomization that does not parse makes every
+  organization document a match. When the objects path cannot
   be read (a read fails, or the repository's tree is too large for one read), nothing
   is erased (see "What the scan is for" below);
 - when GitHub cannot list the merged pull request's files: whether it removed the file
@@ -178,7 +179,7 @@ make it that organization:
 
 | The kustomization has | The documents that count |
 | --- | --- |
-| `namespace: <parent>`, or a SOPS-encrypted (`ENC[...]`) `namespace` | a document of `<name>` in any namespace |
+| `namespace: <parent>`, or a `namespace` the scan cannot read: SOPS-encrypted (`ENC[...]`) or with a variable (`${...}`) that Flux's post-build substitution may replace | a document of `<name>` in any namespace |
 | `namespace` with another value in clear text | none: Kustomize writes that value, which is not `<parent>` |
 | `namePrefix` or `nameSuffix` | a document of `<parent>` whose own name is a part of `<name>`: a prefix or a suffix only adds text |
 | a non-empty `transformers`, `patches`, `patchesJson6902`, `patchesStrategicMerge` or `replacements` | every document: these can set any namespace and any name |
@@ -187,7 +188,14 @@ make it that organization:
 
 The fields combine: with `namespace: <parent>` and a `nameSuffix`, a document in any
 namespace whose name is a part of `<name>` counts. A document with no namespace, or
-whose own namespace and name are `<parent>/<name>`, always counts.
+whose own namespace and name are `<parent>/<name>`, always counts, and so does one
+whose own namespace or name the scan cannot read. The scan reads a kustomization's
+keys in any case (`Patches:` is `patches:`), as Kustomize does.
+
+The scan reads only the files under the objects path. It does not follow a
+kustomization's `resources`, `components` or `bases` entry to a remote URL or to a path
+outside the objects path, and it does not read `vars` with `configurations`: only the
+second guard below covers what those bring in.
 
 The cost: in a repository that uses such an overlay, an erase can be refused although
 Flux's build no longer holds the organization. The answer names each kustomization and

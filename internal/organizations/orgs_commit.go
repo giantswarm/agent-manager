@@ -321,8 +321,9 @@ const nextDelete = "then call delete_organization again with mode commit and no 
 // read, whatever its name, since Kustomize loads a resource file by any
 // name: one read of the branch's head, one tree read and two reads for each
 // file, all at that one commit, so a commit that lands during the scan
-// cannot hide a definition. A file that does not parse defines nothing,
-// since Kustomize cannot apply it either. A read that fails, or a tree too
+// cannot hide a definition. A resource file that does not parse defines
+// nothing, since Kustomize cannot apply it either; a kustomization that does
+// not parse counts as below. A read that fails, or a tree too
 // large for one read, erases nothing.
 //
 // The scan runs no Kustomize, so it fails closed on what a kustomization
@@ -418,7 +419,7 @@ type renaming struct{ namespace, affix, name bool }
 // renamingOf reads what the kustomization docs (ok false: it does not
 // parse) may change of a resource's identity on its way to parent, and
 // why, nil when nothing. It fails closed: a kustomization it cannot parse,
-// a field of a form it does not know, a SOPS-encrypted value (ENC[...]) or
+// a field of a form it does not know, a value it cannot read (opaque) or
 // one of rewriteFields counts as changing what it may. A namespace other
 // than parent, in clear text, cannot move a document into parent.
 func renamingOf(docs []map[string]any, ok bool, parent string) (renaming, []string) {
@@ -428,7 +429,7 @@ func renamingOf(docs []map[string]any, ok bool, parent string) (renaming, []stri
 	if len(docs) == 0 {
 		return renaming{}, nil
 	}
-	k := docs[0]
+	k := foldKeys(docs[0])
 	var (
 		r   renaming
 		why []string
@@ -436,7 +437,7 @@ func renamingOf(docs []map[string]any, ok bool, parent string) (renaming, []stri
 	switch ns := k["namespace"].(type) {
 	case nil:
 	case string:
-		if ns == parent || sealed(ns) {
+		if ns == parent || opaque(ns) {
 			r.namespace = true
 			why = append(why, "namespace "+ns)
 		}
@@ -445,7 +446,7 @@ func renamingOf(docs []map[string]any, ok bool, parent string) (renaming, []stri
 		why = append(why, "namespace of a form the scan does not know")
 	}
 	for _, field := range []string{"namePrefix", "nameSuffix"} {
-		switch v := k[field].(type) {
+		switch v := k[strings.ToLower(field)].(type) {
 		case nil:
 		case string:
 			if v != "" {
@@ -458,7 +459,7 @@ func renamingOf(docs []map[string]any, ok bool, parent string) (renaming, []stri
 		}
 	}
 	for _, field := range rewriteFields {
-		if nonEmpty(k[field]) {
+		if nonEmpty(k[strings.ToLower(field)]) {
 			r.namespace, r.name = true, true
 			why = append(why, field)
 		}
@@ -483,8 +484,33 @@ func nonEmpty(v any) bool {
 	}
 }
 
+// foldKeys is the kustomization k with its keys in lower case: Kustomize
+// decodes a kustomization with encoding/json, which matches a field's key
+// whatever its case. Two keys that fold to one give a value of a form the
+// scan does not know.
+func foldKeys(k map[string]any) map[string]any {
+	out := make(map[string]any, len(k))
+	for key, v := range k {
+		key = strings.ToLower(key)
+		if _, twice := out[key]; twice {
+			v = twiceSet{}
+		}
+		out[key] = v
+	}
+	return out
+}
+
+// twiceSet is the value of a kustomization field whose key is set twice,
+// in two cases.
+type twiceSet struct{}
+
 // sealed reports whether s is a value SOPS encrypted (ENC[...]).
 func sealed(s string) bool { return strings.HasPrefix(s, "ENC[") }
+
+// opaque reports whether the scan cannot read the value s: SOPS encrypted
+// it, or it holds a variable (${...}) that Flux's post-build substitution
+// may replace.
+func opaque(s string) bool { return sealed(s) || strings.Contains(s, "${") }
 
 // documents parses raw's YAML or JSON documents; ok is false when one does
 // not parse, since Kustomize cannot apply such a file.
@@ -509,7 +535,7 @@ func documents(raw []byte) (out []map[string]any, ok bool) {
 // holds in its items, the AgentPlatformOrganization parent/name, as
 // Kustomize applies it. A document without a namespace counts, and so does
 // one whose namespace or name r says a kustomization may change. A value
-// SOPS encrypted (ENC[...]) is not known, so it counts too.
+// the scan cannot read (opaque) is not known, so it counts too.
 func definesOrganization(doc map[string]any, parent, name string, r renaming) bool {
 	u := unstructured.Unstructured{Object: doc}
 	if items, ok := doc["items"].([]any); ok && strings.HasSuffix(u.GetKind(), "List") {
@@ -526,8 +552,8 @@ func definesOrganization(doc map[string]any, parent, name string, r renaming) bo
 	}
 	ns, own := u.GetNamespace(), u.GetName()
 	return kind &&
-		(r.name || own == name || sealed(own) || (r.affix && strings.Contains(name, own))) &&
-		(r.namespace || ns == "" || ns == parent || sealed(ns))
+		(r.name || own == name || opaque(own) || (r.affix && strings.Contains(name, own))) &&
+		(r.namespace || ns == "" || ns == parent || opaque(ns))
 }
 
 // openDelete opens the pull request that removes the organization's file

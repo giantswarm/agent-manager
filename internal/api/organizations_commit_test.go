@@ -705,6 +705,21 @@ func TestAMergedDeleteThatDidNotRemoveTheFileErasesNothing(t *testing.T) {
 		siblingOverlay("a sibling overlay sets a SOPS-encrypted namespace", "org-template", "payments", map[string]string{
 			"kustomization.yaml": "namespace: ENC[AES256_GCM,data:abc,type:str]\nresources:\n  - ../../base\n",
 		}, "namespace ENC["),
+		siblingOverlay("a sibling overlay sets a namespace that Flux's post-build substitution may replace", "org-template", "payments", map[string]string{
+			"kustomization.yaml": "namespace: ${org_ns}\nresources:\n  - ../../base\n",
+		}, "namespace ${org_ns}"),
+		siblingOverlay("a sibling overlay writes a patch field's key in another case", "org-template", "payments", map[string]string{
+			"kustomization.yaml": "resources:\n  - ../../base\nPatches:\n  - path: move.yaml\n",
+		}, "patches"),
+		siblingOverlay("a sibling overlay sets the namespace twice in two cases", "org-template", "payments", map[string]string{
+			"kustomization.yaml": "namespace: org-other\nNamespace: org-acme\nresources:\n  - ../../base\n",
+		}, "namespace of a form the scan does not know"),
+		siblingOverlay("a sibling overlay sets a name suffix of a form the scan does not know", "org-acme", "legacy", map[string]string{
+			"kustomization.yaml": "nameSuffix: [a]\nresources:\n  - ../../base\n",
+		}, "nameSuffix of a form the scan does not know"),
+		siblingOverlay("a sibling overlay sets transformers of a form the scan does not know", "org-template", "payments", map[string]string{
+			"kustomization.yaml": "transformers: namespace.yaml\nresources:\n  - ../../base\n",
+		}, "transformers"),
 		siblingOverlay("a sibling overlay does not parse", "org-template", "payments", map[string]string{
 			"kustomization.yaml": "resources: [../../base\n",
 		}, "it does not parse"),
