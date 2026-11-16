@@ -53,7 +53,6 @@ func calledFromLayout() bool {
 // pull request's branch.
 type planRaceSubject struct {
 	name, tool, branch string
-	create             bool
 	arguments          map[string]any
 	seed               func(t *testing.T, fixture *orgFixture)
 	prefix             string
@@ -67,7 +66,7 @@ func planRaceSubjects() []planRaceSubject {
 			for key, value := range s.arguments {
 				arguments[key] = value
 			}
-			subject := planRaceSubject{name: s.tool + "/create", tool: s.tool, branch: s.branch, create: create, arguments: arguments, prefix: "already_exists:"}
+			subject := planRaceSubject{name: s.tool + "/create", tool: s.tool, branch: s.branch, arguments: arguments, prefix: "already_exists:"}
 			if !create {
 				subject.name, subject.prefix = s.tool+"/no create", "conflict:"
 			}
