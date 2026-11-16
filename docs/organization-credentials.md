@@ -381,6 +381,19 @@ nothing: the operation stays `pending`, a retry gets the same refusal, and a
 fresh preparation is what is needed. Only a failure after the branch exists
 leaves the operation `uncertain`.
 
+Once the checks pass, the branch, the commit and the pull request run to their
+end also when the caller goes away (its request is cancelled or times out):
+the operation ends `complete`, its credentials `committed`, with its pull
+request, as for a caller that waited, and a repeated call gives the receipt.
+These writes have their own time limit of two minutes, and recording their
+outcome has 15 seconds more.
+
+A failed save logs `credential save failed` with the `step` that failed (for
+example `prepare commit`, `create branch`, `commit` or `open pull request`) and
+its `cause`, at `ERROR` for a failure and at `WARN` for a refusal the caller
+can act on. Every value the save received is removed from the cause, as typed
+and base64 encoded.
+
 A crash before a write, or after a write before recording its version, can leave
 an operation without enough evidence to complete it. Inspect the recorded branch or marked live resources;
 do not assume an error means nothing was written. Conflicting or missing evidence

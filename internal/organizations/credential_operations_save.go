@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"log/slog"
 	"reflect"
 	"slices"
 	"strings"
@@ -64,18 +65,77 @@ func credentialSaveError(err error) error {
 			return fmt.Errorf("%w: credential save was refused; refresh the operation before retrying", sentinel)
 		}
 	}
-	return errors.New("credential save failed; inspect the operation status before retrying")
+	return errCredentialSaveFailed
+}
+
+// errCredentialSaveFailed answers a save that failed for a reason the caller
+// cannot act on: agent-manager's log names the step and the cause.
+var errCredentialSaveFailed = errors.New("credential save failed; inspect the operation status before retrying")
+
+// credentialWriteBudget is how long the writes of a commit-mode save may take
+// once they start. They no longer stop with the caller's request, so this is
+// what ends them.
+const credentialWriteBudget = 2 * time.Minute
+
+// credentialRecordBudget is how long recording a commit-mode save's outcome
+// may take, after its writes, whatever the caller does.
+const credentialRecordBudget = 15 * time.Second
+
+// saveStep names the step of a save that failed, for the log only: the
+// answer to the caller stays what credentialSaveError makes of the cause.
+type saveStep struct {
+	step string
+	err  error
+}
+
+func (e saveStep) Error() string { return e.err.Error() }
+func (e saveStep) Unwrap() error { return e.err }
+
+// atStep marks err with step, unless a deeper step already marked it.
+func atStep(step string, err error) error {
+	if err == nil || errors.As(err, new(saveStep)) {
+		return err
+	}
+	return saveStep{step: step, err: err}
+}
+
+// redactCredentialValues removes every submitted value, as typed and base64
+// encoded, from a message bound for the log.
+func redactCredentialValues(message string, values []CredentialValue) string {
+	for _, value := range values {
+		if value.Value == "" {
+			continue
+		}
+		for _, form := range []string{value.Value, base64.StdEncoding.EncodeToString([]byte(value.Value))} {
+			message = strings.ReplaceAll(message, form, "[redacted]")
+		}
+	}
+	return message
 }
 
 func (s *Service) SaveCredentialOperation(ctx context.Context, id, version string, values []CredentialValue) (*ResourceResult, error) {
 	result, err := s.saveCredentialOperation(ctx, id, version, values)
 	if err != nil {
-		return nil, credentialSaveError(err)
+		answer := credentialSaveError(err)
+		step := "save"
+		var failed saveStep
+		if errors.As(err, &failed) {
+			step = failed.step
+		}
+		// A refusal is the caller's to act on; a failure is the operator's.
+		level := slog.LevelWarn
+		if errors.Is(answer, errCredentialSaveFailed) {
+			level = slog.LevelError
+		}
+		s.log.Log(ctx, level, "credential save failed", identity.LogAttr(ctx), "operation", id, "step", step, "cause", redactCredentialValues(err.Error(), values))
+		return nil, answer
 	}
 	return result, nil
 }
 
-func (s *Service) saveCredentialOperation(ctx context.Context, id, version string, values []CredentialValue) (*ResourceResult, error) {
+func (s *Service) saveCredentialOperation(ctx context.Context, id, version string, values []CredentialValue) (_ *ResourceResult, err error) {
+	step := "read operation"
+	defer func() { err = atStep(step, err) }()
 	operation, err := s.credentialOperation(ctx, id)
 	if err != nil {
 		return nil, err
@@ -90,6 +150,7 @@ func (s *Service) saveCredentialOperation(ctx context.Context, id, version strin
 		return &operation.Result, nil
 	}
 	if operation.Mode == agents.ModeCommit {
+		step = "check Git target"
 		writer, err := s.contentWriter(ctx, operation.Namespace, operation.Mode)
 		if err != nil {
 			return nil, err
@@ -100,23 +161,30 @@ func (s *Service) saveCredentialOperation(ctx context.Context, id, version strin
 	}
 	if operation.State == operationSaving {
 		if operation.Mode == agents.ModeCommit {
+			step = "finish commit"
 			return s.recoverCredentialCommit(ctx, operation)
 		}
+		step = "finish apply"
 		return s.recoverAppliedCredential(ctx, operation)
 	}
+	step = "check version"
 	if (operation.State != operationPending && operation.State != operationUncertain) || version == "" || version != operation.Version {
 		return nil, fmt.Errorf("%w: %w", agents.ErrConflict, ErrCredentialOperationChanged)
 	}
 	if operation.State == operationUncertain && operation.Mode == agents.ModeCommit {
+		step = "finish commit"
 		return s.recoverCredentialCommit(ctx, operation)
 	}
+	step = "check values"
 	if len(values) != len(operation.Credentials) {
 		return nil, invalidf("supply exactly the credentials in the confirmation")
 	}
+	step = "authenticate caller"
 	caller, err := s.caller(ctx)
 	if err != nil {
 		return nil, err
 	}
+	step = "check consumers"
 	writes, err := remainingOperationWrites(ctx, caller, operation)
 	if err != nil {
 		return nil, err
@@ -199,11 +267,13 @@ func (s *Service) saveCredentialOperation(ctx context.Context, id, version strin
 		data := map[string]any{credential.Key: base64.StdEncoding.EncodeToString([]byte(values[index].Value))}
 		writes = append([]write{credentialSecretWrite(operation.Namespace.Name, credential.Secret, action, data)}, writes...)
 	}
+	step = "dry run"
 	for _, planned := range writes {
 		if _, err := doCredentialWrite(ctx, caller, operation, planned, dryRunAll); err != nil {
 			return nil, err
 		}
 	}
+	step = "open writer"
 	writer, err := s.contentWriter(ctx, operation.Namespace, operation.Mode)
 	if err != nil {
 		return nil, err
@@ -213,6 +283,7 @@ func (s *Service) saveCredentialOperation(ctx context.Context, id, version strin
 	// was written, so a retry runs the same checks and gets the same answer.
 	var prepared *credentialCommit
 	if operation.Mode == agents.ModeCommit {
+		step = "prepare commit"
 		prepared, err = s.prepareCredentialCommit(ctx, operation, writer, writes)
 		if err != nil {
 			return nil, err
@@ -220,17 +291,30 @@ func (s *Service) saveCredentialOperation(ctx context.Context, id, version strin
 	}
 	// After this point a write may have happened: a failure marks the
 	// operation uncertain, and the next save recovers it.
+	step = "record saving"
 	operation.State = operationSaving
 	if err := s.cfg.CredentialOperations.put(ctx, operation); err != nil {
 		return nil, err
 	}
+	// In commit mode the branch, the commit and the pull request run to
+	// their end once the branch is to be made, also when the caller goes
+	// away: a request cut between the commit and the pull request would leave
+	// a commit that only "Finish the save" opens. Their own budget ends them
+	// instead.
+	record := ctx
 	if operation.Mode == agents.ModeCommit {
+		writeCtx, cancelWrite := context.WithTimeout(context.WithoutCancel(ctx), credentialWriteBudget)
 		var committed *CommitResult
-		committed, err = s.writeCredentialCommit(ctx, operation, writer, prepared)
+		committed, err = s.writeCredentialCommit(writeCtx, operation, writer, prepared)
+		cancelWrite()
 		if err == nil {
 			operation.Result.Commit = committed
 		}
+		var cancelRecord context.CancelFunc
+		record, cancelRecord = context.WithTimeout(context.WithoutCancel(ctx), credentialRecordBudget)
+		defer cancelRecord()
 	} else {
+		step = "apply"
 		err = s.applyCredentialOperation(ctx, caller, operation, writes)
 		if errors.As(err, new(nameTaken)) {
 			s.removeCreatedSecrets(ctx, caller, operation, created)
@@ -238,13 +322,19 @@ func (s *Service) saveCredentialOperation(ctx context.Context, id, version strin
 	}
 	if err != nil {
 		operation.State = operationUncertain
-		_ = s.cfg.CredentialOperations.put(ctx, operation)
+		if recordErr := s.cfg.CredentialOperations.put(record, operation); recordErr != nil {
+			s.log.Warn("a failed credential save could not be recorded as uncertain", identity.LogAttr(ctx), "operation", id, "cause", recordErr.Error())
+		}
 		return nil, err
 	}
+	step = "record result"
 	completeCredentialOperation(operation)
 	operation.Result.Note = strings.Join(slices.DeleteFunc(append([]string{operation.Result.Note}, notes...), func(note string) bool { return note == "" }), "; ")
-	if err := s.cfg.CredentialOperations.put(ctx, operation); err != nil {
+	if err := s.cfg.CredentialOperations.put(record, operation); err != nil {
 		return nil, err
+	}
+	if ctx.Err() != nil {
+		s.log.Info("a credential save completed after its request ended", identity.LogAttr(ctx), "operation", id, "mode", operation.Mode)
 	}
 	return &operation.Result, nil
 }

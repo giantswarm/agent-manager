@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -623,6 +624,84 @@ func TestCredentialCommitRecoversAnUncertainPullRequest(t *testing.T) {
 	confirmation = confirmOperation(t, fixture, result.CredentialOperation)
 	require.Equal(t, "complete", confirmation.State)
 	require.Equal(t, organizations.CredentialCommitted, confirmation.Result.Credentials[0].State)
+}
+
+// leavingRemote is the fake forge where the caller goes away right after the
+// commit: the commit cancels the request, and every later call sees the
+// request's context as a real GitHub client does.
+type leavingRemote struct {
+	*commit.Fake
+	leave context.CancelFunc
+}
+
+func (r *leavingRemote) Commit(ctx context.Context, repo commit.Repository, branch, message string, files map[string][]byte) error {
+	if err := r.Fake.Commit(ctx, repo, branch, message, files); err != nil {
+		return err
+	}
+	if r.leave != nil {
+		r.leave()
+	}
+	return ctx.Err()
+}
+
+func (r *leavingRemote) OpenPullRequest(ctx context.Context, repo commit.Repository, head, base, title, body string) (commit.PullRequest, error) {
+	if err := ctx.Err(); err != nil {
+		return commit.PullRequest{}, err
+	}
+	return r.Fake.OpenPullRequest(ctx, repo, head, base, title, body)
+}
+
+// A commit-mode save whose caller goes away between the commit and the pull
+// request still opens the pull request: the operation ends committed, as for
+// a caller that waited, and a repeated call gives the receipt
+// (giantswarm/agent-manager#396).
+func TestCredentialCommitOpensThePullRequestWhenTheCallerLeavesAfterTheCommit(t *testing.T) {
+	remote := &leavingRemote{}
+	fixture, forge := commitFixtureWith(t, nil, func(fake *commit.Fake) organizations.GitHubRemote {
+		remote.Fake = fake
+		return remote
+	})
+	result := prepareModelOperation(t, fixture, map[string]any{"mode": "commit"})
+	confirmation := confirmOperation(t, fixture, result.CredentialOperation)
+	waiting := fixture.ctx
+	request, leave := context.WithCancel(waiting)
+	defer leave()
+	remote.leave = leave
+	fixture.ctx = request
+	operationHTTP(t, fixture, http.MethodPost, result.CredentialOperation, confirmation.Version, valuesBody(t, result, "synthetic-value"), nil)
+	fixture.ctx = waiting
+	require.Error(t, request.Err(), "the caller went away during the save")
+	require.Len(t, forge.PullRequests(), 1, "the pull request opens without the caller")
+	after := confirmOperation(t, fixture, result.CredentialOperation)
+	require.Equal(t, "complete", after.State)
+	require.Equal(t, organizations.CredentialCommitted, after.Result.Credentials[0].State)
+	require.NotNil(t, after.Result.Commit)
+	require.Equal(t, forge.PullRequests()[0].URL, after.Result.Commit.PullRequest)
+	status, receipt, _ := operationHTTP(t, fixture, http.MethodPost, result.CredentialOperation, after.Version, `{"values":[]}`, nil)
+	require.Equal(t, http.StatusOK, status, receipt)
+	require.Contains(t, receipt, forge.PullRequests()[0].URL)
+	require.Len(t, forge.PullRequests(), 1)
+	require.Contains(t, fixture.logs.String(), `"msg":"a credential save completed after its request ended"`)
+	require.NotContains(t, fixture.logs.String(), "synthetic-value")
+}
+
+// A failed save names its step and its cause in the log, and never a value
+// the person typed, even when the cause repeats it.
+func TestAFailedCredentialSaveLogsItsStepAndCause(t *testing.T) {
+	fixture, forge := commitFixture(t, nil)
+	result := prepareModelOperation(t, fixture, map[string]any{"mode": "commit"})
+	confirmation := confirmOperation(t, fixture, result.CredentialOperation)
+	forge.Fail[commit.OpOpenPullRequest] = errors.New("the provider did not answer about synthetic-value or c3ludGhldGljLXZhbHVl")
+	status, answer, _ := operationHTTP(t, fixture, http.MethodPost, result.CredentialOperation, confirmation.Version, valuesBody(t, result, "synthetic-value"), nil)
+	require.Equal(t, http.StatusBadGateway, status, answer)
+	logs := fixture.logs.String()
+	require.Contains(t, logs, `"msg":"credential save failed"`)
+	require.Contains(t, logs, `"level":"ERROR"`)
+	require.Contains(t, logs, `"step":"open pull request"`)
+	require.Contains(t, logs, "the provider did not answer about [redacted] or [redacted]")
+	require.NotContains(t, logs, "synthetic-value")
+	require.NotContains(t, logs, "c3ludGhldGljLXZhbHVl")
+	require.Equal(t, "uncertain", confirmOperation(t, fixture, result.CredentialOperation).State)
 }
 
 // A commit-mode save refused before a branch exists writes nothing, so the
