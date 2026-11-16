@@ -415,6 +415,7 @@ func TestMCPToolsMirrorREST(t *testing.T) {
 		}
 		switch tool.Name {
 		case ToolCreateAgent:
+			assert.EqualValues(t, 128, tool.InputSchema.Properties["toolset"].(map[string]any)["maxItems"])
 			assert.Contains(t, tool.InputSchema.Required, "toolset")
 			assert.NotContains(t, tool.InputSchema.Required, "modelConfig", "omitted, the namespace default")
 			assert.Contains(t, tool.InputSchema.Properties["toolset"].(map[string]any)["description"], "preset:none")
@@ -743,4 +744,11 @@ func TestNewMCPServer_AdvertisesTheGiantSwarmIcon(t *testing.T) {
 	require.NoError(t, json.Unmarshal(raw, &resp), string(raw))
 	assert.Equal(t, "agent-manager", resp.Result.ServerInfo.Name)
 	assert.Equal(t, []mcp.Icon{brand.GiantSwarmIcon()}, resp.Result.ServerInfo.Icons)
+}
+
+func TestToolsetMaxItemsUsesTheServerLifecycle(t *testing.T) {
+	require.Zero(t, toolsetMaxItems(t.Context(), nil))
+	svc, _ := newService(t)
+	require.Equal(t, 128, toolsetMaxItems(t.Context(), svc))
+	require.Equal(t, 128, toolsetMaxItems(nil, svc)) //nolint:staticcheck // nil is the unset WithLifecycle option.
 }
