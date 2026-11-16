@@ -53,6 +53,12 @@ func credentialSaveError(err error) error {
 	if errors.As(err, new(nameTaken)) {
 		return fmt.Errorf("%w: the object this operation creates exists now, live or in git; prepare it again", ErrAlreadyExists)
 	}
+	// The Git files or the encryption policy changed since the preparation,
+	// before any branch: the operation stays pending, and only a fresh
+	// preparation helps.
+	if errors.As(err, new(gitInputsChanged)) {
+		return fmt.Errorf("%w: the Git files or the encryption policy changed since the preparation; nothing was written; prepare the credential operation again", agents.ErrConflict)
+	}
 	for _, sentinel := range []error{agents.ErrUnauthenticated, agents.ErrAuthRequired, agents.ErrForbidden, agents.ErrNotFound, agents.ErrConflict, agents.ErrInvalid, agents.ErrUnsupported, agents.ErrGitOpsOwned} {
 		if errors.Is(err, sentinel) {
 			return fmt.Errorf("%w: credential save was refused; refresh the operation before retrying", sentinel)

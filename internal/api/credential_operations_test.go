@@ -631,6 +631,8 @@ func TestCredentialCommitRecoversAnUncertainPullRequest(t *testing.T) {
 func TestCredentialCommitRefusalBeforeTheBranchLeavesTheOperationPending(t *testing.T) {
 	elsewhere := connector("gh", sharedSecret, "token")
 	require.NoError(t, unstructured.SetNestedField(elsewhere.Object, "https://elsewhere.example.com/mcp", "spec", "url"))
+	created := model("claude", true)
+	created.SetNamespace("")
 	for name, scenario := range map[string]struct {
 		code    string
 		prepare func(t *testing.T) (*orgFixture, *commit.Fake, organizations.ResourceResult)
@@ -657,6 +659,14 @@ func TestCredentialCommitRefusalBeforeTheBranchLeavesTheOperationPending(t *test
 			},
 			change: map[string][]byte{paymentsPath + "/remotemcpserver-gh.yaml": gitManifest(t, elsewhere)},
 		},
+		"the name is taken in Git": {
+			code: "already_exists",
+			prepare: func(t *testing.T) (*orgFixture, *commit.Fake, organizations.ResourceResult) {
+				fixture, forge := commitFixture(t, nil)
+				return fixture, forge, prepareModelOperation(t, fixture, map[string]any{"mode": "commit"})
+			},
+			change: map[string][]byte{paymentsPath + "/modelconfig-claude.yaml": gitManifest(t, created)},
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			fixture, forge, result := scenario.prepare(t)
@@ -665,6 +675,7 @@ func TestCredentialCommitRefusalBeforeTheBranchLeavesTheOperationPending(t *test
 			status, first, _ := operationHTTP(t, fixture, http.MethodPost, result.CredentialOperation, confirmation.Version, valuesBody(t, result, "synthetic-value"), nil)
 			require.Equal(t, http.StatusConflict, status, first)
 			require.Equal(t, scenario.code, errorCode(t, first))
+			require.Contains(t, first, "prepare", "the refusal says that a fresh preparation is what is needed")
 			after := confirmOperation(t, fixture, result.CredentialOperation)
 			require.Equal(t, "pending", after.State)
 			require.Equal(t, confirmation.Version, after.Version)

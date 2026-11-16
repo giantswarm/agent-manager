@@ -136,6 +136,14 @@ func (c *orgCommit) credentialSnapshot(ctx context.Context, operation *credentia
 	return snapshot, nil
 }
 
+// gitInputsChanged refuses a commit-mode save whose Git files or encryption
+// policy changed since the preparation: nothing was written, and a fresh
+// preparation is all the person needs.
+type gitInputsChanged struct{ err error }
+
+func (e gitInputsChanged) Error() string { return e.err.Error() }
+func (e gitInputsChanged) Unwrap() error { return e.err }
+
 // credentialCommit is a credential commit that is checked and built but not
 // written yet: no branch exists for it.
 type credentialCommit struct {
@@ -155,7 +163,7 @@ func (s *Service) prepareCredentialCommit(ctx context.Context, operation *creden
 		return nil, err
 	}
 	if !maps.Equal(current, operation.GitFiles) {
-		return nil, fmt.Errorf("%w: Git files or encryption policy changed; prepare the credential operation again", agents.ErrConflict)
+		return nil, gitInputsChanged{fmt.Errorf("%w: Git files or encryption policy changed; prepare the credential operation again", agents.ErrConflict)}
 	}
 	change := fileChange{dir: writer.dir, write: map[string][]byte{}}
 	isSecret, err := writer.commit.secretFiles(ctx)
