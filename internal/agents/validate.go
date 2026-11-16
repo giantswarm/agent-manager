@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
+	"github.com/santhosh-tekuri/jsonschema/v6/kind"
 	"golang.org/x/text/language"
 	"golang.org/x/text/message"
 	authorizationv1 "k8s.io/api/authorization/v1"
@@ -69,7 +70,11 @@ func flatten(err error) []string {
 			if loc == "/" {
 				loc = "(root)"
 			}
-			out = append(out, fmt.Sprintf("%s: %s", loc, e.ErrorKind.LocalizedString(printer)))
+			line := fmt.Sprintf("%s: %s", loc, e.ErrorKind.LocalizedString(printer))
+			if _, tooMany := e.ErrorKind.(*kind.MaxItems); tooMany && loc == "/"+ToolsetValuesKey {
+				line += ": " + toolsetPresetHint
+			}
+			out = append(out, line)
 			return
 		}
 		for _, c := range e.Causes {
