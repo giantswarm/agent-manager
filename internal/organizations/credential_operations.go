@@ -57,20 +57,12 @@ func ValidateCredentialUIURL(template string) error {
 	return err
 }
 
-var errPlatformCredentialUIURL = errors.New("installation credential UI requires an HTTPS RFC 6570 URI template with one {operation} and one {namespace} expression in its path or query, using only {operation} and {namespace}")
-
-// ValidatePlatformCredentialUIURL is ValidateCredentialUIURL for the
-// installation form: its links name the namespace the model is written in.
-func ValidatePlatformCredentialUIURL(template string) error {
+// CredentialUIURLNamesNamespace reports whether a valid credential UI URL
+// template has a {namespace} expression. Installation model links need it:
+// an installation model has no {parent} or {organization} to expand.
+func CredentialUIURLNamesNamespace(template string) bool {
 	tpl, err := parseCredentialUIURL(template)
-	if err != nil {
-		return errPlatformCredentialUIURL
-	}
-	names := tpl.Varnames()
-	if !slices.Contains(names, fieldNamespace) || slices.ContainsFunc(names, func(name string) bool { return name != templateOperation && name != fieldNamespace }) {
-		return errPlatformCredentialUIURL
-	}
-	return nil
+	return err == nil && slices.Contains(tpl.Varnames(), fieldNamespace)
 }
 
 func parseCredentialUIURL(template string) (*uritemplate.Template, error) {
@@ -344,9 +336,6 @@ func (s *Service) landResource(ctx context.Context, writer *contentWriter, write
 		return nil
 	}
 	template := s.cfg.CredentialUIURL
-	if writer.org.Scope == scopePlatform {
-		template = s.cfg.PlatformCredentialUIURL
-	}
 	if template == "" {
 		return fmt.Errorf("%w: no credential UI URL is configured; no resource was written", agents.ErrUnsupported)
 	}

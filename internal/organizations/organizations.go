@@ -75,10 +75,9 @@ var rbacGVR = schema.GroupVersionResource{Group: "rbac.authorization.k8s.io", Ve
 
 // Config is what the tools need besides the caller's client.
 type Config struct {
-	PlatformNamespace       string
-	PlatformCredentialUIURL string
-	CredentialUIURL         string
-	CredentialOperations    *CredentialOperations
+	PlatformNamespace    string
+	CredentialUIURL      string
+	CredentialOperations *CredentialOperations
 	// Namespaces finds the organization namespaces with the ServiceAccount.
 	Namespaces *Namespaces
 	// KagentAPIVersion is the api.kagent.dev version of the ModelConfigs,

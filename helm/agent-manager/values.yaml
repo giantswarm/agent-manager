@@ -558,11 +558,11 @@ tenants:
     platformModelsPath: ""
 
 credentials:
-  # -- HTTPS RFC 6570 installation model credential form template with {operation} and {namespace} expressions.
-  # Independent of tenants.enabled and credentials.uiURL; requires downstream OAuth.
-  platformUIURL: ""
-  # -- HTTPS RFC 6570 URI template with one {operation} expression. The UI owns
-  # its routes; agent-manager supplies only a non-authorizing operation ID.
+  # -- HTTPS RFC 6570 URI template with one {operation} expression, for
+  # organization and installation models. Installation model links need a
+  # {namespace} expression, required without tenants.enabled. The UI owns its
+  # routes; agent-manager supplies only a non-authorizing operation ID.
+  # Requires downstream OAuth.
   uiURL: ""
   # -- Dedicated namespace for nonsecret operation metadata. Empty derives
   # a namespace from the release. Do not share it with application config.

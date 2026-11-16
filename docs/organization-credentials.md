@@ -10,10 +10,11 @@ Model operations also accept the configured installation namespace, requiring
 cluster-admin authorization again when an operation is read or saved. Its target
 declares `scope: platform`, without a synthetic organization. Connector and egress
 operations remain organization-scoped. Installation models require
-`credentials.platformUIURL`, an HTTPS template with `{operation}` and
-`{namespace}`. OAuth and downstream authorization are required; the installation
-form and model tools also work with tenancy disabled and no organization form
-URL. Tenant management tools stay disabled, and organization discovery is empty.
+`credentials.uiURL` with a `{namespace}` expression: an installation model has
+no `{parent}` or `{organization}`. OAuth and downstream authorization are
+required. Without tenancy the template must name `{namespace}`, and the form and
+model tools work for installation models only. Tenant management tools stay
+disabled, and organization discovery is empty.
 
 Native `AnthropicVertexAI` and `GeminiVertexAI` take nonsecret `projectID` and
 `location`; their credential key defaults to `GOOGLE_APPLICATION_CREDENTIALS`.
@@ -33,7 +34,7 @@ organization model with one of them is refused. In the installation namespace
 agent-manager writes only `tenant-credential-*` Secrets: a model may reference
 any existing Secret, such as one GitOps or Helm manages, and its value is
 replaced where it is managed. The installation form and model tools start only
-with `--multi-tenant` or `--platform-credential-ui-url`.
+with `--multi-tenant` or `--credential-ui-url`.
 
 Installation commit mode requires an explicit `tenants.commit.platformModelsPath`
 in the trusted repository and never derives a directory from an organization.
@@ -96,12 +97,13 @@ Configure an HTTPS URL template, for example:
 
 ```yaml
 credentials:
-  uiURL: https://portal.example.com/organizations/graveler/{parent}/{organization}/credentials?operation={operation}
+  uiURL: https://portal.example.com/customize/models/credentials/graveler/{namespace}/{operation}
 ```
 
 The template is an [RFC 6570](https://www.rfc-editor.org/rfc/rfc6570) URI
 template. One `{operation}` expression is required in the path or query
-(`{?operation}` works too). `{parent}`, `{organization}` and `{namespace}` are optional; the
+(`{?operation}` works too). `{parent}`, `{organization}` and `{namespace}` are optional, but installation
+model links need `{namespace}`, and without tenancy it is required; the
 scheme and host are fixed, and no other variable is accepted. Routes and the
 installation name belong to the UI configuration. Agent-manager neither hosts a
 form nor constructs a Backstage route. The operation ID grants no authority.

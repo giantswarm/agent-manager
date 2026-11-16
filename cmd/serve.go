@@ -119,7 +119,6 @@ type serveOptions struct {
 	githubExchangeAudience        string
 	githubExchangeCAFile          string
 	credentialUIURL               string
-	platformCredentialUIURL       string
 	platformModelsPath            string
 	credentialOperationsNamespace string
 }
@@ -206,8 +205,7 @@ environment variable named next to it; flags win over the environment.`,
 	f.StringVar(&o.githubExchangeSecretFile, "github-token-exchange-client-secret-file", envOr("AGENT_MANAGER_GITHUB_TOKEN_EXCHANGE_CLIENT_SECRET_FILE", ""), "Mounted confidential client secret file (AGENT_MANAGER_GITHUB_TOKEN_EXCHANGE_CLIENT_SECRET_FILE)")
 	f.StringVar(&o.githubExchangeAudience, "github-token-exchange-audience", envOr("AGENT_MANAGER_GITHUB_TOKEN_EXCHANGE_AUDIENCE", ""), "RFC 8693 audience of the manager App user grant, also the App named in grant_required answers (AGENT_MANAGER_GITHUB_TOKEN_EXCHANGE_AUDIENCE)")
 	f.StringVar(&o.githubExchangeCAFile, "github-token-exchange-ca-file", envOr("AGENT_MANAGER_GITHUB_TOKEN_EXCHANGE_CA_FILE", ""), "Additional CA bundle for token exchange (AGENT_MANAGER_GITHUB_TOKEN_EXCHANGE_CA_FILE)")
-	f.StringVar(&o.credentialUIURL, "credential-ui-url", envOr("AGENT_MANAGER_CREDENTIAL_UI_URL", ""), "HTTPS credential UI URL template containing {operation}; the URL grants no authority (AGENT_MANAGER_CREDENTIAL_UI_URL)")
-	f.StringVar(&o.platformCredentialUIURL, "platform-credential-ui-url", envOr("AGENT_MANAGER_PLATFORM_CREDENTIAL_UI_URL", ""), "HTTPS installation model credential form template containing {operation} and {namespace} (AGENT_MANAGER_PLATFORM_CREDENTIAL_UI_URL)")
+	f.StringVar(&o.credentialUIURL, "credential-ui-url", envOr("AGENT_MANAGER_CREDENTIAL_UI_URL", ""), "HTTPS credential UI URL template containing {operation}, and {namespace} for installation models; the URL grants no authority (AGENT_MANAGER_CREDENTIAL_UI_URL)")
 	f.StringVar(&o.platformModelsPath, "platform-models-path", envOr("AGENT_MANAGER_PLATFORM_MODELS_PATH", ""), "Trusted repository-relative directory for installation model commits in the configured organizations repository (AGENT_MANAGER_PLATFORM_MODELS_PATH)")
 	f.StringVar(&o.credentialOperationsNamespace, "credential-operations-namespace", envOr("AGENT_MANAGER_CREDENTIAL_OPERATIONS_NAMESPACE", ""), "Dedicated namespace for nonsecret credential operation metadata (AGENT_MANAGER_CREDENTIAL_OPERATIONS_NAMESPACE)")
 	return cmd
@@ -403,7 +401,7 @@ func runServe(ctx context.Context, o *serveOptions) error {
 			orgsCommit.PlatformModelsPath = o.platformModelsPath
 		}
 		var credentialOperations *organizations.CredentialOperations
-		if o.credentialUIURL != "" || o.platformCredentialUIURL != "" {
+		if o.credentialUIURL != "" {
 			credentialOperations = organizations.NewCredentialOperations(clients.Typed().CoreV1().ConfigMaps(o.credentialOperationsNamespace))
 			go credentialOperations.Expire(ctx)
 		}
@@ -411,18 +409,17 @@ func runServe(ctx context.Context, o *serveOptions) error {
 			orgNamespaces = organizations.NewNamespaces(clients.Typed(), clients.Dynamic(), o.kagentNamespace)
 		}
 		orgs = organizations.New(provider, organizations.Config{
-			PlatformNamespace:       o.kagentNamespace,
-			Namespaces:              orgNamespaces,
-			KagentAPIVersion:        kagentVersion,
-			HelmReleaseAPIVersion:   helmReleaseAPI,
-			Commit:                  orgsCommit,
-			CredentialUIURL:         o.credentialUIURL,
-			PlatformCredentialUIURL: o.platformCredentialUIURL,
-			CredentialOperations:    credentialOperations,
-			Sessions:                sessions,
+			PlatformNamespace:     o.kagentNamespace,
+			Namespaces:            orgNamespaces,
+			KagentAPIVersion:      kagentVersion,
+			HelmReleaseAPIVersion: helmReleaseAPI,
+			Commit:                orgsCommit,
+			CredentialUIURL:       o.credentialUIURL,
+			CredentialOperations:  credentialOperations,
+			Sessions:              sessions,
 		}, log)
 	} else if o.orgsRepository != "" {
-		return fmt.Errorf("--organizations-repository needs --multi-tenant or --platform-credential-ui-url: it is where the organization and installation model tools commit")
+		return fmt.Errorf("--organizations-repository needs --multi-tenant or --credential-ui-url: it is where the organization and installation model tools commit")
 	}
 
 	var bindings agents.SessionBinder
@@ -665,26 +662,21 @@ func gitHubRemote(enabled bool, apiURL string) agents.RemoteFor {
 
 // organizationToolsEnabled reports whether the organization and model tools
 // are served: in organization namespaces with --multi-tenant, in the kagent
-// namespace with an installation credential form.
+// namespace with a credential UI URL that names {namespace}.
 func organizationToolsEnabled(options *serveOptions) bool {
-	return options.multiTenant || options.platformCredentialUIURL != ""
+	return options.multiTenant || options.credentialUIURL != ""
 }
 
 func validateCredentialOptions(options *serveOptions) error {
-	if options.platformCredentialUIURL != "" {
-		if err := organizations.ValidatePlatformCredentialUIURL(options.platformCredentialUIURL); err != nil {
-			return err
-		}
-		if !options.oauthEnabled || !options.downstreamOAuth || options.credentialOperationsNamespace == "" {
-			return errors.New("--platform-credential-ui-url requires OAuth, downstream OAuth and a credential operation namespace")
-		}
-	}
 	if options.credentialUIURL != "" {
 		if err := organizations.ValidateCredentialUIURL(options.credentialUIURL); err != nil {
 			return err
 		}
-		if !options.multiTenant || !options.oauthEnabled || !options.downstreamOAuth || options.credentialOperationsNamespace == "" {
-			return errors.New("--credential-ui-url requires multi-tenant, OAuth, downstream OAuth and a credential operation namespace")
+		if !options.oauthEnabled || !options.downstreamOAuth || options.credentialOperationsNamespace == "" {
+			return errors.New("--credential-ui-url requires OAuth, downstream OAuth and a credential operation namespace")
+		}
+		if !options.multiTenant && !organizations.CredentialUIURLNamesNamespace(options.credentialUIURL) {
+			return errors.New("--credential-ui-url requires a {namespace} expression without --multi-tenant: installation model links name the namespace")
 		}
 	}
 	if options.githubExchangeEndpoint != "" {

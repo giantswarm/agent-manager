@@ -41,6 +41,7 @@ func TestInstallationModelEndpointRejectsCredentials(t *testing.T) {
 			fixture := newOrgFixtureWith(t, func(configuration *organizations.Config) {
 				configuration.Namespaces = nil
 				configuration.PlatformNamespace = "kagent"
+				configuration.CredentialUIURL = "https://portal.example.com/model-credentials/{namespace}/{operation}"
 			})
 			answer, failed := fixture.call(t, ToolSetOrganizationModel, map[string]any{
 				"namespace": "kagent", "name": "new-model", "provider": "OpenAI", "model": "test-model", "endpoint": endpoint, "noCredential": true,
@@ -67,6 +68,7 @@ func TestInstallationDefaultMovePreservesExternalOwnership(t *testing.T) {
 			fixture := newOrgFixtureWith(t, func(configuration *organizations.Config) {
 				configuration.Namespaces = nil
 				configuration.PlatformNamespace = "kagent"
+				configuration.CredentialUIURL = "https://portal.example.com/model-credentials/{namespace}/{operation}"
 			}, previous)
 			answer, failed := fixture.call(t, ToolSetOrganizationModel, map[string]any{
 				"namespace": "kagent", "name": "new-model", "provider": "OpenAI", "model": "test-model", "noCredential": true, "default": true,
@@ -87,6 +89,7 @@ func TestInstallationDefaultMoveAllowsOwnedAndUnmanagedModels(t *testing.T) {
 			fixture := newOrgFixtureWith(t, func(configuration *organizations.Config) {
 				configuration.Namespaces = nil
 				configuration.PlatformNamespace = "kagent"
+				configuration.CredentialUIURL = "https://portal.example.com/model-credentials/{namespace}/{operation}"
 			}, previous)
 			answer, failed := fixture.call(t, ToolSetOrganizationModel, map[string]any{
 				"namespace": "kagent", "name": "new-model", "provider": "OpenAI", "model": "test-model", "noCredential": true, "default": true,
@@ -95,6 +98,27 @@ func TestInstallationDefaultMoveAllowsOwnedAndUnmanagedModels(t *testing.T) {
 			require.False(t, failed, answer)
 			require.False(t, marked(fixture.get(t, mcGVR, "kagent", "previous-default")))
 			require.True(t, marked(fixture.get(t, mcGVR, "kagent", "new-model")))
+		})
+	}
+}
+
+func TestInstallationModelsNeedANamespaceInTheCredentialUIURL(t *testing.T) {
+	for name, template := range map[string]string{
+		"no form":           "",
+		"organization form": "https://portal.example.com/organizations/test/{parent}/{organization}/credentials/{operation}",
+	} {
+		t.Run(name, func(t *testing.T) {
+			fixture := newOrgFixtureWith(t, func(configuration *organizations.Config) {
+				configuration.PlatformNamespace = "kagent"
+				configuration.CredentialUIURL = template
+			})
+			answer, failed := fixture.call(t, ToolSetOrganizationModel, map[string]any{
+				"namespace": "kagent", "name": "keyless", "provider": "Ollama", "model": "test-model", "noCredential": true,
+				"endpoint": "https://models.example/v1",
+			})
+			require.True(t, failed, answer)
+			require.Contains(t, answer, "{namespace}")
+			require.Nil(t, fixture.get(t, mcGVR, "kagent", "keyless"))
 		})
 	}
 }
@@ -192,7 +216,7 @@ func TestInstallationModelCredentialAuthorization(t *testing.T) {
 	fixture := newOrgFixtureWith(t, func(configuration *organizations.Config) {
 		configuration.Namespaces = nil
 		configuration.PlatformNamespace = "kagent"
-		configuration.PlatformCredentialUIURL = "https://portal.example.com/model-credentials/{namespace}/{operation}"
+		configuration.CredentialUIURL = "https://portal.example.com/model-credentials/{namespace}/{operation}"
 	})
 	result := prepareModelOperation(t, fixture, map[string]any{"namespace": "kagent"})
 	confirmation := confirmOperation(t, fixture, result.CredentialOperation)
@@ -213,7 +237,7 @@ func TestInstallationModelCredentialSave(t *testing.T) {
 	fixture := newOrgFixtureWith(t, func(configuration *organizations.Config) {
 		configuration.Namespaces = nil
 		configuration.PlatformNamespace = "kagent"
-		configuration.PlatformCredentialUIURL = "https://portal.example.com/model-credentials/{namespace}/{operation}"
+		configuration.CredentialUIURL = "https://portal.example.com/model-credentials/{namespace}/{operation}"
 	})
 	result := prepareModelOperation(t, fixture, map[string]any{"namespace": "kagent", "provider": "GeminiVertexAI", "projectID": "vertex-test", "location": "global"})
 	confirmation := confirmOperation(t, fixture, result.CredentialOperation)
@@ -242,6 +266,7 @@ func TestInstallationModelToolsKeepOrganizationManagementDisabled(t *testing.T) 
 	fixture := newOrgFixtureWith(t, func(configuration *organizations.Config) {
 		configuration.Namespaces = nil
 		configuration.PlatformNamespace = "kagent"
+		configuration.CredentialUIURL = "https://portal.example.com/model-credentials/{namespace}/{operation}"
 	})
 	answer, failed := fixture.call(t, ToolListOrganizations, nil)
 	require.False(t, failed, answer)
@@ -264,7 +289,7 @@ func TestInstallationCredentialWritesOnlyOwnedSecrets(t *testing.T) {
 	fixture := newOrgFixtureWith(t, func(configuration *organizations.Config) {
 		configuration.Namespaces = nil
 		configuration.PlatformNamespace = "kagent"
-		configuration.PlatformCredentialUIURL = "https://portal.example.com/model-credentials/{namespace}/{operation}"
+		configuration.CredentialUIURL = "https://portal.example.com/model-credentials/{namespace}/{operation}"
 	}, external)
 	vertex := map[string]any{"namespace": "kagent", "provider": "GeminiVertexAI", "model": "gemini-2.5-flash", "projectID": "vertex-test", "location": "europe-west1"}
 	withSecret := func(name, secret string) map[string]any {
@@ -325,7 +350,7 @@ func TestInstallationKeylessModelProviderChangeAsksForACredential(t *testing.T) 
 	fixture := newOrgFixtureWith(t, func(configuration *organizations.Config) {
 		configuration.Namespaces = nil
 		configuration.PlatformNamespace = "kagent"
-		configuration.PlatformCredentialUIURL = "https://portal.example.com/model-credentials/{namespace}/{operation}"
+		configuration.CredentialUIURL = "https://portal.example.com/model-credentials/{namespace}/{operation}"
 	}, keyless)
 
 	answer, failed := fixture.call(t, ToolSetOrganizationModel, map[string]any{"namespace": "kagent", "name": "local", "displayName": "Local model"})
@@ -392,7 +417,7 @@ func TestKeylessEditsOpenAFormOutsideInstallationModels(t *testing.T) {
 				if test.namespace == "kagent" {
 					configuration.Namespaces = nil
 					configuration.PlatformNamespace = "kagent"
-					configuration.PlatformCredentialUIURL = "https://portal.example.com/model-credentials/{namespace}/{operation}"
+					configuration.CredentialUIURL = "https://portal.example.com/model-credentials/{namespace}/{operation}"
 				}
 			}, keylessModel(test.namespace, test.provider))
 			answer, failed := fixture.call(t, ToolSetOrganizationModel, map[string]any{"namespace": test.namespace, "name": "claude", "displayName": "Edited"})
@@ -450,7 +475,7 @@ func installationVertexOperation(t *testing.T, configure func(*organizations.Con
 	fixture := newOrgFixtureWith(t, func(configuration *organizations.Config) {
 		configuration.Namespaces = nil
 		configuration.PlatformNamespace = "kagent"
-		configuration.PlatformCredentialUIURL = "https://portal.example.com/model-credentials/{namespace}/{operation}"
+		configuration.CredentialUIURL = "https://portal.example.com/model-credentials/{namespace}/{operation}"
 		if configure != nil {
 			configure(configuration)
 		}
