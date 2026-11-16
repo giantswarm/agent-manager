@@ -42,6 +42,9 @@ type Members struct {
 // organization resolves an organization namespace argument: it must be one
 // agent-platform-operator keeps.
 func (s *Service) organization(ctx context.Context, ns string) (Namespace, error) {
+	if s.cfg.Namespaces == nil {
+		return Namespace{}, fmt.Errorf("%w: organization management is disabled", agents.ErrUnsupported)
+	}
 	if ns == "" {
 		return Namespace{}, invalidf("namespace (the organization namespace) is required; list_organizations lists yours, get_organization names an organization's")
 	}

@@ -5,9 +5,9 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"path"
 	"reflect"
 	"slices"
+	"strings"
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -84,7 +84,11 @@ func (s *Service) saveCredentialOperation(ctx context.Context, id, version strin
 		return &operation.Result, nil
 	}
 	if operation.Mode == agents.ModeCommit {
-		if s.cfg.Commit == nil || operation.GitTarget == nil || s.cfg.Commit.Objects.Repository.String() != operation.GitTarget.Repository || s.cfg.Commit.Objects.Branch != operation.GitTarget.Base || path.Join(s.cfg.Commit.ContentPrefix, operation.Namespace.Parent, operation.Namespace.Organization) != operation.GitTarget.Directory {
+		writer, err := s.contentWriter(ctx, operation.Namespace, operation.Mode)
+		if err != nil {
+			return nil, err
+		}
+		if s.cfg.Commit == nil || operation.GitTarget == nil || s.cfg.Commit.Objects.Repository.String() != operation.GitTarget.Repository || s.cfg.Commit.Objects.Branch != operation.GitTarget.Base || writer.dir.Path() != operation.GitTarget.Directory {
 			return nil, fmt.Errorf("%w: the credential Git target changed", agents.ErrConflict)
 		}
 	}
@@ -114,6 +118,7 @@ func (s *Service) saveCredentialOperation(ctx context.Context, id, version strin
 	seen := map[string]bool{}
 	// created are the Secrets this save creates: only those it may take back.
 	var created []string
+	var notes []string
 	for _, credential := range operation.Credentials {
 		index := slices.IndexFunc(values, func(value CredentialValue) bool {
 			return value.Secret == credential.Secret && value.Key == credential.Key
@@ -131,6 +136,11 @@ func (s *Service) saveCredentialOperation(ctx context.Context, id, version strin
 		if operation.Result.Kind == KindCredential && !sameConsumers(references, operation.Consumers) {
 			return nil, errConsumersChanged(operation.Namespace.Name, credential.Secret)
 		}
+		keyNotes, err := validateCredentialModels(operation, live, credential, values[index].Value)
+		if err != nil {
+			return nil, err
+		}
+		notes = append(notes, keyNotes...)
 		// The preparation stored at least one consumer of the key and none of
 		// another key, so for a replacement the comparison above already
 		// answers both cases below; they stay as a defence.
@@ -214,6 +224,7 @@ func (s *Service) saveCredentialOperation(ctx context.Context, id, version strin
 		return nil, err
 	}
 	completeCredentialOperation(operation)
+	operation.Result.Note = strings.Join(slices.DeleteFunc(append([]string{operation.Result.Note}, notes...), func(note string) bool { return note == "" }), "; ")
 	if err := s.cfg.CredentialOperations.put(ctx, operation); err != nil {
 		return nil, err
 	}
