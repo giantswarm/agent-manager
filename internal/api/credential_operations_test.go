@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -115,7 +116,32 @@ func operationMaps(t *testing.T) typedcore.ConfigMapInterface {
 		err = client.Tracker().Update(corev1.SchemeGroupVersion.WithResource("configmaps"), item, action.GetNamespace())
 		return true, item, err
 	})
-	return client.CoreV1().ConfigMaps("agent-manager")
+	return contextMaps{client.CoreV1().ConfigMaps("agent-manager")}
+}
+
+// contextMaps answers a call whose context ended with its error, as the real
+// client does; the fake clientset ignores the context.
+type contextMaps struct{ typedcore.ConfigMapInterface }
+
+func (m contextMaps) Get(ctx context.Context, name string, options metav1.GetOptions) (*corev1.ConfigMap, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return m.ConfigMapInterface.Get(ctx, name, options)
+}
+
+func (m contextMaps) Create(ctx context.Context, item *corev1.ConfigMap, options metav1.CreateOptions) (*corev1.ConfigMap, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return m.ConfigMapInterface.Create(ctx, item, options)
+}
+
+func (m contextMaps) Update(ctx context.Context, item *corev1.ConfigMap, options metav1.UpdateOptions) (*corev1.ConfigMap, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return m.ConfigMapInterface.Update(ctx, item, options)
 }
 
 func prepareModelOperation(t *testing.T, fixture *orgFixture, extra map[string]any) organizations.ResourceResult {
@@ -623,6 +649,105 @@ func TestCredentialCommitRecoversAnUncertainPullRequest(t *testing.T) {
 	confirmation = confirmOperation(t, fixture, result.CredentialOperation)
 	require.Equal(t, "complete", confirmation.State)
 	require.Equal(t, organizations.CredentialCommitted, confirmation.Result.Credentials[0].State)
+}
+
+// leavingRemote is the fake forge where the caller goes away right after the
+// commit: the commit cancels the request, and every later call sees the
+// request's context as a real GitHub client does.
+type leavingRemote struct {
+	*commit.Fake
+	leave context.CancelFunc
+}
+
+func (r *leavingRemote) Commit(ctx context.Context, repo commit.Repository, branch, message string, files map[string][]byte) error {
+	if err := r.Fake.Commit(ctx, repo, branch, message, files); err != nil {
+		return err
+	}
+	if r.leave != nil {
+		r.leave()
+	}
+	return ctx.Err()
+}
+
+func (r *leavingRemote) OpenPullRequest(ctx context.Context, repo commit.Repository, head, base, title, body string) (commit.PullRequest, error) {
+	if err := ctx.Err(); err != nil {
+		return commit.PullRequest{}, err
+	}
+	return r.Fake.OpenPullRequest(ctx, repo, head, base, title, body)
+}
+
+// A commit-mode save whose caller goes away between the commit and the pull
+// request still opens the pull request: the operation ends committed, as for
+// a caller that waited, and a repeated call gives the receipt
+// (giantswarm/agent-manager#396).
+func TestCredentialCommitOpensThePullRequestWhenTheCallerLeavesAfterTheCommit(t *testing.T) {
+	remote := &leavingRemote{}
+	fixture, forge := commitFixtureWith(t, nil, func(fake *commit.Fake) organizations.GitHubRemote {
+		remote.Fake = fake
+		return remote
+	})
+	result := prepareModelOperation(t, fixture, map[string]any{"mode": "commit"})
+	confirmation := confirmOperation(t, fixture, result.CredentialOperation)
+	waiting := fixture.ctx
+	request, leave := context.WithCancel(waiting)
+	defer leave()
+	remote.leave = leave
+	fixture.ctx = request
+	operationHTTP(t, fixture, http.MethodPost, result.CredentialOperation, confirmation.Version, valuesBody(t, result, "synthetic-value"), nil)
+	fixture.ctx = waiting
+	require.Error(t, request.Err(), "the caller went away during the save")
+	require.Len(t, forge.PullRequests(), 1, "the pull request opens without the caller")
+	after := confirmOperation(t, fixture, result.CredentialOperation)
+	require.Equal(t, "complete", after.State)
+	require.Equal(t, organizations.CredentialCommitted, after.Result.Credentials[0].State)
+	require.NotNil(t, after.Result.Commit)
+	require.Equal(t, forge.PullRequests()[0].URL, after.Result.Commit.PullRequest)
+	status, receipt, _ := operationHTTP(t, fixture, http.MethodPost, result.CredentialOperation, after.Version, `{"values":[]}`, nil)
+	require.Equal(t, http.StatusOK, status, receipt)
+	require.Contains(t, receipt, forge.PullRequests()[0].URL)
+	require.Len(t, forge.PullRequests(), 1)
+	require.Contains(t, fixture.logs.String(), `"msg":"a credential save completed after its request ended"`)
+	require.NotContains(t, fixture.logs.String(), "synthetic-value")
+}
+
+// A failed save names its step and its cause in the log, and never a value
+// the person typed, even when the cause repeats it, quoted or encoded.
+func TestAFailedCredentialSaveLogsItsStepAndCause(t *testing.T) {
+	value := "synthetic \"line\"\nvalue"
+	fixture, forge := commitFixture(t, nil)
+	result := prepareModelOperation(t, fixture, map[string]any{"mode": "commit"})
+	confirmation := confirmOperation(t, fixture, result.CredentialOperation)
+	encoded := base64.StdEncoding.EncodeToString([]byte(value))
+	forge.Fail[commit.OpOpenPullRequest] = fmt.Errorf("the provider did not answer about %q, %s or %s", value, encoded, strings.TrimRight(encoded, "="))
+	status, answer, _ := operationHTTP(t, fixture, http.MethodPost, result.CredentialOperation, confirmation.Version, valuesBody(t, result, value), nil)
+	require.Equal(t, http.StatusBadGateway, status, answer)
+	logs := fixture.logs.String()
+	require.Contains(t, logs, `"msg":"credential save failed"`)
+	require.Contains(t, logs, `"level":"ERROR"`)
+	require.Contains(t, logs, `"step":"open pull request"`)
+	require.Contains(t, logs, `the provider did not answer about \"[redacted]\", [redacted] or [redacted]`)
+	require.NotContains(t, logs, "synthetic")
+	require.NotContains(t, logs, strings.TrimRight(encoded, "="))
+	require.Equal(t, "uncertain", confirmOperation(t, fixture, result.CredentialOperation).State)
+}
+
+// A Kubernetes API refusal may quote the Secret it refused: the log keeps its
+// reason and code, never its message.
+func TestACredentialSaveRefusedByTheAPIServerLogsNoMessage(t *testing.T) {
+	value := "synthetic \"line\"\nvalue"
+	fixture, _ := commitFixture(t, nil)
+	result := prepareModelOperation(t, fixture, map[string]any{"mode": "commit"})
+	confirmation := confirmOperation(t, fixture, result.CredentialOperation)
+	fixture.dyn.PrependReactor("create", "secrets", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewBadRequest(fmt.Sprintf("admission webhook refused credential %q", value))
+	})
+	status, answer, _ := operationHTTP(t, fixture, http.MethodPost, result.CredentialOperation, confirmation.Version, valuesBody(t, result, value), nil)
+	require.Equal(t, http.StatusBadRequest, status, answer)
+	logs := fixture.logs.String()
+	require.Contains(t, logs, `"step":"dry run"`)
+	require.Contains(t, logs, `"cause":"the Kubernetes API answered BadRequest (400)"`)
+	require.NotContains(t, logs, "synthetic")
+	require.NotContains(t, logs, "admission webhook")
 }
 
 // A commit-mode save refused before a branch exists writes nothing, so the

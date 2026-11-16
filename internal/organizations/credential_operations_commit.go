@@ -233,11 +233,11 @@ func (s *Service) writeCredentialCommit(ctx context.Context, operation *credenti
 	operation.WrittenFiles = prepared.written
 	operation.Result.Commit = result
 	if err := s.cfg.CredentialOperations.put(ctx, operation); err != nil {
-		return nil, err
+		return nil, atStep("record branch", err)
 	}
 	err := writer.commit.remote.CreateBranch(ctx, writer.commit.cfg.Objects.Repository, result.Branch, result.Base)
 	if err != nil {
-		return nil, commitError(writer.commit.gh, err)
+		return nil, atStep("create branch", commitError(writer.commit.gh, err))
 	}
 	branchConfiguration := *writer.commit.cfg
 	branchConfiguration.Objects.Branch = result.Branch
@@ -245,18 +245,18 @@ func (s *Service) writeCredentialCommit(ctx context.Context, operation *credenti
 	branchReader.cfg = &branchConfiguration
 	branchSnapshot, err := branchReader.credentialSnapshot(ctx, operation)
 	if err != nil {
-		return nil, err
+		return nil, atStep("check branch", err)
 	}
 	if !maps.Equal(branchSnapshot, operation.GitFiles) {
-		return nil, fmt.Errorf("%w: the Git base changed before the credential write", agents.ErrConflict)
+		return nil, atStep("check branch", fmt.Errorf("%w: the Git base changed before the credential write", agents.ErrConflict))
 	}
 	err = writer.commit.remote.Commit(ctx, writer.commit.cfg.Objects.Repository, result.Branch, "chore(organizations): save credential operation", landed)
 	if err != nil {
-		return nil, commitError(writer.commit.gh, err)
+		return nil, atStep("commit", commitError(writer.commit.gh, err))
 	}
 	pullRequest, err := writer.commit.remote.OpenPullRequest(ctx, writer.commit.cfg.Objects.Repository, result.Branch, result.Base, "chore(organizations): save credential operation", "Updates the confirmed organization resources and their encrypted credentials. Operation: "+operation.ElicitationID+".\n\nThe platform team reviews the change through CODEOWNERS.")
 	if err != nil {
-		return nil, commitError(writer.commit.gh, err)
+		return nil, atStep("open pull request", commitError(writer.commit.gh, err))
 	}
 	result.PullRequest, result.Number = pullRequest.URL, pullRequest.Number
 	return result, nil
@@ -274,17 +274,17 @@ func (s *Service) recoverCredentialCommit(ctx context.Context, operation *creden
 	for file, digest := range operation.WrittenFiles {
 		contents, err := writer.commit.remote.ReadFile(ctx, writer.commit.cfg.Objects.Repository, result.Branch, file)
 		if err != nil || fileDigest(contents) != digest {
-			return nil, fmt.Errorf("%w: credential commit has an uncertain outcome; inspect branch %s before retrying", agents.ErrConflict, result.Branch)
+			return nil, atStep("read branch", fmt.Errorf("%w: credential commit has an uncertain outcome; inspect branch %s before retrying", agents.ErrConflict, result.Branch))
 		}
 	}
 	pullRequest, err := writer.commit.remote.OpenPullRequest(ctx, writer.commit.cfg.Objects.Repository, result.Branch, result.Base, "chore(organizations): save credential operation", "Completes credential operation "+operation.ElicitationID+". The platform team reviews the change through CODEOWNERS.")
 	if err != nil {
-		return nil, commitError(writer.commit.gh, err)
+		return nil, atStep("open pull request", commitError(writer.commit.gh, err))
 	}
 	result.PullRequest, result.Number = pullRequest.URL, pullRequest.Number
 	completeCredentialOperation(operation)
 	if err := s.cfg.CredentialOperations.put(ctx, operation); err != nil {
-		return nil, err
+		return nil, atStep("record result", err)
 	}
 	return &operation.Result, nil
 }
