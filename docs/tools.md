@@ -374,7 +374,7 @@ Before any write, dry run too, refuses when you may not bind them or your right 
       "type": "string"
     },
     "workerReplicas": {
-      "description": "Warm workers of its WorkerPool",
+      "description": "Warm workers of its WorkerPool; omitted means 1, 0 runs none. They run only while the organization has a model and an agent or a session",
       "type": "number"
     }
   },
@@ -1704,7 +1704,7 @@ An omitted field stays; harnesses replaces the whole list; displayName "" remove
       "type": "string"
     },
     "workerReplicas": {
-      "description": "Warm workers of its WorkerPool",
+      "description": "Warm workers; omitted keeps the value (none set means 1), 0 runs none. They run only while the organization has a model and an agent or a session",
       "type": "number"
     }
   },

@@ -82,7 +82,7 @@ func organizationOf(u *unstructured.Unstructured) (*apov1alpha1.AgentPlatformOrg
 func (s *Service) summary(org *apov1alpha1.AgentPlatformOrganization) Organization {
 	out := Organization{
 		Name: org.Name, Parent: org.Namespace, DisplayName: org.Annotations[apov1alpha1.DisplayNameAnnotation],
-		Namespace: org.Status.Namespace, Harnesses: slices.Clone(org.Spec.Harnesses), WorkerReplicas: org.Spec.Workers.Replicas,
+		Namespace: org.Status.Namespace, Harnesses: slices.Clone(org.Spec.Harnesses), WorkerReplicas: org.Spec.Workers.ReplicasOrDefault(),
 		SnapshotPrefix: org.Status.SnapshotPrefix, Deleting: org.DeletionTimestamp != nil, ErasureStep: org.Status.ErasureStep,
 		GitOps: org.Labels[agents.KustomizationNameLabel], LastAppliedRevision: org.Status.LastAppliedRevision,
 	}
@@ -681,7 +681,11 @@ func changeOrganization(next *unstructured.Unstructured, req UpdateRequest) ([]s
 		}
 		changed = append(changed, "harnesses")
 	}
-	if req.WorkerReplicas != nil && *req.WorkerReplicas != cur.Spec.Workers.Replicas {
+	// An unset field is the CRD's default, not the requested value: write
+	// the request then too, so an explicit 0 is never taken for "no change".
+	// A request equal to the default is written as well: the value then stays
+	// when the operator's default changes.
+	if req.WorkerReplicas != nil && (cur.Spec.Workers.Replicas == nil || *req.WorkerReplicas != *cur.Spec.Workers.Replicas) {
 		if err := unstructured.SetNestedField(next.Object, int64(*req.WorkerReplicas), "spec", "workers", "replicas"); err != nil {
 			return nil, err
 		}
