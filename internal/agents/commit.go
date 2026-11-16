@@ -38,12 +38,13 @@ const KustomizationNamespaceLabel = "kustomize.toolkit.fluxcd.io/namespace"
 const CommitDirectory = "agent-manager"
 
 // GitHubRemote is what commit mode needs of GitHub: the pull request seams,
-// the reads of the base and the files a merged pull request changed, acting
-// as the person.
+// the reads of the base (at a branch, or at one commit its head resolves to)
+// and the files a merged pull request changed, acting as the person.
 type GitHubRemote interface {
 	commit.Remote
 	commit.Reader
 	commit.Lister
+	commit.HeadReader
 	commit.MergedFilesLister
 }
 

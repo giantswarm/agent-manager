@@ -154,6 +154,13 @@ func TestCreateOrganizationInCommitModeOpensOnePullRequest(t *testing.T) {
 // first admins, a model with its credential and a nested directory.
 func gitOrganization(t *testing.T) (*orgFixture, *commit.Fake) {
 	t.Helper()
+	return gitOrganizationWith(t, nil)
+}
+
+// gitOrganizationWith is gitOrganization whose remote is wrap of the fake
+// forge, as commitFixtureWith.
+func gitOrganizationWith(t *testing.T, wrap func(*commit.Fake) organizations.GitHubRemote) (*orgFixture, *commit.Fake) {
+	t.Helper()
 	live := organization("org-acme", "payments", fromGitLabels("flux"))
 	live.SetAnnotations(map[string]string{organizations.PruneAnnotation: organizations.PruneDisabled})
 	file := organization("org-acme", "payments", nil)
@@ -178,7 +185,7 @@ func gitOrganization(t *testing.T) (*orgFixture, *commit.Fake) {
 	adminsYAML, err := yaml.Marshal(adminsFile.Object)
 	require.NoError(t, err)
 	admins.SetLabels(fromGitLabels("agents-payments-x7k2q"))
-	return commitFixture(t, map[string][]byte{
+	return commitFixtureWith(t, map[string][]byte{
 		objectsPath + "/kustomization.yaml":          []byte("resources:\n  - org-acme\n"),
 		objectsPath + "/org-acme/kustomization.yaml": []byte("resources:\n  - payments.yaml\n"),
 		paymentsFile:                                                       fileYAML,
@@ -189,7 +196,7 @@ func gitOrganization(t *testing.T) (*orgFixture, *commit.Fake) {
 		paymentsPath + "/agents/kustomization.yaml":                        []byte("resources:\n  - sre.yaml\n"),
 		paymentsPath + "/agents/sre.yaml":                                  []byte("kind: HelmRelease\n"),
 		"agent-platform/organizations/org-acme/billing/modelconfig-x.yaml": []byte("kind: ModelConfig\n"),
-	}, live, claude, admins)
+	}, wrap, live, claude, admins)
 }
 
 // Delete in commit mode, two steps: the pull request removes the object's
@@ -531,6 +538,46 @@ func TestAMergedDeleteThatDidNotRemoveTheFileErasesNothing(t *testing.T) {
 			noConfirm: true,
 		},
 		{
+			// The overlay is not above the file: it refers to it by ../, so
+			// any kustomization under the objects path that sets a
+			// namespace counts (giantswarm/agent-manager#399).
+			name: "a sibling overlay sets the namespace of the moved file",
+			edit: func(t *testing.T, fake *commit.Fake, head string, _ []byte) {
+				org, err := yaml.Marshal(orgDocument(t, "org-template"))
+				require.NoError(t, err)
+				require.NoError(t, fake.Commit(ctx, mcRepo, head, "move it", map[string][]byte{
+					objectsPath + "/base/payments.yaml":               org,
+					objectsPath + "/base/kustomization.yaml":          []byte("resources:\n  - payments.yaml\n"),
+					objectsPath + "/overlays/prod/kustomization.yaml": []byte("namespace: org-acme\nresources:\n  - ../../base\n"),
+				}))
+			},
+			want:      []string{"conflict:", objectsPath + "/base/payments.yaml", "still defines it", objectsPath + "/overlays/prod/kustomization.yaml", "remove that setting or the overlay"},
+			noConfirm: true,
+		},
+		{
+			name: "a sibling overlay sets a name suffix of the moved file",
+			edit: func(t *testing.T, fake *commit.Fake, head string, _ []byte) {
+				doc := orgDocument(t, "org-acme")
+				require.NoError(t, unstructured.SetNestedField(doc, "pay", "metadata", "name"))
+				org, err := yaml.Marshal(doc)
+				require.NoError(t, err)
+				require.NoError(t, fake.Commit(ctx, mcRepo, head, "move it", map[string][]byte{
+					objectsPath + "/base/pay.yaml":                    org,
+					objectsPath + "/overlays/prod/kustomization.yaml": []byte("nameSuffix: ments\nresources:\n  - ../../base/pay.yaml\n"),
+				}))
+			},
+			want:      []string{"conflict:", objectsPath + "/base/pay.yaml", "still defines it", objectsPath + "/overlays/prod/kustomization.yaml"},
+			noConfirm: true,
+		},
+		{
+			name: "the head of the branch cannot be read",
+			after: func(t *testing.T, fake *commit.Fake) {
+				fake.Fail[commit.OpHead] = errors.New("get ref heads/main: 404 Not Found")
+			},
+			want:      []string{"nothing was erased", "the head of main", "whether the organization is still defined in git is unknown"},
+			noConfirm: true,
+		},
+		{
 			name: "the objects path cannot be read",
 			after: func(t *testing.T, fake *commit.Fake) {
 				fake.Fail[commit.OpListFiles] = errors.New("the repository's tree is too large for one read")
@@ -579,6 +626,72 @@ func TestAMergedDeleteThatDidNotRemoveTheFileErasesNothing(t *testing.T) {
 			live := f.get(t, orgGVR, "org-acme", "payments")
 			require.NotNil(t, live, "nothing is erased")
 			assert.Equal(t, organizations.PruneDisabled, live.GetAnnotations()[organizations.PruneAnnotation], "the delete intent is not written")
+		})
+	}
+}
+
+// movingRemote is the fake forge where another writer, once armed, commits
+// a move on the base branch right after the objects path is listed: between
+// the scan's list and its reads.
+type movingRemote struct {
+	*commit.Fake
+	move map[string][]byte
+}
+
+func (r *movingRemote) ListFiles(ctx context.Context, repo commit.Repository, ref, dir string) ([]string, error) {
+	files, err := r.Fake.ListFiles(ctx, repo, ref, dir)
+	if err == nil && dir == objectsPath && r.move != nil {
+		move := r.move
+		r.move = nil
+		if err := r.Commit(ctx, repo, "main", "another writer moves the definition", move); err != nil {
+			return nil, err
+		}
+	}
+	return files, err
+}
+
+// The scan reads the objects path at one commit: a commit that moves the
+// definition between the list and the reads does not hide it, with and
+// without confirm (giantswarm/agent-manager#420).
+func TestACommitDuringTheScanDoesNotHideTheDefinition(t *testing.T) {
+	ctx := context.Background()
+	archived := objectsPath + "/archive/payments.yaml"
+	for _, confirm := range []string{"", "org-acme/payments"} {
+		t.Run("confirm "+confirm, func(t *testing.T) {
+			remote := &movingRemote{}
+			f, fake := gitOrganizationWith(t, func(fake *commit.Fake) organizations.GitHubRemote {
+				remote.Fake = fake
+				return remote
+			})
+			file := fake.Files(mcRepo, "main")[paymentsFile]
+			text, isErr := f.call(t, ToolDeleteOrganization, map[string]any{"namespace": "org-acme", "name": "payments", "mode": "commit"})
+			require.False(t, isErr, text)
+			pr := fake.PullRequests()[0]
+			// The delete pull request moved the file and changed it, which
+			// GitHub reports as a removal and an addition.
+			require.NoError(t, fake.Commit(ctx, mcRepo, pr.Head, "move it", map[string][]byte{archived: append([]byte("# archived\n"), file...)}))
+			merge := pr.PullRequest
+			st, err := fake.Status(ctx, merge)
+			require.NoError(t, err)
+			merge.HeadSHA = st.HeadSHA
+			require.NoError(t, fake.Merge(ctx, merge))
+
+			moved := fake.Files(mcRepo, "main")[archived]
+			remote.move = map[string][]byte{archived: nil, objectsPath + "/old/current": moved}
+			args := map[string]any{"namespace": "org-acme", "name": "payments", "mode": "commit"}
+			if confirm != "" {
+				args["confirm"] = confirm
+			}
+			text, isErr = f.call(t, ToolDeleteOrganization, args)
+			require.Nil(t, remote.move, "the other writer committed during the scan")
+			require.NotContains(t, fake.Files(mcRepo, "main"), archived)
+			require.True(t, isErr, text)
+			assert.True(t, strings.HasPrefix(text, "conflict:"), text)
+			assert.Contains(t, text, archived+" in "+mcRepo.String()+" still defines it", "the file as the commit the scan read has it")
+			assert.NotContains(t, text, "pending erase:")
+			live := f.get(t, orgGVR, "org-acme", "payments")
+			require.NotNil(t, live, "nothing is erased")
+			assert.Equal(t, organizations.PruneDisabled, live.GetAnnotations()[organizations.PruneAnnotation])
 		})
 	}
 }
