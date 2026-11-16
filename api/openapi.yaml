@@ -619,7 +619,8 @@ paths:
         while the operation is neither expired nor cancelled: sign in the same way as
         when it was prepared, then open the link again. That answer carries nothing of
         the operation. Every other caller gets 404 not_found. The save and the
-        cancellation answer the same.
+        cancellation answer the same. 403 also answers an owner without the
+        permissions (forbidden): switch on error.code, not on the status.
       operationId: getCredentialOperation
       responses:
         "200":

@@ -167,3 +167,19 @@ func TestCredentialOperationOfAnUnverifiedOwnerAnswersNotFound(t *testing.T) {
 	require.Equal(t, http.StatusNotFound, status, answer)
 	require.Equal(t, "not_found", errorCode(t, answer))
 }
+
+// A completed operation answers the owner's other login as a pending one
+// does: the answer does not tell the state.
+func TestCredentialOperationOtherLoginOfACompletedOperation(t *testing.T) {
+	fixture, _ := otherLoginFixture(t)
+	result := prepareModelOperation(t, fixture, nil)
+	confirmation := confirmOperation(t, fixture, result.CredentialOperation)
+	status, answer, _ := operationHTTP(t, fixture, http.MethodPost, result.CredentialOperation, confirmation.Version, valuesBody(t, result, "sensitive-fixture"), nil)
+	require.Equal(t, http.StatusOK, status, answer)
+	require.Equal(t, "complete", confirmOperation(t, fixture, result.CredentialOperation).State)
+
+	status, answer, _ = operationHTTP(t, fixture, http.MethodGet, result.CredentialOperation, "", "", otherLogin())
+	require.Equal(t, http.StatusForbidden, status, answer)
+	require.Equal(t, "credential_operation_other_login", errorCode(t, answer))
+	requireNothingOfTheOperation(t, answer)
+}

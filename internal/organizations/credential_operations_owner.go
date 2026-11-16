@@ -2,7 +2,6 @@ package organizations
 
 import (
 	"crypto/sha256"
-	"crypto/subtle"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -20,13 +19,16 @@ import (
 // the operation.
 var ErrCredentialOperationOtherLogin = errors.New("this credential operation was started with another login; sign in the same way as when it was started, then open the link again")
 
-// verifiedEmailDigest is the SHA-256 of the caller's email address, compared
-// without case, when the identity provider verified it; empty otherwise.
+// verifiedEmailDigest is the SHA-256 of the caller's email address, its ASCII
+// letters in lower case, when the identity provider verified it; empty
+// otherwise. It is a pseudonym, not a secret. Only ASCII is folded: full
+// Unicode folding would map other characters (the Kelvin sign) to ASCII
+// letters and so match another address.
 func verifiedEmailDigest(person *identity.Identity) string {
 	if person == nil || !person.EmailVerified || person.Email == "" {
 		return ""
 	}
-	sum := sha256.Sum256([]byte(strings.ToLower(person.Email)))
+	sum := sha256.Sum256([]byte(strings.Map(asciiLower, person.Email)))
 	return hex.EncodeToString(sum[:])
 }
 
@@ -38,9 +40,16 @@ func verifiedEmailDigest(person *identity.Identity) string {
 func refuseNonOwner(operation *credentialOperation, person *identity.Identity) error {
 	digest := verifiedEmailDigest(person)
 	if person != nil && !person.Delegated && operation.Issuer == person.Issuer &&
-		digest != "" && subtle.ConstantTimeCompare([]byte(operation.EmailDigest), []byte(digest)) == 1 &&
+		digest != "" && operation.EmailDigest == digest &&
 		operation.State != operationCancelled && time.Now().Before(operation.ExpiresAt) {
 		return ErrCredentialOperationOtherLogin
 	}
 	return fmt.Errorf("%w: credential operation", agents.ErrNotFound)
+}
+
+func asciiLower(r rune) rune {
+	if r >= 'A' && r <= 'Z' {
+		return r + ('a' - 'A')
+	}
+	return r
 }
