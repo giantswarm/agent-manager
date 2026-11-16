@@ -3,11 +3,13 @@ package organizations
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -99,18 +101,44 @@ func atStep(step string, err error) error {
 	return saveStep{step: step, err: err}
 }
 
-// redactCredentialValues removes every submitted value, as typed and base64
-// encoded, from a message bound for the log.
-func redactCredentialValues(message string, values []CredentialValue) string {
+// credentialSaveCause is the cause of a failed save as the log may hold it.
+// A Kubernetes API answer is logged by its reason and code only: the API
+// server, a webhook or an admission policy may quote the object it refused,
+// in any escaping, and a credential Secret carries the value. Any other
+// cause is logged with every submitted value removed, as typed, quoted and
+// base64 encoded.
+func credentialSaveCause(err error, values []CredentialValue) string {
+	var status apierrors.APIStatus
+	if errors.As(err, &status) {
+		return fmt.Sprintf("the Kubernetes API answered %s (%d)", apierrors.ReasonForError(err), status.Status().Code)
+	}
+	message := err.Error()
 	for _, value := range values {
 		if value.Value == "" {
 			continue
 		}
-		for _, form := range []string{value.Value, base64.StdEncoding.EncodeToString([]byte(value.Value))} {
+		raw := []byte(value.Value)
+		quoted := strconv.Quote(value.Value)
+		escaped, _ := json.Marshal(value.Value)
+		for _, form := range []string{
+			value.Value,
+			quoted[1 : len(quoted)-1],
+			string(escaped[1 : len(escaped)-1]),
+			base64.StdEncoding.EncodeToString(raw),
+			base64.RawStdEncoding.EncodeToString(raw),
+			base64.URLEncoding.EncodeToString(raw),
+			base64.RawURLEncoding.EncodeToString(raw),
+		} {
 			message = strings.ReplaceAll(message, form, "[redacted]")
 		}
 	}
 	return message
+}
+
+// detached is ctx without its cancellation and deadline, ended by budget
+// instead: work that must not stop with the caller's request.
+func detached(ctx context.Context, budget time.Duration) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), budget)
 }
 
 func (s *Service) SaveCredentialOperation(ctx context.Context, id, version string, values []CredentialValue) (*ResourceResult, error) {
@@ -127,7 +155,7 @@ func (s *Service) SaveCredentialOperation(ctx context.Context, id, version strin
 		if errors.Is(answer, errCredentialSaveFailed) {
 			level = slog.LevelError
 		}
-		s.log.Log(ctx, level, "credential save failed", identity.LogAttr(ctx), "operation", id, "step", step, "cause", redactCredentialValues(err.Error(), values))
+		s.log.Log(ctx, level, "credential save failed", identity.LogAttr(ctx), "operation", id, "step", step, "cause", credentialSaveCause(err, values))
 		return nil, answer
 	}
 	return result, nil
@@ -136,6 +164,7 @@ func (s *Service) SaveCredentialOperation(ctx context.Context, id, version strin
 func (s *Service) saveCredentialOperation(ctx context.Context, id, version string, values []CredentialValue) (_ *ResourceResult, err error) {
 	step := "read operation"
 	defer func() { err = atStep(step, err) }()
+	request := ctx
 	operation, err := s.credentialOperation(ctx, id)
 	if err != nil {
 		return nil, err
@@ -293,7 +322,20 @@ func (s *Service) saveCredentialOperation(ctx context.Context, id, version strin
 	// operation uncertain, and the next save recovers it.
 	step = "record saving"
 	operation.State = operationSaving
-	if err := s.cfg.CredentialOperations.put(ctx, operation); err != nil {
+	saving := ctx
+	if operation.Mode == agents.ModeCommit {
+		// The operation must outlive the writes and their record, so that a
+		// repeated call finds it and gives the receipt.
+		if until := time.Now().Add(credentialWriteBudget + 2*credentialRecordBudget); operation.ExpiresAt.Before(until) {
+			operation.ExpiresAt = until
+		}
+		// A put the request cut could land without its answer, leaving a
+		// saving operation with no recorded branch to recover.
+		var cancelSaving context.CancelFunc
+		saving, cancelSaving = detached(ctx, credentialRecordBudget)
+		defer cancelSaving()
+	}
+	if err := s.cfg.CredentialOperations.put(saving, operation); err != nil {
 		return nil, err
 	}
 	// In commit mode the branch, the commit and the pull request run to
@@ -303,7 +345,7 @@ func (s *Service) saveCredentialOperation(ctx context.Context, id, version strin
 	// instead.
 	record := ctx
 	if operation.Mode == agents.ModeCommit {
-		writeCtx, cancelWrite := context.WithTimeout(context.WithoutCancel(ctx), credentialWriteBudget)
+		writeCtx, cancelWrite := detached(ctx, credentialWriteBudget)
 		var committed *CommitResult
 		committed, err = s.writeCredentialCommit(writeCtx, operation, writer, prepared)
 		cancelWrite()
@@ -311,7 +353,7 @@ func (s *Service) saveCredentialOperation(ctx context.Context, id, version strin
 			operation.Result.Commit = committed
 		}
 		var cancelRecord context.CancelFunc
-		record, cancelRecord = context.WithTimeout(context.WithoutCancel(ctx), credentialRecordBudget)
+		record, cancelRecord = detached(ctx, credentialRecordBudget)
 		defer cancelRecord()
 	} else {
 		step = "apply"
@@ -333,7 +375,7 @@ func (s *Service) saveCredentialOperation(ctx context.Context, id, version strin
 	if err := s.cfg.CredentialOperations.put(record, operation); err != nil {
 		return nil, err
 	}
-	if ctx.Err() != nil {
+	if request.Err() != nil {
 		s.log.Info("a credential save completed after its request ended", identity.LogAttr(ctx), "operation", id, "mode", operation.Mode)
 	}
 	return &operation.Result, nil
