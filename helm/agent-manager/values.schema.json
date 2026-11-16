@@ -71,7 +71,7 @@
                 },
                 "uiURL": {
                     "type": "string",
-                    "description": "HTTPS RFC 6570 URI template with one {operation} expression. The UI owns its routes; agent-manager supplies only a non-authorizing operation ID."
+                    "description": "HTTPS RFC 6570 URI template with one {operation} expression, for organization and installation models. It uses only {operation}, {parent}, {organization} and {namespace}, in the path or query, never in the host. Installation model links need {namespace} and no {parent} or {organization}, required without tenants.enabled. The UI owns its routes; agent-manager supplies only a non-authorizing operation ID. Requires downstream OAuth."
                 }
             }
         },
@@ -558,7 +558,7 @@
                         },
                         "caSecret": {
                             "type": "object",
-                            "description": "Secret with the CA of a Dex that serves a private certificate; `global.identity.ca.secretName` / `global.identity.ca.key`.",
+                            "description": "Secret with the CA of a Dex that serves a private certificate; mounted and passed as `--dex-ca-file`. Empty name falls back to `global.identity.ca.secretName` / `global.identity.ca.key`.",
                             "additionalProperties": false,
                             "properties": {
                                 "key": {
@@ -589,7 +589,7 @@
                     "properties": {
                         "enabled": {
                             "type": "boolean",
-                            "description": "Call the Kubernetes API as the caller: everything a request does (HelmReleases and OCIRepositories, the Agents, RemoteMCPServers, Harnesses, ModelConfigs and events it reads) presents the caller's IdP token, so the caller's RBAC governs — the apiserver must trust the IdP and the token's audience (a Dex install lists that audience in `muster.mcpServer.auth.requiredAudiences`; a Google install's client id permissions: the chart renders none of its Roles (`rbac.create` is moot) and the token stays mounted only for the in-cluster API address and CA plus API discovery at startup, which every authenticated principal may read. Requests have no other identity: a request without a token is refused with 401 instead of running as the ServiceAccount. Background work keeps its own RBAC (`skills.mintGitAuthSecret`), and `tenants.enabled` lets the ServiceAccount read namespaces to find the organization namespaces."
+                            "description": "Call the Kubernetes API as the caller: everything a request does (HelmReleases and OCIRepositories, the Agents, RemoteMCPServers, Harnesses, ModelConfigs and events it reads) presents the caller's IdP token, so the caller's RBAC governs — the apiserver must trust the IdP and the token's audience (a Dex install lists that audience in `muster.mcpServer.auth.requiredAudiences`; a Google install's client id is the apiserver's `--oidc-client-id`). The ServiceAccount then holds no permissions: the chart renders none of its Roles (`rbac.create` is moot) and the token stays mounted only for the in-cluster API address and CA plus API discovery at startup, which every authenticated principal may read. Requests have no other identity: a request without a token is refused with 401 instead of running as the ServiceAccount. Background work keeps its own RBAC (`skills.mintGitAuthSecret`), and `tenants.enabled` lets the ServiceAccount read namespaces to find the organization namespaces."
                         }
                     }
                 },
@@ -980,6 +980,10 @@
                             "type": "string",
                             "description": "The directory the installation's Kustomization applies the organization objects from: `<objectsPath>/<parent>/<name>.yaml`."
                         },
+                        "platformModelsPath": {
+                            "type": "string",
+                            "description": "Trusted repository-relative directory for installation model commits."
+                        },
                         "repository": {
                             "type": "string",
                             "description": "The installation's repository (`owner/name`) the organization tools' `mode: commit` opens its pull requests in, as the person. Empty: `mode: commit` is not offered for organizations. Needs `github.enabled`. The repository's CODEOWNERS must name the platform team for `objectsPath` and `contentPrefix`, and its `.sops.yaml` must cover `contentPrefix` (docs/organizations-commit-mode.md)."
@@ -1027,7 +1031,7 @@
                     "properties": {
                         "secretName": {
                             "type": "string",
-                            "description": "A `kubernetes.io/dockerconfigjson` Secret in the release namespace: agent-manager reads the toolchains of a registry host its `.dockerconfigjson` has credentials for with them, a private source's with its own pull secret. Optional: until the Secret exists, and when empty (the default), every registry is read anonymously. Read when the pod starts. Rendered with `repository`."
+                            "description": "A `kubernetes.io/dockerconfigjson` Secret in the release namespace: agent-manager reads the toolchains of a registry host its `.dockerconfigjson` has credentials for with them, a private source's (`--toolchain-registry-config`). The kagent controller pulls the images with its own pull secret. Optional: until the Secret exists, and when empty (the default), every registry is read anonymously. Read when the pod starts. Rendered with `repository`."
                         }
                     }
                 },

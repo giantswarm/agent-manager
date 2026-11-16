@@ -446,7 +446,7 @@ func NewMCPServer(svc *agents.Service, version string, opts ...Option) *mcpserve
 
 	s.AddTool(mcp.NewTool(ToolListModelConfigs,
 		tooldesc.Describe("List the ModelConfigs of a namespace: the values create_agent accepts for modelConfig.",
-			"Each with provider, model, its Accepted and ResolvedRefs conditions, who manages it, and default: the one create_agent writes when modelConfig is omitted (the single ModelConfig annotated "+apov1alpha1.DefaultModelConfigAnnotation+"=true; none or several is no default), and its settings: displayName, maxTokens, promptCaching (with cacheTTL while on; omitted for a provider without it). Organization admins write them with set_organization_model."),
+			"Each with provider, model, its Accepted and ResolvedRefs conditions, who manages it, and default: the one create_agent writes when modelConfig is omitted (the single ModelConfig annotated "+apov1alpha1.DefaultModelConfigAnnotation+"=true; none or several is no default), and its settings: displayName, maxTokens, promptCaching (with cacheTTL while on; omitted for a provider without it), credentialSecret/credentialKey of its key (names only). Organization admins write them with set_organization_model."),
 		nsProp,
 		orgProp,
 		clusterProp,
@@ -458,7 +458,7 @@ func NewMCPServer(svc *agents.Service, version string, opts ...Option) *mcpserve
 
 	s.AddTool(mcp.NewTool(ToolListEgressPolicies,
 		tooldesc.Describe("List the EgressPolicies of a namespace: the names create_agent and update_agent accept for egressPolicyRefs.",
-			"Each with its origins and, where the egress gateway adds a credential, the header's name; never the Secret. Read as you; organization admins write them with set_organization_egress_policy. A change to a policy reaches every agent that picks it from its next Session on."),
+			"Each with its origins and, where the egress gateway adds a credential, credentialHeader, credentialSecret and credentialKey: names only, never a value. Read as you; organization admins write them with set_organization_egress_policy. A change to a policy reaches every agent that picks it from its next Session on."),
 		nsProp,
 		orgProp,
 		clusterProp,

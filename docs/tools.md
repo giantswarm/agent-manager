@@ -375,7 +375,7 @@ Before any write, dry run too, refuses when you may not bind them or your right 
       "type": "string"
     },
     "workerReplicas": {
-      "description": "Warm workers of its WorkerPool",
+      "description": "Warm workers of its WorkerPool; omitted means 1, 0 runs none. They run only while the organization has a model and an agent or a session",
       "type": "number"
     }
   },
@@ -497,9 +497,9 @@ Without confirm it only answers what would be erased: show that to the person an
 ## `delete_organization_object`
 
 ```text
-Delete an organization's model, connector or egress policy as you.
+Delete an organization object or installation model as you.
 
-Dry run first. Its credential Secret stays. Deleting the default model leaves the organization without one until another is marked. Copies the platform curates are refused. Needs agent-platform:admin.
+Dry run first. Its credential Secret stays. Deleting the default model leaves its namespace without one until another is marked. Copies the platform curates are refused. Needs agent-platform:admin in an organization, cluster-admin for installation models.
 ```
 
 ```json
@@ -530,7 +530,7 @@ Dry run first. Its credential Secret stays. Deleting the default model leaves th
       "type": "string"
     },
     "namespace": {
-      "description": "The organization namespace, e.g. agents-payments-x7k2q (list_organizations, get_organization)",
+      "description": "Organization namespace, or the configured installation namespace for cluster admins",
       "type": "string"
     }
   },
@@ -812,7 +812,7 @@ managed: helmrelease is writable here; gitops needs mode commit; platform is rea
 ```text
 List the EgressPolicies of a namespace: the names create_agent and update_agent accept for egressPolicyRefs.
 
-Each with its origins and, where the egress gateway adds a credential, the header's name; never the Secret. Read as you; organization admins write them with set_organization_egress_policy. A change to a policy reaches every agent that picks it from its next Session on.
+Each with its origins and, where the egress gateway adds a credential, credentialHeader, credentialSecret and credentialKey: names only, never a value. Read as you; organization admins write them with set_organization_egress_policy. A change to a policy reaches every agent that picks it from its next Session on.
 ```
 
 ```json
@@ -841,7 +841,7 @@ Each with its origins and, where the egress gateway adds a credential, the heade
 ```text
 List the ModelConfigs of a namespace: the values create_agent accepts for modelConfig.
 
-Each with provider, model, its Accepted and ResolvedRefs conditions, who manages it, and default: the one create_agent writes when modelConfig is omitted (the single ModelConfig annotated agent-platform.giantswarm.io/is-default-model-config=true; none or several is no default), and its settings: displayName, maxTokens, promptCaching (with cacheTTL while on; omitted for a provider without it). Organization admins write them with set_organization_model.
+Each with provider, model, its Accepted and ResolvedRefs conditions, who manages it, and default: the one create_agent writes when modelConfig is omitted (the single ModelConfig annotated agent-platform.giantswarm.io/is-default-model-config=true; none or several is no default), and its settings: displayName, maxTokens, promptCaching (with cacheTTL while on; omitted for a provider without it), credentialSecret/credentialKey of its key (names only). Organization admins write them with set_organization_model.
 ```
 
 ```json
@@ -916,7 +916,7 @@ Read as you; every member role (user, editor or admin) may read them, from agent
 ```text
 List the organizations you manage or belong to, of one parent namespace or of all.
 
-Each with its organization namespace, Orphaned condition, deleting, and permissions (manage, member, createAgents), asked with your own token; a New agent goes where createAgents is true. Where you manage it, organization is its summary: harnesses, workers, Ready, DefaultModelConfigured, the last revision Flux applied (lastAppliedRevision) and in mode commit its commit and the organization's file (lastAppliedRevisionUrl, lastAppliedFile, lastAppliedFileUrl). none says who can add you when there is none.
+Each with its namespace, Orphaned condition, deleting, and permissions (manage, member, createAgents), asked as you; a New agent goes where createAgents is true; a missing createAgents is not known. Where you manage it, organization is its summary: harnesses, workers, Ready, DefaultModelConfigured, the last revision Flux applied (lastAppliedRevision) and in mode commit its commit and file (lastAppliedRevisionUrl, lastAppliedFile, lastAppliedFileUrl). none (no organization) says who can add you.
 ```
 
 ```json
@@ -1059,9 +1059,9 @@ From every binding of the role that holds them, dry run first; an emptied bindin
 ## `replace_organization_credential`
 
 ```text
-Replace an organization's credential by its Secret and key, as you, writing only the Secret.
+Replace an organization credential or installation model credential by its Secret and key, as you.
 
-No model, connector or egress policy is written. Answers with a URL elicitation of the credential UI, link in credentials[].next; the form lists every object that uses the Secret and where each sends the value. Refused when nothing uses that key of the Secret, and when an object reads another key of it: the Secret is written whole, holding the one key. A credential whose consumer git applies is replaced with mode commit. Never pass a value. Needs agent-platform:admin.
+Only the Secret is written. The form (credentials[].next) lists its consumers and destinations; another login: 403 credential_operation_other_login. Refused if unused or another key is referenced: the one-key Secret is replaced whole. Use mode commit for consumers applied from git. Never pass a value. Needs agent-platform:admin in an organization, cluster-admin for installation models.
 ```
 
 ```json
@@ -1084,7 +1084,7 @@ No model, connector or egress policy is written. Answers with a URL elicitation 
       "type": "string"
     },
     "namespace": {
-      "description": "The organization namespace, e.g. agents-payments-x7k2q (list_organizations, get_organization)",
+      "description": "Organization namespace, or the configured installation namespace for cluster admins",
       "type": "string"
     },
     "requestId": {
@@ -1092,7 +1092,7 @@ No model, connector or egress policy is written. Answers with a URL elicitation 
       "type": "string"
     },
     "secret": {
-      "description": "Secret in the organization namespace that holds the credential, by name (tenant-credential-...); never a value",
+      "description": "Secret in the target namespace, by name; organizations need tenant-credential-...; never a value",
       "type": "string"
     }
   },
@@ -1110,7 +1110,7 @@ No model, connector or egress policy is written. Answers with a URL elicitation 
 ```text
 Create or change an organization's connector (a RemoteMCPServer) as you; its credential is a Secret named by reference.
 
-A credential field sets the Secret-backed header it names (default: the only one, else Authorization; Secret tenant-credential-<name>, key token, the whole value); other headers stay; noCredential removes them. A URL with userinfo, a fragment, a credential-like query parameter or a query that does not parse is refused. Never pass a value: a missing credential is a URL elicitation of the credential UI, link in credentials[].next. Needs agent-platform:admin.
+A credential field sets the Secret-backed header it names (default: the only one, else Authorization; Secret tenant-credential-<name>, key token, the whole value); other headers stay; noCredential removes them. A URL with userinfo, a fragment, a credential-like or unparsable query is refused. Never pass a value: a missing one is a URL elicitation of the credential UI (credentials[].next); another login: 403 credential_operation_other_login. Needs agent-platform:admin.
 ```
 
 ```json
@@ -1129,7 +1129,7 @@ A credential field sets the Secret-backed header it names (default: the only one
       "type": "string"
     },
     "credentialSecret": {
-      "description": "Secret in the organization namespace that holds the credential, by name (tenant-credential-...); never a value",
+      "description": "Secret in the target namespace, by name; organizations need tenant-credential-...; never a value",
       "type": "string"
     },
     "description": {
@@ -1182,7 +1182,7 @@ A credential field sets the Secret-backed header it names (default: the only one
 ```text
 Create or replace an organization's egress policy as you: origins its agents may reach, credentials by Secret name.
 
-destinations replaces the whole list. A credentialHeader makes the egress gateway add that header from the Secret (default tenant-credential-<policy>, key token). Never pass a value: a missing credential is a URL elicitation of the credential UI, link in credentials[].next. list_egress_policies lists them. Needs agent-platform:admin.
+destinations replaces the whole list. A credentialHeader makes the egress gateway add that header from the Secret (default tenant-credential-<policy>, key token). Never pass a value: a missing credential is a URL elicitation of the credential UI (credentials[].next); another login: 403 credential_operation_other_login. list_egress_policies lists them. Needs agent-platform:admin.
 ```
 
 ```json
@@ -1209,7 +1209,7 @@ destinations replaces the whole list. A credentialHeader makes the egress gatewa
             "type": "string"
           },
           "credentialSecret": {
-            "description": "Secret in the organization namespace that holds the credential, by name (tenant-credential-...); never a value",
+            "description": "Secret in the target namespace, by name; organizations need tenant-credential-...; never a value",
             "type": "string"
           },
           "origin": {
@@ -1261,9 +1261,9 @@ destinations replaces the whole list. A credentialHeader makes the egress gatewa
 ## `set_organization_model`
 
 ```text
-Create or change an organization's model (a ModelConfig) as you; its API key is a Secret named by reference.
+Create or change an organization or installation model as you; credentials are Secret references.
 
-The first model of an organization without a default becomes its default (annotation agent-platform.giantswarm.io/is-default-model-config); default true moves the mark here. A new Anthropic model caches prompts (5m) unless promptCaching is false; an omitted argument keeps the stored value. Never pass a key: a missing one is a URL elicitation of the credential UI, link in credentials[].next. list_model_configs lists the models and settings. Needs agent-platform:admin.
+A new model becomes the default when none is set; default true moves the mark. New Anthropic models cache prompts (5m) unless promptCaching is false; omitted settings stay. Never pass a key: missing credentials open the form (credentials[].next); another login: 403 credential_operation_other_login. Vertex AI calls bypass the LLM gateway's metering, rate limits and spend reporting. list_model_configs lists them. Needs agent-platform:admin (organization) or cluster-admin (installation models).
 ```
 
 ```json
@@ -1278,15 +1278,15 @@ The first model of an organization without a default becomes its default (annota
       "type": "boolean"
     },
     "credentialKey": {
-      "description": "Key of that Secret; default apiKey",
+      "description": "Key of that Secret; default GOOGLE_APPLICATION_CREDENTIALS for Vertex AI, apiKey otherwise",
       "type": "string"
     },
     "credentialSecret": {
-      "description": "Secret in the organization namespace that holds the credential, by name (tenant-credential-...); never a value; default tenant-credential-<name>",
+      "description": "Secret in the target namespace, by name; organizations need tenant-credential-...; never a value; default and only written: tenant-credential-<name>",
       "type": "string"
     },
     "default": {
-      "description": "Make this the organization's default model, moving the mark (default false)",
+      "description": "Make this the namespace's default model, moving the mark (default false)",
       "type": "boolean"
     },
     "displayName": {
@@ -1296,6 +1296,18 @@ The first model of an organization without a default becomes its default (annota
     "dryRun": {
       "description": "Check every write with the API server as you and write nothing (default false)",
       "type": "boolean"
+    },
+    "endpoint": {
+      "description": "Installation models only: OpenAI/Anthropic base URL or Ollama host, without userinfo, fragment or credential query; empty removes it",
+      "type": "string"
+    },
+    "insecureSkipTLSVerify": {
+      "description": "Installation models only: disable model endpoint certificate verification; default false",
+      "type": "boolean"
+    },
+    "location": {
+      "description": "Vertex AI location: global, us, eu or a Google region",
+      "type": "string"
     },
     "maxTokens": {
       "description": "Token limit of an answer (Anthropic, Mistral, OpenAI); 0 removes it: the provider's default",
@@ -1318,7 +1330,15 @@ The first model of an organization without a default becomes its default (annota
       "type": "string"
     },
     "namespace": {
-      "description": "The organization namespace, e.g. agents-payments-x7k2q (list_organizations, get_organization)",
+      "description": "Organization namespace, or the configured installation namespace for cluster admins",
+      "type": "string"
+    },
+    "noCredential": {
+      "description": "Installation models only: the endpoint requires no credential; never valid for Vertex AI",
+      "type": "boolean"
+    },
+    "projectID": {
+      "description": "Vertex AI Google project ID; required to create a Vertex model",
       "type": "string"
     },
     "promptCaching": {
@@ -1706,7 +1726,7 @@ An omitted field stays; harnesses replaces the whole list; displayName "" remove
       "type": "string"
     },
     "workerReplicas": {
-      "description": "Warm workers of its WorkerPool",
+      "description": "Warm workers; omitted keeps the value (none set means 1), 0 runs none. They run only while the organization has a model and an agent or a session",
       "type": "number"
     }
   },

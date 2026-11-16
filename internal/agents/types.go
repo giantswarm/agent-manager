@@ -113,6 +113,9 @@ const (
 	// OCIRepositories agent-manager created.
 	ManagedByLabel = "app.kubernetes.io/managed-by"
 	ManagedByValue = "agent-manager"
+	// PortalManagedByValue is the ManagedByLabel value on models the
+	// Backstage portal wrote: agent-manager may change them.
+	PortalManagedByValue = "giantswarm-backstage"
 	// OperatorObjectLabel marks what agent-platform-operator keeps in an
 	// organization namespace (the agent chart's OCIRepository and the curated
 	// copies among them): agent-manager never deletes or rewrites such an
@@ -613,6 +616,12 @@ type ModelConfig struct {
 	// CacheTTL is its cache time, given while caching is on.
 	PromptCaching *bool  `json:"promptCaching,omitempty"`
 	CacheTTL      string `json:"cacheTTL,omitempty"`
+	// CredentialSecret and CredentialKey name the Secret and its key that hold
+	// the model's API key (spec.apiKeySecret, spec.apiKeySecretKey); empty for
+	// a model without one; the key only with the Secret's name. The names
+	// only: the Secret is never read.
+	CredentialSecret string `json:"credentialSecret,omitempty"`
+	CredentialKey    string `json:"credentialKey,omitempty"`
 }
 
 // EgressPolicy is a kagent EgressPolicy as list_egress_policies reports it:
@@ -626,10 +635,14 @@ type EgressPolicy struct {
 
 // EgressDestination is one origin of an EgressPolicy. CredentialHeader names
 // the request header the egress gateway fills with a credential, when the
-// origin carries one; the Secret behind it is never reported.
+// origin carries one; CredentialSecret and CredentialKey name the Secret and
+// its key the value comes from; the key only with the Secret's name, as on a
+// ModelConfig. The names only: the Secret is never read.
 type EgressDestination struct {
 	Origin           string `json:"origin"`
 	CredentialHeader string `json:"credentialHeader,omitempty"`
+	CredentialSecret string `json:"credentialSecret,omitempty"`
+	CredentialKey    string `json:"credentialKey,omitempty"`
 }
 
 // Manifests are the objects a create/update applies, as YAML, plus the values.

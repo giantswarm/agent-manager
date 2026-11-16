@@ -33,6 +33,7 @@ const (
 // value is typed in the credential UI, never in a tool call,
 // and no tool answer, log or trace carries it.
 type Credential struct {
+	InputFormat string `json:"inputFormat,omitempty"`
 	// Secret and Key name where the value lives in the organization
 	// namespace.
 	Secret string `json:"secret"`

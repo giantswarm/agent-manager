@@ -1,6 +1,8 @@
 package agents
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 
 	apov1alpha1 "github.com/giantswarm/agent-platform-operator/api/v1alpha1"
@@ -114,6 +116,28 @@ func TestListModelConfigsReportsResolvedRefs(t *testing.T) {
 	assert.Equal(t, ModelConfig{Name: "qwen", Namespace: "kagent", Provider: "OpenAI", Model: "qwen3"}, list[1])
 	assert.Equal(t, new(true), list[2].ResolvedRefs)
 	assert.False(t, list[2].Default)
+}
+
+// list_model_configs names the Secret and key of a model's API key, never
+// reads the Secret, and names none for a model without a key.
+func TestListModelConfigsNamesTheKeySecret(t *testing.T) {
+	keyed := modelConfig("kagent", "claude", "Anthropic", "claude-sonnet-4-6")
+	_ = unstructured.SetNestedField(keyed.Object, "tenant-credential-claude", "spec", "apiKeySecret")
+	_ = unstructured.SetNestedField(keyed.Object, "apiKey", "spec", "apiKeySecretKey")
+	f := modelFixture(t, keyed, modelConfig("kagent", "qwen", "OpenAI", "qwen3"))
+
+	list, err := f.svc.ListModelConfigs(t.Context(), In("kagent"))
+	require.NoError(t, err)
+	require.Len(t, list, 2)
+	assert.Equal(t, "tenant-credential-claude", list[0].CredentialSecret)
+	assert.Equal(t, "apiKey", list[0].CredentialKey)
+	assert.Empty(t, list[1].CredentialSecret)
+	assert.Empty(t, list[1].CredentialKey)
+	b, err := json.Marshal(list)
+	require.NoError(t, err)
+	assert.Contains(t, string(b), `"credentialSecret":"tenant-credential-claude","credentialKey":"apiKey"`)
+	assert.Equal(t, 1, strings.Count(string(b), "credentialSecret"), "a model without a key names none")
+	requireNoSecretRead(t, f, "modelconfigs")
 }
 
 func TestValidateCreateReportsTheModelItWouldWrite(t *testing.T) {

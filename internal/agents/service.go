@@ -826,6 +826,9 @@ func (s *Service) readModelConfigs(ctx context.Context, st *site) (namespaceMode
 		mc := ModelConfig{Name: item.GetName(), Namespace: item.GetNamespace()}
 		mc.Provider, _, _ = unstructured.NestedString(item.Object, "spec", "provider")
 		mc.Model, _, _ = unstructured.NestedString(item.Object, "spec", "model")
+		if mc.CredentialSecret, _, _ = unstructured.NestedString(item.Object, "spec", "apiKeySecret"); mc.CredentialSecret != "" {
+			mc.CredentialKey, _, _ = unstructured.NestedString(item.Object, "spec", "apiKeySecretKey")
+		}
 		conds := conditionsOfObject(&item)
 		mc.Accepted = conditionStatus(conds, conditionAccepted)
 		mc.ResolvedRefs = conditionStatus(conds, conditionResolvedRefs)

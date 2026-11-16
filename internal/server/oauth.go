@@ -267,7 +267,7 @@ func (o *oauthRuntime) attachIdentity(next http.Handler) http.Handler {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
-		id := &identity.Identity{Issuer: o.cfg.DexIssuerURL, Subject: info.ID, Email: info.Email, Name: info.Name, Groups: info.Groups, Source: identity.SourceOAuth}
+		id := &identity.Identity{Issuer: o.cfg.DexIssuerURL, Subject: info.ID, Email: info.Email, EmailVerified: info.EmailVerified, Name: info.Name, Groups: info.Groups, Source: identity.SourceOAuth}
 		if o.cfg.provider() == ProviderGoogle {
 			id.Issuer = "https://accounts.google.com"
 		}

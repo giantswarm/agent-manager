@@ -1,10 +1,12 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"path"
 	"path/filepath"
 	"regexp"
@@ -81,6 +83,8 @@ type orgFixture struct {
 	user authenticationv1.UserInfo
 	ctx  context.Context
 	orgs *organizations.Service
+	// logs is what the organizations service logged.
+	logs *logBuffer
 	// cfg and provider build the tools again, with another logger.
 	cfg      organizations.Config
 	provider kube.Provider
@@ -178,12 +182,30 @@ func newOrgFixtureWith(t *testing.T, configure func(*organizations.Config), objs
 		configure(&cfg)
 	}
 	f.cfg, f.provider = cfg, callerOnly{c: kube.FromInterfaces(f.dyn, f.typed, f.typed.Discovery())}
-	orgs := organizations.New(f.provider, cfg, nil)
+	f.logs = &logBuffer{}
+	orgs := organizations.New(f.provider, cfg, slog.New(slog.NewJSONHandler(f.logs, nil)))
 	f.orgs = orgs
 	svc, _ := newService(t)
 	f.srv = NewMCPServer(svc, "test", WithOrganizations(orgs), WithLifecycle(t.Context()))
 	f.ctx = identity.ContextWith(t.Context(), &identity.Identity{Issuer: "https://identity.example.com", Client: "platform", Subject: "a", Email: "alice@example.com"})
 	return f
+}
+
+type logBuffer struct {
+	mu     sync.Mutex
+	buffer bytes.Buffer
+}
+
+func (l *logBuffer) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buffer.Write(p)
+}
+
+func (l *logBuffer) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buffer.String()
 }
 
 func namespace(name string, labels map[string]string) *corev1.Namespace {
@@ -238,6 +260,8 @@ func TestCreateOrganizationWritesTheObjectAndTheFirstAdminsAsTheCaller(t *testin
 	org := f.get(t, orgGVR, "org-acme", "payments")
 	require.NotNil(t, org)
 	assert.Equal(t, "Payments", org.GetAnnotations()[apov1alpha1.DisplayNameAnnotation])
+	_, found, _ := unstructured.NestedFieldNoCopy(org.Object, "spec", "workers", "replicas")
+	assert.False(t, found, "an omitted workerReplicas writes no field: the CRD's default of 1 applies")
 	binding := f.get(t, rbGVR, orgNS, organizations.FirstAdminsBinding)
 	require.NotNil(t, binding)
 	assert.Equal(t, organizations.RoleAdmin, binding.Object["roleRef"].(map[string]any)["name"])
@@ -642,6 +666,53 @@ func TestListOrganizationsSaysWhoMayCreateAgents(t *testing.T) {
 	})
 }
 
+// A failed createAgents review (an error, not a denial) leaves createAgents
+// out: not known, so the Dev Portal does not show an editor as unable to
+// create agents. A denial answers false and an allowance true.
+func TestListOrganizationsLeavesOutCreateAgentsItCouldNotAsk(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		review func(f *orgFixture)
+		want   map[string]any
+	}{
+		{"failed", func(f *orgFixture) {
+			f.typed.PrependReactor("create", "selfsubjectaccessreviews", func(a k8stesting.Action) (bool, runtime.Object, error) {
+				ra := a.(k8stesting.CreateAction).GetObject().(*authorizationv1.SelfSubjectAccessReview).Spec.ResourceAttributes
+				if ra.Verb == "create" && ra.Resource == "agents" {
+					return true, nil, apierrors.NewInternalError(errors.New("etcd timeout"))
+				}
+				return false, nil, nil
+			})
+		}, map[string]any{"manage": true, "member": true}},
+		// A failed authorization webhook: the review answers, but neither
+		// allows nor denies.
+		{"evaluation error", func(f *orgFixture) {
+			f.typed.PrependReactor("create", "selfsubjectaccessreviews", func(a k8stesting.Action) (bool, runtime.Object, error) {
+				review := a.(k8stesting.CreateAction).GetObject().(*authorizationv1.SelfSubjectAccessReview)
+				if ra := review.Spec.ResourceAttributes; ra.Verb == "create" && ra.Resource == "agents" {
+					review.Status = authorizationv1.SubjectAccessReviewStatus{EvaluationError: "webhook timeout"}
+					return true, review, nil
+				}
+				return false, nil, nil
+			})
+		}, map[string]any{"manage": true, "member": true}},
+		{"denied", func(f *orgFixture) {
+			f.deny = func(_, verb, resource, _ string) bool { return resource == "agents" && verb == "create" }
+		}, map[string]any{"manage": true, "member": true, "createAgents": false}},
+		{"allowed", func(*orgFixture) {}, map[string]any{"manage": true, "member": true, "createAgents": true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newOrgFixture(t, organization("org-acme", "payments", nil))
+			tc.review(f)
+			text, isErr := f.call(t, ToolListOrganizations, nil)
+			require.False(t, isErr, text)
+			listed := decode(t, text)["organizations"].([]any)
+			require.Len(t, listed, 1, text)
+			assert.Equal(t, tc.want, listed[0].(map[string]any)["permissions"])
+		})
+	}
+}
+
 // recordAccessReviews records the attributes of every
 // SelfSubjectAccessReview the caller asks, and leaves the answer to the
 // fixture.
@@ -868,6 +939,56 @@ func TestListOrganizations(t *testing.T) {
 	text, isErr = f.call(t, ToolListOrganizations, map[string]any{"namespace": "org-acme"})
 	require.True(t, isErr)
 	assert.True(t, strings.HasPrefix(text, "unsupported:"), text)
+}
+
+// An organization with no spec.workers.replicas runs the operator's default
+// of 1, and the tools report it so. An omitted workerReplicas writes no
+// field; an explicit 0 is written, also over an object without the field.
+func TestWorkerReplicasDefaultIsOneAndAnExplicitZeroIsWritten(t *testing.T) {
+	f := newOrgFixture(t, organization("org-acme", "payments", nil))
+
+	text, isErr := f.call(t, ToolGetOrganization, map[string]any{"namespace": "org-acme", "name": "payments"})
+	require.False(t, isErr, text)
+	assert.EqualValues(t, 1, decode(t, text)["workerReplicas"])
+
+	text, isErr = f.call(t, ToolUpdateOrganization, map[string]any{"namespace": "org-acme", "name": "payments", "displayName": "Payments"})
+	require.False(t, isErr, text)
+	_, found, _ := unstructured.NestedFieldNoCopy(f.get(t, orgGVR, "org-acme", "payments").Object, "spec", "workers", "replicas")
+	assert.False(t, found, "an omitted workerReplicas writes no field")
+
+	text, isErr = f.call(t, ToolUpdateOrganization, map[string]any{"namespace": "org-acme", "name": "payments", "workerReplicas": 0})
+	require.False(t, isErr, text)
+	res := decode(t, text)
+	assert.Equal(t, []any{"workerReplicas"}, res["changed"])
+	assert.EqualValues(t, 1, res["before"].(map[string]any)["workerReplicas"])
+	assert.EqualValues(t, 0, res["after"].(map[string]any)["workerReplicas"])
+	replicas, found, _ := unstructured.NestedFieldNoCopy(f.get(t, orgGVR, "org-acme", "payments").Object, "spec", "workers", "replicas")
+	require.True(t, found, "an explicit 0 is written")
+	assert.EqualValues(t, 0, replicas)
+
+	text, isErr = f.call(t, ToolUpdateOrganization, map[string]any{"namespace": "org-acme", "name": "payments", "workerReplicas": 0})
+	require.False(t, isErr, text)
+	assert.Empty(t, decode(t, text)["changed"], "a stored 0 is no change")
+}
+
+// An explicit workerReplicas equal to the default is written over an
+// object without the field, so it stays when the operator's default
+// changes; a create with an explicit 0 writes 0.
+func TestWorkerReplicasExplicitValuesAreWritten(t *testing.T) {
+	f := newOrgFixture(t, organization("org-acme", "payments", nil))
+	text, isErr := f.call(t, ToolUpdateOrganization, map[string]any{"namespace": "org-acme", "name": "payments", "workerReplicas": 1})
+	require.False(t, isErr, text)
+	assert.Equal(t, []any{"workerReplicas"}, decode(t, text)["changed"])
+	replicas, found, _ := unstructured.NestedFieldNoCopy(f.get(t, orgGVR, "org-acme", "payments").Object, "spec", "workers", "replicas")
+	require.True(t, found, "an explicit 1 is written")
+	assert.EqualValues(t, 1, replicas)
+
+	f = newOrgFixture(t)
+	text, isErr = f.call(t, ToolCreateOrganization, map[string]any{"namespace": "org-acme", "name": "payments", "adminGroups": []any{"payments-leads"}, "workerReplicas": 0})
+	require.False(t, isErr, text)
+	replicas, found, _ = unstructured.NestedFieldNoCopy(f.get(t, orgGVR, "org-acme", "payments").Object, "spec", "workers", "replicas")
+	require.True(t, found, "a create writes an explicit 0")
+	assert.EqualValues(t, 0, replicas)
 }
 
 // get_organization answers what a delete erases as far as the caller can

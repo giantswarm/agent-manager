@@ -43,7 +43,9 @@ import (
 // The roles the tools name: the ones agent-platform's connectivity chart
 // renders (giantswarm/agent-platform#1270).
 const (
-	fieldMetadata = "metadata"
+	fieldMetadata  = "metadata"
+	fieldNamespace = "namespace"
+	scopePlatform  = "platform"
 	// RoleOrganizationsAdmin creates, changes and deletes
 	// AgentPlatformOrganizations, and binds members in their namespaces.
 	RoleOrganizationsAdmin = "agent-platform:organizations-admin"
@@ -73,6 +75,7 @@ var rbacGVR = schema.GroupVersionResource{Group: "rbac.authorization.k8s.io", Ve
 
 // Config is what the tools need besides the caller's client.
 type Config struct {
+	PlatformNamespace    string
 	CredentialUIURL      string
 	CredentialOperations *CredentialOperations
 	// Namespaces finds the organization namespaces with the ServiceAccount.
@@ -111,6 +114,9 @@ type Service struct {
 
 // New builds the tools on the caller's client provider.
 func New(k kube.Provider, cfg Config, log *slog.Logger) *Service {
+	if cfg.PlatformNamespace == "" && cfg.Namespaces != nil {
+		cfg.PlatformNamespace = cfg.Namespaces.platform
+	}
 	if log == nil {
 		log = slog.Default()
 	}
@@ -128,6 +134,9 @@ func New(k kube.Provider, cfg Config, log *slog.Logger) *Service {
 	}
 	return &Service{kube: k, cfg: cfg, log: log}
 }
+
+// OrganizationToolsEnabled reports whether organization discovery and management are configured.
+func (s *Service) OrganizationToolsEnabled() bool { return s.cfg.Namespaces != nil }
 
 func (s *Service) kagentGVR(resource string) schema.GroupVersionResource {
 	return schema.GroupVersionResource{Group: agents.KagentAPIGroup, Version: s.cfg.KagentAPIVersion, Resource: resource}
@@ -288,15 +297,20 @@ func apply(ctx context.Context, dyn dynamic.Interface, writes []write, dryRun bo
 	return nil
 }
 
+// do sends one write as the caller. A create and an update ask for strict
+// field validation: the API server refuses a field the object's schema does
+// not have (spec.openAI.promptCaching on a ModelConfig, say) with a bad
+// request that names it, where it would otherwise drop it in silence and the
+// object would run without it.
 func do(ctx context.Context, dyn dynamic.Interface, w write, dryRun []string) (*unstructured.Unstructured, error) {
 	res := dyn.Resource(w.gvr).Namespace(w.ns)
 	var err error
 	var object *unstructured.Unstructured
 	switch w.op {
 	case opCreate:
-		object, err = res.Create(ctx, unstructuredOf(w.obj), metav1.CreateOptions{FieldManager: agents.FieldManager, DryRun: dryRun})
+		object, err = res.Create(ctx, unstructuredOf(w.obj), metav1.CreateOptions{FieldManager: agents.FieldManager, DryRun: dryRun, FieldValidation: metav1.FieldValidationStrict})
 	case opUpdate:
-		object, err = res.Update(ctx, unstructuredOf(w.obj), metav1.UpdateOptions{FieldManager: agents.FieldManager, DryRun: dryRun})
+		object, err = res.Update(ctx, unstructuredOf(w.obj), metav1.UpdateOptions{FieldManager: agents.FieldManager, DryRun: dryRun, FieldValidation: metav1.FieldValidationStrict})
 	case opDelete:
 		err = res.Delete(ctx, w.name, metav1.DeleteOptions{DryRun: dryRun})
 	}

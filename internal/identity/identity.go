@@ -42,6 +42,9 @@ type Identity struct {
 	Subject string
 	// Email is the caller's email when the IdP provided one.
 	Email string
+	// EmailVerified is the IdP's `email_verified` claim. An absent claim is
+	// false: the address is then not proven.
+	EmailVerified bool
 	// Name is the display name when the IdP provided one.
 	Name string
 	// Groups are the IdP group claims (Dex `groups`; empty for Google).

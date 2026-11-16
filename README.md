@@ -53,8 +53,8 @@ MCP-server-writer half.
 | Delete: the HelmRelease; the OCIRepository only when nothing else references it | `DELETE /api/v1/agents/{ns}/{name}[?force=true&mode=&dryRun=]` | `delete_agent` | HelmRelease, OCIRepository, (bare Agent with force) |
 | Status verdict: the Agent's conditions, HelmRelease conditions/history, Warning events | `GET /api/v1/agents/{ns}/{name}/status` | `get_agent_status` | no |
 | Dry run of create/update: pinned skills, composed manifests + every violation | `POST /api/v1/agents/validate` | `validate_agent` | no |
-| kagent ModelConfigs of a namespace, with the namespace default (`default`), their `accepted` and `resolvedRefs` conditions and their `displayName`, `maxTokens`, `promptCaching` and `cacheTTL` | `GET /api/v1/modelconfigs?namespace=` | `list_model_configs` | no |
-| kagent EgressPolicies of a namespace, read as the caller: each origin and its credential header's name, never the Secret | `GET /api/v1/egresspolicies?namespace=` | `list_egress_policies` | no |
+| kagent ModelConfigs of a namespace, with the namespace default (`default`), their `accepted` and `resolvedRefs` conditions and their `displayName`, `maxTokens`, `promptCaching` and `cacheTTL`, and the `credentialSecret` and `credentialKey` of their API key (names only) | `GET /api/v1/modelconfigs?namespace=` | `list_model_configs` | no |
+| kagent EgressPolicies of a namespace, read as the caller: each origin and, with a credential, its `credentialHeader`, `credentialSecret` and `credentialKey` (names only, never a value) | `GET /api/v1/egresspolicies?namespace=` | `list_egress_policies` | no |
 | Skills (`SKILL.md`) of the configured GitHub repositories, grouped by repository with its head commit, tags from `metadata.tags`; `tags` keeps those with any of them | `GET /api/v1/skills[?repository=&ref=&refresh=&tags=]` | `list_skills` | no |
 | Sessions of an agent, as the caller (`SessionService/ListSessions`; `allCreators` when the controller grants it) | `GET /api/v1/agents/{ns}/{name}/sessions[?allCreators=true][&pageToken=…]` | `list_sessions` | no |
 | Start a session: create it (in a workspace with `workspaceGrant`), send the first message when one is given and answer once the turn is accepted; without `message` only create it | `POST /api/v1/agents/{ns}/{name}/sessions` | `start_session` | a kagent Session |
@@ -70,7 +70,7 @@ The three writes take `dryRun` and `mode` (`apply` | `commit`, see
 column is files of a pull request, nothing live. `validate_agent` takes
 `mode` too and answers as the write would.
 
-Errors are `{"error":{"code":"not_found|invalid_request|conflict|gitops_owned|forbidden|unauthenticated|auth_required|unsupported|precondition_failed|precondition_required|credential_consumers_changed|already_exists|backend_error","message":"…"}}`;
+Errors are `{"error":{"code":"not_found|invalid_request|conflict|gitops_owned|forbidden|unauthenticated|auth_required|unsupported|precondition_failed|precondition_required|credential_consumers_changed|credential_operation_other_login|already_exists|backend_error","message":"…"}}`;
 `unsupported` (501) is something this installation is not configured for,
 `backend_error` (502) a failure of the API server, Git or a store behind it;
 `precondition_failed` (412) and `precondition_required` (428) answer a
@@ -78,6 +78,8 @@ credential save or cancellation whose `If-Match` is stale or missing;
 `credential_consumers_changed` (409) a credential save of
 `replace_organization_credential` whose consumers changed since the
 preparation (see [organization credentials](docs/organization-credentials.md));
+`credential_operation_other_login` (403) a credential operation read, save or
+cancellation by another login of the person who prepared it;
 `already_exists` (409) a create of an organization model, connector or egress
 policy whose name is taken (`set_organization_model`,
 `set_organization_connector` or `set_organization_egress_policy` with
@@ -702,7 +704,11 @@ The organization tools (every name holds `organization`):
   organization with neither `manage` nor `member` is not listed; one the
   caller only belongs to carries its status alone (namespace, `orphaned`,
   `deleting`), and one the caller manages also its summary (`organization`).
-  A New agent can be created where `createAgents` is true.
+  A New agent can be created where `createAgents` is true. When the review
+  for `createAgents` fails (an error, not a denial), the field is left out:
+  a missing `createAgents` means not known. A failed review for `manage` or
+  `member` answers false, because those two decide whether the organization
+  is listed at all, and a missing one could not say whether to list it.
 
 Every write is dry-run as the caller first, all of a call's writes before any
 of them, so RBAC, schemas and admission refuse before anything changes; a

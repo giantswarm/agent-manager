@@ -16,9 +16,10 @@ const DefaultCacheTTL = "5m"
 // provider: the key of the provider's block in the spec (openAI, not
 // openai), and whether that block has promptCaching and cacheTTL (Anthropic
 // and Bedrock) and maxTokens (Anthropic, AnthropicVertexAI, AzureOpenAI,
-// Mistral and OpenAI). The API server prunes a field the block does not
-// have, so a writer refuses it instead of losing it in silence. The
-// provider is matched in any case; the API server judges its spelling.
+// Mistral and OpenAI). list_model_configs reads it to show a setting as off
+// or not at all; a write does not consult it to refuse a setting: the API
+// server's strict field validation does. The provider is matched in any
+// case; the API server judges its spelling.
 type ModelSettingsBlock struct {
 	Key       string
 	Caching   bool

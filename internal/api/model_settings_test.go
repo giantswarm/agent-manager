@@ -80,9 +80,12 @@ func TestSetModelUpdateKeepsTheStoredSettings(t *testing.T) {
 	assert.Equal(t, map[string]any{"promptCaching": false, "maxTokens": int64(16000)}, modelBlock(t, fixture.get(t, mcGVR, orgNS, "claude"), "anthropic"))
 }
 
-// A provider without prompt caching gets no default and refuses the caching
-// arguments; its token limit goes into its own block; a setting its block
-// does not have and a negative limit are refused, and nothing is written.
+// A provider without prompt caching gets no default; its token limit goes
+// into its own block; a negative or malformed setting is refused, and
+// nothing is written. A setting the provider's block does not have is
+// refused by the API server's strict dry run, which this fake client does
+// not do: TestEnvtestOrganizationWritesAreStrict in internal/organizations
+// pins it.
 func TestSetModelSettingsFollowTheProvider(t *testing.T) {
 	fixture := newOrgFixture(t)
 	seedSecret(t, fixture, "tenant-credential-claude", "apiKey")
@@ -93,9 +96,6 @@ func TestSetModelSettingsFollowTheProvider(t *testing.T) {
 	assert.Nil(t, modelBlock(t, live, "anthropic"))
 
 	for name, extra := range map[string]map[string]any{
-		"promptCaching on OpenAI":  {"promptCaching": true},
-		"cacheTTL on OpenAI":       {"cacheTTL": "5m"},
-		"maxTokens on Ollama":      {"provider": "Ollama", "maxTokens": 100},
 		"negative maxTokens":       {"maxTokens": -1},
 		"fractional maxTokens":     {"maxTokens": 1.5},
 		"promptCaching not a bool": {"promptCaching": "yes"},
@@ -259,12 +259,15 @@ func normalized(t *testing.T, block map[string]any) map[string]any {
 
 // list_model_configs and GET /modelconfigs report each model's display
 // name, token limit and prompt caching, so an organization's model compares
-// with the platform's; a provider without caching reports none.
+// with the platform's; a provider without caching reports none. A model with
+// a key names its Secret and key; one without names none.
 func TestListModelConfigsReportsTheSettings(t *testing.T) {
 	svc, dyn := newService(t)
 	platform := markedModelConfig("anthropic-sonnet-5-5")
 	platform.SetAnnotations(map[string]string{agents.DisplayNameAnnotation: "Claude Sonnet 5.5"})
 	_ = unstructured.SetNestedField(platform.Object, map[string]any{"promptCaching": true, "cacheTTL": "5m", "maxTokens": int64(32000)}, "spec", "anthropic")
+	_ = unstructured.SetNestedField(platform.Object, "kagent-anthropic", "spec", "apiKeySecret")
+	_ = unstructured.SetNestedField(platform.Object, "ANTHROPIC_API_KEY", "spec", "apiKeySecretKey")
 	openai := markedModelConfig("gpt")
 	openai.SetAnnotations(nil)
 	_ = unstructured.SetNestedField(openai.Object, "OpenAI", "spec", "provider")
@@ -297,10 +300,14 @@ func TestListModelConfigsReportsTheSettings(t *testing.T) {
 		assert.EqualValues(t, 32000, sonnet["maxTokens"])
 		assert.Equal(t, true, sonnet["promptCaching"])
 		assert.Equal(t, "5m", sonnet["cacheTTL"])
+		assert.Equal(t, "kagent-anthropic", sonnet["credentialSecret"])
+		assert.Equal(t, "ANTHROPIC_API_KEY", sonnet["credentialKey"])
 		gpt := models["gpt"]
 		assert.EqualValues(t, 4096, gpt["maxTokens"])
 		assert.NotContains(t, gpt, "promptCaching")
 		assert.NotContains(t, gpt, "displayName")
+		assert.NotContains(t, gpt, "credentialSecret")
+		assert.NotContains(t, gpt, "credentialKey")
 		uncached := models["default-model-config"]
 		assert.Equal(t, false, uncached["promptCaching"])
 		assert.NotContains(t, uncached, "cacheTTL")

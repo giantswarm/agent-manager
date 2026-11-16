@@ -3,11 +3,14 @@ package organizations
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
-	"path"
+	"log/slog"
 	"reflect"
 	"slices"
+	"strconv"
+	"strings"
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -40,6 +43,9 @@ func credentialSaveError(err error) error {
 	if errors.Is(err, ErrCredentialOperationChanged) {
 		return ErrCredentialOperationChanged
 	}
+	if errors.Is(err, ErrCredentialOperationOtherLogin) {
+		return ErrCredentialOperationOtherLogin
+	}
 	// The consumers changed since the preparation: a stable sentinel the
 	// client switches on, naming nothing the confirmation did not show.
 	if errors.As(err, new(consumersDiffer)) {
@@ -50,23 +56,115 @@ func credentialSaveError(err error) error {
 	if errors.As(err, new(nameTaken)) {
 		return fmt.Errorf("%w: the object this operation creates exists now, live or in git; prepare it again", ErrAlreadyExists)
 	}
+	// The Git files or the encryption policy changed since the preparation,
+	// before any branch: the operation stays pending, and only a fresh
+	// preparation helps.
+	if errors.As(err, new(gitInputsChanged)) {
+		return fmt.Errorf("%w: the Git files or the encryption policy changed since the preparation; nothing was written; prepare the credential operation again", agents.ErrConflict)
+	}
 	for _, sentinel := range []error{agents.ErrUnauthenticated, agents.ErrAuthRequired, agents.ErrForbidden, agents.ErrNotFound, agents.ErrConflict, agents.ErrInvalid, agents.ErrUnsupported, agents.ErrGitOpsOwned} {
 		if errors.Is(err, sentinel) {
 			return fmt.Errorf("%w: credential save was refused; refresh the operation before retrying", sentinel)
 		}
 	}
-	return errors.New("credential save failed; inspect the operation status before retrying")
+	return errCredentialSaveFailed
+}
+
+// errCredentialSaveFailed answers a save that failed for a reason the caller
+// cannot act on: agent-manager's log names the step and the cause.
+var errCredentialSaveFailed = errors.New("credential save failed; inspect the operation status before retrying")
+
+// credentialWriteBudget is how long the writes of a commit-mode save may take
+// once they start. They no longer stop with the caller's request, so this is
+// what ends them.
+const credentialWriteBudget = 2 * time.Minute
+
+// credentialRecordBudget is how long recording a commit-mode save's outcome
+// may take, after its writes, whatever the caller does.
+const credentialRecordBudget = 15 * time.Second
+
+// saveStep names the step of a save that failed, for the log only: the
+// answer to the caller stays what credentialSaveError makes of the cause.
+type saveStep struct {
+	step string
+	err  error
+}
+
+func (e saveStep) Error() string { return e.err.Error() }
+func (e saveStep) Unwrap() error { return e.err }
+
+// atStep marks err with step, unless a deeper step already marked it.
+func atStep(step string, err error) error {
+	if err == nil || errors.As(err, new(saveStep)) {
+		return err
+	}
+	return saveStep{step: step, err: err}
+}
+
+// credentialSaveCause is the cause of a failed save as the log may hold it.
+// A Kubernetes API answer is logged by its reason and code only: the API
+// server, a webhook or an admission policy may quote the object it refused,
+// in any escaping, and a credential Secret carries the value. Any other
+// cause is logged with every submitted value removed, as typed, quoted and
+// base64 encoded.
+func credentialSaveCause(err error, values []CredentialValue) string {
+	var status apierrors.APIStatus
+	if errors.As(err, &status) {
+		return fmt.Sprintf("the Kubernetes API answered %s (%d)", apierrors.ReasonForError(err), status.Status().Code)
+	}
+	message := err.Error()
+	for _, value := range values {
+		if value.Value == "" {
+			continue
+		}
+		raw := []byte(value.Value)
+		quoted := strconv.Quote(value.Value)
+		escaped, _ := json.Marshal(value.Value)
+		for _, form := range []string{
+			value.Value,
+			quoted[1 : len(quoted)-1],
+			string(escaped[1 : len(escaped)-1]),
+			base64.StdEncoding.EncodeToString(raw),
+			base64.RawStdEncoding.EncodeToString(raw),
+			base64.URLEncoding.EncodeToString(raw),
+			base64.RawURLEncoding.EncodeToString(raw),
+		} {
+			message = strings.ReplaceAll(message, form, "[redacted]")
+		}
+	}
+	return message
+}
+
+// detached is ctx without its cancellation and deadline, ended by budget
+// instead: work that must not stop with the caller's request.
+func detached(ctx context.Context, budget time.Duration) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), budget)
 }
 
 func (s *Service) SaveCredentialOperation(ctx context.Context, id, version string, values []CredentialValue) (*ResourceResult, error) {
 	result, err := s.saveCredentialOperation(ctx, id, version, values)
 	if err != nil {
-		return nil, credentialSaveError(err)
+		answer := credentialSaveError(err)
+		step := "save"
+		var failed saveStep
+		if errors.As(err, &failed) {
+			step = failed.step
+		}
+		// A refusal is the caller's to act on; a failure is the operator's.
+		level := slog.LevelWarn
+		if errors.Is(answer, errCredentialSaveFailed) {
+			level = slog.LevelError
+		}
+		s.log.Log(ctx, level, "credential save failed", identity.LogAttr(ctx), "operation", id, "step", step, "cause", credentialSaveCause(err, values))
+		return nil, answer
 	}
 	return result, nil
 }
 
-func (s *Service) saveCredentialOperation(ctx context.Context, id, version string, values []CredentialValue) (*ResourceResult, error) {
+func (s *Service) saveCredentialOperation(ctx context.Context, id, version string, values []CredentialValue) (_ *ResourceResult, err error) {
+	step := "read operation"
+	defer func() { err = atStep(step, err) }()
+	request := ctx
 	operation, err := s.credentialOperation(ctx, id)
 	if err != nil {
 		return nil, err
@@ -81,29 +179,41 @@ func (s *Service) saveCredentialOperation(ctx context.Context, id, version strin
 		return &operation.Result, nil
 	}
 	if operation.Mode == agents.ModeCommit {
-		if s.cfg.Commit == nil || operation.GitTarget == nil || s.cfg.Commit.Objects.Repository.String() != operation.GitTarget.Repository || s.cfg.Commit.Objects.Branch != operation.GitTarget.Base || path.Join(s.cfg.Commit.ContentPrefix, operation.Namespace.Parent, operation.Namespace.Organization) != operation.GitTarget.Directory {
+		step = "check Git target"
+		writer, err := s.contentWriter(ctx, operation.Namespace, operation.Mode)
+		if err != nil {
+			return nil, err
+		}
+		if s.cfg.Commit == nil || operation.GitTarget == nil || s.cfg.Commit.Objects.Repository.String() != operation.GitTarget.Repository || s.cfg.Commit.Objects.Branch != operation.GitTarget.Base || writer.dir.Path() != operation.GitTarget.Directory {
 			return nil, fmt.Errorf("%w: the credential Git target changed", agents.ErrConflict)
 		}
 	}
 	if operation.State == operationSaving {
 		if operation.Mode == agents.ModeCommit {
+			step = "finish commit"
 			return s.recoverCredentialCommit(ctx, operation)
 		}
+		step = "finish apply"
 		return s.recoverAppliedCredential(ctx, operation)
 	}
+	step = "check version"
 	if (operation.State != operationPending && operation.State != operationUncertain) || version == "" || version != operation.Version {
 		return nil, fmt.Errorf("%w: %w", agents.ErrConflict, ErrCredentialOperationChanged)
 	}
 	if operation.State == operationUncertain && operation.Mode == agents.ModeCommit {
+		step = "finish commit"
 		return s.recoverCredentialCommit(ctx, operation)
 	}
+	step = "check values"
 	if len(values) != len(operation.Credentials) {
 		return nil, invalidf("supply exactly the credentials in the confirmation")
 	}
+	step = "authenticate caller"
 	caller, err := s.caller(ctx)
 	if err != nil {
 		return nil, err
 	}
+	step = "check consumers"
 	writes, err := remainingOperationWrites(ctx, caller, operation)
 	if err != nil {
 		return nil, err
@@ -111,6 +221,7 @@ func (s *Service) saveCredentialOperation(ctx context.Context, id, version strin
 	seen := map[string]bool{}
 	// created are the Secrets this save creates: only those it may take back.
 	var created []string
+	var notes []string
 	for _, credential := range operation.Credentials {
 		index := slices.IndexFunc(values, func(value CredentialValue) bool {
 			return value.Secret == credential.Secret && value.Key == credential.Key
@@ -128,6 +239,11 @@ func (s *Service) saveCredentialOperation(ctx context.Context, id, version strin
 		if operation.Result.Kind == KindCredential && !sameConsumers(references, operation.Consumers) {
 			return nil, errConsumersChanged(operation.Namespace.Name, credential.Secret)
 		}
+		keyNotes, err := validateCredentialModels(operation, live, credential, values[index].Value)
+		if err != nil {
+			return nil, err
+		}
+		notes = append(notes, keyNotes...)
 		// The preparation stored at least one consumer of the key and none of
 		// another key, so for a replacement the comparison above already
 		// answers both cases below; they stay as a defence.
@@ -180,26 +296,67 @@ func (s *Service) saveCredentialOperation(ctx context.Context, id, version strin
 		data := map[string]any{credential.Key: base64.StdEncoding.EncodeToString([]byte(values[index].Value))}
 		writes = append([]write{credentialSecretWrite(operation.Namespace.Name, credential.Secret, action, data)}, writes...)
 	}
+	step = "dry run"
 	for _, planned := range writes {
 		if _, err := doCredentialWrite(ctx, caller, operation, planned, dryRunAll); err != nil {
 			return nil, err
 		}
 	}
+	step = "open writer"
 	writer, err := s.contentWriter(ctx, operation.Namespace, operation.Mode)
 	if err != nil {
 		return nil, err
 	}
+	// Before a branch exists: every check of commit mode runs while the
+	// operation is still pending, and a refusal returns it as it is. Nothing
+	// was written, so a retry runs the same checks and gets the same answer.
+	var prepared *credentialCommit
+	if operation.Mode == agents.ModeCommit {
+		step = "prepare commit"
+		prepared, err = s.prepareCredentialCommit(ctx, operation, writer, writes)
+		if err != nil {
+			return nil, err
+		}
+	}
+	// After this point a write may have happened: a failure marks the
+	// operation uncertain, and the next save recovers it.
+	step = "record saving"
 	operation.State = operationSaving
-	if err := s.cfg.CredentialOperations.put(ctx, operation); err != nil {
+	saving := ctx
+	if operation.Mode == agents.ModeCommit {
+		// The operation must outlive the writes and their record, so that a
+		// repeated call finds it and gives the receipt.
+		if until := time.Now().Add(credentialWriteBudget + 2*credentialRecordBudget); operation.ExpiresAt.Before(until) {
+			operation.ExpiresAt = until
+		}
+		// A put the request cut could land without its answer, leaving a
+		// saving operation with no recorded branch to recover.
+		var cancelSaving context.CancelFunc
+		saving, cancelSaving = detached(ctx, credentialRecordBudget)
+		defer cancelSaving()
+	}
+	if err := s.cfg.CredentialOperations.put(saving, operation); err != nil {
 		return nil, err
 	}
+	// In commit mode the branch, the commit and the pull request run to
+	// their end once the branch is to be made, also when the caller goes
+	// away: a request cut between the commit and the pull request would leave
+	// a commit that only "Finish the save" opens. Their own budget ends them
+	// instead.
+	record := ctx
 	if operation.Mode == agents.ModeCommit {
+		writeCtx, cancelWrite := detached(ctx, credentialWriteBudget)
 		var committed *CommitResult
-		committed, err = s.commitCredentialOperation(ctx, operation, writer, writes)
+		committed, err = s.writeCredentialCommit(writeCtx, operation, writer, prepared)
+		cancelWrite()
 		if err == nil {
 			operation.Result.Commit = committed
 		}
+		var cancelRecord context.CancelFunc
+		record, cancelRecord = detached(ctx, credentialRecordBudget)
+		defer cancelRecord()
 	} else {
+		step = "apply"
 		err = s.applyCredentialOperation(ctx, caller, operation, writes)
 		if errors.As(err, new(nameTaken)) {
 			s.removeCreatedSecrets(ctx, caller, operation, created)
@@ -207,12 +364,19 @@ func (s *Service) saveCredentialOperation(ctx context.Context, id, version strin
 	}
 	if err != nil {
 		operation.State = operationUncertain
-		_ = s.cfg.CredentialOperations.put(ctx, operation)
+		if recordErr := s.cfg.CredentialOperations.put(record, operation); recordErr != nil {
+			s.log.Warn("a failed credential save could not be recorded as uncertain", identity.LogAttr(ctx), "operation", id, "cause", recordErr.Error())
+		}
 		return nil, err
 	}
+	step = "record result"
 	completeCredentialOperation(operation)
-	if err := s.cfg.CredentialOperations.put(ctx, operation); err != nil {
+	operation.Result.Note = strings.Join(slices.DeleteFunc(append([]string{operation.Result.Note}, notes...), func(note string) bool { return note == "" }), "; ")
+	if err := s.cfg.CredentialOperations.put(record, operation); err != nil {
 		return nil, err
+	}
+	if request.Err() != nil {
+		s.log.Info("a credential save completed after its request ended", identity.LogAttr(ctx), "operation", id, "mode", operation.Mode)
 	}
 	return &operation.Result, nil
 }

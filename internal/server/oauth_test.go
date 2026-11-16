@@ -137,12 +137,19 @@ func selfSignedLocalhost(t *testing.T) tls.Certificate {
 // idToken mints an id_token the fake IdP signed.
 func (f *fakeIdP) idToken(t *testing.T, aud []string, exp time.Time) string {
 	t.Helper()
+	return f.idTokenWithout(t, aud, exp, "")
+}
+
+// idTokenWithout is idToken without the named claim.
+func (f *fakeIdP) idTokenWithout(t *testing.T, aud []string, exp time.Time, claim string) string {
+	t.Helper()
 	signer, err := jose.NewSigner(jose.SigningKey{Algorithm: jose.RS256, Key: f.key},
 		(&jose.SignerOptions{}).WithHeader("kid", testKID).WithType("JWT"))
 	require.NoError(t, err)
 	claims := jwt.Claims{Issuer: f.issuer, Subject: "sub-admin", Audience: jwt.Audience(aud),
 		Expiry: jwt.NewNumericDate(exp), IssuedAt: jwt.NewNumericDate(time.Now().Add(-time.Minute))}
 	extra := map[string]any{"email": "admin@lab.local", "email_verified": true, "name": "Lab Admin", "groups": []string{"platform-admins"}}
+	delete(extra, claim)
 	tok, err := jwt.Signed(signer).Claims(claims).Claims(extra).Serialize()
 	require.NoError(t, err)
 	return tok
@@ -220,10 +227,17 @@ func TestForwardedIDTokenBecomesTheCaller(t *testing.T) {
 	require.Equal(t, http.StatusNoContent, rec.Code, rec.Body.String())
 	require.True(t, seen.ok, "the caller reaches the handler")
 	assert.Equal(t, "admin@lab.local", seen.id.Email)
+	assert.True(t, seen.id.EmailVerified, "the IdP's email_verified claim")
 	assert.Equal(t, "sub-admin", seen.id.Subject)
 	assert.Equal(t, []string{"platform-admins"}, seen.id.Groups)
 	assert.Equal(t, identity.SourceSSO, seen.id.Source)
 	assert.Equal(t, forwarded, seen.token, "downstream OAuth: the forwarded id_token is what the Kubernetes API will see")
+
+	// Without the email_verified claim the address is not verified.
+	rec = call(idp.idTokenWithout(t, []string{"agent-platform"}, time.Now().Add(30*time.Minute), "email_verified"))
+	require.Equal(t, http.StatusNoContent, rec.Code, rec.Body.String())
+	assert.Equal(t, "admin@lab.local", seen.id.Email)
+	assert.False(t, seen.id.EmailVerified, "an absent email_verified claim counts as not verified")
 
 	// A token minted for some other client (another aggregator, another app)
 	// is not trusted, even though the same IdP signed it.

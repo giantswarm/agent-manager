@@ -386,7 +386,7 @@ paths:
     get:
       tags: [egresspolicies]
       summary: List the kagent EgressPolicies of a namespace, read as the caller
-      description: The names an agent's egressPolicyRefs may pick, each with its origins and, where the egress gateway adds a credential, the header's name; never the Secret
+      description: The names an agent's egressPolicyRefs may pick, each with its origins and, where the egress gateway adds a credential, the header and the Secret and key it comes from, by name; never a value
       operationId: listEgressPolicies
       x-mcp-tool: list_egress_policies
       parameters:
@@ -611,6 +611,16 @@ paths:
     get:
       tags: [organizations]
       summary: Read a bound credential confirmation or receipt
+      description: |
+        Only the person who prepared the operation reads it: the token's issuer and
+        subject. A caller with the same issuer and the same verified email address but
+        another subject (another login of the same person, through another connector of
+        the identity provider) gets 403 with error code credential_operation_other_login
+        while the operation is neither expired nor cancelled: sign in the same way as
+        when it was prepared, then open the link again. That answer carries nothing of
+        the operation. Every other caller gets 404 not_found. The save and the
+        cancellation answer the same. 403 also answers an owner without the
+        permissions (forbidden): switch on error.code, not on the status.
       operationId: getCredentialOperation
       responses:
         "200":
@@ -896,8 +906,8 @@ components:
           properties:
             code:
               type: string
-              enum: [not_found, invalid_request, conflict, gitops_owned, forbidden, unauthenticated, auth_required, unsupported, precondition_failed, precondition_required, credential_consumers_changed, already_exists, backend_error]
-              description: "A stable code to switch on. credential_consumers_changed (409, saveCredentialOperation): the objects that use the credential, or where they send it, changed since the replacement was prepared, live or in git; the credential was not written; prepare the replacement again with a fresh requestId. already_exists (409): a create whose object exists by then, live or as its file in git: set_organization_model, set_organization_connector or set_organization_egress_policy with create, and a saveCredentialOperation whose operation creates a model, connector or egress policy"
+              enum: [not_found, invalid_request, conflict, gitops_owned, forbidden, unauthenticated, auth_required, unsupported, precondition_failed, precondition_required, credential_consumers_changed, credential_operation_other_login, already_exists, backend_error]
+              description: "A stable code to switch on. credential_operation_other_login (403, getCredentialOperation, saveCredentialOperation, cancelCredentialOperation): the operation was prepared with another login of the same person (same issuer and verified email address, another subject); sign in the same way as when it was prepared, then open the link again; the answer names nothing of the operation. credential_consumers_changed (409, saveCredentialOperation): the objects that use the credential, or where they send it, changed since the replacement was prepared, live or in git; the credential was not written; prepare the replacement again with a fresh requestId. already_exists (409): a create whose object exists by then, live or as its file in git: set_organization_model, set_organization_connector or set_organization_egress_policy with create, and a saveCredentialOperation whose operation creates a model, connector or egress policy"
             message: { type: string }
     Info:
       type: object
@@ -1344,6 +1354,8 @@ components:
         maxTokens: { type: integer, description: "The token limit of an answer, the provider block's maxTokens; omitted when unset (the provider's default)" }
         promptCaching: { type: boolean, description: "The provider block's promptCaching (Anthropic, Bedrock), false when unset; omitted for a provider without the setting" }
         cacheTTL: { type: string, description: "The prompt cache time (5m or 1h), given while promptCaching is true" }
+        credentialSecret: { type: string, description: "The Secret that holds the model's API key (spec.apiKeySecret), by name; absent for a model without a key. The Secret is never read" }
+        credentialKey: { type: string, description: "The key in credentialSecret that holds the API key (spec.apiKeySecretKey); absent for a model without a key" }
     EgressPolicy:
       type: object
       properties:
@@ -1355,7 +1367,9 @@ components:
             type: object
             properties:
               origin: { type: string }
-              credentialHeader: { type: string, description: The request header the egress gateway fills with the policy's credential; absent without one. The Secret is never reported }
+              credentialHeader: { type: string, description: The request header the egress gateway fills with the policy's credential; absent without one }
+              credentialSecret: { type: string, description: "The Secret the credential comes from, by name; absent without a credential. The Secret is never read" }
+              credentialKey: { type: string, description: The key in credentialSecret that holds the credential; absent without a credential }
         managedBy: { type: string }
     DiscoveredSkill:
       type: object
@@ -1576,6 +1590,8 @@ components:
         name: { type: string }
         key: { type: string, description: The key of the Secret the object reads }
         provider: { type: string, description: "ModelConfig: the provider it sends the value to" }
+        projectID: { type: string, description: "Vertex AI project of the credential consumer" }
+        location: { type: string, description: "Vertex AI location of the credential consumer" }
         url: { type: string, description: "RemoteMCPServer: where it sends the value; a credential in the URL shows as REDACTED" }
         origins: { type: array, items: { type: string }, description: "EgressPolicy: the origins it sends the value to" }
         fromGit: { type: boolean, description: A Flux Kustomization applies the object from git }
@@ -1601,6 +1617,7 @@ components:
           type: object
           properties:
             namespace: { type: string }
+            scope: { type: string, enum: [platform], description: "Explicit installation model target; absent for an organization" }
             parent: { type: string }
             organization: { type: string }
         changes:
@@ -1639,6 +1656,7 @@ components:
             properties:
               secret: { type: string }
               key: { type: string }
+              inputFormat: { type: string, enum: [text, google-service-account-json], description: "Credential input control; absent means text" }
               state: { type: string, enum: [present, committed, missing, replace] }
               formUrl: { type: string }
               next: { type: string }

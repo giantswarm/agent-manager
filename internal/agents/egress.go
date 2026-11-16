@@ -94,8 +94,8 @@ func (s *Service) listEgressPolicies(ctx context.Context, st *site) ([]EgressPol
 }
 
 // egressPolicyOf reads an EgressPolicy's destinations: each origin with the
-// name of the header its credential is sent in. The Secret the credential
-// comes from is never read or reported.
+// name of the header its credential is sent in and the Secret and key it
+// comes from, by name. The Secret itself is never read.
 func egressPolicyOf(obj *unstructured.Unstructured) EgressPolicy {
 	p := EgressPolicy{Name: obj.GetName(), Namespace: obj.GetNamespace(), Destinations: []EgressDestination{}}
 	raw, _, _ := unstructured.NestedSlice(obj.Object, "spec", "destinations")
@@ -108,6 +108,11 @@ func egressPolicyOf(obj *unstructured.Unstructured) EgressPolicy {
 		dest.Origin, _ = d["origin"].(string)
 		if auth, ok := d["authentication"].(map[string]any); ok {
 			dest.CredentialHeader, _ = auth["header"].(string)
+			if ref, ok := auth["secretKeyRef"].(map[string]any); ok {
+				if dest.CredentialSecret, _ = ref["name"].(string); dest.CredentialSecret != "" {
+					dest.CredentialKey, _ = ref["key"].(string)
+				}
+			}
 		}
 		p.Destinations = append(p.Destinations, dest)
 	}

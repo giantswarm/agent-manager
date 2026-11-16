@@ -1,10 +1,54 @@
-# Organization credential operations
+# Model and organization credential operations
 
 Models, connectors and EgressPolicies name credential Secrets by reference. The
 organization tools accept no credential values. A missing credential prepares
 an operation before writing any consumer. Ordinary edits with existing
 credentials do not prepare an operation or change the Secret; a new value for
 an existing credential goes through `replace_organization_credential`.
+
+Model operations also accept the configured installation namespace, requiring
+cluster-admin authorization again when an operation is read or saved. Its target
+declares `scope: platform`, without a synthetic organization. Connector and egress
+operations remain organization-scoped. Installation models require
+`credentials.uiURL` with a `{namespace}` expression and no `{parent}` or
+`{organization}`: an installation model has neither, so they would leave empty
+path segments in its link. OAuth and downstream authorization are
+required. Without tenancy the template must be such a template, and the form and
+model tools work for installation models only. Tenant management tools stay
+disabled, and organization discovery is empty.
+
+Native `AnthropicVertexAI` and `GeminiVertexAI` take nonsecret `projectID` and
+`location`; their credential key defaults to `GOOGLE_APPLICATION_CREDENTIALS`.
+Their confirmation declares `inputFormat: google-service-account-json`. Other
+credentials use `text`; an omitted format also means text. The client presents
+the uploader on the credential page. The server checks the service-account type,
+RSA private key and Google OAuth token endpoint before writing. A key whose
+`project_id` differs from the model's `projectID` is accepted, because a
+central project's service account can hold Vertex AI access in the model's
+project: the save's `note` names both projects so the person can check that
+access. Only keys saved through the form are checked. A new Vertex model that
+names an existing credential Secret opens the form to replace it, so its key
+is checked too; an installation model may still reference a Secret managed
+elsewhere, which is not checked.
+`location` is `global`, `us`, `eu` or a Google region such as `europe-west1`;
+`projectID` is a Google project ID. Vertex AI calls go from the agent to Google
+directly: the LLM gateway's metering, rate limits and spend reporting do not
+apply to them. Replacement validates every Vertex consumer; project or location
+changes invalidate the confirmation. Model deletion retains its Secret.
+
+`endpoint`, `insecureSkipTLSVerify` and `noCredential: true` (keyless
+endpoints, excluding Vertex) apply to installation models only; an
+organization model with one of them is refused. On an organization model
+`insecureSkipTLSVerify: false` removes a `tls.disableVerify` written
+elsewhere, and `endpoint: ""` changes nothing: admission holds its base URL
+to the LLM listener. In the installation namespace
+agent-manager writes only `tenant-credential-*` Secrets: a model may reference
+any existing Secret, such as one GitOps or Helm manages, and its value is
+replaced where it is managed. The installation form and model tools start only
+with `--multi-tenant` or `--credential-ui-url`.
+
+Installation commit mode requires an explicit `tenants.commit.platformModelsPath`
+in the trusted repository and never derives a directory from an organization.
 
 `set_organization_model`, `set_organization_connector` and
 `set_organization_egress_policy` with `create: true` only create: a model,
@@ -64,13 +108,16 @@ Configure an HTTPS URL template, for example:
 
 ```yaml
 credentials:
-  uiURL: https://portal.example.com/organizations/graveler/{parent}/{organization}/credentials?operation={operation}
+  uiURL: https://portal.example.com/customize/models/credentials/graveler/{namespace}/{operation}
 ```
 
 The template is an [RFC 6570](https://www.rfc-editor.org/rfc/rfc6570) URI
 template. One `{operation}` expression is required in the path or query
-(`{?operation}` works too). `{parent}` and `{organization}` are optional; the
-scheme and host are fixed, and no other variable is accepted. Routes and the
+(`{?operation}` works too). `{parent}`, `{organization}` and `{namespace}` are optional, but installation
+model links need `{namespace}` and no `{parent}` or `{organization}`, and
+without tenancy such a template is required; the scheme and host are fixed,
+and no other variable is accepted. The chart refuses the same templates as the
+server. Routes and the
 installation name belong to the UI configuration. Agent-manager neither hosts a
 form nor constructs a Backstage route. The operation ID grants no authority.
 
@@ -170,12 +217,14 @@ cannot authorize the credential HTTPS save.
 The chart creates a dedicated namespace, a ConfigMap-only Role and a quota of
 256 ConfigMaps. Records are limited to 128 KiB and expire after 15 minutes, with
 minute-based cleanup. They hold nonsecret intent, verified issuer/subject,
-authenticated audience and MCP session context, revisions, file hashes and the
-receipt. Values, ciphertext, ID tokens and App tokens never enter them. The
+the SHA-256 digest of the verified email address (see
+[Who owns an operation](#who-owns-an-operation)), authenticated audience and
+MCP session context, revisions, file hashes and the receipt. Values, ciphertext, ID tokens and App tokens never enter them. The
 manager's ServiceAccount gains no tenant Secret or application ConfigMap access.
 
-Reads, saves and cancellation independently verify issuer/subject ownership and
-current organization permissions. Saves recheck consumers, Git destination,
+Reads, saves and cancellation independently verify issuer/subject ownership
+([Who owns an operation](#who-owns-an-operation)) and current organization
+permissions. Saves recheck consumers, Git destination,
 file hashes and encryption policy, then server-side dry-run all intended writes
 as the person. Stale operation versions return `412`, a save or cancellation
 without `If-Match` returns `428`, and changed resources or Git inputs return
@@ -238,11 +287,70 @@ The base is checked again once the pull request's branch is cut from it: a
 file another commit added after the first check is refused there too
 (`already_exists` with `create`, else `conflict`), before anything is
 committed. The branch stays, without a commit, and the next write brings it up
-to date. This holds for every commit-mode create, the organization's own
+to date. When another commit added the identical files and their
+kustomization entries before the change was planned, so that Git already
+carries the whole change, the create is refused the same way, and no branch
+is cut. This holds for every commit-mode create, the organization's own
 object and first admins included (see
 [repository requirements](organizations-commit-mode.md)).
 The receipt's credential state `committed` means a PR exists, not that Flux has
 applied it. See [repository requirements](organizations-commit-mode.md).
+
+## Who owns an operation
+
+An operation belongs to the person who prepared it, as the token's issuer and
+subject (`sub`) name them. Reads, saves and cancellations of every other caller
+are refused.
+
+Dex gives one person a different subject for each connector. A person who
+prepares an operation from an MCP client signed in through one connector and
+opens the link in the Dev Portal with a session from another connector is,
+for this check, another caller. The answer to that caller names the cause:
+
+| Caller | Answer |
+|---|---|
+| The owner: same issuer and subject | The operation |
+| Same issuer, same verified email address, another subject | `403`, code `credential_operation_other_login`: the operation was started with another login; sign in the same way as when it was started, then open the link again |
+| Another email address, an email address that is not verified, another issuer, or a delegated token | `404`, code `not_found` |
+
+An expired or cancelled operation answers as before for every caller: the
+owner reads a cancelled operation's state and gets `409` for an expired one,
+every other caller gets `404`. The other-login answer
+holds no organization, namespace, model, Secret, key or other content of the
+operation. Its words are the error code and a fixed message.
+
+The email address is verified when the identity provider's token says
+`email_verified: true`; an absent claim counts as not verified. At preparation
+the operation records the SHA-256 digest of the verified address, with its
+ASCII letters in lower case, and no digest when the address is not verified.
+The digest is a pseudonym, not a secret: whoever reads the operation records
+can test a guessed address against it. An operation
+prepared before agent-manager recorded the digest has none: every caller but
+its owner gets `404` for it.
+
+**Why the email address does not become the owner.** A person who can sign in
+through two connectors could open their own operation with either login if the
+verified email address were the owner. That is safe only when every sign-in
+connector of every installation proves the address: a connector that passes
+on an address that the person does not control (a self-asserted address, an
+upstream identity provider with weak checks, a misconfigured claim mapping)
+would then hand a stranger the key entry form, which is the most sensitive
+page of the platform. agent-manager cannot check that property of each
+installation's Dex configuration. The subject is what the identity provider
+issues for one login, so it stays the owner, and the person signs in again
+with the same connector.
+
+**What the other-login answer tells.** It tells the caller that an operation
+with this id exists and that it was prepared with the caller's own verified
+email address. The caller already holds the operation id (48 hex characters
+of a digest of the preparing login, its client session and the request, sent
+only in that person's link), has proven the same issuer, and has a token that
+says the identity provider verified the same address. The answer gives the
+caller nothing they could not find out by signing in with their other login,
+and it grants no read, save or cancellation. It is the same for a pending,
+saving or completed operation, so it does not tell those states apart. A
+connector with a weak email check reaches only this sentence, never the
+operation.
 
 ## Upgrading credential UI configuration
 
@@ -268,6 +376,30 @@ carry the `agent-manager.giantswarm.io/credential-operation`
 marker; committed files hold the desired state alone. An uncertain Git save
 verifies the same private branch against stored encrypted-file hashes and
 opens or reuses its PR. It never creates a second branch automatically.
+
+A Git save runs all its checks before it creates the branch: the Git files and
+the encryption policy against the preparation, the objects that use the key, a
+name already taken, and the encryption of each value. A refusal there writes
+nothing: the operation stays `pending`, a retry gets the same refusal, and a
+fresh preparation is what is needed. Only a failure after the branch exists
+leaves the operation `uncertain`.
+
+Once the checks pass, the branch, the commit and the pull request run to their
+end also when the caller goes away (its request is cancelled or times out):
+the operation ends `complete`, its credentials `committed`, with its pull
+request, as for a caller that waited, and a repeated call gives the receipt.
+These writes have their own time limit of two minutes, and recording their
+outcome has 15 seconds more; the operation does not expire before they end. A
+restart of agent-manager during the writes still stops them: the operation
+stays `saving` or `uncertain`, and a repeated save recovers it as above.
+
+A failed save logs `credential save failed` with the `step` that failed (for
+example `dry run`, `prepare commit`, `create branch`, `commit` or
+`open pull request`) and its `cause`, at `ERROR` for a failure and at `WARN`
+for a refusal the caller can act on. A Kubernetes API answer is logged by its
+reason and code only, since it may quote the refused object. Any other cause
+is logged with every value the save received removed, as typed, quoted and
+base64 encoded.
 
 A crash before a write, or after a write before recording its version, can leave
 an operation without enough evidence to complete it. Inspect the recorded branch or marked live resources;

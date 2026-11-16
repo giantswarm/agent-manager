@@ -315,60 +315,81 @@ const nextDelete = "then call delete_organization again with mode commit and no 
 // base branch still defines the organization parent/name: a move that
 // GitHub reports as a removal and an addition, a definition the delete pull
 // request wrote into another file, or one a later commit wrote or moved.
-// The installation's Kustomization applies the objects path alone, so a
-// definition anywhere else does not re-create the object. Every file under
-// the objects path is read, whatever its name, since Kustomize loads a
-// resource file by any name: one tree read, and two reads for each file. A
-// file that does not parse defines nothing, since Kustomize cannot apply
-// it either. A read that fails, or a tree too large for one read, erases
-// nothing. The scan gives an early, clear answer; it runs no Kustomize, so
-// a sibling overlay that sets the namespace (giantswarm/agent-manager#399)
-// and a move between its reads (giantswarm/gitops-commit#70) pass it. The admission policy
-// agent-platform-organization-delete-intent still refuses those erases: it
-// needs Orphaned DeleteMerged, which the operator sets from the inventory
-// of Flux's own build (docs/organizations-commit-mode.md).
+// Both the erase and the answer pending erase take it. The installation's
+// Kustomization applies the objects path alone, so a definition anywhere
+// else does not re-create the object. Every file under the objects path is
+// read, whatever its name, since Kustomize loads a resource file by any
+// name: one read of the branch's head, one tree read and two reads for each
+// file, all at that one commit, so a commit that lands during the scan
+// cannot hide a definition. A file that does not parse defines nothing,
+// since Kustomize cannot apply it either. A read that fails, or a tree too
+// large for one read, erases nothing.
+//
+// The scan runs no Kustomize, so it fails closed on what a kustomization
+// changes: when any kustomization under the objects path sets a namespace,
+// a name prefix or a name suffix, a document's own namespace or name does
+// not tell, wherever that kustomization is (a sibling overlay refers to a
+// file by ../, giantswarm/agent-manager#399), and every organization
+// document that may become parent/name counts. In a repository with such an
+// overlay an erase can be refused although Flux's build no longer holds the
+// organization: the answer names the overlay to remove or change.
 func (c *orgCommit) stillInGit(ctx context.Context, pr commit.PullRequest, parent, name, what, p string) error {
 	repo, base, dir := c.cfg.Objects.Repository, c.cfg.Objects.Branch, c.cfg.Objects.Directory
 	unknown := func(err error, step string) error {
 		return fmt.Errorf("%w (nothing was erased: %s could not be read, so whether the organization is still defined in git is unknown; call delete_organization again with mode commit and confirm to retry)", commitError(c.gh, err), step)
 	}
-	files, err := c.remote.ListFiles(ctx, repo, base, dir)
+	// One commit for every read: a branch name in each read would resolve
+	// the head again, and a commit between the list and the reads could move
+	// a definition out of both.
+	sha, err := c.remote.Head(ctx, repo, base)
+	if err != nil {
+		return unknown(err, "the head of "+base)
+	}
+	files, err := c.remote.ListFiles(ctx, repo, sha, dir)
 	if err != nil {
 		return unknown(err, "the objects path "+dir)
 	}
 	docs := map[string][]map[string]any{}
-	renames := map[string]renaming{}
+	var (
+		r         renaming
+		renamedBy []string
+	)
 	for _, f := range files {
-		raw, err := c.remote.ReadFile(ctx, repo, base, f)
+		raw, err := c.remote.ReadFile(ctx, repo, sha, f)
 		if errors.Is(err, commit.ErrFileNotFound) {
+			// Listed at the same commit, so not a file a later commit
+			// moved: a symlink out of the repository, which Kustomize
+			// cannot load either.
 			continue
 		}
 		if err != nil {
 			return unknown(err, f)
 		}
 		parsed := documents(raw)
-		// A file of a kustomization's name is read both ways: as the
-		// kustomization of its directory, and as a resource file, since
-		// another kustomization may list it as one. A kustomization's own
-		// document never is an organization.
+		// A file of a kustomization's name is read both ways: as a
+		// kustomization, and as a resource file, since another
+		// kustomization may list it as one. A kustomization's own document
+		// never is an organization.
 		if kustomizationFiles[path.Base(f)] && len(parsed) > 0 {
-			renames[path.Dir(f)] = renamingOf(parsed[0])
+			if k := renamingOf(parsed[0]); k.namespace || k.name {
+				r.namespace = r.namespace || k.namespace
+				r.name = r.name || k.name
+				renamedBy = append(renamedBy, f)
+			}
 		}
 		docs[f] = parsed
 	}
 	for _, f := range files {
-		// A kustomization above the file that sets a namespace, a name
-		// prefix or a name suffix changes what its documents say: their
-		// raw namespace or name then does not tell.
-		var r renaming
-		for d := path.Dir(f); within(dir, d); d = path.Dir(d) {
-			r.namespace = r.namespace || renames[d].namespace
-			r.name = r.name || renames[d].name
-		}
 		for _, doc := range docs[f] {
-			if definesOrganization(doc, parent, name, r) {
-				return fmt.Errorf("%w: %s: its merged delete pull request %s removed %s, but %s in %s still defines it (moved there, or written there by the pull request or a later commit), so the organization is still in git; it is not pending erase and is not erased; remove that definition from %s and call delete_organization again with mode commit and confirm %q, or move it back to %s, %s", agents.ErrConflict, what, pr.URL, p, f, repo, f, parent+"/"+name, p, nextDelete)
+			if !definesOrganization(doc, parent, name, r) {
+				continue
 			}
+			if !definesOrganization(doc, parent, name, renaming{}) {
+				// The overlay alone makes the match: the document may be
+				// another organization, which must not be removed blindly.
+				return fmt.Errorf("%w: %s: its merged delete pull request %s removed %s, but %s in %s may still define it: %s set a namespace, a name prefix or a name suffix, so what the document says of its own namespace and name does not tell, and the scan, which runs no Kustomize, takes it as a definition; it is not pending erase and is not erased. Check the overlay first: if it does not make that document %s, remove that setting or the overlay from the objects path and call delete_organization again with mode commit and confirm %q; if it does, remove that definition", agents.ErrConflict, what, pr.URL, p, f, repo, strings.Join(renamedBy, ", "), parent+"/"+name, parent+"/"+name)
+			}
+			return fmt.Errorf("%w: %s: its merged delete pull request %s removed %s, but %s in %s still defines it (moved there, or written there by the pull request or a later commit), so the organization is still in git; it is not pending erase and is not erased; remove that definition from %s and call delete_organization again with mode commit and confirm %q, or move it back to %s, %s", agents.ErrConflict, what, pr.URL, p, f, repo, f, parent+"/"+name, p, nextDelete)
 		}
 	}
 	return nil

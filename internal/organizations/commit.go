@@ -71,7 +71,8 @@ type RemoteFor = agents.RemoteFor
 
 // CommitConfig is where commit mode writes an installation's organizations.
 type CommitConfig struct {
-	User func(context.Context) (*identity.GitHub, error)
+	PlatformModelsPath string
+	User               func(context.Context) (*identity.GitHub, error)
 	// GitHub builds the caller's remote.
 	GitHub RemoteFor
 	// Objects is the installation's repository, its branch, and the
@@ -324,7 +325,17 @@ func (c *orgCommit) open(ctx context.Context, changes []fileChange, branch, titl
 	if dryRun {
 		return out, nil
 	}
+	var creates []string
+	for _, ch := range changes {
+		creates = append(creates, ch.create...)
+	}
 	if len(landed) == 0 {
+		// Git carries every file already. A file this write creates was
+		// absent at its first check: another writer added it since, and the
+		// create is refused as on the cut branch.
+		if err := c.absent(ctx, creates); err != nil {
+			return nil, err
+		}
 		out.Unchanged = true
 		return out, nil
 	}
@@ -335,10 +346,6 @@ func (c *orgCommit) open(ctx context.Context, changes []fileChange, branch, titl
 			return nil, commitError(c.gh, err)
 		}
 		return nil, fmt.Errorf("%w: the pull request %s for this object is open: merge or close it first, then call again", agents.ErrConflict, open.URL)
-	}
-	var creates []string
-	for _, ch := range changes {
-		creates = append(creates, ch.create...)
 	}
 	pr, err := c.land(ctx, landed, creates, branch, title, body+"\n\nThe platform team reviews this pull request (CODEOWNERS of the organization paths).\n\nOpened by agent-manager as @"+c.gh.Login+".")
 	if err != nil {
@@ -374,14 +381,8 @@ func (c *orgCommit) land(ctx context.Context, changes []commit.Change, creates [
 	if err := c.remote.CreateBranch(ctx, repo, branch, base); err != nil {
 		return commit.PullRequest{}, commitError(c.gh, err)
 	}
-	for _, p := range creates {
-		taken, err := c.exists(ctx, p)
-		if err != nil {
-			return commit.PullRequest{}, err
-		}
-		if taken {
-			return commit.PullRequest{}, nameTaken{fmt.Errorf("%w: %s is in %s already and not applied yet: wait for Flux to apply it, then change it", agents.ErrConflict, p, repo)}
-		}
+	if err := c.absent(ctx, creates); err != nil {
+		return commit.PullRequest{}, err
 	}
 	if err := c.remote.Commit(ctx, repo, branch, title, files); err != nil {
 		return commit.PullRequest{}, commitError(c.gh, err)
@@ -391,6 +392,21 @@ func (c *orgCommit) land(ctx context.Context, changes []commit.Change, creates [
 		return commit.PullRequest{}, commitError(c.gh, err)
 	}
 	return pr, nil
+}
+
+// absent refuses (nameTaken) when the base branch carries any of creates,
+// files a write creates.
+func (c *orgCommit) absent(ctx context.Context, creates []string) error {
+	for _, p := range creates {
+		taken, err := c.exists(ctx, p)
+		if err != nil {
+			return err
+		}
+		if taken {
+			return nameTaken{fmt.Errorf("%w: %s is in %s already and not applied yet: wait for Flux to apply it, then change it", agents.ErrConflict, p, c.cfg.Objects.Repository)}
+		}
+	}
+	return nil
 }
 
 // branch is a pull request's head branch for a verb on an organization.
@@ -489,9 +505,17 @@ func (s *Service) writable(ctx context.Context, org Namespace) error {
 	if !ok {
 		return nil
 	}
-	what := "organization " + org.Parent + "/" + org.Organization
+	return s.erasing(o, org.Parent, org.Organization, org.Name)
+}
+
+// erasing refuses a write to the organization parent/name, or into its
+// namespace ns, while o (that organization) is being deleted or is in
+// Pending erase. writable reads o with agent-manager's ServiceAccount;
+// update_organization passes the object the caller read.
+func (s *Service) erasing(o *apov1alpha1.AgentPlatformOrganization, parent, name, ns string) error {
+	what := "organization " + parent + "/" + name
 	if o.DeletionTimestamp != nil {
-		return fmt.Errorf("%w: %s is being erased (%s): nothing is written into namespace %s; get_organization reports its erasure step until it is gone", agents.ErrConflict, what, orDefault(o.Status.ErasureStep, "starting"), org.Name)
+		return fmt.Errorf("%w: %s is being erased (%s): nothing is written into namespace %s; get_organization reports its erasure step until it is gone", agents.ErrConflict, what, orDefault(o.Status.ErasureStep, "starting"), ns)
 	}
 	c := meta.FindStatusCondition(o.Status.Conditions, apov1alpha1.ConditionOrphaned)
 	if c == nil || c.Status != metav1.ConditionTrue || c.Reason != apov1alpha1.ReasonDeleteMerged {
@@ -499,9 +523,9 @@ func (s *Service) writable(ctx context.Context, org Namespace) error {
 	}
 	file := "its file"
 	if s.cfg.Commit != nil {
-		file += " " + s.cfg.Commit.objectFile(org.Parent, org.Organization)
+		file += " " + s.cfg.Commit.objectFile(parent, name)
 	}
-	return fmt.Errorf("%w: %s is in Pending erase: its delete pull request merged (Orphaned, reason %s), so nothing is written into namespace %s. Erase it with delete_organization, mode commit and confirm %q (Erase now), or restore %s in git to keep it", agents.ErrConflict, what, apov1alpha1.ReasonDeleteMerged, org.Name, org.Parent+"/"+org.Organization, file)
+	return fmt.Errorf("%w: %s is in Pending erase: its delete pull request merged (Orphaned, reason %s), so nothing is written into namespace %s. Erase it with delete_organization, mode commit and confirm %q (Erase now), or restore %s in git to keep it", agents.ErrConflict, what, apov1alpha1.ReasonDeleteMerged, ns, parent+"/"+name, file)
 }
 
 func (s *Service) contentWriter(ctx context.Context, org Namespace, mode string) (*contentWriter, error) {
@@ -516,20 +540,21 @@ func (s *Service) contentWriter(ctx context.Context, org Namespace, mode string)
 	if mode != agents.ModeCommit {
 		return w, nil
 	}
-	if org.Parent == "" || org.Organization == "" {
+	if org.Scope != scopePlatform && (org.Parent == "" || org.Organization == "") {
 		return nil, fmt.Errorf("%w: namespace %s does not name its organization (labels %s and %s): its content path is unknown", agents.ErrConflict, org.Name, "agent-platform.giantswarm.io/parent", "agent-platform.giantswarm.io/organization")
 	}
 	if w.commit, err = s.newCommit(ctx); err != nil {
 		return nil, err
 	}
-	w.dir = w.commit.contentDir(org.Parent, org.Organization)
+	w.dir, err = w.commit.credentialDirectory(org)
+	if err != nil {
+		return nil, err
+	}
 	return w, nil
 }
 
-// owned refuses a write to an object this mode may not change:
-// agent-platform-operator's copies always; in apply mode an object a Flux
-// Kustomization applies from git, which Flux would revert; in commit mode an
-// object written live, which no file in git defines.
+// owned protects operator copies and enforces where an object's content lives.
+// Apply mode cannot change objects applied by Flux; commit mode requires a Git source.
 func (w *contentWriter) owned(obj *unstructured.Unstructured, kind string) error {
 	if obj == nil {
 		return nil
@@ -556,6 +581,20 @@ func (w *contentWriter) source(ctx context.Context, obj *unstructured.Unstructur
 	}
 	if err := w.owned(obj, kind); err != nil {
 		return nil, err
+	}
+	if kind == kubeKindModelConfig {
+		owner := obj.GetLabels()[agents.ManagedByLabel]
+		for _, key := range []string{"meta.helm.sh/release-name", "meta.helm.sh/release-namespace"} {
+			if obj.GetAnnotations()[key] != "" {
+				owner = "Helm"
+			}
+		}
+		if obj.GetLabels()["helm.toolkit.fluxcd.io/name"] != "" || obj.GetLabels()["helm.toolkit.fluxcd.io/namespace"] != "" {
+			owner = "Helm"
+		}
+		if owner != "" && owner != agents.ManagedByValue && owner != agents.PortalManagedByValue {
+			return nil, fmt.Errorf("%w: %s %s/%s is managed by %s: change it through that owner", agents.ErrGitOpsOwned, kind, obj.GetNamespace(), obj.GetName(), owner)
+		}
 	}
 	if w.mode != agents.ModeCommit {
 		return obj, nil
