@@ -104,6 +104,12 @@ giantswarm/agent-platform-operator#15 is the long-term fix.
    `kustomize.toolkit.fluxcd.io/prune: enabled` on the live object and deletes it; the
    operator erases it.
 
+While the operator reports the organization `Orphaned` with reason `DeleteMerged`
+(Pending erase), and while it is being erased, every write tool of its contents
+(members, models, connectors, egress policies and credentials, in both modes) answers
+`conflict`: Erase now, or restore its file to keep it. Reads and `delete_organization`
+keep working.
+
 The erase is refused:
 
 - while the object's file is still in git, also when the pull request the object names

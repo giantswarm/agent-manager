@@ -211,10 +211,6 @@ func (s *Service) AddMember(ctx context.Context, req MemberRequest) (*MemberResu
 	if err != nil {
 		return nil, err
 	}
-	cw, err := s.contentWriter(ctx, org, req.Mode)
-	if err != nil {
-		return nil, err
-	}
 	c, err := s.caller(ctx)
 	if err != nil {
 		return nil, err
@@ -222,7 +218,13 @@ func (s *Service) AddMember(ctx context.Context, req MemberRequest) (*MemberResu
 	ns := req.Namespace
 	name := memberBinding(req.Role)
 	res := &MemberResult{Namespace: ns, Member: Member{Kind: sub.Kind, Name: sub.Name, Role: req.Role, Binding: name}, DryRun: req.DryRun, RequestedBy: identity.Caller(ctx)}
+	// The caller reads first: one who may not gets forbidden, not the
+	// organization's state.
 	bindings, err := s.roleBindings(ctx, c, ns, wayOrganizationAdmin(ns))
+	if err != nil {
+		return nil, err
+	}
+	cw, err := s.contentWriter(ctx, org, req.Mode)
 	if err != nil {
 		return nil, err
 	}
@@ -290,17 +292,19 @@ func (s *Service) RemoveMember(ctx context.Context, req MemberRequest) (*MemberR
 	if err != nil {
 		return nil, err
 	}
-	cw, err := s.contentWriter(ctx, org, req.Mode)
-	if err != nil {
-		return nil, err
-	}
 	c, err := s.caller(ctx)
 	if err != nil {
 		return nil, err
 	}
 	ns := req.Namespace
 	res := &MemberResult{Namespace: ns, Member: Member{Kind: sub.Kind, Name: sub.Name, Role: req.Role}, DryRun: req.DryRun, RequestedBy: identity.Caller(ctx)}
+	// The caller reads first: one who may not gets forbidden, not the
+	// organization's state.
 	bindings, err := s.roleBindings(ctx, c, ns, wayOrganizationAdmin(ns))
+	if err != nil {
+		return nil, err
+	}
+	cw, err := s.contentWriter(ctx, org, req.Mode)
 	if err != nil {
 		return nil, err
 	}
