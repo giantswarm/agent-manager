@@ -150,15 +150,13 @@ func TestVertexCredentialOperations(t *testing.T) {
 }
 
 func TestVertexCredentialValidationBeforeWrites(t *testing.T) {
-	for _, scenario := range []string{"wrong project", "wrong type", "foreign token endpoint", "missing email", "invalid private key", "invalid JSON"} {
+	for _, scenario := range []string{"wrong type", "foreign token endpoint", "missing email", "invalid private key", "invalid JSON"} {
 		t.Run(scenario, func(t *testing.T) {
 			fixture := newOrgFixture(t)
 			result := prepareModelOperation(t, fixture, map[string]any{"provider": "GeminiVertexAI", "projectID": "vertex-test", "location": "europe-west4"})
 			confirmation := confirmOperation(t, fixture, result.CredentialOperation)
 			key := vertexCredential(t)
 			switch scenario {
-			case "wrong project":
-				key["project_id"] = "another-project"
 			case "wrong type":
 				key["type"] = "external_account"
 			case "foreign token endpoint":
@@ -459,15 +457,43 @@ func TestVertexProjectChangeNeedsAKeyCheckedAgainstTheNewProject(t *testing.T) {
 	moved := prepareModelOperation(t, fixture, map[string]any{"provider": "", "model": "", "projectID": "vertex-other", "credentialSecret": "tenant-credential-claude-other"}) // #nosec G101 -- a Secret name, no value.
 	confirmation = confirmOperation(t, fixture, moved.CredentialOperation)
 	status, answer, _ = operationHTTP(t, fixture, http.MethodPost, moved.CredentialOperation, confirmation.Version, valuesBody(t, moved, string(encoded)), nil)
-	require.Equal(t, http.StatusBadRequest, status, answer)
-	require.Nil(t, fixture.get(t, secretGVR, orgNS, "tenant-credential-claude-other"))
-	key["project_id"] = "vertex-other"
-	encoded, err = json.Marshal(key)
-	require.NoError(t, err)
-	status, answer, _ = operationHTTP(t, fixture, http.MethodPost, moved.CredentialOperation, confirmation.Version, valuesBody(t, moved, string(encoded)), nil)
 	require.Equal(t, http.StatusOK, status, answer)
+	var saved organizations.ResourceResult
+	require.NoError(t, json.Unmarshal([]byte(answer), &saved))
+	require.Equal(t, "the key's service account belongs to project vertex-test and the model calls Vertex AI in project vertex-other: it needs Vertex AI access in vertex-other", saved.Note)
 	project, _, _ = unstructured.NestedString(fixture.get(t, mcGVR, orgNS, "claude").Object, "spec", "geminiVertexAI", "projectID")
 	require.Equal(t, "vertex-other", project)
+}
+
+func TestVertexKeyOfTheModelProjectSavesWithoutANote(t *testing.T) {
+	fixture := newOrgFixture(t)
+	result := prepareModelOperation(t, fixture, map[string]any{"provider": "GeminiVertexAI", "projectID": "vertex-test", "location": "europe-west1"})
+	confirmation := confirmOperation(t, fixture, result.CredentialOperation)
+	encoded, err := json.Marshal(vertexCredential(t))
+	require.NoError(t, err)
+	status, answer, _ := operationHTTP(t, fixture, http.MethodPost, result.CredentialOperation, confirmation.Version, valuesBody(t, result, string(encoded)), nil)
+	require.Equal(t, http.StatusOK, status, answer)
+	var saved organizations.ResourceResult
+	require.NoError(t, json.Unmarshal([]byte(answer), &saved))
+	require.Empty(t, saved.Note)
+}
+
+func TestNewVertexModelOnAnExistingSecretReplacesItThroughTheForm(t *testing.T) {
+	fixture := newOrgFixture(t)
+	seedSecret(t, fixture, "tenant-credential-shared", "GOOGLE_APPLICATION_CREDENTIALS")
+	result := prepareModelOperation(t, fixture, map[string]any{"provider": "GeminiVertexAI", "projectID": "vertex-test", "location": "europe-west1", "credentialSecret": "tenant-credential-shared"}) // #nosec G101 -- a Secret name, no value.
+	require.Equal(t, organizations.CredentialReplace, result.Credentials[0].State)
+	require.Equal(t, "google-service-account-json", result.Credentials[0].InputFormat)
+	require.Nil(t, fixture.get(t, mcGVR, orgNS, "claude"))
+	confirmation := confirmOperation(t, fixture, result.CredentialOperation)
+	status, answer, _ := operationHTTP(t, fixture, http.MethodPost, result.CredentialOperation, confirmation.Version, valuesBody(t, result, "sensitive-invalid-json"), nil)
+	require.Equal(t, http.StatusBadRequest, status, answer)
+	require.Nil(t, fixture.get(t, mcGVR, orgNS, "claude"))
+	encoded, err := json.Marshal(vertexCredential(t))
+	require.NoError(t, err)
+	status, answer, _ = operationHTTP(t, fixture, http.MethodPost, result.CredentialOperation, confirmation.Version, valuesBody(t, result, string(encoded)), nil)
+	require.Equal(t, http.StatusOK, status, answer)
+	require.NotNil(t, fixture.get(t, mcGVR, orgNS, "claude"))
 }
 
 func installationVertexOperation(t *testing.T, configure func(*organizations.Config)) (*orgFixture, organizations.ResourceResult, string) {

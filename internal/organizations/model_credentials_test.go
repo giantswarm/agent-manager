@@ -54,6 +54,12 @@ func TestGoogleCredentialSizeLimit(t *testing.T) {
 	padded := func(size int) string {
 		return string(document[:len(document)-1]) + strings.Repeat(" ", size-len(document)) + "}"
 	}
-	require.NoError(t, validateGoogleCredential(padded(64*1024), "vertex-test"))
-	require.Error(t, validateGoogleCredential(padded(64*1024+1), "vertex-test"))
+	note, err := validateGoogleCredential(padded(64*1024), "vertex-test")
+	require.NoError(t, err)
+	require.Empty(t, note)
+	_, err = validateGoogleCredential(padded(64*1024+1), "vertex-test")
+	require.Error(t, err)
+	note, err = validateGoogleCredential(string(document), "vertex-models")
+	require.NoError(t, err)
+	require.Equal(t, "the key's service account belongs to project vertex-test and the model calls Vertex AI in project vertex-models: it needs Vertex AI access in vertex-models", note)
 }

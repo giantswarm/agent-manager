@@ -229,16 +229,16 @@ func (s *Service) SetModel(ctx context.Context, req ModelRequest) (*ResourceResu
 	if !res.Created && !providerChanged && secret == "" && req.CredentialSecret == "" && org.Scope == scopePlatform && !isVertexModel(obj) {
 		req.NoCredential = true
 	}
-	// A Vertex key is checked against the model's project only when it is
-	// saved through the form, so a new project or a change to Vertex needs a
-	// Secret the form writes.
-	vertexKeyUnchecked := isVertexModel(obj) && providerChanged
+	// A Vertex key is checked only when it is saved through the form, so a
+	// new Vertex model, a change to Vertex and a new project need a key the
+	// form writes.
+	vertexKeyUnchecked := isVertexModel(obj) && (res.Created || providerChanged)
 	if previous := find(items, req.Name); previous != nil && isVertexModel(previous) && isVertexModel(obj) {
 		previousProject, _, _ := unstructured.NestedString(previous.Object, "spec", vertexBlock(previous), "projectID")
 		project, _, _ := unstructured.NestedString(obj.Object, "spec", vertexBlock(obj), "projectID")
 		if previousProject != project {
 			if req.CredentialSecret == "" || req.CredentialSecret == secret {
-				return nil, invalidf("changing a Vertex project requires a new credentialSecret; its key must belong to that project")
+				return nil, invalidf("changing a Vertex project requires a new credentialSecret: the form checks its key for the new project")
 			}
 			vertexKeyUnchecked = true
 		}
@@ -322,9 +322,18 @@ func (s *Service) SetModel(ctx context.Context, req ModelRequest) (*ResourceResu
 		cred.Next = s.next(cred, "ModelConfig "+req.Name)
 	}
 	if vertexKeyUnchecked && cred.State == CredentialPresent {
-		return nil, invalidf("a Vertex model on a new project or provider needs a credentialSecret that does not exist yet: the form checks its key against the project")
+		switch {
+		case !res.Created:
+			return nil, invalidf("a Vertex model on a new project or provider needs a credentialSecret that does not exist yet: the form checks its key for the project")
+		case writableModelCredential(org, secret) == nil:
+			// The existing Secret was not checked for this model: the form
+			// replaces it with a key it checks. An installation Secret
+			// managed elsewhere is referenced as it is.
+			cred.State = CredentialReplace
+			cred.Next = s.next(cred, "ModelConfig "+req.Name)
+		}
 	}
-	if cred.State == CredentialMissing {
+	if cred.State == CredentialMissing || cred.State == CredentialReplace {
 		if err := writableModelCredential(org, secret); err != nil {
 			return nil, err
 		}

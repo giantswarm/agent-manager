@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"path"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/giantswarm/gitops-commit/layout"
@@ -160,7 +161,11 @@ func configureModel(model *unstructured.Unstructured, request ModelRequest) erro
 	return nil
 }
 
-func validateGoogleCredential(raw, project string) error {
+// validateGoogleCredential checks a service-account key for a Vertex model
+// on project. A key of another project is accepted: a central project's
+// service account may hold Vertex AI access in the model's project. The
+// returned note names the two projects so the person can check that access.
+func validateGoogleCredential(raw, project string) (string, error) {
 	var key struct {
 		Type        string `json:"type"`
 		ProjectID   string `json:"project_id"`
@@ -168,35 +173,39 @@ func validateGoogleCredential(raw, project string) error {
 		PrivateKey  string `json:"private_key"`
 		TokenURI    string `json:"token_uri"`
 	}
-	if len(raw) > 64*1024 || json.Unmarshal([]byte(raw), &key) != nil || key.Type != "service_account" || key.ProjectID == "" || key.ProjectID != project || key.ClientEmail == "" {
-		return invalidf("upload a Google service-account JSON key for the model's project")
+	if len(raw) > 64*1024 || json.Unmarshal([]byte(raw), &key) != nil || key.Type != "service_account" || key.ProjectID == "" || key.ClientEmail == "" {
+		return "", invalidf("upload a Google service-account JSON key")
 	}
 	if key.TokenURI != "" {
 		endpoint, err := url.Parse(key.TokenURI)
 		if err != nil || endpoint.Scheme != "https" || endpoint.Host != "oauth2.googleapis.com" || endpoint.User != nil || endpoint.RawQuery != "" || endpoint.Fragment != "" || endpoint.Path != "/token" {
-			return invalidf("Google credentials must use https://oauth2.googleapis.com/token")
+			return "", invalidf("Google credentials must use https://oauth2.googleapis.com/token")
 		}
 	}
 	block, rest := pem.Decode([]byte(key.PrivateKey))
 	if block == nil || len(strings.TrimSpace(string(rest))) > 0 || block.Type != "PRIVATE KEY" {
-		return invalidf("Google credentials require a valid RSA private key")
+		return "", invalidf("Google credentials require a valid RSA private key")
 	}
 	parsed, err := x509.ParsePKCS8PrivateKey(block.Bytes)
 	if err != nil {
-		return invalidf("Google credentials require a valid RSA private key")
+		return "", invalidf("Google credentials require a valid RSA private key")
 	}
 	privateKey, ok := parsed.(*rsa.PrivateKey)
 	if !ok || privateKey.Validate() != nil {
-		return invalidf("Google credentials require a valid RSA private key")
+		return "", invalidf("Google credentials require a valid RSA private key")
 	}
-	return nil
+	if key.ProjectID != project {
+		return fmt.Sprintf("the key's service account belongs to project %s and the model calls Vertex AI in project %s: it needs Vertex AI access in %s", key.ProjectID, project, project), nil
+	}
+	return "", nil
 }
 
-func validateCredentialModels(operation *credentialOperation, live map[string]*unstructured.Unstructured, credential operationCredential, value string) error {
+func validateCredentialModels(operation *credentialOperation, live map[string]*unstructured.Unstructured, credential operationCredential, value string) ([]string, error) {
 	models := maps.Clone(live)
 	for _, planned := range operation.Writes {
 		models[planned.Kind+"/"+planned.Name] = unstructuredOf(planned.Object)
 	}
+	var notes []string
 	for _, model := range models {
 		if model.GetKind() != kubeKindModelConfig || !isVertexModel(model) {
 			continue
@@ -207,9 +216,14 @@ func validateCredentialModels(operation *credentialOperation, live map[string]*u
 			continue
 		}
 		project, _, _ := unstructured.NestedString(model.Object, "spec", vertexBlock(model), "projectID")
-		if err := validateGoogleCredential(value, project); err != nil {
-			return err
+		note, err := validateGoogleCredential(value, project)
+		if err != nil {
+			return nil, err
+		}
+		if note != "" && !slices.Contains(notes, note) {
+			notes = append(notes, note)
 		}
 	}
-	return nil
+	slices.Sort(notes)
+	return notes, nil
 }

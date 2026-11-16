@@ -21,7 +21,14 @@ Native `AnthropicVertexAI` and `GeminiVertexAI` take nonsecret `projectID` and
 Their confirmation declares `inputFormat: google-service-account-json`. Other
 credentials use `text`; an omitted format also means text. The client presents
 the uploader on the credential page. The server checks the service-account type,
-Google project, RSA private key and Google OAuth token endpoint before writing.
+RSA private key and Google OAuth token endpoint before writing. A key whose
+`project_id` differs from the model's `projectID` is accepted, because a
+central project's service account can hold Vertex AI access in the model's
+project: the save's `note` names both projects so the person can check that
+access. Only keys saved through the form are checked. A new Vertex model that
+names an existing credential Secret opens the form to replace it, so its key
+is checked too; an installation model may still reference a Secret managed
+elsewhere, which is not checked.
 `location` is `global`, `us`, `eu` or a Google region such as `europe-west1`;
 `projectID` is a Google project ID. Vertex AI calls go from the agent to Google
 directly: the LLM gateway's metering, rate limits and spend reporting do not
