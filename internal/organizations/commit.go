@@ -440,7 +440,9 @@ func head(object string) string {
 
 // openPullRequest finds an open pull request of the object's branch name:
 // on a head of a write (the name, the separator and a suffix), or on the
-// name itself, the head an older agent-manager opened.
+// name itself, the head an older agent-manager opened. The lookup of the
+// name can go once no pull request of an agent-manager older than this
+// change is open on an installation (giantswarm/agent-manager#385).
 func (c *orgCommit) openPullRequest(ctx context.Context, object string) (commit.PullRequest, bool, error) {
 	repo := c.cfg.Objects.Repository
 	prs, err := c.remote.FindPullRequestsByPrefix(ctx, repo, object+headSeparator)

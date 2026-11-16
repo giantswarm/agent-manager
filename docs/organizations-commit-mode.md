@@ -73,6 +73,12 @@ MCP authorization mode alone cannot authorize an HTTPS credential save.
    therefore neither change the rule nor approve a merge into an organization's path
    alone.
 
+3. **"Automatically delete head branches"** turned on in the repository's settings.
+   Every write opens its pull request on a new branch, and agent-manager deletes none:
+   without the setting, the branch of each merged pull request stays. The branch of a
+   pull request closed without a merge, and of a write refused after its branch was cut,
+   stays in either case.
+
 ### Why the platform team reviews every organization pull request
 
 Until giantswarm/agent-platform-operator#15 gives each organization its own Flux source
