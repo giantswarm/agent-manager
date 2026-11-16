@@ -17,6 +17,8 @@ var credentialKinds = []string{kubeKindModelConfig, kubeKindRemoteMCPServer, kub
 // CredentialReference is an object of an organization namespace that names
 // a credential Secret.
 type CredentialReference struct {
+	ProjectID string `json:"projectID,omitempty"`
+	Location  string `json:"location,omitempty"`
 	// Kind is ModelConfig, RemoteMCPServer or EgressPolicy.
 	Kind string `json:"kind"`
 	Name string `json:"name"`
@@ -47,6 +49,9 @@ type CredentialUse struct {
 }
 
 func (s *Service) orgNamespace(ctx context.Context, parent, organization string) (Namespace, error) {
+	if s.cfg.Namespaces == nil {
+		return Namespace{}, fmt.Errorf("%w: organization management is disabled", agents.ErrUnsupported)
+	}
 	if parent == "" || organization == "" {
 		return Namespace{}, invalidf("parent and organization are required")
 	}
@@ -98,6 +103,10 @@ func referencesOf(kind string, u *unstructured.Unstructured, secret string) []Cr
 			ref := base
 			ref.Key = key
 			ref.Provider, _, _ = unstructured.NestedString(u.Object, "spec", "provider")
+			if block := vertexBlock(u); block != "" {
+				ref.ProjectID, _, _ = unstructured.NestedString(u.Object, "spec", block, "projectID")
+				ref.Location, _, _ = unstructured.NestedString(u.Object, "spec", block, "location")
+			}
 			out = append(out, ref)
 		}
 	case kubeKindRemoteMCPServer:

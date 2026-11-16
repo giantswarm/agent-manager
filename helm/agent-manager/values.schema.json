@@ -71,7 +71,7 @@
                 },
                 "uiURL": {
                     "type": "string",
-                    "description": "HTTPS RFC 6570 URI template with one {operation} expression. The UI owns its routes; agent-manager supplies only a non-authorizing operation ID."
+                    "description": "HTTPS RFC 6570 URI template with one {operation} expression, for organization and installation models. It uses only {operation}, {parent}, {organization} and {namespace}, in the path or query, never in the host. Installation model links need {namespace} and no {parent} or {organization}, required without tenants.enabled. The UI owns its routes; agent-manager supplies only a non-authorizing operation ID. Requires downstream OAuth."
                 }
             }
         },
@@ -979,6 +979,10 @@
                         "objectsPath": {
                             "type": "string",
                             "description": "The directory the installation's Kustomization applies the organization objects from: `<objectsPath>/<parent>/<name>.yaml`."
+                        },
+                        "platformModelsPath": {
+                            "type": "string",
+                            "description": "Trusted repository-relative directory for installation model commits."
                         },
                         "repository": {
                             "type": "string",

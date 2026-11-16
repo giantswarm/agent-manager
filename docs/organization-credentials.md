@@ -1,10 +1,54 @@
-# Organization credential operations
+# Model and organization credential operations
 
 Models, connectors and EgressPolicies name credential Secrets by reference. The
 organization tools accept no credential values. A missing credential prepares
 an operation before writing any consumer. Ordinary edits with existing
 credentials do not prepare an operation or change the Secret; a new value for
 an existing credential goes through `replace_organization_credential`.
+
+Model operations also accept the configured installation namespace, requiring
+cluster-admin authorization again when an operation is read or saved. Its target
+declares `scope: platform`, without a synthetic organization. Connector and egress
+operations remain organization-scoped. Installation models require
+`credentials.uiURL` with a `{namespace}` expression and no `{parent}` or
+`{organization}`: an installation model has neither, so they would leave empty
+path segments in its link. OAuth and downstream authorization are
+required. Without tenancy the template must be such a template, and the form and
+model tools work for installation models only. Tenant management tools stay
+disabled, and organization discovery is empty.
+
+Native `AnthropicVertexAI` and `GeminiVertexAI` take nonsecret `projectID` and
+`location`; their credential key defaults to `GOOGLE_APPLICATION_CREDENTIALS`.
+Their confirmation declares `inputFormat: google-service-account-json`. Other
+credentials use `text`; an omitted format also means text. The client presents
+the uploader on the credential page. The server checks the service-account type,
+RSA private key and Google OAuth token endpoint before writing. A key whose
+`project_id` differs from the model's `projectID` is accepted, because a
+central project's service account can hold Vertex AI access in the model's
+project: the save's `note` names both projects so the person can check that
+access. Only keys saved through the form are checked. A new Vertex model that
+names an existing credential Secret opens the form to replace it, so its key
+is checked too; an installation model may still reference a Secret managed
+elsewhere, which is not checked.
+`location` is `global`, `us`, `eu` or a Google region such as `europe-west1`;
+`projectID` is a Google project ID. Vertex AI calls go from the agent to Google
+directly: the LLM gateway's metering, rate limits and spend reporting do not
+apply to them. Replacement validates every Vertex consumer; project or location
+changes invalidate the confirmation. Model deletion retains its Secret.
+
+`endpoint`, `insecureSkipTLSVerify` and `noCredential: true` (keyless
+endpoints, excluding Vertex) apply to installation models only; an
+organization model with one of them is refused. On an organization model
+`insecureSkipTLSVerify: false` removes a `tls.disableVerify` written
+elsewhere, and `endpoint: ""` changes nothing: admission holds its base URL
+to the LLM listener. In the installation namespace
+agent-manager writes only `tenant-credential-*` Secrets: a model may reference
+any existing Secret, such as one GitOps or Helm manages, and its value is
+replaced where it is managed. The installation form and model tools start only
+with `--multi-tenant` or `--credential-ui-url`.
+
+Installation commit mode requires an explicit `tenants.commit.platformModelsPath`
+in the trusted repository and never derives a directory from an organization.
 
 `set_organization_model`, `set_organization_connector` and
 `set_organization_egress_policy` with `create: true` only create: a model,
@@ -64,13 +108,16 @@ Configure an HTTPS URL template, for example:
 
 ```yaml
 credentials:
-  uiURL: https://portal.example.com/organizations/graveler/{parent}/{organization}/credentials?operation={operation}
+  uiURL: https://portal.example.com/customize/models/credentials/graveler/{namespace}/{operation}
 ```
 
 The template is an [RFC 6570](https://www.rfc-editor.org/rfc/rfc6570) URI
 template. One `{operation}` expression is required in the path or query
-(`{?operation}` works too). `{parent}` and `{organization}` are optional; the
-scheme and host are fixed, and no other variable is accepted. Routes and the
+(`{?operation}` works too). `{parent}`, `{organization}` and `{namespace}` are optional, but installation
+model links need `{namespace}` and no `{parent}` or `{organization}`, and
+without tenancy such a template is required; the scheme and host are fixed,
+and no other variable is accepted. The chart refuses the same templates as the
+server. Routes and the
 installation name belong to the UI configuration. Agent-manager neither hosts a
 form nor constructs a Backstage route. The operation ID grants no authority.
 

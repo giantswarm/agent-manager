@@ -554,10 +554,17 @@ tenants:
     # `<contentPrefix>/<parent>/<name>`: agent-platform-operator's
     # `commitMode.path` without `{parent}/{name}`.
     contentPrefix: agent-platform/organizations
+    # -- Trusted repository-relative directory for installation model commits.
+    platformModelsPath: ""
 
 credentials:
-  # -- HTTPS RFC 6570 URI template with one {operation} expression. The UI owns
-  # its routes; agent-manager supplies only a non-authorizing operation ID.
+  # -- HTTPS RFC 6570 URI template with one {operation} expression, for
+  # organization and installation models. It uses only {operation}, {parent},
+  # {organization} and {namespace}, in the path or query, never in the host.
+  # Installation model links need {namespace} and no {parent} or
+  # {organization}, required without tenants.enabled. The UI owns its
+  # routes; agent-manager supplies only a non-authorizing operation ID.
+  # Requires downstream OAuth.
   uiURL: ""
   # -- Dedicated namespace for nonsecret operation metadata. Empty derives
   # a namespace from the release. Do not share it with application config.

@@ -43,9 +43,13 @@ func ContextWithCredentialRequest(ctx context.Context, tool, intent, client stri
 }
 
 // credentialUIVars are the variables a credential UI URL template may use.
-var credentialUIVars = []string{"operation", "parent", "organization"}
+var credentialUIVars = []string{templateOperation, "parent", "organization", fieldNamespace}
 
-var errCredentialUIURL = errors.New("credential UI requires an HTTPS RFC 6570 URI template with one {operation} expression in its path or query, using only {operation}, {parent} and {organization}")
+// templateOperation is the credential UI URL template variable the
+// operation ID expands into.
+const templateOperation = "operation"
+
+var errCredentialUIURL = errors.New("credential UI requires an HTTPS RFC 6570 URI template with one {operation} expression in its path or query, using only {operation}, {parent}, {organization} and {namespace}")
 
 // ValidateCredentialUIURL keeps the origin fixed while allowing domain identifiers in the path or query.
 func ValidateCredentialUIURL(template string) error {
@@ -53,10 +57,23 @@ func ValidateCredentialUIURL(template string) error {
 	return err
 }
 
+// CredentialUIURLServesInstallations reports whether a valid credential UI
+// URL template links installation models: it has a {namespace} expression
+// and no {parent} or {organization}, which an installation model leaves
+// empty.
+func CredentialUIURLServesInstallations(template string) bool {
+	tpl, err := parseCredentialUIURL(template)
+	if err != nil {
+		return false
+	}
+	names := tpl.Varnames()
+	return slices.Contains(names, fieldNamespace) && !slices.Contains(names, "parent") && !slices.Contains(names, "organization")
+}
+
 func parseCredentialUIURL(template string) (*uritemplate.Template, error) {
 	const marker = "credentialoperationplaceholder"
 	tpl, err := uritemplate.New(template)
-	if err != nil || !slices.Contains(tpl.Varnames(), "operation") {
+	if err != nil || !slices.Contains(tpl.Varnames(), templateOperation) {
 		return nil, errCredentialUIURL
 	}
 	for _, name := range tpl.Varnames() {
@@ -77,9 +94,10 @@ func parseCredentialUIURL(template string) (*uritemplate.Template, error) {
 
 func expandCredentialUIURL(tpl *uritemplate.Template, operation, parent, organization string) (string, error) {
 	return tpl.Expand(uritemplate.Values{
-		"operation":    uritemplate.String(operation),
-		"parent":       uritemplate.String(parent),
-		"organization": uritemplate.String(organization),
+		templateOperation: uritemplate.String(operation),
+		"parent":          uritemplate.String(parent),
+		"organization":    uritemplate.String(organization),
+		fieldNamespace:    uritemplate.String(parent),
 	})
 }
 
@@ -183,7 +201,12 @@ func (s *Service) credentialOperation(ctx context.Context, id string) (*credenti
 	if time.Now().After(operation.ExpiresAt) {
 		return nil, fmt.Errorf("%w: credential operation expired; prepare it again", agents.ErrConflict)
 	}
-	organization, err := s.orgNamespace(ctx, operation.Namespace.Parent, operation.Namespace.Organization)
+	var organization Namespace
+	if operation.Namespace.Scope == scopePlatform {
+		organization, err = s.modelNamespace(ctx, operation.Namespace.Name)
+	} else {
+		organization, err = s.orgNamespace(ctx, operation.Namespace.Parent, operation.Namespace.Organization)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -317,10 +340,11 @@ func (s *Service) landResource(ctx context.Context, writer *contentWriter, write
 	if result.DryRun {
 		return nil
 	}
-	if s.cfg.CredentialUIURL == "" {
+	template := s.cfg.CredentialUIURL
+	if template == "" {
 		return fmt.Errorf("%w: no credential UI URL is configured; no resource was written", agents.ErrUnsupported)
 	}
-	uiURL, err := parseCredentialUIURL(s.cfg.CredentialUIURL)
+	uiURL, err := parseCredentialUIURL(template)
 	if err != nil {
 		return invalidf("%s", err)
 	}
@@ -370,7 +394,10 @@ func (s *Service) landResource(ctx context.Context, writer *contentWriter, write
 			return err
 		}
 	}
-	link, err := expandCredentialUIURL(uiURL, id, writer.org.Parent, writer.org.Organization)
+	link, err := uiURL.Expand(uritemplate.Values{
+		templateOperation: uritemplate.String(id), "parent": uritemplate.String(writer.org.Parent),
+		"organization": uritemplate.String(writer.org.Organization), fieldNamespace: uritemplate.String(writer.org.Name),
+	})
 	if err != nil {
 		return invalidf("%s", errCredentialUIURL)
 	}
