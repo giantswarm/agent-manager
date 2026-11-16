@@ -811,7 +811,7 @@ managed: helmrelease is writable here; gitops needs mode commit; platform is rea
 ```text
 List the EgressPolicies of a namespace: the names create_agent and update_agent accept for egressPolicyRefs.
 
-Each with its origins and, where the egress gateway adds a credential, the header's name; never the Secret. Read as you; organization admins write them with set_organization_egress_policy. A change to a policy reaches every agent that picks it from its next Session on.
+Each with its origins and, where the egress gateway adds a credential, credentialHeader, credentialSecret and credentialKey: names only, never a value. Read as you; organization admins write them with set_organization_egress_policy. A change to a policy reaches every agent that picks it from its next Session on.
 ```
 
 ```json
@@ -840,7 +840,7 @@ Each with its origins and, where the egress gateway adds a credential, the heade
 ```text
 List the ModelConfigs of a namespace: the values create_agent accepts for modelConfig.
 
-Each with provider, model, its Accepted and ResolvedRefs conditions, who manages it, and default: the one create_agent writes when modelConfig is omitted (the single ModelConfig annotated agent-platform.giantswarm.io/is-default-model-config=true; none or several is no default), and its settings: displayName, maxTokens, promptCaching (with cacheTTL while on; omitted for a provider without it). Organization admins write them with set_organization_model.
+Each with provider, model, its Accepted and ResolvedRefs conditions, who manages it, and default: the one create_agent writes when modelConfig is omitted (the single ModelConfig annotated agent-platform.giantswarm.io/is-default-model-config=true; none or several is no default), and its settings: displayName, maxTokens, promptCaching (with cacheTTL while on; omitted for a provider without it), credentialSecret/credentialKey of its key (names only). Organization admins write them with set_organization_model.
 ```
 
 ```json

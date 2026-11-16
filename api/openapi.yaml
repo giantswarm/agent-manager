@@ -386,7 +386,7 @@ paths:
     get:
       tags: [egresspolicies]
       summary: List the kagent EgressPolicies of a namespace, read as the caller
-      description: The names an agent's egressPolicyRefs may pick, each with its origins and, where the egress gateway adds a credential, the header's name; never the Secret
+      description: The names an agent's egressPolicyRefs may pick, each with its origins and, where the egress gateway adds a credential, the header and the Secret and key it comes from, by name; never a value
       operationId: listEgressPolicies
       x-mcp-tool: list_egress_policies
       parameters:
@@ -1355,6 +1355,8 @@ components:
         maxTokens: { type: integer, description: "The token limit of an answer, the provider block's maxTokens; omitted when unset (the provider's default)" }
         promptCaching: { type: boolean, description: "The provider block's promptCaching (Anthropic, Bedrock), false when unset; omitted for a provider without the setting" }
         cacheTTL: { type: string, description: "The prompt cache time (5m or 1h), given while promptCaching is true" }
+        credentialSecret: { type: string, description: "The Secret that holds the model's API key (spec.apiKeySecret), by name; absent for a model without a key. The Secret is never read" }
+        credentialKey: { type: string, description: "The key in credentialSecret that holds the API key (spec.apiKeySecretKey); absent for a model without a key" }
     EgressPolicy:
       type: object
       properties:
@@ -1366,7 +1368,9 @@ components:
             type: object
             properties:
               origin: { type: string }
-              credentialHeader: { type: string, description: The request header the egress gateway fills with the policy's credential; absent without one. The Secret is never reported }
+              credentialHeader: { type: string, description: The request header the egress gateway fills with the policy's credential; absent without one }
+              credentialSecret: { type: string, description: "The Secret the credential comes from, by name; absent without a credential. The Secret is never read" }
+              credentialKey: { type: string, description: The key in credentialSecret that holds the credential; absent without a credential }
         managedBy: { type: string }
     DiscoveredSkill:
       type: object

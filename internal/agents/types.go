@@ -616,6 +616,11 @@ type ModelConfig struct {
 	// CacheTTL is its cache time, given while caching is on.
 	PromptCaching *bool  `json:"promptCaching,omitempty"`
 	CacheTTL      string `json:"cacheTTL,omitempty"`
+	// CredentialSecret and CredentialKey name the Secret and its key that hold
+	// the model's API key (spec.apiKeySecret, spec.apiKeySecretKey); empty for
+	// a model without one. The names only: the Secret is never read.
+	CredentialSecret string `json:"credentialSecret,omitempty"`
+	CredentialKey    string `json:"credentialKey,omitempty"`
 }
 
 // EgressPolicy is a kagent EgressPolicy as list_egress_policies reports it:
@@ -629,10 +634,13 @@ type EgressPolicy struct {
 
 // EgressDestination is one origin of an EgressPolicy. CredentialHeader names
 // the request header the egress gateway fills with a credential, when the
-// origin carries one; the Secret behind it is never reported.
+// origin carries one; CredentialSecret and CredentialKey name the Secret and
+// its key the value comes from. The names only: the Secret is never read.
 type EgressDestination struct {
 	Origin           string `json:"origin"`
 	CredentialHeader string `json:"credentialHeader,omitempty"`
+	CredentialSecret string `json:"credentialSecret,omitempty"`
+	CredentialKey    string `json:"credentialKey,omitempty"`
 }
 
 // Manifests are the objects a create/update applies, as YAML, plus the values.
