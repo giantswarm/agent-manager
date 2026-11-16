@@ -70,7 +70,7 @@ The three writes take `dryRun` and `mode` (`apply` | `commit`, see
 column is files of a pull request, nothing live. `validate_agent` takes
 `mode` too and answers as the write would.
 
-Errors are `{"error":{"code":"not_found|invalid_request|conflict|gitops_owned|forbidden|unauthenticated|auth_required|unsupported|precondition_failed|precondition_required|credential_consumers_changed|already_exists|backend_error","message":"…"}}`;
+Errors are `{"error":{"code":"not_found|invalid_request|conflict|gitops_owned|forbidden|unauthenticated|auth_required|unsupported|precondition_failed|precondition_required|credential_consumers_changed|credential_operation_other_login|already_exists|backend_error","message":"…"}}`;
 `unsupported` (501) is something this installation is not configured for,
 `backend_error` (502) a failure of the API server, Git or a store behind it;
 `precondition_failed` (412) and `precondition_required` (428) answer a
@@ -78,6 +78,8 @@ credential save or cancellation whose `If-Match` is stale or missing;
 `credential_consumers_changed` (409) a credential save of
 `replace_organization_credential` whose consumers changed since the
 preparation (see [organization credentials](docs/organization-credentials.md));
+`credential_operation_other_login` (403) a credential operation read, save or
+cancellation by another login of the person who prepared it;
 `already_exists` (409) a create of an organization model, connector or egress
 policy whose name is taken (`set_organization_model`,
 `set_organization_connector` or `set_organization_egress_policy` with

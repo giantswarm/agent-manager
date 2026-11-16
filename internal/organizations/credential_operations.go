@@ -123,6 +123,11 @@ type credentialOperation struct {
 	// objects that read its Secret and where they send the value, as
 	// prepared.
 	Consumers []CredentialReference `json:"consumers,omitempty"`
+	// EmailDigest is the SHA-256 of the owner's verified email address at
+	// preparation, empty when it was not verified. It never makes a caller
+	// the owner: it only words the refusal of another login of the same
+	// person (ErrCredentialOperationOtherLogin).
+	EmailDigest string `json:"emailDigest,omitempty"`
 }
 
 type CredentialGitTarget struct {
@@ -173,7 +178,7 @@ func (s *Service) credentialOperation(ctx context.Context, id string) (*credenti
 	}
 	person, ok := identity.FromContext(ctx)
 	if !ok || person.Delegated || operation.Issuer != person.Issuer || operation.Subject != person.Subject {
-		return nil, fmt.Errorf("%w: credential operation", agents.ErrNotFound)
+		return nil, refuseNonOwner(operation, person)
 	}
 	if time.Now().After(operation.ExpiresAt) {
 		return nil, fmt.Errorf("%w: credential operation expired; prepare it again", agents.ErrConflict)
@@ -325,7 +330,7 @@ func (s *Service) landResource(ctx context.Context, writer *contentWriter, write
 	}
 	person, _ := identity.FromContext(ctx)
 	request, _ := ctx.Value(credentialRequestKey{}).(credentialRequest)
-	operation := &credentialOperation{ID: id, Issuer: person.Issuer, Subject: person.Subject, Request: request, ElicitationID: uuid.NewString(), ExpiresAt: time.Now().Add(credentialOperationTTL), State: operationPending, Namespace: writer.org, Mode: writer.mode, Result: *result}
+	operation := &credentialOperation{ID: id, Issuer: person.Issuer, Subject: person.Subject, EmailDigest: verifiedEmailDigest(person), Request: request, ElicitationID: uuid.NewString(), ExpiresAt: time.Now().Add(credentialOperationTTL), State: operationPending, Namespace: writer.org, Mode: writer.mode, Result: *result}
 	for _, planned := range writes {
 		object := unstructuredOf(planned.obj)
 		stored := operationWrite{Resource: planned.gvr, Kind: planned.kind, Action: planned.op, Object: object.DeepCopy().Object, Name: planned.name, Version: object.GetResourceVersion()}
@@ -373,7 +378,7 @@ func (s *Service) landResource(ctx context.Context, writer *contentWriter, write
 		credential := &operation.Result.Credentials[index]
 		if credential.State == CredentialMissing || credential.State == CredentialReplace {
 			credential.FormURL = link
-			credential.Next = "Enter the credential in the authenticated credential UI: " + link + " . Never send the value to a tool or a chat."
+			credential.Next = "Enter the credential in the authenticated credential UI: " + link + " . Open it signed in with the same login as this request: another login is refused with credential_operation_other_login. Never send the value to a tool or a chat."
 		}
 	}
 	operation.Result.CredentialOperation = id

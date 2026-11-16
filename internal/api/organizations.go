@@ -314,7 +314,7 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service, l
 
 	s.AddTool(mcp.NewTool(ToolSetOrganizationModel,
 		tooldesc.Describe("Create or change an organization's model (a ModelConfig) as you; its API key is a Secret named by reference.",
-			"The first model of an organization without a default becomes its default (annotation "+apov1alpha1.DefaultModelConfigAnnotation+"); default true moves the mark here. A new Anthropic model caches prompts ("+agents.DefaultCacheTTL+") unless promptCaching is false; an omitted argument keeps the stored value. Never pass a key: a missing one is a URL elicitation of the credential UI, link in credentials[].next. list_model_configs lists the models and settings. Needs agent-platform:admin."),
+			"The first model of an organization without a default becomes its default (annotation "+apov1alpha1.DefaultModelConfigAnnotation+"); default true moves the mark here. A new Anthropic model caches prompts ("+agents.DefaultCacheTTL+") unless promptCaching is false; an omitted argument keeps the stored value. Never pass a key: a missing one is a URL elicitation of the credential UI, link in credentials[].next, for this login. list_model_configs lists the models and settings. Needs agent-platform:admin."),
 		orgNSProp,
 		mcp.WithString(argName, mcp.Required(), mcp.Description("ModelConfig name")),
 		mcp.WithString(argProvider, mcp.Description("Provider as kagent's ModelConfig takes it, e.g. Anthropic, OpenAI; required to create; a change needs a new credentialSecret too")),
@@ -371,7 +371,7 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service, l
 
 	s.AddTool(mcp.NewTool(ToolSetOrganizationConnector,
 		tooldesc.Describe("Create or change an organization's connector (a RemoteMCPServer) as you; its credential is a Secret named by reference.",
-			"A credential field sets the Secret-backed header it names (default: the only one, else Authorization; Secret tenant-credential-<name>, key token, the whole value); other headers stay; noCredential removes them. A URL with userinfo, a fragment, a credential-like query parameter or a query that does not parse is refused. Never pass a value: a missing credential is a URL elicitation of the credential UI, link in credentials[].next. Needs agent-platform:admin."),
+			"A credential field sets the Secret-backed header it names (default: the only one, else Authorization; Secret tenant-credential-<name>, key token, the whole value); other headers stay; noCredential removes them. A URL with userinfo, a fragment, a credential-like query parameter or a query that does not parse is refused. Never pass a value: a missing credential is a URL elicitation of the credential UI, link in credentials[].next, for this login. Needs agent-platform:admin."),
 		orgNSProp,
 		mcp.WithString(argName, mcp.Required(), mcp.Description("RemoteMCPServer name")),
 		mcp.WithString(argURL, mcp.Description("MCP endpoint URL, without a credential in it; required to create")),
@@ -409,7 +409,7 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service, l
 
 	s.AddTool(mcp.NewTool(ToolSetOrganizationEgress,
 		tooldesc.Describe("Create or replace an organization's egress policy as you: origins its agents may reach, credentials by Secret name.",
-			"destinations replaces the whole list. A credentialHeader makes the egress gateway add that header from the Secret (default tenant-credential-<policy>, key token). Never pass a value: a missing credential is a URL elicitation of the credential UI, link in credentials[].next. list_egress_policies lists them. Needs agent-platform:admin."),
+			"destinations replaces the whole list. A credentialHeader makes the egress gateway add that header from the Secret (default tenant-credential-<policy>, key token). Never pass a value: a missing credential is a URL elicitation of the credential UI, link in credentials[].next, for this login. list_egress_policies lists them. Needs agent-platform:admin."),
 		orgNSProp,
 		mcp.WithString(argName, mcp.Required(), mcp.Description("EgressPolicy name")),
 		mcp.WithArray(argDestinations, mcp.Required(), mcp.Description("Origins, each {origin, credentialHeader, credentialPrefix, credentialSecret, credentialKey}"), mcp.Items(map[string]any{
@@ -447,7 +447,7 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service, l
 
 	s.AddTool(mcp.NewTool(ToolReplaceOrganizationCredential,
 		tooldesc.Describe("Replace an organization's credential by its Secret and key, as you, writing only the Secret.",
-			"No model, connector or egress policy is written. Answers with a URL elicitation of the credential UI, link in credentials[].next; the form lists every object that uses the Secret and where each sends the value. Refused when nothing uses that key of the Secret, and when an object reads another key of it: the Secret is written whole, holding the one key. A credential whose consumer git applies is replaced with mode commit. Never pass a value. Needs agent-platform:admin."),
+			"No model, connector or egress policy is written. Answers with a URL elicitation of the credential UI, link in credentials[].next, for this login; the form lists every object that uses the Secret and where each sends the value. Refused when nothing uses that key of the Secret, and when an object reads another key of it: the Secret is written whole, holding the one key. A credential whose consumer git applies is replaced with mode commit. Never pass a value. Needs agent-platform:admin."),
 		orgNSProp,
 		mcp.WithString(argSecret, mcp.Required(), mcp.Description(credSecretDesc)),
 		mcp.WithString(argKey, mcp.Required(), mcp.Description("Key of that Secret the objects read, e.g. apiKey or token")),

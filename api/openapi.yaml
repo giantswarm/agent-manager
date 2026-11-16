@@ -611,6 +611,15 @@ paths:
     get:
       tags: [organizations]
       summary: Read a bound credential confirmation or receipt
+      description: |
+        Only the person who prepared the operation reads it: the token's issuer and
+        subject. A caller with the same issuer and the same verified email address but
+        another subject (another login of the same person, through another connector of
+        the identity provider) gets 403 with error code credential_operation_other_login
+        while the operation is neither expired nor cancelled: sign in the same way as
+        when it was prepared, then open the link again. That answer carries nothing of
+        the operation. Every other caller gets 404 not_found. The save and the
+        cancellation answer the same.
       operationId: getCredentialOperation
       responses:
         "200":
@@ -896,8 +905,8 @@ components:
           properties:
             code:
               type: string
-              enum: [not_found, invalid_request, conflict, gitops_owned, forbidden, unauthenticated, auth_required, unsupported, precondition_failed, precondition_required, credential_consumers_changed, already_exists, backend_error]
-              description: "A stable code to switch on. credential_consumers_changed (409, saveCredentialOperation): the objects that use the credential, or where they send it, changed since the replacement was prepared, live or in git; the credential was not written; prepare the replacement again with a fresh requestId. already_exists (409): a create whose object exists by then, live or as its file in git: set_organization_model, set_organization_connector or set_organization_egress_policy with create, and a saveCredentialOperation whose operation creates a model, connector or egress policy"
+              enum: [not_found, invalid_request, conflict, gitops_owned, forbidden, unauthenticated, auth_required, unsupported, precondition_failed, precondition_required, credential_consumers_changed, credential_operation_other_login, already_exists, backend_error]
+              description: "A stable code to switch on. credential_operation_other_login (403, getCredentialOperation, saveCredentialOperation, cancelCredentialOperation): the operation was prepared with another login of the same person (same issuer and verified email address, another subject); sign in the same way as when it was prepared, then open the link again; the answer names nothing of the operation. credential_consumers_changed (409, saveCredentialOperation): the objects that use the credential, or where they send it, changed since the replacement was prepared, live or in git; the credential was not written; prepare the replacement again with a fresh requestId. already_exists (409): a create whose object exists by then, live or as its file in git: set_organization_model, set_organization_connector or set_organization_egress_policy with create, and a saveCredentialOperation whose operation creates a model, connector or egress policy"
             message: { type: string }
     Info:
       type: object
