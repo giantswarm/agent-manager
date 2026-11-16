@@ -170,19 +170,30 @@ the scan does not change what it reads, so a move of the definition between the 
 read and the file reads cannot hide it (giantswarm/agent-manager#420).
 
 The scan reads the files as they are and does not run Kustomize. So it fails closed on
-what a kustomization changes: when any kustomization file under the objects path sets
-`namespace`, `namePrefix` or `nameSuffix`, wherever it is, every
-`AgentPlatformOrganization` document that one of these three fields could make the
-organization counts as still in git. That covers an overlay in a sibling directory that refers to the file
-(for one, `../../base`) and sets `namespace`, so that Kustomize applies the
-organization into its parent from a document with another namespace
-(giantswarm/agent-manager#399). The cost: in a repository that uses such an overlay,
-an erase can be refused although Flux's build no longer holds the organization. The
-answer names the kustomization; a person then removes that setting, or the overlay,
-and erases again. The objects paths that agent-manager writes use no such overlay.
-The scan does not read the other ways Kustomize can change a namespace or a name (a
-`transformers` entry, a patch, `replacements`): only the second guard below covers
-those (giantswarm/agent-manager#423).
+what a kustomization changes. Every kustomization file under the objects path counts,
+wherever it is: an overlay in a sibling directory refers to the file by a path such as
+`../../base` (giantswarm/agent-manager#399). For the erase of `<parent>/<name>`, an
+`AgentPlatformOrganization` document counts as still in git when a kustomization could
+make it that organization:
+
+| The kustomization has | The documents that count |
+| --- | --- |
+| `namespace: <parent>`, or a SOPS-encrypted (`ENC[...]`) `namespace` | a document of `<name>` in any namespace |
+| `namespace` with another value in clear text | none: Kustomize writes that value, which is not `<parent>` |
+| `namePrefix` or `nameSuffix` | a document of `<parent>` whose own name is a part of `<name>`: a prefix or a suffix only adds text |
+| a non-empty `transformers`, `patches`, `patchesJson6902`, `patchesStrategicMerge` or `replacements` | every document: these can set any namespace and any name |
+| a value of a form the scan does not know (a `namespace` that is not a string, for one) | every document that the field could change |
+| content that does not parse | every document |
+
+The fields combine: with `namespace: <parent>` and a `nameSuffix`, a document in any
+namespace whose name is a part of `<name>` counts. A document with no namespace, or
+whose own namespace and name are `<parent>/<name>`, always counts.
+
+The cost: in a repository that uses such an overlay, an erase can be refused although
+Flux's build no longer holds the organization. The answer names each kustomization and
+the field that made it count; a person then removes that setting, or the overlay, and
+erases again. The objects paths that agent-manager writes use no such overlay
+(giantswarm/agent-manager#423).
 
 The cluster has a second guard, which follows Flux's own Kustomize build. The
 admission policy `agent-platform-organization-delete-intent`
