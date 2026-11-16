@@ -38,7 +38,10 @@ changes invalidate the confirmation. Model deletion retains its Secret.
 
 `endpoint`, `insecureSkipTLSVerify` and `noCredential: true` (keyless
 endpoints, excluding Vertex) apply to installation models only; an
-organization model with one of them is refused. In the installation namespace
+organization model with one of them is refused. On an organization model
+`insecureSkipTLSVerify: false` removes a `tls.disableVerify` written
+elsewhere, and `endpoint: ""` changes nothing: admission holds its base URL
+to the LLM listener. In the installation namespace
 agent-manager writes only `tenant-credential-*` Secrets: a model may reference
 any existing Secret, such as one GitOps or Helm manages, and its value is
 replaced where it is managed. The installation form and model tools start only

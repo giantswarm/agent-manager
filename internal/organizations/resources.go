@@ -215,6 +215,16 @@ func (s *Service) SetModel(ctx context.Context, req ModelRequest) (*ResourceResu
 		if (req.Endpoint != nil && *req.Endpoint != "") || (req.InsecureSkipTLSVerify != nil && *req.InsecureSkipTLSVerify) || req.NoCredential {
 			return nil, invalidf("endpoint, insecureSkipTLSVerify and noCredential apply only to installation models (namespace %s)", s.cfg.PlatformNamespace)
 		}
+		// insecureSkipTLSVerify false is applied: it takes off a
+		// disableVerify written elsewhere. An empty endpoint is not:
+		// admission holds an organization model's base URL to the LLM
+		// listener and fills it in.
+		if req.InsecureSkipTLSVerify != nil {
+			unstructured.RemoveNestedField(obj.Object, "spec", "tls", "disableVerify")
+			if tls, found, _ := unstructured.NestedMap(obj.Object, "spec", "tls"); found && len(tls) == 0 {
+				unstructured.RemoveNestedField(obj.Object, "spec", "tls")
+			}
+		}
 		req.Endpoint, req.InsecureSkipTLSVerify = nil, nil
 	}
 	if err := configureModel(obj, req); err != nil {

@@ -340,6 +340,25 @@ func TestOrganizationModelsRefuseInstallationSettings(t *testing.T) {
 	require.NotEmpty(t, result.CredentialOperation)
 }
 
+func TestOrganizationModelInsecureSkipTLSVerifyFalseClearsDisableVerify(t *testing.T) {
+	model := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "api.kagent.dev/v1alpha3", "kind": "ModelConfig",
+		"metadata": map[string]any{"name": "claude", "namespace": orgNS},
+		"spec": map[string]any{ // #nosec G101 -- Secret and key names, no value.
+			"provider": "Anthropic", "model": "claude-sonnet-4-6",
+			"apiKeySecret": "tenant-credential-claude", "apiKeySecretKey": "ANTHROPIC_API_KEY",
+			"tls": map[string]any{"disableVerify": true},
+		},
+	}}
+	fixture := newOrgFixture(t, model)
+	seedSecret(t, fixture, "tenant-credential-claude", "ANTHROPIC_API_KEY")
+	answer, failed := fixture.call(t, ToolSetOrganizationModel, map[string]any{"namespace": orgNS, "name": "claude", "insecureSkipTLSVerify": false})
+	require.False(t, failed, answer)
+	stored := fixture.get(t, mcGVR, orgNS, "claude")
+	_, found, _ := unstructured.NestedFieldNoCopy(stored.Object, "spec", "tls")
+	require.False(t, found)
+}
+
 func TestInstallationKeylessModelProviderChangeAsksForACredential(t *testing.T) {
 	keyless := &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "api.kagent.dev/v1alpha3", "kind": "ModelConfig",
