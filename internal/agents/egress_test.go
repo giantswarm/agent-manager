@@ -2,11 +2,13 @@ package agents
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	k8stesting "k8s.io/client-go/testing"
 )
 
 func TestEgressReadBack(t *testing.T) {
@@ -80,8 +82,9 @@ func TestEgressPolicyRefsReadBack(t *testing.T) {
 	require.Nil(t, egressPolicyRefsFromObject(&unstructured.Unstructured{Object: map[string]any{"spec": map[string]any{}}}))
 }
 
-// list_egress_policies reports each origin and its credential header's name,
-// never the Secret behind it.
+// list_egress_policies reports each origin and, for one with a credential,
+// its header and the Secret and key the value comes from, by name; it never
+// reads a Secret, and a destination without a credential names none.
 func TestListEgressPolicies(t *testing.T) {
 	f := seeded(t)
 	mustCreate(t, f, egressGVR, egressPolicy("kagent", "go-modules", "https://proxy.golang.org", "https://sum.golang.org"))
@@ -91,13 +94,45 @@ func TestListEgressPolicies(t *testing.T) {
 	list, err := f.svc.ListEgressPolicies(t.Context(), Location{})
 	require.NoError(t, err)
 	require.Equal(t, []EgressPolicy{
-		{Name: "github", Namespace: "kagent", Destinations: []EgressDestination{{Origin: "https://api.github.com", CredentialHeader: "Authorization"}, {Origin: "https://github.com"}}},
+		{Name: "github", Namespace: "kagent", Destinations: []EgressDestination{
+			{Origin: "https://api.github.com", CredentialHeader: "Authorization", CredentialSecret: "github-token", CredentialKey: "token"},
+			{Origin: "https://github.com"},
+		}},
 		{Name: "go-modules", Namespace: "kagent", Destinations: []EgressDestination{{Origin: "https://proxy.golang.org"}, {Origin: "https://sum.golang.org"}}},
 	}, list)
 	b, err := json.Marshal(list)
 	require.NoError(t, err)
-	require.NotContains(t, string(b), "github-token")
+	require.Contains(t, string(b), `{"origin":"https://api.github.com","credentialHeader":"Authorization","credentialSecret":"github-token","credentialKey":"token"}`)
+	require.Contains(t, string(b), `{"origin":"https://github.com"}`)
 	require.NotContains(t, string(b), "Bearer")
+	requireNoSecretRead(t, f, "egresspolicies")
+}
+
+// A secretKeyRef without a name names no credential: the key goes only with
+// the Secret's name, as on a ModelConfig.
+func TestEgressPolicyOfNamesNoKeyWithoutTheSecret(t *testing.T) {
+	obj := egressPolicy("kagent", "github", "https://api.github.com|Authorization")
+	dests, _, _ := unstructured.NestedSlice(obj.Object, "spec", "destinations")
+	delete(dests[0].(map[string]any)["authentication"].(map[string]any)["secretKeyRef"].(map[string]any), "name")
+	require.NoError(t, unstructured.SetNestedSlice(obj.Object, dests, "spec", "destinations"))
+	require.Equal(t, []EgressDestination{{Origin: "https://api.github.com", CredentialHeader: "Authorization"}}, egressPolicyOf(obj).Destinations)
+}
+
+// requireNoSecretRead fails when the fixture's clients were asked for a
+// Secret: a list names a credential's Secret, never reads it. listed is the
+// resource the list read, which the recorded actions must hold, so the check
+// cannot pass on a client the fixture does not record.
+func requireNoSecretRead(t *testing.T, f *fixture, listed string) {
+	t.Helper()
+	require.True(t, slices.ContainsFunc(f.dyn.Actions(), func(a k8stesting.Action) bool {
+		return a.GetVerb() == "list" && a.GetResource().Resource == listed
+	}), "the fixture recorded no list of %s", listed)
+	for _, a := range f.dyn.Actions() {
+		require.NotEqual(t, "secrets", a.GetResource().Resource, "dynamic %s", a.GetVerb())
+	}
+	for _, a := range f.typed.Actions() {
+		require.NotEqual(t, "secrets", a.GetResource().Resource, "typed %s", a.GetVerb())
+	}
 }
 
 // egressPolicyRefs pass create, validate and update into
