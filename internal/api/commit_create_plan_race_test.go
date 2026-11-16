@@ -21,6 +21,13 @@ type planRacingRemote struct {
 	*commit.Fake
 	files map[string][]byte
 	done  bool
+	// cut are the branches the write cut.
+	cut []string
+}
+
+func (r *planRacingRemote) CreateBranch(ctx context.Context, repo commit.Repository, branch, base string) error {
+	r.cut = append(r.cut, branch)
+	return r.Fake.CreateBranch(ctx, repo, branch, base)
 }
 
 func (r *planRacingRemote) ReadFile(ctx context.Context, repo commit.Repository, ref, path string) ([]byte, error) {
@@ -50,7 +57,7 @@ func calledFromLayout() bool {
 }
 
 // planRaceSubject is a commit-mode create: its tool, its arguments, and its
-// pull request's branch.
+// object's branch name, which starts its pull request's head branch.
 type planRaceSubject struct {
 	name, tool, branch string
 	arguments          map[string]any
@@ -116,7 +123,9 @@ func TestCommitModeCreateRefusesIdenticalFilesAddedBeforeThePlan(t *testing.T) {
 			text, failed := clean.call(t, subject.tool, subject.arguments)
 			require.False(t, failed, text)
 			require.Len(t, cleanForge.PullRequests(), 1)
-			files := changed(cleanForge, subject.branch)
+			head := cleanForge.PullRequests()[0].Head
+			require.True(t, strings.HasPrefix(head, subject.branch+"_"), head)
+			files := changed(cleanForge, head)
 			require.NotEmpty(t, files)
 
 			// A retry finds its own open pull request and is refused for it.
@@ -137,7 +146,7 @@ func TestCommitModeCreateRefusesIdenticalFilesAddedBeforeThePlan(t *testing.T) {
 			require.True(t, failed, text)
 			require.True(t, strings.HasPrefix(text, subject.prefix), text)
 			require.Empty(t, forge.PullRequests())
-			require.Empty(t, forge.Files(mcRepo, subject.branch), "no branch is cut")
+			require.Empty(t, remote.cut, "no branch is cut")
 			main := forge.Files(mcRepo, "main")
 			for p, content := range files {
 				require.Equal(t, content, main[p], p)

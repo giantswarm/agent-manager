@@ -4,7 +4,11 @@ On an installation whose configuration lives in git, the organization tools take
 `mode: commit`. Every write is first dry-run on the API server as the caller, so a
 change the caller could not apply live is refused before a pull request exists. Then
 agent-manager opens a pull request as the caller (the GitHub App user token) in the
-installation's repository. This page states the repository layout the tools write and
+installation's repository. Each write's pull request has a head branch of its own, cut
+from the base branch: the object's branch name (`agent-manager/<verb>-<parent>-<name>`),
+an underscore and a random suffix. A second write of the same object is refused while a
+pull request of the object is open, also one on the name without a suffix that an older
+agent-manager opened. This page states the repository layout the tools write and
 what the repository must have before an installation turns on
 `tenants.commit.repository`.
 
@@ -68,6 +72,12 @@ MCP authorization mode alone cannot authorize an HTTPS credential save.
    The platform team owns the CODEOWNERS file itself. An organization's admin can
    therefore neither change the rule nor approve a merge into an organization's path
    alone.
+
+3. **"Automatically delete head branches"** turned on in the repository's settings.
+   Every write opens its pull request on a new branch, and agent-manager deletes none:
+   without the setting, the branch of each merged pull request stays. The branch of a
+   pull request closed without a merge, and of a write refused after its branch was cut,
+   stays in either case.
 
 ### Why the platform team reviews every organization pull request
 

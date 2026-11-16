@@ -359,7 +359,7 @@ func TestGitHubRefusalNamesWhatRenewsTheToken(t *testing.T) {
 func TestAReadRefusedWith403NamesTheAppsPermissions(t *testing.T) {
 	pinned := &identity.GitHub{Login: "alice", Token: "pinned"}
 	granted := &identity.GitHub{Login: "alice", Token: "granted", App: "manager-app"}
-	reads := []string{commit.OpStatus, commit.OpHead, commit.OpReadFile, commit.OpListFiles, commit.OpFindPullRequest, commit.OpMergedFiles}
+	reads := []string{commit.OpStatus, commit.OpHead, commit.OpReadFile, commit.OpListFiles, commit.OpFindPullRequest, commit.OpFindByPrefix, commit.OpMergedFiles}
 	for _, gh := range []*identity.GitHub{pinned, granted} {
 		for _, op := range reads {
 			t.Run(gh.Token+"/"+op, func(t *testing.T) {
