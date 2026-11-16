@@ -42,6 +42,11 @@ namespace admits only the providers the listener serves.
   without it. A negative `maxTokens` is refused too. The API server's dry run
   judges the values themselves (the `cacheTTL` values, a minimum), in apply
   and commit mode.
+- Every organization write asks the API server for strict field validation.
+  A field that kagent's schema does not have, also one that the tool does not
+  set (a model file in git, or a live object changed by hand, with
+  `spec.openAI.promptCaching`), is refused with `invalid_request` that names
+  the field, in apply and commit mode, and nothing is written.
 - Apply mode writes the settings to the live object; commit mode writes the
   same fields into the model's file in git. An update in commit mode starts
   from the file in git: a setting changed on the live object by hand and not
