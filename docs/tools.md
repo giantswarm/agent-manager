@@ -1262,7 +1262,7 @@ destinations replaces the whole list. A credentialHeader makes the egress gatewa
 ```text
 Create or change an organization or installation model as you; credentials are Secret references.
 
-A new model becomes default when its namespace has none; default true moves the mark. New Anthropic models cache prompts (5m) unless promptCaching is false; omitted settings stay. Never pass a key: missing credentials open the form, link in credentials[].next; another login: 403 credential_operation_other_login. Vertex AI calls go to Google directly, without the LLM gateway's metering, rate limits or spend reporting. list_model_configs lists models and settings. Needs agent-platform:admin in an organization, cluster-admin for installation models.
+A new model becomes the default when none is set; default true moves the mark. New Anthropic models cache prompts (5m) unless promptCaching is false; omitted settings stay. Never pass a key: missing credentials open the form (credentials[].next); another login: 403 credential_operation_other_login. Vertex AI calls bypass the LLM gateway's metering, rate limits and spend reporting. list_model_configs lists them. Needs agent-platform:admin (organization) or cluster-admin (installation models).
 ```
 
 ```json

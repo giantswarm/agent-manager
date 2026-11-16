@@ -326,7 +326,7 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service, l
 
 	t.addTool(s, mcp.NewTool(ToolSetOrganizationModel,
 		tooldesc.Describe("Create or change an organization or installation model as you; credentials are Secret references.",
-			"A new model becomes default when its namespace has none; default true moves the mark. New Anthropic models cache prompts ("+agents.DefaultCacheTTL+") unless promptCaching is false; omitted settings stay. Never pass a key: missing credentials open the form, link in credentials[].next; another login: 403 credential_operation_other_login. Vertex AI calls go to Google directly, without the LLM gateway's metering, rate limits or spend reporting. list_model_configs lists models and settings. Needs agent-platform:admin in an organization, cluster-admin for installation models."),
+			"A new model becomes the default when none is set; default true moves the mark. New Anthropic models cache prompts ("+agents.DefaultCacheTTL+") unless promptCaching is false; omitted settings stay. Never pass a key: missing credentials open the form (credentials[].next); another login: 403 credential_operation_other_login. Vertex AI calls bypass the LLM gateway's metering, rate limits and spend reporting. list_model_configs lists them. Needs agent-platform:admin (organization) or cluster-admin (installation models)."),
 		modelNSProp,
 		mcp.WithString(argName, mcp.Required(), mcp.Description("ModelConfig name")),
 		mcp.WithString(argProvider, mcp.Description("Provider as kagent's ModelConfig takes it, e.g. Anthropic, OpenAI; required to create; a change needs a new credentialSecret too")),
