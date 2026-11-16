@@ -38,12 +38,13 @@ const KustomizationNamespaceLabel = "kustomize.toolkit.fluxcd.io/namespace"
 const CommitDirectory = "agent-manager"
 
 // GitHubRemote is what commit mode needs of GitHub: the pull request seams,
-// the reads of the base and the files a merged pull request changed, acting
-// as the person.
+// the reads of the base (at a branch, or at one commit its head resolves to)
+// and the files a merged pull request changed, acting as the person.
 type GitHubRemote interface {
 	commit.Remote
 	commit.Reader
 	commit.Lister
+	commit.HeadReader
 	commit.MergedFilesLister
 }
 
@@ -260,7 +261,7 @@ func (s *Service) gitHubFor(ctx context.Context) (GitHubRemote, *identity.GitHub
 // readOps are the remote operations that only read: GitHub refusing one with
 // 403 is the App's permissions or installation, never the person's push
 // access, and no new sign-in or grant changes it.
-var readOps = []string{commit.OpStatus, commit.OpReadFile, commit.OpListFiles, commit.OpFindPullRequest, commit.OpMergedFiles}
+var readOps = []string{commit.OpStatus, commit.OpHead, commit.OpReadFile, commit.OpListFiles, commit.OpFindPullRequest, commit.OpMergedFiles}
 
 // GitHubRefusal answers GitHub refusing gh's token on an operation of
 // commit mode with what renews it: on the App-pinned registration the

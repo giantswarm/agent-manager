@@ -130,10 +130,11 @@ The erase is refused:
   reports a removal and an addition, or a definition that the pull request or a later
   commit wrote there. A document defines it when it is an `AgentPlatformOrganization`
   of its name in its parent or without a namespace, also as an item of a `List`. Where
-  a `kustomization.yaml` above the file sets `namespace`, `namePrefix` or `nameSuffix`,
-  or SOPS encrypted the value, the document's own namespace or name does not count, and
-  it is taken as a match. The answer names the file: remove that definition and erase
-  again, or move the file back and open the delete again. A file that does not parse
+  any `kustomization.yaml` under the objects path sets `namespace`, `namePrefix` or
+  `nameSuffix`, or SOPS encrypted the value, the document's own namespace or name does
+  not count, and it is taken as a match. The answer names the file, and the
+  kustomization when that made the match: remove that definition and erase again, or
+  move the file back and open the delete again. A file that does not parse
   defines nothing, since Kustomize cannot apply it either. When the objects path cannot
   be read (a read fails, or the repository's tree is too large for one read), nothing
   is erased (see "What the scan is for" below);
@@ -150,17 +151,31 @@ The scan of the objects path gives an early, clear answer for the usual mistake:
 delete pull request that moved the organization's file instead of removing it, or a
 later commit that wrote it again. A file named `kustomization.yaml` (`.yml`,
 `Kustomization`) is read both as its directory's kustomization and as a resource file,
-since another kustomization may list it as one. The scan reads the files as they are
-and does not run Kustomize, so it does not find these two cases:
+since another kustomization may list it as one. The answer "pending erase" and the
+erase take the same scan.
 
-- an overlay in a sibling directory that refers to the file (for one, `../../base`)
-  and sets `namespace`, so that Kustomize applies the organization into its parent
-  from a document with another namespace (giantswarm/agent-manager#399);
-- a commit that moves the definition between the scan's tree read and its file reads,
-  a few seconds: each read takes the branch's head again (giantswarm/gitops-commit#70).
+The scan reads the whole objects path at one commit: it reads the head of the base
+branch once, then the tree and every file at that commit. A commit that lands during
+the scan does not change what it reads, so a move of the definition between the tree
+read and the file reads cannot hide it (giantswarm/agent-manager#420).
 
-These are accepted because the cluster has a second guard, which follows Flux's own
-Kustomize build. The admission policy `agent-platform-organization-delete-intent`
+The scan reads the files as they are and does not run Kustomize. So it fails closed on
+what a kustomization changes: when any kustomization file under the objects path sets
+`namespace`, `namePrefix` or `nameSuffix`, wherever it is, every
+`AgentPlatformOrganization` document that one of these three fields could make the
+organization counts as still in git. That covers an overlay in a sibling directory that refers to the file
+(for one, `../../base`) and sets `namespace`, so that Kustomize applies the
+organization into its parent from a document with another namespace
+(giantswarm/agent-manager#399). The cost: in a repository that uses such an overlay,
+an erase can be refused although Flux's build no longer holds the organization. The
+answer names the kustomization; a person then removes that setting, or the overlay,
+and erases again. The objects paths that agent-manager writes use no such overlay.
+The scan does not read the other ways Kustomize can change a namespace or a name (a
+`transformers` entry, a patch, `replacements`): only the second guard below covers
+those (giantswarm/agent-manager#423).
+
+The cluster has a second guard, which follows Flux's own Kustomize build. The
+admission policy `agent-platform-organization-delete-intent`
 (giantswarm/agent-platform, `helm/agent-platform-connectivity/templates/organizations/admission.yaml`)
 permits the delete of an organization that carries an `Orphaned` condition (one that
 agent-platform-operator found applied from git) only when that condition is `True`
@@ -182,8 +197,9 @@ both cases an earlier `DeleteMerged` still permits the erase.
 To erase, agent-manager reads the delete pull request with pull request reads only:
 whether it is merged (one read), and its files (one read for each 100 files). It does
 not read its reviews, or the commit statuses and check runs of its head. Then it reads
-the objects path on the base branch: one read of the repository's tree, and two
-contents reads for each file under the objects path (about two for each organization
+the objects path on the base branch: one read of the branch's ref (its head commit),
+then, at that commit, one read of the repository's tree and two contents reads for
+each file under the objects path (about two for each organization
 and for each parent's `kustomization.yaml`). The erase is rare, so these reads are
 taken on each erase and on each answer of pending erase. The GitHub App needs no
 permission beyond contents and pull requests. When GitHub refuses a step that only reads with 403, the answer
