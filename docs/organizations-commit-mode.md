@@ -105,9 +105,10 @@ giantswarm/agent-platform-operator#15 is the long-term fix.
    operator erases it.
 
 While the operator reports the organization `Orphaned` with reason `DeleteMerged`
-(Pending erase), and while it is being erased, every write tool of its contents
-(members, models, connectors, egress policies and credentials, in both modes) answers
-`conflict`: Erase now, or restore its file to keep it. Reads and `delete_organization`
+(Pending erase), and while it is being erased, `update_organization` and every write
+tool of its contents (members, models, connectors, egress policies and credentials), in
+both modes, answer `conflict`: Erase now, or restore its file to keep it. A caller who
+may not read the organization gets `forbidden`, not its state. Reads and `delete_organization`
 keep working.
 
 The erase is refused:

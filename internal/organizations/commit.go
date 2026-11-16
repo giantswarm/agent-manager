@@ -489,9 +489,17 @@ func (s *Service) writable(ctx context.Context, org Namespace) error {
 	if !ok {
 		return nil
 	}
-	what := "organization " + org.Parent + "/" + org.Organization
+	return s.erasing(o, org.Parent, org.Organization, org.Name)
+}
+
+// erasing refuses a write to the organization parent/name, or into its
+// namespace ns, while o (that organization) is being deleted or is in
+// Pending erase. writable reads o with agent-manager's ServiceAccount;
+// update_organization passes the object the caller read.
+func (s *Service) erasing(o *apov1alpha1.AgentPlatformOrganization, parent, name, ns string) error {
+	what := "organization " + parent + "/" + name
 	if o.DeletionTimestamp != nil {
-		return fmt.Errorf("%w: %s is being erased (%s): nothing is written into namespace %s; get_organization reports its erasure step until it is gone", agents.ErrConflict, what, orDefault(o.Status.ErasureStep, "starting"), org.Name)
+		return fmt.Errorf("%w: %s is being erased (%s): nothing is written into namespace %s; get_organization reports its erasure step until it is gone", agents.ErrConflict, what, orDefault(o.Status.ErasureStep, "starting"), ns)
 	}
 	c := meta.FindStatusCondition(o.Status.Conditions, apov1alpha1.ConditionOrphaned)
 	if c == nil || c.Status != metav1.ConditionTrue || c.Reason != apov1alpha1.ReasonDeleteMerged {
@@ -499,9 +507,9 @@ func (s *Service) writable(ctx context.Context, org Namespace) error {
 	}
 	file := "its file"
 	if s.cfg.Commit != nil {
-		file += " " + s.cfg.Commit.objectFile(org.Parent, org.Organization)
+		file += " " + s.cfg.Commit.objectFile(parent, name)
 	}
-	return fmt.Errorf("%w: %s is in Pending erase: its delete pull request merged (Orphaned, reason %s), so nothing is written into namespace %s. Erase it with delete_organization, mode commit and confirm %q (Erase now), or restore %s in git to keep it", agents.ErrConflict, what, apov1alpha1.ReasonDeleteMerged, org.Name, org.Parent+"/"+org.Organization, file)
+	return fmt.Errorf("%w: %s is in Pending erase: its delete pull request merged (Orphaned, reason %s), so nothing is written into namespace %s. Erase it with delete_organization, mode commit and confirm %q (Erase now), or restore %s in git to keep it", agents.ErrConflict, what, apov1alpha1.ReasonDeleteMerged, ns, parent+"/"+name, file)
 }
 
 func (s *Service) contentWriter(ctx context.Context, org Namespace, mode string) (*contentWriter, error) {
