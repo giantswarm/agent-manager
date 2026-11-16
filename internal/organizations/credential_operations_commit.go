@@ -136,7 +136,20 @@ func (c *orgCommit) credentialSnapshot(ctx context.Context, operation *credentia
 	return snapshot, nil
 }
 
-func (s *Service) commitCredentialOperation(ctx context.Context, operation *credentialOperation, writer *contentWriter, writes []write) (*CommitResult, error) {
+// credentialCommit is a credential commit that is checked and built but not
+// written yet: no branch exists for it.
+type credentialCommit struct {
+	files   map[string][]byte
+	written map[string]string
+	result  *CommitResult
+}
+
+// prepareCredentialCommit runs every check of a commit-mode save that comes
+// before a branch exists: the Git files and the encryption policy against the
+// preparation, the objects that use the key, a name taken in Git, the layout
+// and the encryption of each submitted field. It writes nothing, not even the
+// operation, so a refusal here leaves the operation as it was.
+func (s *Service) prepareCredentialCommit(ctx context.Context, operation *credentialOperation, writer *contentWriter, writes []write) (*credentialCommit, error) {
 	current, err := writer.commit.credentialSnapshot(ctx, operation)
 	if err != nil {
 		return nil, err
@@ -188,22 +201,33 @@ func (s *Service) commitCredentialOperation(ctx context.Context, operation *cred
 			return nil, fmt.Errorf("%w: the encryption policy does not encrypt every submitted credential field", agents.ErrInvalid)
 		}
 	}
-	operation.WrittenFiles = map[string]string{}
-	result := &CommitResult{Repository: writer.commit.cfg.Objects.Repository.String(), Base: writer.commit.cfg.Objects.Branch, Branch: "agent-manager/credential-" + operation.ElicitationID, Author: writer.commit.gh.Login, Review: reviewNote, Files: []agents.CommitFile{}}
+	prepared := &credentialCommit{files: landed.Files, written: map[string]string{}}
+	prepared.result = &CommitResult{Repository: writer.commit.cfg.Objects.Repository.String(), Base: writer.commit.cfg.Objects.Branch, Branch: "agent-manager/credential-" + operation.ElicitationID, Author: writer.commit.gh.Login, Review: reviewNote, Files: []agents.CommitFile{}}
 	for _, file := range plan.Files {
-		result.Files = append(result.Files, agents.CommitFile{Path: file.Path, Action: string(file.Action)})
+		prepared.result.Files = append(prepared.result.Files, agents.CommitFile{Path: file.Path, Action: string(file.Action)})
 		if raw, ok := landed.Files[file.Path]; ok {
-			operation.WrittenFiles[file.Path] = fileDigest(raw)
+			prepared.written[file.Path] = fileDigest(raw)
 		}
 	}
-	if len(operation.WrittenFiles) == 0 {
+	if len(prepared.written) == 0 {
 		return nil, errors.New("credential operation produced no encrypted change")
 	}
+	return prepared, nil
+}
+
+// writeCredentialCommit writes a prepared credential commit: it records the
+// branch and the files it writes, creates the branch, commits and opens the
+// pull request. From the branch on, a failure leaves an outcome to recover:
+// the caller marks the operation uncertain, and recoverCredentialCommit reads
+// the branch on the next save.
+func (s *Service) writeCredentialCommit(ctx context.Context, operation *credentialOperation, writer *contentWriter, prepared *credentialCommit) (*CommitResult, error) {
+	result, landed := prepared.result, prepared.files
+	operation.WrittenFiles = prepared.written
 	operation.Result.Commit = result
 	if err := s.cfg.CredentialOperations.put(ctx, operation); err != nil {
 		return nil, err
 	}
-	err = writer.commit.remote.CreateBranch(ctx, writer.commit.cfg.Objects.Repository, result.Branch, result.Base)
+	err := writer.commit.remote.CreateBranch(ctx, writer.commit.cfg.Objects.Repository, result.Branch, result.Base)
 	if err != nil {
 		return nil, commitError(writer.commit.gh, err)
 	}
@@ -218,7 +242,7 @@ func (s *Service) commitCredentialOperation(ctx context.Context, operation *cred
 	if !maps.Equal(branchSnapshot, operation.GitFiles) {
 		return nil, fmt.Errorf("%w: the Git base changed before the credential write", agents.ErrConflict)
 	}
-	err = writer.commit.remote.Commit(ctx, writer.commit.cfg.Objects.Repository, result.Branch, "chore(organizations): save credential operation", landed.Files)
+	err = writer.commit.remote.Commit(ctx, writer.commit.cfg.Objects.Repository, result.Branch, "chore(organizations): save credential operation", landed)
 	if err != nil {
 		return nil, commitError(writer.commit.gh, err)
 	}

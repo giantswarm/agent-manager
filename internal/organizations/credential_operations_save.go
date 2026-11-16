@@ -202,13 +202,25 @@ func (s *Service) saveCredentialOperation(ctx context.Context, id, version strin
 	if err != nil {
 		return nil, err
 	}
+	// Before a branch exists: every check of commit mode runs while the
+	// operation is still pending, and a refusal returns it as it is. Nothing
+	// was written, so a retry runs the same checks and gets the same answer.
+	var prepared *credentialCommit
+	if operation.Mode == agents.ModeCommit {
+		prepared, err = s.prepareCredentialCommit(ctx, operation, writer, writes)
+		if err != nil {
+			return nil, err
+		}
+	}
+	// After this point a write may have happened: a failure marks the
+	// operation uncertain, and the next save recovers it.
 	operation.State = operationSaving
 	if err := s.cfg.CredentialOperations.put(ctx, operation); err != nil {
 		return nil, err
 	}
 	if operation.Mode == agents.ModeCommit {
 		var committed *CommitResult
-		committed, err = s.commitCredentialOperation(ctx, operation, writer, writes)
+		committed, err = s.writeCredentialCommit(ctx, operation, writer, prepared)
 		if err == nil {
 			operation.Result.Commit = committed
 		}
