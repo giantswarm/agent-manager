@@ -1060,7 +1060,7 @@ From every binding of the role that holds them, dry run first; an emptied bindin
 ```text
 Replace an organization's credential by its Secret and key, as you, writing only the Secret.
 
-No model, connector or egress policy is written. Answers with a URL elicitation of the credential UI, link in credentials[].next; the form lists every object that uses the Secret and where each sends the value. Refused when nothing uses that key of the Secret, and when an object reads another key of it: the Secret is written whole, holding the one key. A credential whose consumer git applies is replaced with mode commit. Never pass a value. Needs agent-platform:admin.
+No model, connector or egress policy is written. Answers with a URL elicitation of the credential UI (credentials[].next); another login: 403 credential_operation_other_login; the form lists every object that uses the Secret and where each sends the value. Refused when nothing uses that key of the Secret, and when an object reads another key of it: the Secret is written whole, holding the one key. A consumer git applies needs mode commit. Never pass a value. Needs agent-platform:admin.
 ```
 
 ```json
@@ -1109,7 +1109,7 @@ No model, connector or egress policy is written. Answers with a URL elicitation 
 ```text
 Create or change an organization's connector (a RemoteMCPServer) as you; its credential is a Secret named by reference.
 
-A credential field sets the Secret-backed header it names (default: the only one, else Authorization; Secret tenant-credential-<name>, key token, the whole value); other headers stay; noCredential removes them. A URL with userinfo, a fragment, a credential-like query parameter or a query that does not parse is refused. Never pass a value: a missing credential is a URL elicitation of the credential UI, link in credentials[].next. Needs agent-platform:admin.
+A credential field sets the Secret-backed header it names (default: the only one, else Authorization; Secret tenant-credential-<name>, key token, the whole value); other headers stay; noCredential removes them. A URL with userinfo, a fragment, a credential-like or unparsable query is refused. Never pass a value: a missing one is a URL elicitation of the credential UI (credentials[].next); another login: 403 credential_operation_other_login. Needs agent-platform:admin.
 ```
 
 ```json
@@ -1181,7 +1181,7 @@ A credential field sets the Secret-backed header it names (default: the only one
 ```text
 Create or replace an organization's egress policy as you: origins its agents may reach, credentials by Secret name.
 
-destinations replaces the whole list. A credentialHeader makes the egress gateway add that header from the Secret (default tenant-credential-<policy>, key token). Never pass a value: a missing credential is a URL elicitation of the credential UI, link in credentials[].next. list_egress_policies lists them. Needs agent-platform:admin.
+destinations replaces the whole list. A credentialHeader makes the egress gateway add that header from the Secret (default tenant-credential-<policy>, key token). Never pass a value: a missing credential is a URL elicitation of the credential UI (credentials[].next); another login: 403 credential_operation_other_login. list_egress_policies lists them. Needs agent-platform:admin.
 ```
 
 ```json
@@ -1262,7 +1262,7 @@ destinations replaces the whole list. A credentialHeader makes the egress gatewa
 ```text
 Create or change an organization's model (a ModelConfig) as you; its API key is a Secret named by reference.
 
-The first model of an organization without a default becomes its default (annotation agent-platform.giantswarm.io/is-default-model-config); default true moves the mark here. A new Anthropic model caches prompts (5m) unless promptCaching is false; an omitted argument keeps the stored value. Never pass a key: a missing one is a URL elicitation of the credential UI, link in credentials[].next. list_model_configs lists the models and settings. Needs agent-platform:admin.
+The first model of an organization without a default becomes its default (annotation agent-platform.giantswarm.io/is-default-model-config); default true moves it here. A new Anthropic model caches prompts (5m) unless promptCaching is false; an omitted argument keeps its value. Never pass a key: a missing one is a URL elicitation of the credential UI (credentials[].next); another login: 403 credential_operation_other_login. list_model_configs lists them. Needs agent-platform:admin.
 ```
 
 ```json

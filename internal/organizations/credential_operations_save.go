@@ -40,6 +40,9 @@ func credentialSaveError(err error) error {
 	if errors.Is(err, ErrCredentialOperationChanged) {
 		return ErrCredentialOperationChanged
 	}
+	if errors.Is(err, ErrCredentialOperationOtherLogin) {
+		return ErrCredentialOperationOtherLogin
+	}
 	// The consumers changed since the preparation: a stable sentinel the
 	// client switches on, naming nothing the confirmation did not show.
 	if errors.As(err, new(consumersDiffer)) {

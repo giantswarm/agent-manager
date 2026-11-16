@@ -170,12 +170,14 @@ cannot authorize the credential HTTPS save.
 The chart creates a dedicated namespace, a ConfigMap-only Role and a quota of
 256 ConfigMaps. Records are limited to 128 KiB and expire after 15 minutes, with
 minute-based cleanup. They hold nonsecret intent, verified issuer/subject,
-authenticated audience and MCP session context, revisions, file hashes and the
-receipt. Values, ciphertext, ID tokens and App tokens never enter them. The
+the SHA-256 digest of the verified email address (see
+[Who owns an operation](#who-owns-an-operation)), authenticated audience and
+MCP session context, revisions, file hashes and the receipt. Values, ciphertext, ID tokens and App tokens never enter them. The
 manager's ServiceAccount gains no tenant Secret or application ConfigMap access.
 
-Reads, saves and cancellation independently verify issuer/subject ownership and
-current organization permissions. Saves recheck consumers, Git destination,
+Reads, saves and cancellation independently verify issuer/subject ownership
+([Who owns an operation](#who-owns-an-operation)) and current organization
+permissions. Saves recheck consumers, Git destination,
 file hashes and encryption policy, then server-side dry-run all intended writes
 as the person. Stale operation versions return `412`, a save or cancellation
 without `If-Match` returns `428`, and changed resources or Git inputs return
@@ -243,6 +245,62 @@ object and first admins included (see
 [repository requirements](organizations-commit-mode.md)).
 The receipt's credential state `committed` means a PR exists, not that Flux has
 applied it. See [repository requirements](organizations-commit-mode.md).
+
+## Who owns an operation
+
+An operation belongs to the person who prepared it, as the token's issuer and
+subject (`sub`) name them. Reads, saves and cancellations of every other caller
+are refused.
+
+Dex gives one person a different subject for each connector. A person who
+prepares an operation from an MCP client signed in through one connector and
+opens the link in the Dev Portal with a session from another connector is,
+for this check, another caller. The answer to that caller names the cause:
+
+| Caller | Answer |
+|---|---|
+| The owner: same issuer and subject | The operation |
+| Same issuer, same verified email address, another subject | `403`, code `credential_operation_other_login`: the operation was started with another login; sign in the same way as when it was started, then open the link again |
+| Another email address, an email address that is not verified, another issuer, or a delegated token | `404`, code `not_found` |
+
+An expired or cancelled operation answers as before for every caller: the
+owner reads a cancelled operation's state and gets `409` for an expired one,
+every other caller gets `404`. The other-login answer
+holds no organization, namespace, model, Secret, key or other content of the
+operation. Its words are the error code and a fixed message.
+
+The email address is verified when the identity provider's token says
+`email_verified: true`; an absent claim counts as not verified. At preparation
+the operation records the SHA-256 digest of the verified address, with its
+ASCII letters in lower case, and no digest when the address is not verified.
+The digest is a pseudonym, not a secret: whoever reads the operation records
+can test a guessed address against it. An operation
+prepared before agent-manager recorded the digest has none: every caller but
+its owner gets `404` for it.
+
+**Why the email address does not become the owner.** A person who can sign in
+through two connectors could open their own operation with either login if the
+verified email address were the owner. That is safe only when every sign-in
+connector of every installation proves the address: a connector that passes
+on an address that the person does not control (a self-asserted address, an
+upstream identity provider with weak checks, a misconfigured claim mapping)
+would then hand a stranger the key entry form, which is the most sensitive
+page of the platform. agent-manager cannot check that property of each
+installation's Dex configuration. The subject is what the identity provider
+issues for one login, so it stays the owner, and the person signs in again
+with the same connector.
+
+**What the other-login answer tells.** It tells the caller that an operation
+with this id exists and that it was prepared with the caller's own verified
+email address. The caller already holds the operation id (48 hex characters
+of a digest of the preparing login, its client session and the request, sent
+only in that person's link), has proven the same issuer, and has a token that
+says the identity provider verified the same address. The answer gives the
+caller nothing they could not find out by signing in with their other login,
+and it grants no read, save or cancellation. It is the same for a pending,
+saving or completed operation, so it does not tell those states apart. A
+connector with a weak email check reaches only this sentence, never the
+operation.
 
 ## Upgrading credential UI configuration
 
