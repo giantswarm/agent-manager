@@ -374,6 +374,13 @@ marker; committed files hold the desired state alone. An uncertain Git save
 verifies the same private branch against stored encrypted-file hashes and
 opens or reuses its PR. It never creates a second branch automatically.
 
+A Git save runs all its checks before it creates the branch: the Git files and
+the encryption policy against the preparation, the objects that use the key, a
+name already taken, and the encryption of each value. A refusal there writes
+nothing: the operation stays `pending`, a retry gets the same refusal, and a
+fresh preparation is what is needed. Only a failure after the branch exists
+leaves the operation `uncertain`.
+
 A crash before a write, or after a write before recording its version, can leave
 an operation without enough evidence to complete it. Inspect the recorded branch or marked live resources;
 do not assume an error means nothing was written. Conflicting or missing evidence

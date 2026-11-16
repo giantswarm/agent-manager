@@ -625,6 +625,72 @@ func TestCredentialCommitRecoversAnUncertainPullRequest(t *testing.T) {
 	require.Equal(t, organizations.CredentialCommitted, confirmation.Result.Credentials[0].State)
 }
 
+// A commit-mode save refused before a branch exists writes nothing, so the
+// operation stays pending, and a second save gets the same refusal instead of
+// an uncertain outcome.
+func TestCredentialCommitRefusalBeforeTheBranchLeavesTheOperationPending(t *testing.T) {
+	elsewhere := connector("gh", sharedSecret, "token")
+	require.NoError(t, unstructured.SetNestedField(elsewhere.Object, "https://elsewhere.example.com/mcp", "spec", "url"))
+	created := model("claude", true)
+	created.SetNamespace("")
+	for name, scenario := range map[string]struct {
+		code    string
+		prepare func(t *testing.T) (*orgFixture, *commit.Fake, organizations.ResourceResult)
+		change  map[string][]byte
+	}{
+		"the encryption policy changed": {
+			code: "conflict",
+			prepare: func(t *testing.T) (*orgFixture, *commit.Fake, organizations.ResourceResult) {
+				fixture, forge := commitFixture(t, nil)
+				return fixture, forge, prepareModelOperation(t, fixture, map[string]any{"mode": "commit"})
+			},
+			change: map[string][]byte{".sops.yaml": sopsCovering(t, `^changed/.*`)},
+		},
+		"a consumer manifest changed": {
+			code: "credential_consumers_changed",
+			prepare: func(t *testing.T) (*orgFixture, *commit.Fake, organizations.ResourceResult) {
+				live := connector("gh", sharedSecret, "token")
+				live.SetLabels(fromGitLabels("payments"))
+				fixture, forge := commitFixture(t, map[string][]byte{
+					paymentsPath + "/remotemcpserver-gh.yaml": gitManifest(t, connector("gh", sharedSecret, "token")),
+					paymentsPath + "/kustomization.yaml":      []byte("resources:\n  - remotemcpserver-gh.yaml\n"),
+				}, live)
+				return fixture, forge, replaceCredential(t, fixture, map[string]any{"mode": "commit"})
+			},
+			change: map[string][]byte{paymentsPath + "/remotemcpserver-gh.yaml": gitManifest(t, elsewhere)},
+		},
+		"the name is taken in Git": {
+			code: "already_exists",
+			prepare: func(t *testing.T) (*orgFixture, *commit.Fake, organizations.ResourceResult) {
+				fixture, forge := commitFixture(t, nil)
+				return fixture, forge, prepareModelOperation(t, fixture, map[string]any{"mode": "commit"})
+			},
+			change: map[string][]byte{paymentsPath + "/modelconfig-claude.yaml": gitManifest(t, created)},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			fixture, forge, result := scenario.prepare(t)
+			confirmation := confirmOperation(t, fixture, result.CredentialOperation)
+			require.NoError(t, forge.Commit(t.Context(), mcRepo, "main", "change a Git input", scenario.change))
+			status, first, _ := operationHTTP(t, fixture, http.MethodPost, result.CredentialOperation, confirmation.Version, valuesBody(t, result, "synthetic-value"), nil)
+			require.Equal(t, http.StatusConflict, status, first)
+			require.Equal(t, scenario.code, errorCode(t, first))
+			require.Contains(t, first, "prepare", "the refusal says that a fresh preparation is what is needed")
+			after := confirmOperation(t, fixture, result.CredentialOperation)
+			require.Equal(t, "pending", after.State)
+			require.Equal(t, confirmation.Version, after.Version)
+			status, second, _ := operationHTTP(t, fixture, http.MethodPost, result.CredentialOperation, after.Version, valuesBody(t, result, "synthetic-value"), nil)
+			require.Equal(t, http.StatusConflict, status, second)
+			require.Equal(t, first, second)
+			require.NotContains(t, second, "uncertain")
+			require.Equal(t, "pending", confirmOperation(t, fixture, result.CredentialOperation).State)
+			_, err := forge.Head(t.Context(), mcRepo, "agent-manager/credential-"+result.ElicitationID)
+			require.Error(t, err, "no branch exists for a save refused before it")
+			require.Empty(t, forge.PullRequests())
+		})
+	}
+}
+
 func TestCredentialReplacementKeepsOrdinaryEditsSeparate(t *testing.T) {
 	fixture := newOrgFixture(t, model("claude", true))
 	seedSecret(t, fixture, "tenant-credential-claude", "apiKey")
