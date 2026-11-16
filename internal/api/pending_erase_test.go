@@ -195,3 +195,69 @@ func TestPendingEraseKeepsReadsAndEraseNow(t *testing.T) {
 	assert.Equal(t, true, decode(t, text)["deleted"])
 	assert.Nil(t, f.get(t, orgGVR, "org-acme", "payments"))
 }
+
+// update_organization refuses an organization in Pending erase, or one being
+// erased, in both modes, with the content write tools' conflict: it names
+// the state and the way forward. Nothing is written and no pull request
+// opens.
+func TestUpdateOrganizationInPendingEraseIsRefused(t *testing.T) {
+	states := map[string]struct {
+		org      func(t *testing.T, labels map[string]string) *unstructured.Unstructured
+		contains []string
+	}{
+		"pending erase": {pendingErase, []string{"Pending erase", "DeleteMerged", "Erase now", `confirm "org-acme/payments"`, "restore its file", "namespace " + orgNS}},
+		"being erased": {func(*testing.T, map[string]string) *unstructured.Unstructured { return beingErased() },
+			[]string{"being erased", "DeletingNamespace"}},
+	}
+	for state, s := range states {
+		for _, mode := range []string{"apply", "commit"} {
+			t.Run(state+"/"+mode, func(t *testing.T) {
+				var f *orgFixture
+				pullRequests := func() int { return 0 }
+				if mode == "commit" {
+					g, fake := commitFixture(t, nil, s.org(t, fromGitLabels("flux")))
+					f, pullRequests = g, func() int { return len(fake.PullRequests()) }
+				} else {
+					f = newOrgFixture(t, s.org(t, nil))
+				}
+				text, isErr := f.call(t, ToolUpdateOrganization, map[string]any{"namespace": "org-acme", "name": "payments", "displayName": "Payments", "mode": mode})
+				require.True(t, isErr, text)
+				assert.True(t, strings.HasPrefix(text, "conflict:"), text)
+				assert.Contains(t, text, "organization org-acme/payments")
+				for _, c := range s.contains {
+					assert.Contains(t, text, c)
+				}
+				if state == "pending erase" && mode == "commit" {
+					assert.Contains(t, text, paymentsFile, "the file to restore")
+				}
+				requireNothingWritten(t, f)
+				assert.Zero(t, pullRequests())
+			})
+		}
+	}
+}
+
+// A caller who may not read the organization gets forbidden from
+// update_organization, not its Pending erase.
+func TestUpdateOrganizationWithoutRightsIsNotToldThePendingErase(t *testing.T) {
+	f := newOrgFixture(t, pendingErase(t, nil))
+	f.dyn.PrependReactor("get", "agentplatformorganizations", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewForbidden(a.GetResource().GroupResource(), "payments", errors.New("RBAC: access denied"))
+	})
+	text, isErr := f.call(t, ToolUpdateOrganization, map[string]any{"namespace": "org-acme", "name": "payments", "displayName": "Payments"})
+	require.True(t, isErr, text)
+	assert.True(t, strings.HasPrefix(text, "forbidden:"), text)
+	assert.NotContains(t, text, "Pending erase")
+	requireNothingWritten(t, f)
+}
+
+// Orphaned for another reason than a merged delete is not Pending erase:
+// update_organization goes on.
+func TestUpdateOrganizationMissingFromGitIsStillWritten(t *testing.T) {
+	org := organization("org-acme", "payments", nil)
+	orphaned(t, org, "MissingFromGit")
+	f := newOrgFixture(t, org)
+	text, isErr := f.call(t, ToolUpdateOrganization, map[string]any{"namespace": "org-acme", "name": "payments", "displayName": "Payments"})
+	require.False(t, isErr, text)
+	assert.Equal(t, []any{"displayName"}, decode(t, text)["changed"])
+}

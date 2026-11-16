@@ -623,6 +623,11 @@ func (s *Service) Update(ctx context.Context, req UpdateRequest) (*UpdateResult,
 	if err != nil {
 		return nil, err
 	}
+	// After the caller's read: a caller who may not read the organization
+	// gets forbidden from get, never its state.
+	if err := s.erasing(org, req.Parent, req.Name, orDefault(org.Status.Namespace, "(none yet)")); err != nil {
+		return nil, err
+	}
 	if mode == agents.ModeCommit {
 		return s.updateCommit(ctx, c, u, org, req)
 	}
