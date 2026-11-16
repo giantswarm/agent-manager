@@ -287,7 +287,10 @@ The base is checked again once the pull request's branch is cut from it: a
 file another commit added after the first check is refused there too
 (`already_exists` with `create`, else `conflict`), before anything is
 committed. The branch stays, without a commit, and the next write brings it up
-to date. This holds for every commit-mode create, the organization's own
+to date. When another commit added the identical files and their
+kustomization entries before the change was planned, so that Git already
+carries the whole change, the create is refused the same way, and no branch
+is cut. This holds for every commit-mode create, the organization's own
 object and first admins included (see
 [repository requirements](organizations-commit-mode.md)).
 The receipt's credential state `committed` means a PR exists, not that Flux has

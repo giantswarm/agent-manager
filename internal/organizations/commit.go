@@ -325,7 +325,17 @@ func (c *orgCommit) open(ctx context.Context, changes []fileChange, branch, titl
 	if dryRun {
 		return out, nil
 	}
+	var creates []string
+	for _, ch := range changes {
+		creates = append(creates, ch.create...)
+	}
 	if len(landed) == 0 {
+		// Git carries every file already. A file this write creates was
+		// absent at its first check: another writer added it since, and the
+		// create is refused as on the cut branch.
+		if err := c.absent(ctx, creates); err != nil {
+			return nil, err
+		}
 		out.Unchanged = true
 		return out, nil
 	}
@@ -336,10 +346,6 @@ func (c *orgCommit) open(ctx context.Context, changes []fileChange, branch, titl
 			return nil, commitError(c.gh, err)
 		}
 		return nil, fmt.Errorf("%w: the pull request %s for this object is open: merge or close it first, then call again", agents.ErrConflict, open.URL)
-	}
-	var creates []string
-	for _, ch := range changes {
-		creates = append(creates, ch.create...)
 	}
 	pr, err := c.land(ctx, landed, creates, branch, title, body+"\n\nThe platform team reviews this pull request (CODEOWNERS of the organization paths).\n\nOpened by agent-manager as @"+c.gh.Login+".")
 	if err != nil {
@@ -375,14 +381,8 @@ func (c *orgCommit) land(ctx context.Context, changes []commit.Change, creates [
 	if err := c.remote.CreateBranch(ctx, repo, branch, base); err != nil {
 		return commit.PullRequest{}, commitError(c.gh, err)
 	}
-	for _, p := range creates {
-		taken, err := c.exists(ctx, p)
-		if err != nil {
-			return commit.PullRequest{}, err
-		}
-		if taken {
-			return commit.PullRequest{}, nameTaken{fmt.Errorf("%w: %s is in %s already and not applied yet: wait for Flux to apply it, then change it", agents.ErrConflict, p, repo)}
-		}
+	if err := c.absent(ctx, creates); err != nil {
+		return commit.PullRequest{}, err
 	}
 	if err := c.remote.Commit(ctx, repo, branch, title, files); err != nil {
 		return commit.PullRequest{}, commitError(c.gh, err)
@@ -392,6 +392,21 @@ func (c *orgCommit) land(ctx context.Context, changes []commit.Change, creates [
 		return commit.PullRequest{}, commitError(c.gh, err)
 	}
 	return pr, nil
+}
+
+// absent refuses (nameTaken) when the base branch carries any of creates,
+// files a write creates.
+func (c *orgCommit) absent(ctx context.Context, creates []string) error {
+	for _, p := range creates {
+		taken, err := c.exists(ctx, p)
+		if err != nil {
+			return err
+		}
+		if taken {
+			return nameTaken{fmt.Errorf("%w: %s is in %s already and not applied yet: wait for Flux to apply it, then change it", agents.ErrConflict, p, c.cfg.Objects.Repository)}
+		}
+	}
+	return nil
 }
 
 // branch is a pull request's head branch for a verb on an organization.
