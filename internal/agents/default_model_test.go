@@ -137,7 +137,7 @@ func TestListModelConfigsNamesTheKeySecret(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, string(b), `"credentialSecret":"tenant-credential-claude","credentialKey":"apiKey"`)
 	assert.Equal(t, 1, strings.Count(string(b), "credentialSecret"), "a model without a key names none")
-	requireNoSecretRead(t, f)
+	requireNoSecretRead(t, f, "modelconfigs")
 }
 
 func TestValidateCreateReportsTheModelItWouldWrite(t *testing.T) {

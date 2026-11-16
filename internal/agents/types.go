@@ -618,7 +618,8 @@ type ModelConfig struct {
 	CacheTTL      string `json:"cacheTTL,omitempty"`
 	// CredentialSecret and CredentialKey name the Secret and its key that hold
 	// the model's API key (spec.apiKeySecret, spec.apiKeySecretKey); empty for
-	// a model without one. The names only: the Secret is never read.
+	// a model without one; the key only with the Secret's name. The names
+	// only: the Secret is never read.
 	CredentialSecret string `json:"credentialSecret,omitempty"`
 	CredentialKey    string `json:"credentialKey,omitempty"`
 }
@@ -635,7 +636,8 @@ type EgressPolicy struct {
 // EgressDestination is one origin of an EgressPolicy. CredentialHeader names
 // the request header the egress gateway fills with a credential, when the
 // origin carries one; CredentialSecret and CredentialKey name the Secret and
-// its key the value comes from. The names only: the Secret is never read.
+// its key the value comes from; the key only with the Secret's name, as on a
+// ModelConfig. The names only: the Secret is never read.
 type EgressDestination struct {
 	Origin           string `json:"origin"`
 	CredentialHeader string `json:"credentialHeader,omitempty"`

@@ -109,8 +109,9 @@ func egressPolicyOf(obj *unstructured.Unstructured) EgressPolicy {
 		if auth, ok := d["authentication"].(map[string]any); ok {
 			dest.CredentialHeader, _ = auth["header"].(string)
 			if ref, ok := auth["secretKeyRef"].(map[string]any); ok {
-				dest.CredentialSecret, _ = ref["name"].(string)
-				dest.CredentialKey, _ = ref["key"].(string)
+				if dest.CredentialSecret, _ = ref["name"].(string); dest.CredentialSecret != "" {
+					dest.CredentialKey, _ = ref["key"].(string)
+				}
 			}
 		}
 		p.Destinations = append(p.Destinations, dest)
