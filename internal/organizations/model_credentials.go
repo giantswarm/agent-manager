@@ -25,8 +25,8 @@ func (s *Service) modelNamespace(ctx context.Context, namespace string) (Namespa
 	if namespace == "" || namespace != s.cfg.PlatformNamespace {
 		return s.organization(ctx, namespace)
 	}
-	if !CredentialUIURLNamesNamespace(s.cfg.CredentialUIURL) {
-		return Namespace{}, fmt.Errorf("%w: installation model management requires a credential UI URL with a {namespace} expression", agents.ErrUnsupported)
+	if !CredentialUIURLServesInstallations(s.cfg.CredentialUIURL) {
+		return Namespace{}, fmt.Errorf("%w: installation model management requires a credential UI URL with a {namespace} expression and no {parent} or {organization}", agents.ErrUnsupported)
 	}
 	caller, err := s.caller(ctx)
 	if err != nil {

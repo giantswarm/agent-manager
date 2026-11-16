@@ -57,12 +57,17 @@ func ValidateCredentialUIURL(template string) error {
 	return err
 }
 
-// CredentialUIURLNamesNamespace reports whether a valid credential UI URL
-// template has a {namespace} expression. Installation model links need it:
-// an installation model has no {parent} or {organization} to expand.
-func CredentialUIURLNamesNamespace(template string) bool {
+// CredentialUIURLServesInstallations reports whether a valid credential UI
+// URL template links installation models: it has a {namespace} expression
+// and no {parent} or {organization}, which an installation model leaves
+// empty.
+func CredentialUIURLServesInstallations(template string) bool {
 	tpl, err := parseCredentialUIURL(template)
-	return err == nil && slices.Contains(tpl.Varnames(), fieldNamespace)
+	if err != nil {
+		return false
+	}
+	names := tpl.Varnames()
+	return slices.Contains(names, fieldNamespace) && !slices.Contains(names, "parent") && !slices.Contains(names, "organization")
 }
 
 func parseCredentialUIURL(template string) (*uritemplate.Template, error) {

@@ -124,7 +124,8 @@ func TestCredentialUIURLWithoutTenantsNamesTheNamespace(t *testing.T) {
 		"https://portal.example.com/models/{namespace}/{operation}":              true,
 		"https://portal.example.com/models?namespace={namespace}&op={operation}": true,
 		"https://portal.example.com/models/{operation}":                          false,
-		"https://portal.example.com/models/{parent}/{namespace}/{operation}":     true,
+		"https://portal.example.com/models/{parent}/{namespace}/{operation}":     false,
+		"https://portal.example.com/x/{organization}/{namespace}/{operation}":    false,
 		"https://portal.example.com/models{?namespace,operation}":                true,
 		"https://portal.example.com/models/{namespace}":                          false,
 	} {

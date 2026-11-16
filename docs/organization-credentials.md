@@ -10,9 +10,10 @@ Model operations also accept the configured installation namespace, requiring
 cluster-admin authorization again when an operation is read or saved. Its target
 declares `scope: platform`, without a synthetic organization. Connector and egress
 operations remain organization-scoped. Installation models require
-`credentials.uiURL` with a `{namespace}` expression: an installation model has
-no `{parent}` or `{organization}`. OAuth and downstream authorization are
-required. Without tenancy the template must name `{namespace}`, and the form and
+`credentials.uiURL` with a `{namespace}` expression and no `{parent}` or
+`{organization}`: an installation model has neither, so they would leave empty
+path segments in its link. OAuth and downstream authorization are
+required. Without tenancy the template must be such a template, and the form and
 model tools work for installation models only. Tenant management tools stay
 disabled, and organization discovery is empty.
 
@@ -110,8 +111,10 @@ credentials:
 The template is an [RFC 6570](https://www.rfc-editor.org/rfc/rfc6570) URI
 template. One `{operation}` expression is required in the path or query
 (`{?operation}` works too). `{parent}`, `{organization}` and `{namespace}` are optional, but installation
-model links need `{namespace}`, and without tenancy it is required; the
-scheme and host are fixed, and no other variable is accepted. Routes and the
+model links need `{namespace}` and no `{parent}` or `{organization}`, and
+without tenancy such a template is required; the scheme and host are fixed,
+and no other variable is accepted. The chart refuses the same templates as the
+server. Routes and the
 installation name belong to the UI configuration. Agent-manager neither hosts a
 form nor constructs a Backstage route. The operation ID grants no authority.
 
