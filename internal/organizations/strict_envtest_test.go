@@ -61,45 +61,11 @@ func TestEnvtestOrganizationWritesAreStrict(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	t.Run("an unknown ModelConfig field is refused and names the field", func(t *testing.T) {
-		// What a model file in git, or a live object changed by hand, may
-		// carry: OpenAI's block has no promptCaching.
-		obj := newObject(envtestKagentAPI, "ModelConfig", ns, "gpt")
-		obj.Object["spec"] = map[string]any{"provider": "OpenAI", "model": "gpt-5", "openAI": map[string]any{"promptCaching": true}}
-		w := write{gvr: envtestModelGVR, kind: "ModelConfig", op: opCreate, obj: obj.Object, ns: ns, name: "gpt", what: "ModelConfig " + ns + "/gpt"}
-		for _, dryRun := range []bool{true, false} {
-			err := apply(ctx, dyn, []write{w}, dryRun)
-			require.ErrorIs(t, err, agents.ErrInvalid, "dryRun %v", dryRun)
-			assert.ErrorContains(t, err, "spec.openAI.promptCaching")
-			assert.ErrorContains(t, err, "dry run of create ModelConfig "+ns+"/gpt")
-		}
-		_, err := dyn.Resource(envtestModelGVR).Namespace(ns).Get(ctx, "gpt", metav1.GetOptions{})
-		assert.True(t, apierrors.IsNotFound(err), "nothing is written: %v", err)
-
-		// The update of a live model is refused the same way.
-		obj.Object["spec"] = map[string]any{"provider": "OpenAI", "model": "gpt-5"}
-		w.obj = obj.Object
-		require.NoError(t, apply(ctx, dyn, []write{w}, false))
-		live, err := dyn.Resource(envtestModelGVR).Namespace(ns).Get(ctx, "gpt", metav1.GetOptions{})
-		require.NoError(t, err)
-		require.NoError(t, unstructured.SetNestedField(live.Object, true, "spec", "openAI", "promptCaching"))
-		update := write{gvr: envtestModelGVR, kind: "ModelConfig", op: opUpdate, obj: live.Object, ns: ns, name: "gpt", what: "ModelConfig " + ns + "/gpt"}
-		err = apply(ctx, dyn, []write{update}, false)
-		require.ErrorIs(t, err, agents.ErrInvalid)
-		assert.ErrorContains(t, err, "spec.openAI.promptCaching")
-	})
-
-	// Each write below is built by the code the organization tools use, or
-	// in the shape they write; each is created, then updated from the live
-	// object, as an update of the tools does.
-	writes := map[string]write{}
-	for name, req := range map[string]ModelRequest{
-		"claude":  {Provider: "Anthropic", Model: "claude-sonnet-5-5", MaxTokens: ptr(int64(32000)), DisplayName: ptr("Claude Sonnet")},
-		"gpt-4":   {Provider: "OpenAI", Model: "gpt-4o", MaxTokens: ptr(int64(4096)), Endpoint: ptr("http://llm.example.com/v1"), InsecureSkipTLSVerify: ptr(true)},
-		"local":   {Provider: "Ollama", Model: "qwen3", Endpoint: ptr("http://ollama:11434")},
-		"vertex":  {Provider: "GeminiVertexAI", Model: "gemini-2.5-pro", ProjectID: "my-project", Location: "europe-west1"},
-		"mistral": {Provider: "Mistral", Model: "mistral-large", MaxTokens: ptr(int64(2048))},
-	} {
+	// modelWrite builds a ModelConfig as SetModel does for a new model: the
+	// provider, the model, the endpoint and the Vertex fields, the
+	// credential reference, the settings and the default mark.
+	modelWrite := func(t *testing.T, name string, req ModelRequest) write {
+		t.Helper()
 		obj := newObject(envtestKagentAPI, "ModelConfig", ns, name)
 		require.NoError(t, unstructured.SetNestedField(obj.Object, req.Provider, "spec", "provider"))
 		require.NoError(t, unstructured.SetNestedField(obj.Object, req.Model, "spec", "model"))
@@ -108,24 +74,64 @@ func TestEnvtestOrganizationWritesAreStrict(t *testing.T) {
 		require.NoError(t, unstructured.SetNestedField(obj.Object, modelCredentialKey(obj), "spec", "apiKeySecretKey"))
 		require.NoError(t, setModelSettings(obj, req, req.Provider, true, nil), name)
 		setMark(obj)
-		writes["ModelConfig "+name] = write{gvr: envtestModelGVR, kind: "ModelConfig", obj: obj.Object, ns: ns, name: name}
+		return write{gvr: envtestModelGVR, kind: "ModelConfig", op: opCreate, obj: obj.Object, ns: ns, name: name, what: "ModelConfig " + ns + "/" + name}
+	}
+
+	// A setting the provider's block does not have: set_organization_model
+	// writes it, and the API server refuses it and names it.
+	for field, req := range map[string]ModelRequest{
+		"spec.openAI.promptCaching": {Provider: "OpenAI", Model: "gpt-5", PromptCaching: ptr(true)},
+		"spec.openAI.cacheTTL":      {Provider: "OpenAI", Model: "gpt-5", CacheTTL: "5m"},
+		"spec.ollama.maxTokens":     {Provider: "Ollama", Model: "qwen3", MaxTokens: ptr(int64(100))},
+	} {
+		t.Run(field+" is refused and named", func(t *testing.T) {
+			w := modelWrite(t, "refused", req)
+			for _, dryRun := range []bool{true, false} {
+				err := apply(ctx, dyn, []write{w}, dryRun)
+				require.ErrorIs(t, err, agents.ErrInvalid, "dryRun %v", dryRun)
+				assert.ErrorContains(t, err, field)
+				assert.ErrorContains(t, err, "dry run of create ModelConfig "+ns+"/refused")
+			}
+			_, err := dyn.Resource(envtestModelGVR).Namespace(ns).Get(ctx, "refused", metav1.GetOptions{})
+			assert.True(t, apierrors.IsNotFound(err), "nothing is written: %v", err)
+		})
+	}
+
+	t.Run("an update request that carries an unknown field is refused", func(t *testing.T) {
+		// What a model file in git may carry, in commit mode's dry run of
+		// the update: OpenAI's block has no promptCaching.
+		require.NoError(t, apply(ctx, dyn, []write{modelWrite(t, "gpt", ModelRequest{Provider: "OpenAI", Model: "gpt-5"})}, false))
+		live, err := dyn.Resource(envtestModelGVR).Namespace(ns).Get(ctx, "gpt", metav1.GetOptions{})
+		require.NoError(t, err)
+		require.NoError(t, unstructured.SetNestedField(live.Object, true, "spec", "openAI", "promptCaching"))
+		update := write{gvr: envtestModelGVR, kind: "ModelConfig", op: opUpdate, obj: live.Object, ns: ns, name: "gpt", what: "ModelConfig " + ns + "/gpt"}
+		err = apply(ctx, dyn, []write{update}, true)
+		require.ErrorIs(t, err, agents.ErrInvalid)
+		assert.ErrorContains(t, err, "spec.openAI.promptCaching")
+	})
+
+	// Each write below is built by the code the organization tools use; each
+	// is created, then updated from the live object, as an update of the
+	// tools does.
+	writes := map[string]write{}
+	for name, req := range map[string]ModelRequest{
+		"claude":  {Provider: "Anthropic", Model: "claude-sonnet-5-5", MaxTokens: ptr(int64(32000)), DisplayName: ptr("Claude Sonnet")},
+		"gpt-4":   {Provider: "OpenAI", Model: "gpt-4o", MaxTokens: ptr(int64(4096)), Endpoint: ptr("http://llm.example.com/v1"), InsecureSkipTLSVerify: ptr(true)},
+		"local":   {Provider: "Ollama", Model: "qwen3", Endpoint: ptr("http://ollama:11434")},
+		"vertex":  {Provider: "GeminiVertexAI", Model: "gemini-2.5-pro", ProjectID: "my-project", Location: "europe-west1"},
+		"mistral": {Provider: "Mistral", Model: "mistral-large", MaxTokens: ptr(int64(2048))},
+	} {
+		writes["ModelConfig "+name] = modelWrite(t, name, req)
 	}
 	connector := newObject(envtestKagentAPI, "RemoteMCPServer", ns, "github")
-	connector.Object["spec"] = map[string]any{
-		"url": "https://mcp.example.com/mcp", "description": "MCP server github",
-		"headersFrom": []any{
-			map[string]any{"name": "X-Team", "value": "payments"},
-			map[string]any{"name": "Authorization", "valueFrom": map[string]any{"type": "Secret", "name": CredentialPrefix + "github", "key": defaultTokenKey}},
-		},
-	}
+	connector.Object["spec"] = map[string]any{"headersFrom": []any{map[string]any{"name": "X-Team", "value": "payments"}}}
+	require.NoError(t, setConnectorSpec(connector, ConnectorRequest{Name: "github", URL: "https://mcp.example.com/mcp", CredentialHeader: "Authorization"}))
 	writes["RemoteMCPServer github"] = write{gvr: envtestConnectorGVR, kind: "RemoteMCPServer", obj: connector.Object, ns: ns, name: "github"}
 	egress := newObject(envtestKagentAPI, "EgressPolicy", ns, "apis")
-	egress.Object["spec"] = map[string]any{"destinations": []any{
-		map[string]any{"origin": "https://api.example.com"},
-		map[string]any{"origin": "https://api.github.com", "authentication": map[string]any{
-			"header": "Authorization", "prefix": "Bearer ", "secretKeyRef": map[string]any{"name": CredentialPrefix + "apis", "key": defaultTokenKey},
-		}},
-	}}
+	require.NoError(t, setEgressDestinations(egress, EgressRequest{Name: "apis", Destinations: []EgressDestination{
+		{Origin: "https://api.example.com"},
+		{Origin: "https://api.github.com", CredentialHeader: "Authorization", CredentialPrefix: "Bearer "},
+	}}))
 	writes["EgressPolicy apis"] = write{gvr: envtestEgressGVR, kind: "EgressPolicy", obj: egress.Object, ns: ns, name: "apis"}
 	secret := credentialSecretWrite(ns, CredentialPrefix+"claude", "", map[string]any{defaultModelKey: base64.StdEncoding.EncodeToString([]byte("not-a-key"))})
 	writes["Secret "+secret.name] = secret
