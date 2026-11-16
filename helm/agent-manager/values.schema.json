@@ -71,7 +71,7 @@
                 },
                 "platformUIURL": {
                     "type": "string",
-                    "description": "HTTPS installation model credential form template, containing {operation} and {namespace}. Independent of tenants.enabled and credentials.uiURL; requires downstream OAuth."
+                    "description": "HTTPS RFC 6570 installation model credential form template with {operation} and {namespace} expressions. Independent of tenants.enabled and credentials.uiURL; requires downstream OAuth."
                 },
                 "uiURL": {
                     "type": "string",

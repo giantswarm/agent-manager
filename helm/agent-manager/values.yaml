@@ -558,7 +558,7 @@ tenants:
     platformModelsPath: ""
 
 credentials:
-  # -- HTTPS installation model credential form template, containing {operation} and {namespace}.
+  # -- HTTPS RFC 6570 installation model credential form template with {operation} and {namespace} expressions.
   # Independent of tenants.enabled and credentials.uiURL; requires downstream OAuth.
   platformUIURL: ""
   # -- HTTPS RFC 6570 URI template with one {operation} expression. The UI owns
