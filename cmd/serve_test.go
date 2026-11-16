@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"bytes"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"testing"
@@ -135,5 +137,27 @@ func TestCredentialUIURLWithoutTenantsNamesTheNamespace(t *testing.T) {
 		} else {
 			require.Error(t, validateCredentialOptions(&options), template)
 		}
+	}
+}
+
+func TestWarnDeprecatedOAuthOptions(t *testing.T) {
+	tests := []struct {
+		name             string
+		allowPrivateURLs bool
+		wantWarning      bool
+	}{
+		{name: "allow-private-oauth-urls set", allowPrivateURLs: true, wantWarning: true},
+		{name: "allow-private-oauth-urls unset"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var output bytes.Buffer
+			warnDeprecatedOAuthOptions(&serveOptions{dexAllowPrivateIP: tc.allowPrivateURLs}, slog.New(slog.NewTextHandler(&output, nil)))
+			if !tc.wantWarning {
+				assert.Empty(t, output.String())
+				return
+			}
+			assert.Contains(t, output.String(), "--allow-private-oauth-urls (AGENT_MANAGER_OAUTH_ALLOW_PRIVATE_URLS) has no effect")
+		})
 	}
 }
