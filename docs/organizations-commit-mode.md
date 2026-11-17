@@ -8,7 +8,11 @@ installation's repository. Each write's pull request has a head branch of its ow
 from the base branch: the object's branch name (`agent-manager/<verb>-<parent>-<name>`),
 an underscore and a random suffix. A second write of the same object is refused while a
 pull request of the object is open, also one on the name without a suffix that an older
-agent-manager opened. This page states the repository layout the tools write and
+agent-manager opened. When two writes of the same object arrive at almost the same time
+and each opens a pull request, the pull request with the lower number stays: the write
+that opened the other one closes it and answers the same conflict. When that close
+fails, the answer names both pull requests and asks the caller to close the second one.
+This page states the repository layout the tools write and
 what the repository must have before an installation turns on
 `tenants.commit.repository`.
 
@@ -140,14 +144,21 @@ The erase is refused:
   reports a removal and an addition, or a definition that the pull request or a later
   commit wrote there. A document defines it when it is an `AgentPlatformOrganization`
   of its name in its parent or without a namespace, also as an item of a `List`. Where
-  any `kustomization.yaml` under the objects path sets `namespace`, `namePrefix` or
-  `nameSuffix`, or SOPS encrypted the value, the document's own namespace or name does
-  not count, and it is taken as a match. The answer names the file, and the
-  kustomization when that made the match: remove that definition and erase again, or
-  move the file back and open the delete again. A file that does not parse
-  defines nothing, since Kustomize cannot apply it either. When the objects path cannot
+  a kustomization under the objects path could make another document the organization
+  (the table in "What the scan is for" below gives the rule), that document is taken
+  as a match too. The answer names the file, and each kustomization that made the
+  match and why: remove that definition and erase again, or move the file back and
+  open the delete again. A resource file that does not parse defines nothing, since
+  Kustomize cannot apply it either; a kustomization that does not parse makes every
+  organization document a match. When the objects path cannot
   be read (a read fails, or the repository's tree is too large for one read), nothing
   is erased (see "What the scan is for" below);
+- when a kustomization under the objects path loads files from outside it: a
+  `resources`, `components` or `bases` entry that is a remote (it holds `://` or `//`),
+  a path that leaves the objects path, or one that names no file or directory under it.
+  The scan does not read what such an entry loads, so whether it still defines the
+  organization is unknown. The answer names the kustomization and the entry: bring
+  what it loads under the objects path, or remove the entry, and erase again;
 - when GitHub cannot list the merged pull request's files: whether it removed the file
   is unknown, so nothing is erased. Call again to retry. A pull request of more than
   3000 files never lists, since GitHub lists at most 3000: restore only the object's
@@ -170,19 +181,45 @@ the scan does not change what it reads, so a move of the definition between the 
 read and the file reads cannot hide it (giantswarm/agent-manager#420).
 
 The scan reads the files as they are and does not run Kustomize. So it fails closed on
-what a kustomization changes: when any kustomization file under the objects path sets
-`namespace`, `namePrefix` or `nameSuffix`, wherever it is, every
-`AgentPlatformOrganization` document that one of these three fields could make the
-organization counts as still in git. That covers an overlay in a sibling directory that refers to the file
-(for one, `../../base`) and sets `namespace`, so that Kustomize applies the
-organization into its parent from a document with another namespace
-(giantswarm/agent-manager#399). The cost: in a repository that uses such an overlay,
-an erase can be refused although Flux's build no longer holds the organization. The
-answer names the kustomization; a person then removes that setting, or the overlay,
-and erases again. The objects paths that agent-manager writes use no such overlay.
-The scan does not read the other ways Kustomize can change a namespace or a name (a
-`transformers` entry, a patch, `replacements`): only the second guard below covers
-those (giantswarm/agent-manager#423).
+what a kustomization changes. Every kustomization file under the objects path counts,
+wherever it is: an overlay in a sibling directory refers to the file by a path such as
+`../../base` (giantswarm/agent-manager#399). For the erase of `<parent>/<name>`, an
+`AgentPlatformOrganization` document counts as still in git when a kustomization could
+make it that organization:
+
+| The kustomization has | The documents that count |
+| --- | --- |
+| `namespace: <parent>`, or a `namespace` the scan cannot read: SOPS-encrypted (`ENC[...]`), or with a variable that Flux's post-build substitution (`${...}`) or a Kustomize var (`$(...)`) may replace | a document of `<name>` in any namespace |
+| `namespace` with another value in clear text | none: Kustomize writes that value, which is not `<parent>` |
+| `namePrefix` or `nameSuffix` | a document of `<parent>` whose own name is a part of `<name>`: a prefix or a suffix only adds text |
+| a non-empty `transformers`, `patches`, `patchesJson6902`, `patchesStrategicMerge` or `replacements` | every document: these can set any namespace and any name |
+| a non-empty `vars` and a non-empty `configurations` | every document: a `varReference` in a configurations file can substitute `$(VAR)` in a namespace or a name |
+| a value of a form the scan does not know (a `namespace` that is not a string, for one) | every document that the field could change |
+| content that does not parse | every document |
+
+The fields combine: with `namespace: <parent>` and a `nameSuffix`, a document in any
+namespace whose name is a part of `<name>` counts. A document with no namespace, or
+whose own namespace and name are `<parent>/<name>`, always counts, and so does one
+whose own namespace or name the scan cannot read: SOPS-encrypted, or with a
+variable (`${...}` of Flux, `$(...)` of a Kustomize var). The scan reads a
+kustomization's keys in any case (`Patches:` is `patches:`), as Kustomize does.
+
+The scan reads only the files under the objects path. A kustomization there whose
+`resources`, `components` or `bases` entry loads files from elsewhere refuses the
+erase, whatever those files hold: a remote entry (it holds `://` or `//`, or it has
+a remote form such as `github.com/owner/repo/path` or `git@host:owner/repo`), an
+absolute path, a path that is not under the objects path once joined with the
+kustomization's directory, or a
+path that names no file or directory under the objects path, which Kustomize then
+loads as a remote or fails on. An entry that stays under the objects path, such as
+`../../base` from a sibling overlay, is read as above and refuses nothing by itself
+(giantswarm/agent-manager#437).
+
+The cost: in a repository that uses such an overlay, an erase can be refused although
+Flux's build no longer holds the organization. The answer names each kustomization and
+the field that made it count; a person then removes that setting, or the overlay, and
+erases again. The objects paths that agent-manager writes use no such overlay
+(giantswarm/agent-manager#423).
 
 The cluster has a second guard, which follows Flux's own Kustomize build. The
 admission policy `agent-platform-organization-delete-intent`

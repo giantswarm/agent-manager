@@ -1,9 +1,13 @@
 package agents
 
 import (
+	"cmp"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"slices"
 	"strings"
@@ -304,6 +308,7 @@ type agentCommit struct {
 	loc    commitLocation
 	remote GitHubRemote
 	gh     *identity.GitHub
+	log    *slog.Logger
 }
 
 func (s *Service) newCommit(ctx context.Context, loc commitLocation) (*agentCommit, error) {
@@ -311,7 +316,7 @@ func (s *Service) newCommit(ctx context.Context, loc commitLocation) (*agentComm
 	if err != nil {
 		return nil, err
 	}
-	return &agentCommit{loc: loc, remote: remote, gh: gh}, nil
+	return &agentCommit{loc: loc, remote: remote, gh: gh, log: s.log}, nil
 }
 
 func (c *agentCommit) file(kind, name string) string {
@@ -347,15 +352,19 @@ func (c *agentCommit) requireReleaseFile(ctx context.Context, hr *unstructured.U
 
 // open decides the files against the base (layout.Build) and lands them as
 // one pull request as the caller, or reports them on a dry run. Nothing to
-// change opens none.
-func (c *agentCommit) open(ctx context.Context, write map[string][]byte, remove []string, branch, title, body string, dryRun bool) (*CommitResult, error) {
+// change opens none. object is the agent's branch name (commitBranch). While
+// a pull request of it is open, the write adds its commit to that pull
+// request, as when every write of the object shared one head; otherwise the
+// write cuts a head branch of its own (Head) from the base, so no file of an
+// earlier, closed or merged, pull request of the agent rides along.
+func (c *agentCommit) open(ctx context.Context, write map[string][]byte, remove []string, object, title, body string, dryRun bool) (*CommitResult, error) {
 	plan, err := layout.Build(ctx, c.remote, c.loc.directory(), write, remove)
 	if err != nil {
 		return nil, commitError(c.gh, err)
 	}
 	out := &CommitResult{
 		Repository: c.loc.Repository.String(), Base: c.loc.Branch, Directory: c.loc.directory().Path(),
-		Kustomization: c.loc.kustomization, Prune: c.loc.prune, Branch: branch, Author: c.gh.Login,
+		Kustomization: c.loc.kustomization, Prune: c.loc.prune, Branch: Head(object), Author: c.gh.Login,
 		Files: make([]CommitFile, len(plan.Files)),
 	}
 	for i, f := range plan.Files {
@@ -367,17 +376,119 @@ func (c *agentCommit) open(ctx context.Context, write map[string][]byte, remove 
 	if dryRun || !plan.Changed() {
 		return out, nil
 	}
-	prs, err := commit.Open(ctx, c.remote, commit.Request{Branch: branch, Title: title, Body: body + "\n\nOpened by agent-manager as @" + c.gh.Login + "."}, []commit.Change{plan.Change()})
+	open, err := PullRequestsOf(ctx, c.remote, c.loc.Repository, object)
 	if err != nil {
 		return nil, commitError(c.gh, err)
 	}
-	out.PullRequest, out.Number = prs[0].URL, prs[0].Number
+	if len(open) > 0 {
+		out.Branch = open[0].Head
+	}
+	prs, err := commit.Open(ctx, c.remote, commit.Request{Branch: out.Branch, Title: title, Body: body + "\n\nOpened by agent-manager as @" + c.gh.Login + "."}, []commit.Change{plan.Change()})
+	if err != nil {
+		return nil, commitError(c.gh, err)
+	}
+	pr := prs[0]
+	if len(open) > 0 && pr.Number != open[0].Number {
+		// The pull request found open was closed or merged after the lookup,
+		// and the commit landed on its branch in another pull request: one
+		// this call opened, or one another writer opened there meanwhile. It
+		// can carry the closed one's files. Nothing proves this call opened
+		// it, so the write closes nothing and names both to the caller.
+		return nil, fmt.Errorf("%w: the pull request %s of this agent was closed or merged while this call added to it, and the change is now in %s on the same branch, which can carry the files of %s: review %s, or close it and call again for a pull request of its own", ErrConflict, open[0].URL, pr.URL, open[0].URL, pr.URL)
+	}
+	if len(open) == 0 {
+		// Another write of the agent may have opened its pull request since
+		// the lookup: the one with the lower number stays.
+		if first, lost, err := KeepFirst(ctx, c.log, c.remote, c.loc.Repository, object, pr); lost {
+			return nil, RaceConflict("agent", first, pr, err, "call again to add this change to it")
+		}
+	}
+	out.PullRequest, out.Number = pr.URL, pr.Number
 	return out, nil
 }
 
-// commitBranch is the pull request's head branch for a verb on an agent.
+// commitBranch is the branch name of a verb on an agent, which every write
+// of it shares: each pull request's head is this name, HeadSeparator and a
+// suffix (Head); an older agent-manager used the name itself as the head.
 func commitBranch(verb, ns, name string) string {
 	return fmt.Sprintf("%s/%s-%s-%s", CommitDirectory, verb, ns, name)
+}
+
+// HeadSeparator ends an object's branch name before a write's suffix. No
+// part of the name carries it (Kubernetes names, verbs and slugs have no
+// underscore), so the prefix of one object never matches a head of another
+// whose name starts with the same characters (sre, sre-eu). It is not "/":
+// the branch of an older agent-manager, named like the object, would block
+// every ref below it.
+const HeadSeparator = "_"
+
+// Head is a write's own head branch: the object's branch name, the separator
+// and a random suffix. A new name is cut from the base, never from the
+// branch of an earlier pull request.
+func Head(object string) string {
+	// The suffix is for uniqueness, not secrecy; crypto/rand never fails.
+	suffix := make([]byte, 6)
+	_, _ = rand.Read(suffix)
+	return object + HeadSeparator + hex.EncodeToString(suffix)
+}
+
+// PullRequestsOf returns the open pull requests of an object's branch name,
+// sorted by number: those on a head of a write (the name, HeadSeparator and
+// a suffix), and the one on the name itself, the head an older agent-manager
+// opened. The lookup of the name can go once no pull request of an
+// agent-manager older than per-write heads is open on an installation
+// (giantswarm/agent-manager#385, giantswarm/agent-manager#433).
+func PullRequestsOf(ctx context.Context, remote GitHubRemote, repo commit.Repository, object string) ([]commit.PullRequest, error) {
+	prs, err := remote.FindPullRequestsByPrefix(ctx, repo, object+HeadSeparator)
+	if err != nil {
+		return nil, err
+	}
+	old, has, err := remote.FindPullRequest(ctx, repo, object)
+	if err != nil {
+		return nil, err
+	}
+	if has {
+		prs = append(prs, old)
+		slices.SortFunc(prs, func(a, b commit.PullRequest) int { return cmp.Compare(a.Number, b.Number) })
+	}
+	return prs, nil
+}
+
+// KeepFirst runs after a write opened own, a new pull request of object,
+// when its lookup found none open: two writes of the object at almost the
+// same time can each open one. The one with the lower number stays. When an
+// open pull request of the object has a lower number than own, the write
+// closes own (its branch stays, as a refused write's does) and KeepFirst
+// returns that one with lost true, and the error of the close, if any. A
+// pull request the write did not open is never closed. A failed lookup
+// keeps own and logs it on log (slog's default when nil): the write is
+// done, and a rare second pull request is the reviewer's to close.
+func KeepFirst(ctx context.Context, log *slog.Logger, remote GitHubRemote, repo commit.Repository, object string, own commit.PullRequest) (commit.PullRequest, bool, error) {
+	open, err := PullRequestsOf(ctx, remote, repo, object)
+	if err != nil {
+		if log == nil {
+			log = slog.Default()
+		}
+		log.WarnContext(ctx, "commit mode: the check for a second open pull request of the object failed; this write's pull request stays", "repository", repo.String(), "object", object, "pullRequest", own.URL, "error", err)
+		return commit.PullRequest{}, false, nil
+	}
+	for _, pr := range open {
+		if pr.Number < own.Number {
+			return pr, true, remote.Close(ctx, own, false)
+		}
+	}
+	return commit.PullRequest{}, false, nil
+}
+
+// RaceConflict answers a write that lost KeepFirst to first: what the
+// caller does while first is open (next), and that this call opened own at
+// the same time and closed it; when the close failed, it names both pull
+// requests and asks the caller to close own.
+func RaceConflict(what string, first, own commit.PullRequest, closeErr error, next string) error {
+	if closeErr != nil {
+		return fmt.Errorf("%w: the pull request %s for this %s is open, and this call opened %s for it at the same time; closing %s failed (%v): close %s yourself, then %s", ErrConflict, first.URL, what, own.URL, own.URL, closeErr, own.URL, next)
+	}
+	return fmt.Errorf("%w: the pull request %s for this %s is open: %s (this call opened %s at the same time and closed it)", ErrConflict, first.URL, what, next, own.URL)
 }
 
 // requireOwnFile refuses an agent named like the chart source in commit

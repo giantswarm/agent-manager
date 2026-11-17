@@ -8,6 +8,7 @@ import (
 	"github.com/giantswarm/gitops-commit/provenance"
 	"github.com/stretchr/testify/require"
 
+	"github.com/giantswarm/agent-manager/internal/agents"
 	"github.com/giantswarm/agent-manager/internal/identity"
 )
 
@@ -18,7 +19,7 @@ func TestHeadIsTheObjectNameAndASuffixOfItsOwn(t *testing.T) {
 	first, second := head(object), head(object)
 	require.NotEqual(t, first, second)
 	for _, h := range []string{first, second} {
-		suffix, ok := strings.CutPrefix(h, object+headSeparator)
+		suffix, ok := strings.CutPrefix(h, object+agents.HeadSeparator)
 		require.True(t, ok, h)
 		require.Len(t, suffix, 12)
 		require.Equal(t, -1, strings.IndexFunc(suffix, func(r rune) bool { return !strings.ContainsRune("0123456789abcdef", r) }), suffix)
