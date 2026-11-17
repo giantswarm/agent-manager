@@ -417,7 +417,11 @@ func (s *Service) helmReleaseGVR() schema.GroupVersionResource {
 // CreateAccess is the one question "may the caller create agents in ns":
 // create on Flux HelmReleases (of helmReleaseAPIVersion) in ns. create_agent
 // writes the HelmRelease as the caller, and helm-controller, not the caller,
-// writes the Agent, so this right decides whether a create succeeds.
+// writes the Agent. The agent chart's OCIRepository is not part of the
+// question: it is shared per namespace and its writer is the namespace's
+// keeper (agent-platform-operator in an organization namespace), so
+// agent-platform:editor holds no create on it (giantswarm/agent-platform#1267);
+// create_agent creates it as the caller only where it is still missing.
 // create_agent (requireCreate), get_info namespaces.managed and
 // list_organizations permissions.createAgents all ask it, so they answer
 // alike for the same caller and namespace.
