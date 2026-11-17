@@ -107,14 +107,15 @@ func (n *Namespaces) Organization(ctx context.Context, parent, name string) (*ap
 // giantswarm.io/organization, is not one. The answer is at most listTTL old:
 // concurrent callers share one list, and a failed list is not kept.
 func (n *Namespaces) List(ctx context.Context) ([]Namespace, error) {
-	n.mu.Lock()
-	if !n.at.IsZero() && n.now().Sub(n.at) < listTTL {
-		out := slices.Clone(n.listed)
-		n.mu.Unlock()
+	if out, ok := n.cached(); ok {
 		return out, nil
 	}
-	n.mu.Unlock()
 	ch := n.group.DoChan("list", func() (any, error) {
+		// A list that ended between the read above and this flight filled
+		// the cache: it answers.
+		if out, ok := n.cached(); ok {
+			return out, nil
+		}
 		shared, cancel := context.WithTimeout(context.WithoutCancel(ctx), listBudget)
 		defer cancel()
 		started := n.now()
@@ -136,6 +137,16 @@ func (n *Namespaces) List(ctx context.Context) ([]Namespace, error) {
 		}
 		return slices.Clone(r.Val.([]Namespace)), nil
 	}
+}
+
+// cached is the kept list while it is younger than listTTL.
+func (n *Namespaces) cached() ([]Namespace, bool) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.at.IsZero() || n.now().Sub(n.at) >= listTTL {
+		return nil, false
+	}
+	return slices.Clone(n.listed), true
 }
 
 // list reads the organization namespaces that selector selects from the API
