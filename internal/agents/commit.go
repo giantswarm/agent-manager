@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"slices"
 	"strings"
@@ -307,6 +308,7 @@ type agentCommit struct {
 	loc    commitLocation
 	remote GitHubRemote
 	gh     *identity.GitHub
+	log    *slog.Logger
 }
 
 func (s *Service) newCommit(ctx context.Context, loc commitLocation) (*agentCommit, error) {
@@ -314,7 +316,7 @@ func (s *Service) newCommit(ctx context.Context, loc commitLocation) (*agentComm
 	if err != nil {
 		return nil, err
 	}
-	return &agentCommit{loc: loc, remote: remote, gh: gh}, nil
+	return &agentCommit{loc: loc, remote: remote, gh: gh, log: s.log}, nil
 }
 
 func (c *agentCommit) file(kind, name string) string {
@@ -386,10 +388,20 @@ func (c *agentCommit) open(ctx context.Context, write map[string][]byte, remove 
 		return nil, commitError(c.gh, err)
 	}
 	pr := prs[0]
+	if len(open) > 0 && pr.Number != open[0].Number {
+		// The pull request found open was closed or merged after the lookup,
+		// so commit.Open opened a new one on its branch, which can carry the
+		// files of the closed one: this write closes it and asks for a call
+		// that cuts a head of its own.
+		if err := c.remote.Close(ctx, pr, false); err != nil {
+			return nil, fmt.Errorf("%w: the pull request %s of this agent was closed or merged while this call added to it, so this call opened %s on its branch, which can carry the closed one's files; closing %s failed (%v): close %s yourself, then call again", ErrConflict, open[0].URL, pr.URL, pr.URL, err, pr.URL)
+		}
+		return nil, fmt.Errorf("%w: the pull request %s of this agent was closed or merged while this call added to it, so this call opened %s on its branch and closed it: call again", ErrConflict, open[0].URL, pr.URL)
+	}
 	if len(open) == 0 {
 		// Another write of the agent may have opened its pull request since
 		// the lookup: the one with the lower number stays.
-		if first, lost, err := KeepFirst(ctx, c.remote, c.loc.Repository, object, pr); lost {
+		if first, lost, err := KeepFirst(ctx, c.log, c.remote, c.loc.Repository, object, pr); lost {
 			return nil, RaceConflict("agent", first, pr, err, "call again to add this change to it")
 		}
 	}
@@ -451,11 +463,15 @@ func PullRequestsOf(ctx context.Context, remote GitHubRemote, repo commit.Reposi
 // closes own (its branch stays, as a refused write's does) and KeepFirst
 // returns that one with lost true, and the error of the close, if any. A
 // pull request the write did not open is never closed. A failed lookup
-// keeps own: the write is done, and a rare second pull request is the
-// reviewer's to close.
-func KeepFirst(ctx context.Context, remote GitHubRemote, repo commit.Repository, object string, own commit.PullRequest) (commit.PullRequest, bool, error) {
+// keeps own and logs it on log (slog's default when nil): the write is
+// done, and a rare second pull request is the reviewer's to close.
+func KeepFirst(ctx context.Context, log *slog.Logger, remote GitHubRemote, repo commit.Repository, object string, own commit.PullRequest) (commit.PullRequest, bool, error) {
 	open, err := PullRequestsOf(ctx, remote, repo, object)
 	if err != nil {
+		if log == nil {
+			log = slog.Default()
+		}
+		log.WarnContext(ctx, "commit mode: the check for a second open pull request of the object failed; this write's pull request stays", "repository", repo.String(), "object", object, "pullRequest", own.URL, "error", err)
 		return commit.PullRequest{}, false, nil
 	}
 	for _, pr := range open {

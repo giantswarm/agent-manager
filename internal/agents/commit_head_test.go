@@ -2,6 +2,7 @@ package agents
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -153,4 +154,63 @@ func TestTwoAgentWritesAtTheSameTimeLeaveOnePullRequest(t *testing.T) {
 	require.Len(t, prs, 2)
 	require.False(t, prs[0].Closed, "the other write's pull request stays open")
 	require.True(t, prs[1].Closed, "this write closed its own")
+}
+
+// closingForge closes the open pull request of a branch when this write
+// brings that branch up to date: a reviewer closed it after the lookup.
+type closingForge struct {
+	*commit.Fake
+	closing commit.PullRequest
+}
+
+func (r *closingForge) CreateBranch(ctx context.Context, repo commit.Repository, branch, base string) error {
+	if branch == r.closing.Head {
+		if err := r.Close(ctx, r.closing, false); err != nil {
+			return err
+		}
+	}
+	return r.Fake.CreateBranch(ctx, repo, branch, base)
+}
+
+// A pull request found open and closed before the write adds to it is not
+// reopened as a new pull request on its branch: the write closes the one it
+// opened there and asks for a call again, which cuts a head of its own.
+func TestAgentWriteToAPullRequestClosedMeanwhileIsRefused(t *testing.T) {
+	f, fake, ctx := gitOpsFixture(t, true)
+	pr := earlierPullRequest(t, fake, Head(gitopsUpdate))
+	forge := &closingForge{Fake: fake, closing: pr}
+	f.svc.cfg.GitHub = func(string) (GitHubRemote, error) { return forge, nil }
+	_, err := updateGitops(t, f, ctx, "reviews")
+	require.ErrorIs(t, err, ErrConflict)
+	require.ErrorContains(t, err, "call again")
+	for _, p := range fake.PullRequests() {
+		require.True(t, p.Closed, p.URL)
+	}
+
+	res, err := updateGitops(t, f, ctx, "reviews")
+	require.NoError(t, err)
+	require.NotEqual(t, pr.Head, res.Commit.Branch)
+	require.Equal(t, []string{"agents/agent-manager/gitops.yaml"}, changedFiles(fake, res.Commit.Branch))
+}
+
+// failingLookupForge fails every prefix lookup after the write opened its
+// pull request.
+type failingLookupForge struct{ *commit.Fake }
+
+func (r *failingLookupForge) OpenPullRequest(ctx context.Context, repo commit.Repository, head, base, title, body string) (commit.PullRequest, error) {
+	pr, err := r.Fake.OpenPullRequest(ctx, repo, head, base, title, body)
+	r.Fail[commit.OpFindByPrefix] = errors.New("GitHub is down")
+	return pr, err
+}
+
+// A failed check for a second pull request keeps the write's own: the
+// write is done.
+func TestAgentWriteKeepsItsPullRequestWhenTheSecondLookupFails(t *testing.T) {
+	f, fake, ctx := gitOpsFixture(t, true)
+	f.svc.cfg.GitHub = func(string) (GitHubRemote, error) { return &failingLookupForge{fake}, nil }
+	res, err := updateGitops(t, f, ctx, "reviews")
+	require.NoError(t, err)
+	require.Len(t, fake.PullRequests(), 1)
+	require.Equal(t, fake.PullRequests()[0].URL, res.Commit.PullRequest)
+	require.False(t, fake.PullRequests()[0].Closed)
 }

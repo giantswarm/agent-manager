@@ -542,7 +542,9 @@ standard manifests a kubectl or GitOps user would apply, returns them on
   without a suffix that an older agent-manager opened, a write adds its
   commit to that pull request. When two writes arrive at almost the same
   time and each opens one, the lower number stays and the other write closes
-  its own and answers `conflict`: call again to add the change. The result carries
+  its own and answers `conflict`: call again to add the change. agent-manager
+  deletes no branch: turn on "Automatically delete head branches" in the
+  repository's settings, or the branch of each merged pull request stays. The result carries
   `commit: {repository, base, directory, kustomization, prune, branch, files:
   [{path, action, content (dry run)}], pullRequest, number, author}`.
 

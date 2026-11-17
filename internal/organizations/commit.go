@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"path"
 	"slices"
 	"strings"
@@ -158,6 +159,7 @@ type orgCommit struct {
 	cfg    *CommitConfig
 	remote GitHubRemote
 	gh     *identity.GitHub
+	log    *slog.Logger
 }
 
 func (s *Service) newCommit(ctx context.Context) (*orgCommit, error) {
@@ -177,7 +179,7 @@ func (s *Service) newCommit(ctx context.Context) (*orgCommit, error) {
 	if err != nil {
 		return nil, commitError(gh, err)
 	}
-	return &orgCommit{cfg: s.cfg.Commit, remote: remote, gh: gh}, nil
+	return &orgCommit{cfg: s.cfg.Commit, remote: remote, gh: gh, log: s.log}, nil
 }
 
 // commitError answers a token GitHub refused with what renews it, and
@@ -356,7 +358,7 @@ func (c *orgCommit) open(ctx context.Context, changes []fileChange, object, titl
 	// The guard and land are not one step: another write of the object may
 	// have opened its pull request since. The one with the lower number
 	// stays; this write closes its own and answers as the guard would.
-	if first, lost, err := agents.KeepFirst(ctx, c.remote, c.cfg.Objects.Repository, object, pr); lost {
+	if first, lost, err := agents.KeepFirst(ctx, c.log, c.remote, c.cfg.Objects.Repository, object, pr); lost {
 		return nil, agents.RaceConflict("object", first, pr, err, "merge or close it first, then call again")
 	}
 	out.PullRequest, out.Number = pr.URL, pr.Number
