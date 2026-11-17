@@ -39,6 +39,7 @@ import (
 	"github.com/giantswarm/agent-manager/internal/kube"
 	"github.com/giantswarm/agent-manager/internal/kube/kubetest"
 	"github.com/giantswarm/agent-manager/internal/organizations"
+	"github.com/giantswarm/agent-manager/internal/tags/tagstest"
 )
 
 var (
@@ -113,7 +114,7 @@ func newOrgFixtureWith(t *testing.T, configure func(*organizations.Config), objs
 		user: authenticationv1.UserInfo{Username: "alice@example.com"}}
 	f.dyn = dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{
 		orgGVR: "AgentPlatformOrganizationList", rbGVR: "RoleBindingList", mcGVR: "ModelConfigList", connGVR: "RemoteMCPServerList",
-		egressGVR: "EgressPolicyList", orgAgentGV: "AgentList", hrGVR: "HelmReleaseList",
+		egressGVR: "EgressPolicyList", orgAgentGV: "AgentList", hrGVR: "HelmReleaseList", ociGVR: "OCIRepositoryList",
 	}, objs...)
 	f.dryRuns = kubetest.AnswerDryRuns(f.dyn)
 	answerCredentialResourceVersions(t, f.dyn)
@@ -567,11 +568,11 @@ func TestListOrganizationsByTheCallersAccess(t *testing.T) {
 	other := organization("org-other", "treasury", nil)
 	_ = unstructured.SetNestedField(other.Object, "agents-treasury-z9y8x", "status", "namespace")
 	f := newOrgFixture(t, lost, billing, other)
-	// A member of payments only; the manager of billing only; treasury
-	// neither.
+	// A member of payments only, who may create agents there; the manager of
+	// billing only; treasury neither.
 	f.deny = func(ns, verb, resource, name string) bool {
 		switch {
-		case resource == "agents":
+		case resource == "agents", resource == "helmreleases":
 			return ns != orgNS
 		case verb == "update" && resource == "agentplatformorganizations":
 			return ns != "org-acme" || name != "billing"
@@ -610,16 +611,16 @@ func TestListOrganizationsByTheCallersAccess(t *testing.T) {
 	assert.NotContains(t, text, "agents-", "a refused token learns no organization namespace")
 }
 
-// createAgents is the caller's right to create Agents in the organization
-// namespace, asked as the caller, whatever role grants it: a user is a member
-// who may not create agents, an editor creates them and does not manage the
-// organization, and an admin who also manages it may do all three. An
-// organization without a namespace yet has no namespace to create in.
+// createAgents is the caller's right to create the HelmRelease of an agent in
+// the organization namespace, asked as the caller, whatever role grants it: a
+// user is a member who may not create agents, an editor creates them and does
+// not manage the organization, and an admin who also manages it may do all
+// three. An organization without a namespace yet has no namespace to create in.
 func TestListOrganizationsSaysWhoMayCreateAgents(t *testing.T) {
 	roles := map[string]func(ns, verb, resource, name string) bool{
 		// agent-platform:user reads and runs the agents of its organization.
 		"user": func(_, verb, resource, _ string) bool {
-			return resource == "agentplatformorganizations" || (resource == "agents" && verb != "list")
+			return resource == "agentplatformorganizations" || resource == "helmreleases" || (resource == "agents" && verb != "list")
 		},
 		// agent-platform:editor also writes them.
 		"editor": func(_, _, resource, _ string) bool { return resource == "agentplatformorganizations" },
@@ -645,8 +646,8 @@ func TestListOrganizationsSaysWhoMayCreateAgents(t *testing.T) {
 			require.Len(t, listed, 1, text)
 			assert.Equal(t, tc.want, listed[0].(map[string]any)["permissions"])
 			assert.Contains(t, reviews(), authorizationv1.ResourceAttributes{
-				Namespace: orgNS, Verb: "create", Group: orgAgentGV.Group, Resource: orgAgentGV.Resource,
-			}, "createAgents asks for the kagent Agents of the organization namespace")
+				Namespace: orgNS, Verb: "create", Group: hrGVR.Group, Resource: hrGVR.Resource,
+			}, "createAgents asks for the HelmReleases of the organization namespace")
 		})
 	}
 
@@ -666,6 +667,66 @@ func TestListOrganizationsSaysWhoMayCreateAgents(t *testing.T) {
 	})
 }
 
+// "May the caller create agents here" is one question: create on the
+// HelmRelease create_agent writes, as the caller, in the organization
+// namespace. A binding that grants only one of create on HelmReleases and
+// create on Agents gives the same answer in list_organizations'
+// createAgents, in create_agent and in get_info's namespaces.managed.
+func TestCreateAgentsIsTheRightCreateAgentNeeds(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		// denied is the one resource the binding does not grant create on.
+		denied string
+		want   bool
+	}{
+		{"agents only", "helmreleases", false},
+		{"helmreleases only", "agents", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newOrgFixture(t, organization("org-acme", "payments", nil),
+				&unstructured.Unstructured{Object: map[string]any{
+					"apiVersion": "api.kagent.dev/v1alpha3", "kind": "ModelConfig",
+					"metadata": map[string]any{"name": "own", "namespace": orgNS},
+					"spec":     map[string]any{"provider": "Anthropic", "model": "claude-sonnet-4-6"},
+				}})
+			f.deny = func(_, verb, resource, _ string) bool { return verb == "create" && resource == tc.denied }
+			// The agent tools act as the same caller, with the organization
+			// namespaces managed.
+			svc := agents.New(f.provider, embeddedChart{}, nil, agents.InProcessPinner(pinner{}), agents.Config{
+				DefaultNamespace: "kagent", Version: "test", Tags: tagstest.Rule(), Tenants: f.cfg.Namespaces,
+			}, nil)
+			f.srv = NewMCPServer(svc, "test", WithOrganizations(f.orgs), WithLifecycle(t.Context()))
+
+			text, isErr := f.call(t, ToolListOrganizations, nil)
+			require.False(t, isErr, text)
+			listed := decode(t, text)["organizations"].([]any)
+			require.Len(t, listed, 1, text)
+			assert.Equal(t, tc.want, listed[0].(map[string]any)["permissions"].(map[string]any)["createAgents"], text)
+
+			text, isErr = f.call(t, ToolGetInfo, nil)
+			require.False(t, isErr, text)
+			managed := decode(t, text)["namespaces"].(map[string]any)["managed"]
+			if tc.want {
+				assert.Contains(t, managed, orgNS, text)
+			} else {
+				assert.NotContains(t, managed, orgNS, text)
+			}
+
+			text, isErr = f.call(t, ToolCreateAgent, map[string]any{
+				"namespace": orgNS, "name": "sre", "modelConfig": "own", "toolset": []string{"preset:read-only"},
+			})
+			if !tc.want {
+				require.True(t, isErr, text)
+				assert.True(t, strings.HasPrefix(text, "forbidden:"), text)
+				assert.Nil(t, f.get(t, hrGVR, orgNS, "sre"), "nothing is written")
+				return
+			}
+			require.False(t, isErr, text)
+			assert.NotNil(t, f.get(t, hrGVR, orgNS, "sre"), "the HelmRelease is written in the organization namespace")
+		})
+	}
+}
+
 // A failed createAgents review (an error, not a denial) leaves createAgents
 // out: not known, so the Dev Portal does not show an editor as unable to
 // create agents. A denial answers false and an allowance true.
@@ -678,7 +739,7 @@ func TestListOrganizationsLeavesOutCreateAgentsItCouldNotAsk(t *testing.T) {
 		{"failed", func(f *orgFixture) {
 			f.typed.PrependReactor("create", "selfsubjectaccessreviews", func(a k8stesting.Action) (bool, runtime.Object, error) {
 				ra := a.(k8stesting.CreateAction).GetObject().(*authorizationv1.SelfSubjectAccessReview).Spec.ResourceAttributes
-				if ra.Verb == "create" && ra.Resource == "agents" {
+				if ra.Verb == "create" && ra.Resource == "helmreleases" {
 					return true, nil, apierrors.NewInternalError(errors.New("etcd timeout"))
 				}
 				return false, nil, nil
@@ -689,7 +750,7 @@ func TestListOrganizationsLeavesOutCreateAgentsItCouldNotAsk(t *testing.T) {
 		{"evaluation error", func(f *orgFixture) {
 			f.typed.PrependReactor("create", "selfsubjectaccessreviews", func(a k8stesting.Action) (bool, runtime.Object, error) {
 				review := a.(k8stesting.CreateAction).GetObject().(*authorizationv1.SelfSubjectAccessReview)
-				if ra := review.Spec.ResourceAttributes; ra.Verb == "create" && ra.Resource == "agents" {
+				if ra := review.Spec.ResourceAttributes; ra.Verb == "create" && ra.Resource == "helmreleases" {
 					review.Status = authorizationv1.SubjectAccessReviewStatus{EvaluationError: "webhook timeout"}
 					return true, review, nil
 				}
@@ -697,7 +758,7 @@ func TestListOrganizationsLeavesOutCreateAgentsItCouldNotAsk(t *testing.T) {
 			})
 		}, map[string]any{"manage": true, "member": true}},
 		{"denied", func(f *orgFixture) {
-			f.deny = func(_, verb, resource, _ string) bool { return resource == "agents" && verb == "create" }
+			f.deny = func(_, verb, resource, _ string) bool { return resource == "helmreleases" && verb == "create" }
 		}, map[string]any{"manage": true, "member": true, "createAgents": false}},
 		{"allowed", func(*orgFixture) {}, map[string]any{"manage": true, "member": true, "createAgents": true}},
 	} {

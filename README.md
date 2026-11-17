@@ -710,9 +710,11 @@ The organization tools (every name holds `organization`):
   AgentPlatformOrganizations; SelfSubjectAccessReviews as the caller decide
   each one's `permissions`: `manage` (update it in its parent), `member`
   (list the Agents of its namespace, which every organization role grants)
-  and `createAgents` (create Agents in its namespace, which
-  `agent-platform:editor` and `agent-platform:admin` grant and
-  `agent-platform:user` does not; false while it has no namespace). An
+  and `createAgents` (create on Flux HelmReleases in its namespace, the
+  review `create_agent` and `get_info` `namespaces.managed` ask, because
+  `create_agent` writes the HelmRelease as the caller and helm-controller
+  writes the Agent; `agent-platform:editor` and `agent-platform:admin` grant
+  it and `agent-platform:user` does not; false while it has no namespace). An
   organization with neither `manage` nor `member` is not listed; one the
   caller only belongs to carries its status alone (namespace, `orphaned`,
   `deleting`), and one the caller manages also its summary (`organization`).
