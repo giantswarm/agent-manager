@@ -1,6 +1,3 @@
-{{- if .Values.oauth.dex.allowPrivateURLs }}
-{{- fail "oauth.dex.allowPrivateURLs=true is no longer supported: remove it; Dex reaches private addresses and follows the proxy environment without it" }}
-{{- end }}
 {{- $githubTokenExchange := include "agent-manager.githubTokenExchange" . }}
 apiVersion: apps/v1
 kind: Deployment
@@ -195,6 +192,9 @@ spec:
             {{- if eq .Values.oauth.provider "dex" }}
             - --dex-issuer-url={{ include "agent-manager.oauthDexIssuerURL" . }}
             - --dex-client-id={{ include "agent-manager.oauthDexClientID" . }}
+            {{- if .Values.oauth.dex.allowPrivateURLs }}
+            - --allow-private-oauth-urls=true
+            {{- end }}
             {{- if include "agent-manager.oauthDexCASecretName" . }}
             - --dex-ca-file=/etc/agent-manager/idp-ca/{{ include "agent-manager.oauthDexCASecretKey" . }}
             {{- end }}
