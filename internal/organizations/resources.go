@@ -320,6 +320,7 @@ func (s *Service) SetModel(ctx context.Context, req ModelRequest) (*ResourceResu
 		if err = s.landResource(ctx, w, writes, res, "model-"+req.Name, "chore(organizations): set model "+req.Name); err != nil {
 			return nil, createOnly(err, req.Create, "ModelConfig", ns, req.Name)
 		}
+		s.confirmDefaultMark(ctx, c, gvr, req, res, obj)
 		s.logModelWritten(ctx, req, res, obj)
 		return res, nil
 	}
@@ -355,8 +356,47 @@ func (s *Service) SetModel(ctx context.Context, req ModelRequest) (*ResourceResu
 	if err = s.landResource(ctx, w, writes, res, "model-"+req.Name, "chore(organizations): set model "+req.Name); err != nil {
 		return nil, createOnly(err, req.Create, "ModelConfig", ns, req.Name)
 	}
+	s.confirmDefaultMark(ctx, c, gvr, req, res, obj)
 	s.logModelWritten(ctx, req, res, obj)
 	return res, nil
+}
+
+// confirmDefaultMark reads the namespace's models again after a create that
+// wrote the default mark live (apply mode, no dry run, no pending credential
+// form; the credential save confirms that one). In commit mode the
+// operator's DefaultModelConfigured condition says it.
+func (s *Service) confirmDefaultMark(ctx context.Context, c kube.Client, gvr schema.GroupVersionResource, req ModelRequest, res *ResourceResult, obj *unstructured.Unstructured) {
+	if !res.Created || req.DryRun || res.Commit != nil || res.Pending || !agents.IsMarkedDefault(obj) {
+		return
+	}
+	if note := s.doubleMarkNote(ctx, c, gvr, req.Namespace, req.Name); note != "" {
+		res.DefaultModel, res.Note = "", note
+	}
+}
+
+// doubleMarkNote reads the models of ns again after the model name was
+// created with the default mark. Two first models created at the same time
+// both see no mark and both write one; the namespace then has no default,
+// and the note says so and how to choose one. It is empty when one model
+// carries the mark, and when the read fails: the write landed, so a failed
+// read is logged and changes nothing.
+func (s *Service) doubleMarkNote(ctx context.Context, c kube.Client, gvr schema.GroupVersionResource, ns, name string) string {
+	items, err := s.existing(ctx, c, ns, gvr, "ModelConfigs")
+	if err != nil {
+		s.log.Warn("the models could not be read again after a new model took the default mark", identity.LogAttr(ctx), fieldNamespace, ns, "name", name, "error", err)
+		return ""
+	}
+	var marks []string
+	for i := range items {
+		if agents.IsMarkedDefault(&items[i]) {
+			marks = append(marks, items[i].GetName())
+		}
+	}
+	if len(marks) < 2 {
+		return ""
+	}
+	slices.Sort(marks)
+	return fmt.Sprintf("another model was created at the same time: the namespace now has %d models marked as its default (%s), so it has none: set_organization_model with default true on one of them", len(marks), strings.Join(marks, ", "))
 }
 
 func (s *Service) logModelWritten(ctx context.Context, req ModelRequest, res *ResourceResult, obj *unstructured.Unstructured) {

@@ -301,6 +301,33 @@ func TestCredentialOperationCreatesAndRetriesWithoutAnotherWrite(t *testing.T) {
 	require.Equal(t, organizations.CredentialPresent, retry.Credentials[0].State)
 }
 
+// A first model whose credential the form saves reads the models again after
+// the save: a rival first model created meanwhile is named in the answer, and
+// a save alone gives no note.
+func TestCredentialSaveNamesADoubleDefaultMark(t *testing.T) {
+	for _, race := range []bool{false, true} {
+		t.Run(fmt.Sprintf("race=%v", race), func(t *testing.T) {
+			fixture := newOrgFixture(t)
+			result := prepareModelOperation(t, fixture, nil)
+			if race {
+				rivalCreate(t, fixture, "gpt")
+			}
+			confirmation := confirmOperation(t, fixture, result.CredentialOperation)
+			status, answer, _ := operationHTTP(t, fixture, http.MethodPost, result.CredentialOperation, confirmation.Version, valuesBody(t, result, "synthetic-credential"), nil)
+			require.Equal(t, http.StatusOK, status, answer)
+			var saved organizations.ResourceResult
+			require.NoError(t, json.Unmarshal([]byte(answer), &saved))
+			if !race {
+				require.Empty(t, saved.Note)
+				require.Equal(t, "claude", saved.DefaultModel)
+				return
+			}
+			require.Contains(t, saved.Note, "2 models marked as its default (claude, gpt)")
+			require.Empty(t, saved.DefaultModel)
+		})
+	}
+}
+
 func TestCredentialOperationOwnershipAndConfirmation(t *testing.T) {
 	for _, scenario := range []string{"other subject", "other issuer", "delegated actor", "wrong version", "missing confirmation", "different Secret", "empty credential", "extra body", "trailing JSON", "cancelled", "stale consumer", "write denied", "multi-key Secret", "admission leaks value"} {
 		t.Run(scenario, func(t *testing.T) {

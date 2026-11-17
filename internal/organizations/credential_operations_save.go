@@ -371,6 +371,12 @@ func (s *Service) saveCredentialOperation(ctx context.Context, id, version strin
 	}
 	step = "record result"
 	completeCredentialOperation(operation)
+	if operation.Mode != agents.ModeCommit {
+		if note := s.confirmSavedDefaultMark(ctx, caller, operation); note != "" {
+			operation.Result.DefaultModel = ""
+			notes = append(notes, note)
+		}
+	}
 	operation.Result.Note = strings.Join(slices.DeleteFunc(append([]string{operation.Result.Note}, notes...), func(note string) bool { return note == "" }), "; ")
 	if err := s.cfg.CredentialOperations.put(record, operation); err != nil {
 		return nil, err
@@ -545,6 +551,17 @@ func (s *Service) recoverAppliedCredential(ctx context.Context, operation *crede
 		return nil, err
 	}
 	return &operation.Result, nil
+}
+
+// confirmSavedDefaultMark is doubleMarkNote for a model that the save created
+// with the default mark.
+func (s *Service) confirmSavedDefaultMark(ctx context.Context, caller kube.Client, operation *credentialOperation) string {
+	for _, planned := range operation.Writes {
+		if planned.Kind == "ModelConfig" && planned.Action == opCreate && agents.IsMarkedDefault(unstructuredOf(planned.Object)) {
+			return s.doubleMarkNote(ctx, caller, planned.Resource, operation.Namespace.Name, planned.Name)
+		}
+	}
+	return ""
 }
 
 func completeCredentialOperation(operation *credentialOperation) {
