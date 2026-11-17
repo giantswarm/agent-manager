@@ -373,14 +373,13 @@ func (s *Service) creatableNamespaces(ctx context.Context) []string {
 	if err != nil {
 		return []string{}
 	}
-	gvr := s.helmReleaseGVR()
 	allowed := make([]bool, len(managed))
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(8)
 	for i, ns := range managed {
 		g.Go(func() error {
 			review := &authorizationv1.SelfSubjectAccessReview{Spec: authorizationv1.SelfSubjectAccessReviewSpec{
-				ResourceAttributes: &authorizationv1.ResourceAttributes{Namespace: ns, Verb: verbCreate, Group: gvr.Group, Resource: gvr.Resource},
+				ResourceAttributes: s.createAccess(ns),
 			}}
 			res, err := c.Typed().AuthorizationV1().SelfSubjectAccessReviews().Create(gctx, review, metav1.CreateOptions{})
 			if err != nil {
@@ -413,6 +412,23 @@ func gvrFor(apiVersion, resource string) schema.GroupVersionResource {
 
 func (s *Service) helmReleaseGVR() schema.GroupVersionResource {
 	return gvrFor(s.cfg.Compose.HelmReleaseAPIVersion, "helmreleases")
+}
+
+// CreateAccess is the one question "may the caller create agents in ns":
+// create on Flux HelmReleases (of helmReleaseAPIVersion) in ns. create_agent
+// writes the HelmRelease as the caller, and helm-controller, not the caller,
+// writes the Agent, so this right decides whether a create succeeds.
+// create_agent (requireCreate), get_info namespaces.managed and
+// list_organizations permissions.createAgents all ask it, so they answer
+// alike for the same caller and namespace.
+func CreateAccess(helmReleaseAPIVersion, ns string) authorizationv1.ResourceAttributes {
+	gvr := gvrFor(helmReleaseAPIVersion, "helmreleases")
+	return authorizationv1.ResourceAttributes{Namespace: ns, Verb: verbCreate, Group: gvr.Group, Resource: gvr.Resource}
+}
+
+func (s *Service) createAccess(ns string) *authorizationv1.ResourceAttributes {
+	attributes := CreateAccess(s.cfg.Compose.HelmReleaseAPIVersion, ns)
+	return &attributes
 }
 
 func (s *Service) ociRepositoryGVR() schema.GroupVersionResource {
@@ -1245,7 +1261,7 @@ func (s *Service) ValidateCreate(ctx context.Context, spec Spec) (*ValidateResul
 func (s *Service) requireCreate(ctx context.Context, st *site, name string) error {
 	gvr := s.helmReleaseGVR()
 	review := &authorizationv1.SelfSubjectAccessReview{Spec: authorizationv1.SelfSubjectAccessReviewSpec{
-		ResourceAttributes: &authorizationv1.ResourceAttributes{Namespace: st.fluxNS, Verb: verbCreate, Group: gvr.Group, Resource: gvr.Resource},
+		ResourceAttributes: s.createAccess(st.fluxNS),
 	}}
 	res, err := st.fluxClient.Typed().AuthorizationV1().SelfSubjectAccessReviews().Create(ctx, review, metav1.CreateOptions{})
 	if err != nil {

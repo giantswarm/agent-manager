@@ -84,7 +84,8 @@ type Config struct {
 	// RemoteMCPServers, EgressPolicies and Agents.
 	KagentAPIVersion string
 	// HelmReleaseAPIVersion is the helm.toolkit.fluxcd.io version the delete
-	// preview counts HelmReleases in.
+	// preview counts HelmReleases in, and whose create list_organizations
+	// asks for permissions.createAgents.
 	HelmReleaseAPIVersion string
 	// ReadyTimeout is how long a create waits for the organization's Ready
 	// before it leaves the first admins to a second call; ReadyPoll how often

@@ -29,12 +29,14 @@ type Permissions struct {
 	// organization role grants. A failed review answers false, as for
 	// Manage.
 	Member bool `json:"member"`
-	// CreateAgents: create Agents in its organization namespace, which
-	// agent-platform:editor and agent-platform:admin grant and
-	// agent-platform:user does not. False while it has no namespace; nil,
-	// and left out of the answer, when its review failed: not known. It asks
-	// for the Agent, the resource a New agent makes; create_agent writes its
-	// HelmRelease, which the same roles grant.
+	// CreateAgents: create agents in its organization namespace, asked as
+	// create on Flux HelmReleases (helm.toolkit.fluxcd.io) there: create_agent
+	// writes the agent's HelmRelease in the organization namespace as the
+	// caller, and helm-controller writes the Agent. It is the review
+	// create_agent and get_info namespaces.managed ask (agents.CreateAccess),
+	// so the three agree. agent-platform:editor and agent-platform:admin grant
+	// it and agent-platform:user does not. False while it has no namespace;
+	// nil, and left out of the answer, when its review failed: not known.
 	CreateAgents *bool `json:"createAgents,omitempty"`
 }
 
@@ -121,9 +123,7 @@ func (s *Service) List(ctx context.Context, parent string) (*Listing, error) {
 			ask(&p.Member, authorizationv1.ResourceAttributes{
 				Namespace: ns, Verb: "list", Group: agentsGVR.Group, Resource: agentsGVR.Resource,
 			})
-			askKnown(&p.CreateAgents, authorizationv1.ResourceAttributes{
-				Namespace: ns, Verb: "create", Group: agentsGVR.Group, Resource: agentsGVR.Resource,
-			})
+			askKnown(&p.CreateAgents, agents.CreateAccess(s.cfg.HelmReleaseAPIVersion, ns))
 		} else {
 			p.CreateAgents = new(bool)
 		}
