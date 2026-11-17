@@ -2,8 +2,6 @@ package organizations
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"path"
@@ -355,6 +353,12 @@ func (c *orgCommit) open(ctx context.Context, changes []fileChange, object, titl
 	if err != nil {
 		return nil, err
 	}
+	// The guard and land are not one step: another write of the object may
+	// have opened its pull request since. The one with the lower number
+	// stays; this write closes its own and answers as the guard would.
+	if first, lost, err := agents.KeepFirst(ctx, c.remote, c.cfg.Objects.Repository, object, pr); lost {
+		return nil, agents.RaceConflict("object", first, pr, err, "merge or close it first, then call again")
+	}
 	out.PullRequest, out.Number = pr.URL, pr.Number
 	return out, nil
 }
@@ -420,43 +424,22 @@ func branch(verb, parent, name string) string {
 	return fmt.Sprintf("%s/%s-%s-%s", commitBranchPrefix, verb, parent, name)
 }
 
-// headSeparator ends an object's branch name before a write's suffix. No
-// part of the name carries it (Kubernetes names, verbs and slugs have no
-// underscore), so the prefix of one object never matches a head of another
-// whose name starts with the same characters (model-a, model-ab). It is not
-// "/": the branch of an older agent-manager, named like the object, would
-// block every ref below it.
-const headSeparator = "_"
+// head is a write's own head branch (agents.Head): the object's branch
+// name, agents.HeadSeparator and a random suffix.
+func head(object string) string { return agents.Head(object) }
 
-// head is a write's own head branch: the object's branch name, the
-// separator and a random suffix. A new name per write is cut from the base,
-// never from the branch of an earlier pull request.
-func head(object string) string {
-	// The suffix is for uniqueness, not secrecy; crypto/rand never fails.
-	suffix := make([]byte, 6)
-	_, _ = rand.Read(suffix)
-	return object + headSeparator + hex.EncodeToString(suffix)
-}
-
-// openPullRequest finds an open pull request of the object's branch name:
-// on a head of a write (the name, the separator and a suffix), or on the
-// name itself, the head an older agent-manager opened. The lookup of the
-// name can go once no pull request of an agent-manager older than this
-// change is open on an installation (giantswarm/agent-manager#385).
+// openPullRequest finds the open pull request of the object's branch name
+// with the lowest number (agents.PullRequestsOf): on a head of a write, or
+// on the name itself, the head an older agent-manager opened.
 func (c *orgCommit) openPullRequest(ctx context.Context, object string) (commit.PullRequest, bool, error) {
-	repo := c.cfg.Objects.Repository
-	prs, err := c.remote.FindPullRequestsByPrefix(ctx, repo, object+headSeparator)
+	prs, err := agents.PullRequestsOf(ctx, c.remote, c.cfg.Objects.Repository, object)
 	if err != nil {
 		return commit.PullRequest{}, false, commitError(c.gh, err)
 	}
-	if len(prs) > 0 {
-		return prs[0], true, nil
+	if len(prs) == 0 {
+		return commit.PullRequest{}, false, nil
 	}
-	pr, has, err := c.remote.FindPullRequest(ctx, repo, object)
-	if err != nil {
-		return commit.PullRequest{}, false, commitError(c.gh, err)
-	}
-	return pr, has, nil
+	return prs[0], true, nil
 }
 
 // manifest renders obj as the file Flux applies: no status, no
