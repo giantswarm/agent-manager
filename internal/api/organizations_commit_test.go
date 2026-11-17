@@ -809,8 +809,18 @@ func TestAMergedDeleteThatDidNotRemoveTheFileErasesNothing(t *testing.T) {
 			"kustomization.yaml": "resources:\n  - github.com/example/orgs//shared/orgs?ref=v1\n",
 		}, `resources entry "github.com/example/orgs//shared/orgs?ref=v1" is a remote`),
 		leavingOverlay("a sibling overlay loads a path that names nothing under the objects path", map[string]string{
-			"kustomization.yaml": "resources:\n  - github.com/example/orgs/shared/orgs?ref=v1\n",
-		}, `resources entry "github.com/example/orgs/shared/orgs?ref=v1" names nothing under the objects path, so Kustomize loads it as a remote or fails on it`),
+			"kustomization.yaml": "resources:\n  - example.org/orgs/shared?ref=v1\n",
+		}, `resources entry "example.org/orgs/shared?ref=v1" names nothing under the objects path, so Kustomize loads it as a remote or fails on it`),
+		leavingOverlay("a sibling overlay loads a github.com remote that is also a local directory", map[string]string{
+			"kustomization.yaml":                         "resources:\n  - github.com/example/orgs/shared\n",
+			"github.com/example/orgs/shared/config.yaml": "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: settings\n",
+		}, `resources entry "github.com/example/orgs/shared" is a remote`),
+		leavingOverlay("a sibling overlay loads an SSH remote", map[string]string{
+			"kustomization.yaml": "resources:\n  - git@github.com:example/orgs.git\n",
+		}, `resources entry "git@github.com:example/orgs.git" is a remote`),
+		leavingOverlay("a sibling overlay loads an absolute path", map[string]string{
+			"kustomization.yaml": "resources:\n  - /shared/orgs\n",
+		}, `resources entry "/shared/orgs" leaves the objects path`),
 		leavingOverlay("a sibling overlay loads components from outside the objects path", map[string]string{
 			"kustomization.yaml": "components:\n  - ../../../../../shared/orgs\n",
 		}, `components entry "../../../../../shared/orgs" leaves the objects path`),

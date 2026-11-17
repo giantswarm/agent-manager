@@ -189,7 +189,7 @@ make it that organization:
 
 | The kustomization has | The documents that count |
 | --- | --- |
-| `namespace: <parent>`, or a `namespace` the scan cannot read: SOPS-encrypted (`ENC[...]`) or with a variable (`${...}`) that Flux's post-build substitution may replace | a document of `<name>` in any namespace |
+| `namespace: <parent>`, or a `namespace` the scan cannot read: SOPS-encrypted (`ENC[...]`), or with a variable that Flux's post-build substitution (`${...}`) or a Kustomize var (`$(...)`) may replace | a document of `<name>` in any namespace |
 | `namespace` with another value in clear text | none: Kustomize writes that value, which is not `<parent>` |
 | `namePrefix` or `nameSuffix` | a document of `<parent>` whose own name is a part of `<name>`: a prefix or a suffix only adds text |
 | a non-empty `transformers`, `patches`, `patchesJson6902`, `patchesStrategicMerge` or `replacements` | every document: these can set any namespace and any name |
@@ -206,8 +206,10 @@ kustomization's keys in any case (`Patches:` is `patches:`), as Kustomize does.
 
 The scan reads only the files under the objects path. A kustomization there whose
 `resources`, `components` or `bases` entry loads files from elsewhere refuses the
-erase, whatever those files hold: a remote entry (it holds `://` or `//`), a path that
-is not under the objects path once joined with the kustomization's directory, or a
+erase, whatever those files hold: a remote entry (it holds `://` or `//`, or it has
+a remote form such as `github.com/owner/repo/path` or `git@host:owner/repo`), an
+absolute path, a path that is not under the objects path once joined with the
+kustomization's directory, or a
 path that names no file or directory under the objects path, which Kustomize then
 loads as a remote or fails on. An entry that stays under the objects path, such as
 `../../base` from a sibling overlay, is read as above and refuses nothing by itself

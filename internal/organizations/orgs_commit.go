@@ -320,14 +320,15 @@ const nextDelete = "then call delete_organization again with mode commit and no 
 // re-creates the object only through a kustomization under the objects path
 // that loads it: such an entry (leavingEntries) refuses the erase, since the
 // scan does not read what it loads (giantswarm/agent-manager#437). Every
-// file under the objects path is
-// read, whatever its name, since Kustomize loads a resource file by any
-// name: one read of the branch's head, one tree read and two reads for each
-// file, all at that one commit, so a commit that lands during the scan
-// cannot hide a definition. A resource file that does not parse defines
-// nothing, since Kustomize cannot apply it either; a kustomization that does
-// not parse counts as below. A read that fails, or a tree too
-// large for one read, erases nothing.
+// kustomization under the objects path counts, also one that the build does
+// not reach. Every file under the objects path is read, whatever its name,
+// since Kustomize loads a resource file by any name: one read of the
+// branch's head, one tree read and two reads for each file, all at that one
+// commit, so a commit that lands during the scan cannot hide a definition.
+// A resource file that does not parse defines nothing, since Kustomize
+// cannot apply it either; a kustomization that does not parse counts as
+// below. A read that fails, or a tree too large for one read, erases
+// nothing.
 //
 // The scan runs no Kustomize, so it fails closed on what a kustomization
 // changes, wherever that kustomization is under the objects path (a sibling
@@ -337,8 +338,7 @@ const nextDelete = "then call delete_organization again with mode commit and no 
 // prefix or suffix makes a document whose name is a part of name into it;
 // a transformer, a patch, replacements, vars with configurations, a
 // kustomization that does not parse, or a value the scan cannot read
-// (${...}, $(...), SOPS) makes any organization document
-// count. A namespace other than parent counts for nothing
+// (${...}, $(...), SOPS) makes any organization document count. A namespace other than parent counts for nothing
 // (giantswarm/agent-manager#423). In a repository with such an overlay an
 // erase can be refused although Flux's build no longer holds the
 // organization: the answer names the overlay to remove or change.
@@ -449,9 +449,11 @@ func leavingEntries(docs []map[string]any, ok bool, kdir, dir string, tree map[s
 			switch {
 			case !isString:
 				out = append(out, field+" entry of a form the scan does not know")
-			case strings.Contains(s, "//"):
+			case strings.Contains(s, "//") || remoteForm(s):
 				// :// holds // too.
 				out = append(out, fmt.Sprintf("%s entry %q is a remote", field, s))
+			case path.IsAbs(s):
+				out = append(out, fmt.Sprintf("%s entry %q leaves the objects path", field, s))
 			default:
 				j := path.Join(kdir, s)
 				switch {
@@ -464,6 +466,15 @@ func leavingEntries(docs []map[string]any, ok bool, kdir, dir string, tree map[s
 		}
 	}
 	return out
+}
+
+// remoteForm reports whether the entry s has a form that Kustomize parses
+// as a remote although it holds no //: git@host:owner/repo, gh:owner/repo,
+// or github.com/owner/repo/path, which Kustomize may load as a remote
+// before a local directory of that path.
+func remoteForm(s string) bool {
+	first, _, _ := strings.Cut(s, "/")
+	return strings.HasPrefix(s, "git@") || strings.HasPrefix(s, "gh:") || first == "github.com"
 }
 
 // treeOf is the set of the files and of every directory above them, up to
