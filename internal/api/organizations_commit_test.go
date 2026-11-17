@@ -442,6 +442,112 @@ func TestAMergedPullRequestThatKeptTheFileIsNotTheDelete(t *testing.T) {
 	assert.NotNil(t, g.get(t, orgGVR, "org-acme", "payments"))
 }
 
+// refusedErase is a case of TestAMergedDeleteThatDidNotRemoveTheFileErasesNothing.
+type refusedErase struct {
+	name string
+	// edit changes the delete pull request's branch before the merge, and
+	// receives the main branch's file content.
+	edit  func(t *testing.T, fake *commit.Fake, head string, file []byte)
+	after func(t *testing.T, fake *commit.Fake)
+	want  []string
+	// notWant must not be in the answer.
+	notWant []string
+	// noConfirm: the call without confirm is refused too, and does not
+	// answer pending erase.
+	noConfirm bool
+}
+
+// siblingOverlay is a delete pull request that moved the organization's
+// file to base/<name>.yaml as the organization ns/name, where
+// overlays/prod, a sibling overlay that refers to it by ../, holds the
+// files overlay. The answer names the overlay's kustomization and why.
+func siblingOverlay(title, ns, name string, overlay map[string]string, why string) refusedErase {
+	return refusedErase{
+		name: title,
+		edit: func(t *testing.T, fake *commit.Fake, head string, _ []byte) {
+			doc := orgDocument(t, ns)
+			require.NoError(t, unstructured.SetNestedField(doc, name, "metadata", "name"))
+			org, err := yaml.Marshal(doc)
+			require.NoError(t, err)
+			files := map[string][]byte{
+				objectsPath + "/base/" + name + ".yaml":  org,
+				objectsPath + "/base/kustomization.yaml": []byte("resources:\n  - " + name + ".yaml\n"),
+			}
+			for f, raw := range overlay {
+				files[objectsPath+"/overlays/prod/"+f] = []byte(raw)
+			}
+			require.NoError(t, fake.Commit(context.Background(), mcRepo, head, "move it", files))
+		},
+		want:      []string{"conflict:", objectsPath + "/base/" + name + ".yaml in", "may still define it", objectsPath + "/overlays/prod/kustomization.yaml (" + why, "Check the overlay first", "remove that setting or the overlay"},
+		noConfirm: true,
+	}
+}
+
+// An overlay that cannot make a document the organization does not stop
+// the erase: a namespace other than the parent's moves no document into
+// it, and a name prefix or suffix makes no document of a name that is not
+// a part of the organization's name into it; empty patch fields change
+// nothing (giantswarm/agent-manager#423).
+func TestAnOverlayThatCannotMakeTheOrganizationDoesNotStopTheErase(t *testing.T) {
+	ctx := context.Background()
+	org := func(t *testing.T, ns, name string) []byte {
+		doc := orgDocument(t, ns)
+		require.NoError(t, unstructured.SetNestedField(doc, name, "metadata", "name"))
+		raw, err := yaml.Marshal(doc)
+		require.NoError(t, err)
+		return raw
+	}
+	for _, tc := range []struct {
+		name  string
+		files func(t *testing.T) map[string][]byte
+	}{
+		{
+			name: "another parent sets its own namespace and has an organization of the name",
+			files: func(t *testing.T) map[string][]byte {
+				return map[string][]byte{
+					objectsPath + "/org-beta/payments.yaml":      org(t, "org-beta", "payments"),
+					objectsPath + "/org-beta/kustomization.yaml": []byte("namespace: org-beta\nresources:\n  - payments.yaml\n"),
+				}
+			},
+		},
+		{
+			name: "a sibling overlay sets namespace org-other on a base that has the name",
+			files: func(t *testing.T) map[string][]byte {
+				return map[string][]byte{
+					objectsPath + "/base/payments.yaml":               org(t, "org-template", "payments"),
+					objectsPath + "/base/kustomization.yaml":          []byte("resources:\n  - payments.yaml\n"),
+					objectsPath + "/overlays/prod/kustomization.yaml": []byte("namespace: org-other\nnamePrefix: x-\nresources:\n  - ../../base\npatches: []\ntransformers: []\nreplacements: []\npatchesJson6902: []\npatchesStrategicMerge: []\n"),
+				}
+			},
+		},
+		{
+			name: "a sibling overlay sets a name suffix on an organization whose name is not a part of the name",
+			files: func(t *testing.T) map[string][]byte {
+				return map[string][]byte{
+					objectsPath + "/base/billing.yaml":                org(t, "org-acme", "billing"),
+					objectsPath + "/overlays/prod/kustomization.yaml": []byte("nameSuffix: -prod\nnamePrefix: x-\nresources:\n  - ../../base/billing.yaml\n"),
+				}
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, fake := gitOrganization(t)
+			text, isErr := f.call(t, ToolDeleteOrganization, map[string]any{"namespace": "org-acme", "name": "payments", "mode": "commit"})
+			require.False(t, isErr, text)
+			pr := fake.PullRequests()[0]
+			require.NoError(t, fake.Merge(ctx, pr.PullRequest))
+			require.NoError(t, fake.Commit(ctx, mcRepo, "main", "overlays", tc.files(t)))
+
+			text, isErr = f.call(t, ToolDeleteOrganization, map[string]any{"namespace": "org-acme", "name": "payments", "mode": "commit"})
+			require.False(t, isErr, text)
+			assert.Contains(t, text, "pending erase:")
+			text, isErr = f.call(t, ToolDeleteOrganization, map[string]any{"namespace": "org-acme", "name": "payments", "mode": "commit", "confirm": "org-acme/payments"})
+			require.False(t, isErr, text)
+			assert.Equal(t, true, decode(t, text)["deleted"])
+		})
+	}
+}
+
 // The erase needs the merged delete pull request itself to have removed the
 // object's file. A pull request edited before its merge erases nothing: one
 // that kept the file, which another merge then removed, and one that moved
@@ -449,19 +555,7 @@ func TestAMergedPullRequestThatKeptTheFileIsNotTheDelete(t *testing.T) {
 // could not list.
 func TestAMergedDeleteThatDidNotRemoveTheFileErasesNothing(t *testing.T) {
 	ctx := context.Background()
-	for _, tc := range []struct {
-		name string
-		// edit changes the delete pull request's branch before the merge, and
-		// after receives the main branch's file content.
-		edit  func(t *testing.T, fake *commit.Fake, head string, file []byte)
-		after func(t *testing.T, fake *commit.Fake)
-		want  []string
-		// notWant must not be in the answer.
-		notWant []string
-		// noConfirm: the call without confirm is refused too, and does not
-		// answer pending erase.
-		noConfirm bool
-	}{
+	for _, tc := range []refusedErase{
 		{
 			name: "the removal was reverted and another merge removed the file",
 			edit: func(t *testing.T, fake *commit.Fake, head string, file []byte) {
@@ -573,21 +667,65 @@ func TestAMergedDeleteThatDidNotRemoveTheFileErasesNothing(t *testing.T) {
 		},
 		{
 			// The cost of failing closed: another organization of the name
-			// counts while an overlay sets a namespace anywhere, and the
-			// answer sends the person to the overlay, not to that file.
-			name: "an overlay sets a namespace while another parent has an organization of the name",
+			// counts while an overlay sets the parent's namespace anywhere,
+			// and the answer sends the person to the overlay, not to that
+			// file.
+			name: "an overlay sets the parent's namespace while another parent has an organization of the name",
 			after: func(t *testing.T, fake *commit.Fake) {
 				org, err := yaml.Marshal(orgDocument(t, "org-beta"))
 				require.NoError(t, err)
 				require.NoError(t, fake.Commit(ctx, mcRepo, "main", "another parent", map[string][]byte{
 					objectsPath + "/org-beta/payments.yaml":      org,
-					objectsPath + "/org-beta/kustomization.yaml": []byte("namespace: org-beta\nresources:\n  - payments.yaml\n"),
+					objectsPath + "/org-beta/kustomization.yaml": []byte("resources:\n  - payments.yaml\n"),
+					objectsPath + "/org-acme/kustomization.yaml": []byte("namespace: org-acme\nresources:\n  - billing.yaml\n"),
 				}))
 			},
-			want:      []string{"conflict:", objectsPath + "/org-beta/payments.yaml", "may still define it", objectsPath + "/org-beta/kustomization.yaml", "Check the overlay first"},
-			notWant:   []string{"remove that definition from", "moved there"},
+			want:      []string{"conflict:", objectsPath + "/org-beta/payments.yaml", "may still define it", objectsPath + "/org-acme/kustomization.yaml (namespace org-acme)", "Check the overlay first"},
+			notWant:   []string{"remove that definition from", "moved there", objectsPath + "/org-beta/kustomization.yaml"},
 			noConfirm: true,
 		},
+		siblingOverlay("a sibling overlay moves the file's organization by a patch", "org-template", "payments", map[string]string{
+			"kustomization.yaml": "resources:\n  - ../../base\npatches:\n  - target:\n      kind: AgentPlatformOrganization\n    patch: |-\n      - op: replace\n        path: /metadata/namespace\n        value: org-acme\n",
+		}, "patches"),
+		siblingOverlay("a sibling overlay renames the file's organization by a JSON 6902 patch", "org-acme", "legacy", map[string]string{
+			"kustomization.yaml": "resources:\n  - ../../base\npatchesJson6902:\n  - target:\n      group: " + orgGVR.Group + "\n      version: v1alpha1\n      kind: AgentPlatformOrganization\n      name: legacy\n    path: rename.yaml\n",
+			"rename.yaml":        "- op: replace\n  path: /metadata/name\n  value: payments\n",
+		}, "patchesJson6902"),
+		siblingOverlay("a sibling overlay has a strategic merge patch", "org-template", "payments", map[string]string{
+			"kustomization.yaml": "resources:\n  - ../../base\npatchesStrategicMerge:\n  - labels.yaml\n",
+			"labels.yaml":        "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: settings\n  labels:\n    tier: prod\n",
+		}, "patchesStrategicMerge"),
+		siblingOverlay("a sibling overlay moves the file's organization by a transformer", "org-template", "payments", map[string]string{
+			"kustomization.yaml": "resources:\n  - ../../base\ntransformers:\n  - namespace.yaml\n",
+			"namespace.yaml":     "apiVersion: builtin\nkind: NamespaceTransformer\nmetadata:\n  name: move\n  namespace: org-acme\n",
+		}, "transformers"),
+		siblingOverlay("a sibling overlay has replacements", "org-template", "payments", map[string]string{
+			"kustomization.yaml": "resources:\n  - ../../base\nreplacements:\n  - path: replace.yaml\n",
+		}, "replacements"),
+		siblingOverlay("a sibling overlay sets a SOPS-encrypted namespace", "org-template", "payments", map[string]string{
+			"kustomization.yaml": "namespace: ENC[AES256_GCM,data:abc,type:str]\nresources:\n  - ../../base\n",
+		}, "namespace ENC["),
+		siblingOverlay("a sibling overlay sets a namespace that Flux's post-build substitution may replace", "org-template", "payments", map[string]string{
+			"kustomization.yaml": "namespace: ${org_ns}\nresources:\n  - ../../base\n",
+		}, "namespace ${org_ns}"),
+		siblingOverlay("a sibling overlay writes a patch field's key in another case", "org-template", "payments", map[string]string{
+			"kustomization.yaml": "resources:\n  - ../../base\nPatches:\n  - path: move.yaml\n",
+		}, "patches"),
+		siblingOverlay("a sibling overlay sets the namespace twice in two cases", "org-template", "payments", map[string]string{
+			"kustomization.yaml": "namespace: org-other\nNamespace: org-acme\nresources:\n  - ../../base\n",
+		}, "namespace of a form the scan does not know"),
+		siblingOverlay("a sibling overlay sets a name suffix of a form the scan does not know", "org-acme", "legacy", map[string]string{
+			"kustomization.yaml": "nameSuffix: [a]\nresources:\n  - ../../base\n",
+		}, "nameSuffix of a form the scan does not know"),
+		siblingOverlay("a sibling overlay sets transformers of a form the scan does not know", "org-template", "payments", map[string]string{
+			"kustomization.yaml": "transformers: namespace.yaml\nresources:\n  - ../../base\n",
+		}, "transformers"),
+		siblingOverlay("a sibling overlay does not parse", "org-template", "payments", map[string]string{
+			"kustomization.yaml": "resources: [../../base\n",
+		}, "it does not parse"),
+		siblingOverlay("a sibling overlay sets a namespace of a form the scan does not know", "org-template", "payments", map[string]string{
+			"kustomization.yaml": "namespace:\n  name: org-acme\nresources:\n  - ../../base\n",
+		}, "namespace of a form the scan does not know"),
 		{
 			name: "the head of the branch cannot be read",
 			after: func(t *testing.T, fake *commit.Fake) {

@@ -321,17 +321,22 @@ const nextDelete = "then call delete_organization again with mode commit and no 
 // read, whatever its name, since Kustomize loads a resource file by any
 // name: one read of the branch's head, one tree read and two reads for each
 // file, all at that one commit, so a commit that lands during the scan
-// cannot hide a definition. A file that does not parse defines nothing,
-// since Kustomize cannot apply it either. A read that fails, or a tree too
+// cannot hide a definition. A resource file that does not parse defines
+// nothing, since Kustomize cannot apply it either; a kustomization that does
+// not parse counts as below. A read that fails, or a tree too
 // large for one read, erases nothing.
 //
 // The scan runs no Kustomize, so it fails closed on what a kustomization
-// changes: when any kustomization under the objects path sets a namespace,
-// a name prefix or a name suffix, a document's own namespace or name does
-// not tell, wherever that kustomization is (a sibling overlay refers to a
-// file by ../, giantswarm/agent-manager#399), and every organization
-// document that may become parent/name counts. In a repository with such an
-// overlay an erase can be refused although Flux's build no longer holds the
+// changes, wherever that kustomization is under the objects path (a sibling
+// overlay refers to a file by ../, giantswarm/agent-manager#399): every
+// organization document that one may make parent/name counts (renamingOf).
+// A namespace of parent moves a document of any namespace there; a name
+// prefix or suffix makes a document whose name is a part of name into it;
+// a transformer, a patch, replacements, a kustomization that does not
+// parse, or a value the scan cannot read makes any organization document
+// count. A namespace other than parent counts for nothing
+// (giantswarm/agent-manager#423). In a repository with such an overlay an
+// erase can be refused although Flux's build no longer holds the
 // organization: the answer names the overlay to remove or change.
 func (c *orgCommit) stillInGit(ctx context.Context, pr commit.PullRequest, parent, name, what, p string) error {
 	repo, base, dir := c.cfg.Objects.Repository, c.cfg.Objects.Branch, c.cfg.Objects.Directory
@@ -365,16 +370,17 @@ func (c *orgCommit) stillInGit(ctx context.Context, pr commit.PullRequest, paren
 		if err != nil {
 			return unknown(err, f)
 		}
-		parsed := documents(raw)
+		parsed, ok := documents(raw)
 		// A file of a kustomization's name is read both ways: as a
 		// kustomization, and as a resource file, since another
 		// kustomization may list it as one. A kustomization's own document
 		// never is an organization.
-		if kustomizationFiles[path.Base(f)] && len(parsed) > 0 {
-			if k := renamingOf(parsed[0]); k.namespace || k.name {
+		if kustomizationFiles[path.Base(f)] {
+			if k, why := renamingOf(parsed, ok, parent); why != nil {
 				r.namespace = r.namespace || k.namespace
+				r.affix = r.affix || k.affix
 				r.name = r.name || k.name
-				renamedBy = append(renamedBy, f)
+				renamedBy = append(renamedBy, f+" ("+strings.Join(why, ", ")+")")
 			}
 		}
 		docs[f] = parsed
@@ -387,7 +393,7 @@ func (c *orgCommit) stillInGit(ctx context.Context, pr commit.PullRequest, paren
 			if !definesOrganization(doc, parent, name, renaming{}) {
 				// The overlay alone makes the match: the document may be
 				// another organization, which must not be removed blindly.
-				return fmt.Errorf("%w: %s: its merged delete pull request %s removed %s, but %s in %s may still define it: %s set a namespace, a name prefix or a name suffix, so what the document says of its own namespace and name does not tell, and the scan, which runs no Kustomize, takes it as a definition; it is not pending erase and is not erased. Check the overlay first: if it does not make that document %s, remove that setting or the overlay from the objects path and call delete_organization again with mode commit and confirm %q; if it does, remove that definition", agents.ErrConflict, what, pr.URL, p, f, repo, strings.Join(renamedBy, ", "), parent+"/"+name, parent+"/"+name)
+				return fmt.Errorf("%w: %s: its merged delete pull request %s removed %s, but %s in %s may still define it: %s may change a namespace or a name, so what the document says of its own namespace and name does not tell, and the scan, which runs no Kustomize, takes it as a definition; it is not pending erase and is not erased. Check the overlay first: if it does not make that document %s, remove that setting or the overlay from the objects path and call delete_organization again with mode commit and confirm %q; if it does, remove that definition", agents.ErrConflict, what, pr.URL, p, f, repo, strings.Join(renamedBy, ", "), parent+"/"+name, parent+"/"+name)
 			}
 			return fmt.Errorf("%w: %s: its merged delete pull request %s removed %s, but %s in %s still defines it (moved there, or written there by the pull request or a later commit), so the organization is still in git; it is not pending erase and is not erased; remove that definition from %s and call delete_organization again with mode commit and confirm %q, or move it back to %s, %s", agents.ErrConflict, what, pr.URL, p, f, repo, f, parent+"/"+name, p, nextDelete)
 		}
@@ -398,27 +404,126 @@ func (c *orgCommit) stillInGit(ctx context.Context, pr commit.PullRequest, paren
 // kustomizationFiles are the names Kustomize reads a kustomization from.
 var kustomizationFiles = map[string]bool{"kustomization.yaml": true, "kustomization.yml": true, "Kustomization": true}
 
-// renaming is what a kustomization changes of its resources' identity.
-type renaming struct{ namespace, name bool }
+// rewriteFields are the kustomization fields that can set a resource's
+// namespace or name to any value: the scan runs no Kustomize, so it does
+// not read what they write (giantswarm/agent-manager#423).
+var rewriteFields = []string{"transformers", "patches", "patchesJson6902", "patchesStrategicMerge", "replacements"}
 
-func renamingOf(k map[string]any) renaming {
-	set := func(field string) bool { s, _ := k[field].(string); return s != "" }
-	return renaming{namespace: set("namespace"), name: set("namePrefix") || set("nameSuffix")}
+// renaming is what kustomizations may change of a resource's identity on
+// its way to the organization parent/name: namespace, a document of any
+// namespace may land in parent; affix, a document whose own name is a part
+// of name may become it (a prefix or a suffix only adds text); name, a
+// document of any name may become it.
+type renaming struct{ namespace, affix, name bool }
+
+// renamingOf reads what the kustomization docs (ok false: it does not
+// parse) may change of a resource's identity on its way to parent, and
+// why, nil when nothing. It fails closed: a kustomization it cannot parse,
+// a field of a form it does not know, a value it cannot read (opaque) or
+// one of rewriteFields counts as changing what it may. A namespace other
+// than parent, in clear text, cannot move a document into parent.
+func renamingOf(docs []map[string]any, ok bool, parent string) (renaming, []string) {
+	if !ok {
+		return renaming{namespace: true, name: true}, []string{"it does not parse"}
+	}
+	if len(docs) == 0 {
+		return renaming{}, nil
+	}
+	k := foldKeys(docs[0])
+	var (
+		r   renaming
+		why []string
+	)
+	switch ns := k["namespace"].(type) {
+	case nil:
+	case string:
+		if ns == parent || opaque(ns) {
+			r.namespace = true
+			why = append(why, "namespace "+ns)
+		}
+	default:
+		r.namespace = true
+		why = append(why, "namespace of a form the scan does not know")
+	}
+	for _, field := range []string{"namePrefix", "nameSuffix"} {
+		switch v := k[strings.ToLower(field)].(type) {
+		case nil:
+		case string:
+			if v != "" {
+				r.affix = true
+				why = append(why, field)
+			}
+		default:
+			r.name = true
+			why = append(why, field+" of a form the scan does not know")
+		}
+	}
+	for _, field := range rewriteFields {
+		if nonEmpty(k[strings.ToLower(field)]) {
+			r.namespace, r.name = true, true
+			why = append(why, field)
+		}
+	}
+	return r, why
 }
 
-// documents parses raw's YAML or JSON documents; nil when one does not
-// parse, since Kustomize cannot apply such a file.
-func documents(raw []byte) []map[string]any {
+// nonEmpty reports whether a kustomization field's value v is set: an
+// empty string, list or map is not; a value of another form counts.
+func nonEmpty(v any) bool {
+	switch v := v.(type) {
+	case nil:
+		return false
+	case string:
+		return v != ""
+	case []any:
+		return len(v) > 0
+	case map[string]any:
+		return len(v) > 0
+	default:
+		return true
+	}
+}
+
+// foldKeys is the kustomization k with its keys in lower case: Kustomize
+// decodes a kustomization with encoding/json, which matches a field's key
+// whatever its case. Two keys that fold to one give a value of a form the
+// scan does not know.
+func foldKeys(k map[string]any) map[string]any {
+	out := make(map[string]any, len(k))
+	for key, v := range k {
+		key = strings.ToLower(key)
+		if _, twice := out[key]; twice {
+			v = twiceSet{}
+		}
+		out[key] = v
+	}
+	return out
+}
+
+// twiceSet is the value of a kustomization field whose key is set twice,
+// in two cases.
+type twiceSet struct{}
+
+// sealed reports whether s is a value SOPS encrypted (ENC[...]).
+func sealed(s string) bool { return strings.HasPrefix(s, "ENC[") }
+
+// opaque reports whether the scan cannot read the value s: SOPS encrypted
+// it, or it holds a variable (${...}) that Flux's post-build substitution
+// may replace.
+func opaque(s string) bool { return sealed(s) || strings.Contains(s, "${") }
+
+// documents parses raw's YAML or JSON documents; ok is false when one does
+// not parse, since Kustomize cannot apply such a file.
+func documents(raw []byte) (out []map[string]any, ok bool) {
 	dec := kubeyaml.NewYAMLOrJSONDecoder(bytes.NewReader(raw), 4096)
-	var out []map[string]any
 	for {
 		var doc map[string]any
 		err := dec.Decode(&doc)
 		if errors.Is(err, io.EOF) {
-			return out
+			return out, true
 		}
 		if err != nil {
-			return nil
+			return nil, false
 		}
 		if doc != nil {
 			out = append(out, doc)
@@ -429,8 +534,8 @@ func documents(raw []byte) []map[string]any {
 // definesOrganization reports whether doc is, or as a list (kind *List)
 // holds in its items, the AgentPlatformOrganization parent/name, as
 // Kustomize applies it. A document without a namespace counts, and so does
-// one whose namespace or name r says a kustomization changes. A value SOPS
-// encrypted (ENC[...]) is not known, so it counts too.
+// one whose namespace or name r says a kustomization may change. A value
+// the scan cannot read (opaque) is not known, so it counts too.
 func definesOrganization(doc map[string]any, parent, name string, r renaming) bool {
 	u := unstructured.Unstructured{Object: doc}
 	if items, ok := doc["items"].([]any); ok && strings.HasSuffix(u.GetKind(), "List") {
@@ -441,15 +546,14 @@ func definesOrganization(doc map[string]any, parent, name string, r renaming) bo
 		}
 		return false
 	}
-	sealed := func(s string) bool { return strings.HasPrefix(s, "ENC[") }
 	kind := u.GetKind() == orgKind && u.GroupVersionKind().Group == GVR.Group
 	if _, sops := doc["sops"]; sops && (sealed(u.GetKind()) || sealed(u.GetAPIVersion())) {
 		kind = true
 	}
-	ns := u.GetNamespace()
+	ns, own := u.GetNamespace(), u.GetName()
 	return kind &&
-		(r.name || u.GetName() == name || sealed(u.GetName())) &&
-		(r.namespace || ns == "" || ns == parent || sealed(ns))
+		(r.name || own == name || opaque(own) || (r.affix && strings.Contains(name, own))) &&
+		(r.namespace || ns == "" || ns == parent || opaque(ns))
 }
 
 // openDelete opens the pull request that removes the organization's file
