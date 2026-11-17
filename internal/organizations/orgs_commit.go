@@ -316,15 +316,19 @@ const nextDelete = "then call delete_organization again with mode commit and no 
 // GitHub reports as a removal and an addition, a definition the delete pull
 // request wrote into another file, or one a later commit wrote or moved.
 // Both the erase and the answer pending erase take it. The installation's
-// Kustomization applies the objects path alone, so a definition anywhere
-// else does not re-create the object. Every file under the objects path is
-// read, whatever its name, since Kustomize loads a resource file by any
-// name: one read of the branch's head, one tree read and two reads for each
-// file, all at that one commit, so a commit that lands during the scan
-// cannot hide a definition. A resource file that does not parse defines
-// nothing, since Kustomize cannot apply it either; a kustomization that does
-// not parse counts as below. A read that fails, or a tree too
-// large for one read, erases nothing.
+// Kustomization applies the objects path, so a definition anywhere else
+// re-creates the object only through a kustomization under the objects path
+// that loads it: such an entry (leavingEntries) refuses the erase, since the
+// scan does not read what it loads (giantswarm/agent-manager#437). Every
+// kustomization under the objects path counts, also one that the build does
+// not reach. Every file under the objects path is read, whatever its name,
+// since Kustomize loads a resource file by any name: one read of the
+// branch's head, one tree read and two reads for each file, all at that one
+// commit, so a commit that lands during the scan cannot hide a definition.
+// A resource file that does not parse defines nothing, since Kustomize
+// cannot apply it either; a kustomization that does not parse counts as
+// below. A read that fails, or a tree too large for one read, erases
+// nothing.
 //
 // The scan runs no Kustomize, so it fails closed on what a kustomization
 // changes, wherever that kustomization is under the objects path (a sibling
@@ -332,9 +336,9 @@ const nextDelete = "then call delete_organization again with mode commit and no 
 // organization document that one may make parent/name counts (renamingOf).
 // A namespace of parent moves a document of any namespace there; a name
 // prefix or suffix makes a document whose name is a part of name into it;
-// a transformer, a patch, replacements, a kustomization that does not
-// parse, or a value the scan cannot read makes any organization document
-// count. A namespace other than parent counts for nothing
+// a transformer, a patch, replacements, vars with configurations, a
+// kustomization that does not parse, or a value the scan cannot read
+// (${...}, $(...), SOPS) makes any organization document count. A namespace other than parent counts for nothing
 // (giantswarm/agent-manager#423). In a repository with such an overlay an
 // erase can be refused although Flux's build no longer holds the
 // organization: the answer names the overlay to remove or change.
@@ -358,6 +362,10 @@ func (c *orgCommit) stillInGit(ctx context.Context, pr commit.PullRequest, paren
 	var (
 		r         renaming
 		renamedBy []string
+		// leaving are the kustomizations' entries that load what the scan
+		// does not read.
+		leaving []string
+		tree    = treeOf(files)
 	)
 	for _, f := range files {
 		raw, err := c.remote.ReadFile(ctx, repo, sha, f)
@@ -382,6 +390,9 @@ func (c *orgCommit) stillInGit(ctx context.Context, pr commit.PullRequest, paren
 				r.name = r.name || k.name
 				renamedBy = append(renamedBy, f+" ("+strings.Join(why, ", ")+")")
 			}
+			for _, e := range leavingEntries(parsed, ok, path.Dir(f), dir, tree) {
+				leaving = append(leaving, f+" ("+e+")")
+			}
 		}
 		docs[f] = parsed
 	}
@@ -398,7 +409,84 @@ func (c *orgCommit) stillInGit(ctx context.Context, pr commit.PullRequest, paren
 			return fmt.Errorf("%w: %s: its merged delete pull request %s removed %s, but %s in %s still defines it (moved there, or written there by the pull request or a later commit), so the organization is still in git; it is not pending erase and is not erased; remove that definition from %s and call delete_organization again with mode commit and confirm %q, or move it back to %s, %s", agents.ErrConflict, what, pr.URL, p, f, repo, f, parent+"/"+name, p, nextDelete)
 		}
 	}
+	if len(leaving) > 0 {
+		return fmt.Errorf("%w: %s: its merged delete pull request %s removed %s, but a kustomization under the objects path %s in %s loads files from outside it: %s. The scan reads only the objects path and runs no Kustomize, so whether what that entry loads still defines the organization is unknown; it is not pending erase and is not erased. Bring what the entry loads under the objects path, or remove the entry, then call delete_organization again with mode commit and confirm %q", agents.ErrConflict, what, pr.URL, p, dir, repo, strings.Join(leaving, ", "), parent+"/"+name)
+	}
 	return nil
+}
+
+// loadFields are the kustomization fields whose entries name what
+// Kustomize loads as resources: a file, a directory or a remote.
+var loadFields = []string{"resources", "components", "bases"}
+
+// leavingEntries lists the entries of the kustomization docs, in directory
+// kdir, that load what is not under the objects path dir, each with its
+// field and why: a remote (it holds :// or //), a path that leaves dir once
+// joined with kdir, or one that names no file or directory of the tree
+// under dir, which Kustomize then loads as a remote or fails on. A field of
+// a form the scan does not know counts too. A kustomization that does not
+// parse lists nothing: Kustomize cannot build it, and renamingOf already
+// counts it.
+func leavingEntries(docs []map[string]any, ok bool, kdir, dir string, tree map[string]bool) []string {
+	if !ok || len(docs) == 0 {
+		return nil
+	}
+	k := foldKeys(docs[0])
+	dir = path.Clean(dir)
+	var out []string
+	for _, field := range loadFields {
+		v, set := k[field]
+		if !set || v == nil {
+			continue
+		}
+		entries, isList := v.([]any)
+		if !isList {
+			out = append(out, field+" of a form the scan does not know")
+			continue
+		}
+		for _, e := range entries {
+			s, isString := e.(string)
+			switch {
+			case !isString:
+				out = append(out, field+" entry of a form the scan does not know")
+			case strings.Contains(s, "//") || remoteForm(s):
+				// :// holds // too.
+				out = append(out, fmt.Sprintf("%s entry %q is a remote", field, s))
+			case path.IsAbs(s):
+				out = append(out, fmt.Sprintf("%s entry %q leaves the objects path", field, s))
+			default:
+				j := path.Join(kdir, s)
+				switch {
+				case j != dir && !strings.HasPrefix(j, dir+"/"):
+					out = append(out, fmt.Sprintf("%s entry %q leaves the objects path", field, s))
+				case !tree[j]:
+					out = append(out, fmt.Sprintf("%s entry %q names nothing under the objects path, so Kustomize loads it as a remote or fails on it", field, s))
+				}
+			}
+		}
+	}
+	return out
+}
+
+// remoteForm reports whether the entry s has a form that Kustomize parses
+// as a remote although it holds no //: git@host:owner/repo, gh:owner/repo,
+// or github.com/owner/repo/path, which Kustomize may load as a remote
+// before a local directory of that path.
+func remoteForm(s string) bool {
+	first, _, _ := strings.Cut(s, "/")
+	return strings.HasPrefix(s, "git@") || strings.HasPrefix(s, "gh:") || first == "github.com"
+}
+
+// treeOf is the set of the files and of every directory above them, up to
+// the repository's root.
+func treeOf(files []string) map[string]bool {
+	out := make(map[string]bool, 2*len(files))
+	for _, f := range files {
+		for p := f; p != "." && p != "/" && !out[p]; p = path.Dir(p) {
+			out[p] = true
+		}
+	}
+	return out
 }
 
 // kustomizationFiles are the names Kustomize reads a kustomization from.
@@ -464,6 +552,12 @@ func renamingOf(docs []map[string]any, ok bool, parent string) (renaming, []stri
 			why = append(why, field)
 		}
 	}
+	// A var substitutes $(NAME) in the fields a configurations file's
+	// varReference names, metadata/name and metadata/namespace among them.
+	if nonEmpty(k["vars"]) && nonEmpty(k["configurations"]) {
+		r.namespace, r.name = true, true
+		why = append(why, "vars with configurations")
+	}
 	return r, why
 }
 
@@ -508,9 +602,11 @@ type twiceSet struct{}
 func sealed(s string) bool { return strings.HasPrefix(s, "ENC[") }
 
 // opaque reports whether the scan cannot read the value s: SOPS encrypted
-// it, or it holds a variable (${...}) that Flux's post-build substitution
-// may replace.
-func opaque(s string) bool { return sealed(s) || strings.Contains(s, "${") }
+// it, or it holds a variable that Flux's post-build substitution (${...}) or
+// a Kustomize var ($(...)) may replace.
+func opaque(s string) bool {
+	return sealed(s) || strings.Contains(s, "${") || strings.Contains(s, "$(")
+}
 
 // documents parses raw's YAML or JSON documents; ok is false when one does
 // not parse, since Kustomize cannot apply such a file.

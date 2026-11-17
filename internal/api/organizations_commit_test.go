@@ -483,6 +483,31 @@ func siblingOverlay(title, ns, name string, overlay map[string]string, why strin
 	}
 }
 
+// leavingOverlay is a delete pull request that also wrote overlays/prod, a
+// sibling overlay whose kustomization holds the files overlay. The
+// organization is defined outside the objects path, in shared/orgs at the
+// repository's root, which the scan does not read. The answer names the
+// overlay's kustomization and the entry (giantswarm/agent-manager#437).
+func leavingOverlay(title string, overlay map[string]string, entry string) refusedErase {
+	return refusedErase{
+		name: title,
+		edit: func(t *testing.T, fake *commit.Fake, head string, file []byte) {
+			files := map[string][]byte{
+				// Changed, so that the move is not a rename.
+				"shared/orgs/payments.yaml":      append([]byte("# shared\n"), file...),
+				"shared/orgs/kustomization.yaml": []byte("resources:\n  - payments.yaml\n"),
+			}
+			for f, raw := range overlay {
+				files[objectsPath+"/overlays/prod/"+f] = []byte(raw)
+			}
+			require.NoError(t, fake.Commit(context.Background(), mcRepo, head, "refer to it", files))
+		},
+		want:      []string{"conflict:", "loads files from outside it", objectsPath + "/overlays/prod/kustomization.yaml (" + entry + ")", "Bring what the entry loads under the objects path"},
+		notWant:   []string{"still defines it"},
+		noConfirm: true,
+	}
+}
+
 // An overlay that cannot make a document the organization does not stop
 // the erase: a namespace other than the parent's moves no document into
 // it, and a name prefix or suffix makes no document of a name that is not
@@ -546,6 +571,35 @@ func TestAnOverlayThatCannotMakeTheOrganizationDoesNotStopTheErase(t *testing.T)
 			assert.Equal(t, true, decode(t, text)["deleted"])
 		})
 	}
+}
+
+// A kustomization entry that stays under the objects path is followed as
+// before and does not stop the erase by itself: a sibling overlay that
+// refers to a directory, a file and a component by ../
+// (giantswarm/agent-manager#437).
+func TestAnEntryThatStaysUnderTheObjectsPathDoesNotStopTheErase(t *testing.T) {
+	ctx := context.Background()
+	doc := orgDocument(t, "org-acme")
+	require.NoError(t, unstructured.SetNestedField(doc, "billing", "metadata", "name"))
+	billing, err := yaml.Marshal(doc)
+	require.NoError(t, err)
+	f, fake := gitOrganization(t)
+	text, isErr := f.call(t, ToolDeleteOrganization, map[string]any{"namespace": "org-acme", "name": "payments", "mode": "commit"})
+	require.False(t, isErr, text)
+	require.NoError(t, fake.Merge(ctx, fake.PullRequests()[0].PullRequest))
+	require.NoError(t, fake.Commit(ctx, mcRepo, "main", "overlays", map[string][]byte{
+		objectsPath + "/base/billing.yaml":                    billing,
+		objectsPath + "/base/kustomization.yaml":              []byte("resources:\n  - billing.yaml\n"),
+		objectsPath + "/components/labels/kustomization.yaml": []byte("apiVersion: kustomize.config.k8s.io/v1alpha1\nkind: Component\n"),
+		objectsPath + "/overlays/prod/kustomization.yaml":     []byte("resources:\n  - ../../base\n  - ../../base/billing.yaml\n  - .\ncomponents:\n  - ../../components/labels\nbases:\n  - ../../base\n"),
+	}))
+
+	text, isErr = f.call(t, ToolDeleteOrganization, map[string]any{"namespace": "org-acme", "name": "payments", "mode": "commit"})
+	require.False(t, isErr, text)
+	assert.Contains(t, text, "pending erase:")
+	text, isErr = f.call(t, ToolDeleteOrganization, map[string]any{"namespace": "org-acme", "name": "payments", "mode": "commit", "confirm": "org-acme/payments"})
+	require.False(t, isErr, text)
+	assert.Equal(t, true, decode(t, text)["deleted"])
 }
 
 // The erase needs the merged delete pull request itself to have removed the
@@ -726,6 +780,62 @@ func TestAMergedDeleteThatDidNotRemoveTheFileErasesNothing(t *testing.T) {
 		siblingOverlay("a sibling overlay sets a namespace of a form the scan does not know", "org-template", "payments", map[string]string{
 			"kustomization.yaml": "namespace:\n  name: org-acme\nresources:\n  - ../../base\n",
 		}, "namespace of a form the scan does not know"),
+		siblingOverlay("a sibling overlay substitutes the name by vars with configurations", "org-acme", "legacy", map[string]string{
+			"kustomization.yaml": "resources:\n  - ../../base\nconfigurations:\n  - varreference.yaml\nvars:\n  - name: ORG\n    objref:\n      kind: ConfigMap\n      name: org\n      apiVersion: v1\n    fieldref:\n      fieldpath: data.name\n",
+			"varreference.yaml":  "varReference:\n  - path: metadata/name\n    kind: AgentPlatformOrganization\n",
+		}, "vars with configurations"),
+		siblingOverlay("a sibling overlay writes the vars and configurations keys in another case", "org-acme", "legacy", map[string]string{
+			"kustomization.yaml": "resources:\n  - ../../base\nConfigurations:\n  - varreference.yaml\nVars:\n  - name: ORG\n",
+		}, "vars with configurations"),
+		{
+			name: "the file was moved to a document named by a Kustomize var",
+			edit: func(t *testing.T, fake *commit.Fake, head string, _ []byte) {
+				doc := orgDocument(t, "org-acme")
+				require.NoError(t, unstructured.SetNestedField(doc, "$(ORG)", "metadata", "name"))
+				org, err := yaml.Marshal(doc)
+				require.NoError(t, err)
+				require.NoError(t, fake.Commit(ctx, mcRepo, head, "move it", map[string][]byte{objectsPath + "/base/org.yaml": org}))
+			},
+			want:      []string{"conflict:", objectsPath + "/base/org.yaml", "still defines it"},
+			noConfirm: true,
+		},
+		leavingOverlay("a sibling overlay loads resources from outside the objects path", map[string]string{
+			"kustomization.yaml": "resources:\n  - ../../../../../shared/orgs\n",
+		}, `resources entry "../../../../../shared/orgs" leaves the objects path`),
+		leavingOverlay("a sibling overlay loads a remote resource", map[string]string{
+			"kustomization.yaml": "resources:\n  - https://github.com/example/orgs//shared/orgs?ref=v1\n",
+		}, `resources entry "https://github.com/example/orgs//shared/orgs?ref=v1" is a remote`),
+		leavingOverlay("a sibling overlay loads a remote without a scheme", map[string]string{
+			"kustomization.yaml": "resources:\n  - github.com/example/orgs//shared/orgs?ref=v1\n",
+		}, `resources entry "github.com/example/orgs//shared/orgs?ref=v1" is a remote`),
+		leavingOverlay("a sibling overlay loads a path that names nothing under the objects path", map[string]string{
+			"kustomization.yaml": "resources:\n  - example.org/orgs/shared?ref=v1\n",
+		}, `resources entry "example.org/orgs/shared?ref=v1" names nothing under the objects path, so Kustomize loads it as a remote or fails on it`),
+		leavingOverlay("a sibling overlay loads a github.com remote that is also a local directory", map[string]string{
+			"kustomization.yaml":                         "resources:\n  - github.com/example/orgs/shared\n",
+			"github.com/example/orgs/shared/config.yaml": "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: settings\n",
+		}, `resources entry "github.com/example/orgs/shared" is a remote`),
+		leavingOverlay("a sibling overlay loads an SSH remote", map[string]string{
+			"kustomization.yaml": "resources:\n  - git@github.com:example/orgs.git\n",
+		}, `resources entry "git@github.com:example/orgs.git" is a remote`),
+		leavingOverlay("a sibling overlay loads an absolute path", map[string]string{
+			"kustomization.yaml": "resources:\n  - /shared/orgs\n",
+		}, `resources entry "/shared/orgs" leaves the objects path`),
+		leavingOverlay("a sibling overlay loads components from outside the objects path", map[string]string{
+			"kustomization.yaml": "components:\n  - ../../../../../shared/orgs\n",
+		}, `components entry "../../../../../shared/orgs" leaves the objects path`),
+		leavingOverlay("a sibling overlay loads remote components", map[string]string{
+			"kustomization.yaml": "components:\n  - https://github.com/example/orgs//shared/orgs?ref=v1\n",
+		}, `components entry "https://github.com/example/orgs//shared/orgs?ref=v1" is a remote`),
+		leavingOverlay("a sibling overlay loads bases from outside the objects path", map[string]string{
+			"kustomization.yaml": "bases:\n  - ../../../../../shared/orgs\n",
+		}, `bases entry "../../../../../shared/orgs" leaves the objects path`),
+		leavingOverlay("a sibling overlay writes the resources key in another case", map[string]string{
+			"kustomization.yaml": "Resources:\n  - ../../../../../shared/orgs\n",
+		}, `resources entry "../../../../../shared/orgs" leaves the objects path`),
+		leavingOverlay("a sibling overlay sets resources of a form the scan does not know", map[string]string{
+			"kustomization.yaml": "resources: ../../../../../shared/orgs\n",
+		}, "resources of a form the scan does not know"),
 		{
 			name: "the head of the branch cannot be read",
 			after: func(t *testing.T, fake *commit.Fake) {
