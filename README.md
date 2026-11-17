@@ -652,7 +652,11 @@ namespace and is not managed. `--kagent-namespace` is never one.
 
 agent-manager keeps nothing in an organization namespace. Its ServiceAccount
 only finds the organization namespaces: RBAC cannot narrow a list by label, so it
-may get and list namespaces, read-only, and keeps the labelled ones.
+may get and list namespaces, read-only, and keeps the labelled ones. The
+list is kept for 10 seconds, so a burst of tool calls lists them once; a
+namespace is always read by its name (or by its organization's labels) when
+the list does not hold it, so a new organization is found at once, and a
+deleted one leaves the list within those 10 seconds.
 Everything else runs as the caller, which needs `--downstream-oauth`.
 
 The organization tools (every name holds `organization`):
@@ -697,7 +701,9 @@ The organization tools (every name holds `organization`):
   (a ModelConfig; the first model of an organization without a default
   carries `agent-platform.giantswarm.io/is-default-model-config: "true"`,
   `default: true` moves the mark, and a namespace with two marks takes no
-  new model until one is chosen; its display name, token limit and prompt
+  new model until one is chosen; when two first models are created at the
+  same time and both take the mark, the answer names the two marks and the
+  fix; its display name, token limit and prompt
   caching, on by default for a new Anthropic model, are in
   [docs/organization-models.md](docs/organization-models.md));
   `list_organization_connectors` and

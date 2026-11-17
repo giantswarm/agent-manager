@@ -469,6 +469,7 @@ func TestTheDefaultModelMark(t *testing.T) {
 	text, isErr := add("claude", nil)
 	require.False(t, isErr, text)
 	assert.Equal(t, "claude", decode(t, text)["defaultModel"])
+	assert.NotContains(t, decode(t, text), "note", "one create alone")
 	text, isErr = add("haiku", nil)
 	require.False(t, isErr, text)
 	assert.Equal(t, "claude", decode(t, text)["defaultModel"])
@@ -487,6 +488,37 @@ func TestTheDefaultModelMark(t *testing.T) {
 	assert.True(t, strings.HasPrefix(text, "conflict:"), text)
 	assert.Contains(t, text, "a, b")
 	assert.Nil(t, g.get(t, mcGVR, orgNS, "c"))
+}
+
+// rivalCreate makes the first live create of a ModelConfig race another
+// first model: the rival, marked as the default, lands just before it.
+func rivalCreate(t *testing.T, f *orgFixture, rival string) {
+	t.Helper()
+	raced := false
+	f.dyn.PrependReactor("create", "modelconfigs", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		if raced || len(a.(k8stesting.CreateActionImpl).CreateOptions.DryRun) > 0 {
+			return false, nil, nil
+		}
+		raced = true
+		require.NoError(t, f.dyn.Tracker().Create(mcGVR, model(rival, true), orgNS))
+		return false, nil, nil
+	})
+}
+
+// Two first models created at the same time both take the default mark; the
+// answer reads the models again and names the two marks and the fix.
+func TestTwoConcurrentFirstModelsNameTheDoubleMark(t *testing.T) {
+	f := newOrgFixture(t)
+	seedSecret(t, f, "tenant-credential-claude", "apiKey")
+	rivalCreate(t, f, "gpt")
+	text, isErr := f.call(t, ToolSetOrganizationModel, map[string]any{"namespace": orgNS, "name": "claude", "provider": "Anthropic", "model": "claude-sonnet-4-6"})
+	require.False(t, isErr, text)
+	out := decode(t, text)
+	assert.Contains(t, out["note"], "2 models marked as its default (claude, gpt)")
+	assert.Contains(t, out["note"], "set_organization_model with default true on one of them")
+	assert.NotContains(t, out, "defaultModel")
+	assert.True(t, marked(f.get(t, mcGVR, orgNS, "claude")))
+	assert.True(t, marked(f.get(t, mcGVR, orgNS, "gpt")))
 }
 
 // No organization tool takes a secret value; a missing credential is
