@@ -564,10 +564,13 @@ one-time consent (`core_auth_login server=agent-manager`).
 
 ## Identity
 
+Configuration upgrades: [OAuth migration](docs/oauth-migration.md).
+
 The caller, not the ServiceAccount. With `--enable-oauth` agent-manager is an
 OAuth 2.1 resource server ([mcp-oauth](https://github.com/giantswarm/mcp-oauth))
 in front of **both** the MCP endpoint and the REST API; providers `dex` (with
-`--dex-ca-file` and `--allow-private-oauth-urls` for an in-cluster Dex) and
+`--dex-ca-file` for a Dex with a private certificate; the Dex client follows
+`HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY`) and
 `google`. Nobody logs in to agent-manager itself: muster forwards the session's
 IdP id_token byte-identical (MCPServer `auth: {type: oauth, forwardToken: true,
 requiredAudiences}`, rendered by the chart under `muster.mcpServer.auth`) and
