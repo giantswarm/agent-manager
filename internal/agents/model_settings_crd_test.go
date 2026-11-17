@@ -2,6 +2,7 @@ package agents
 
 import (
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -15,7 +16,9 @@ import (
 // tested against (testdata/crds). The map can go wrong only when kagent
 // changes a provider block, so a refresh of the CRD copy for a new kagent
 // version fails here until the map agrees. A provider block is a spec
-// property whose name is, in any case, a value of the spec.provider enum.
+// property that a CEL rule of the spec pairs with a provider
+// (providerBlockRule), or whose name is, in any case, a value of the
+// spec.provider enum.
 func TestModelSettingsMapMatchesTheModelConfigCRD(t *testing.T) {
 	const crdFile = "testdata/crds/api.kagent.dev_modelconfigs.yaml"
 	raw, err := os.ReadFile(crdFile)
@@ -32,15 +35,28 @@ func TestModelSettingsMapMatchesTheModelConfigCRD(t *testing.T) {
 	providers := spec.Properties["provider"].Enum
 	require.NotEmpty(t, providers, "%s: spec.provider has no enum", crdFile)
 
-	// The provider blocks of the CRD, by provider in lower case.
+	// The provider blocks of the CRD, by provider in lower case: from the
+	// CEL rules that pair a block with its provider, and from a spec
+	// property named like a provider.
 	crdBlocks := map[string]string{}
+	for _, v := range spec.XValidations {
+		if m := providerBlockRule.FindStringSubmatch(v.Rule); m != nil {
+			crdBlocks[strings.ToLower(m[2])] = m[1]
+		}
+	}
+	require.NotEmpty(t, crdBlocks, "%s: no CEL rule of the form %s pairs a provider block with its provider", crdFile, providerBlockRule)
 	for _, p := range providers {
 		var provider string
 		require.NoError(t, yaml.Unmarshal(p.Raw, &provider))
 		for key := range spec.Properties {
-			if strings.EqualFold(key, provider) {
-				crdBlocks[strings.ToLower(provider)] = key
+			if !strings.EqualFold(key, provider) {
+				continue
 			}
+			if paired, ok := crdBlocks[strings.ToLower(provider)]; ok && paired != key {
+				t.Errorf("%s: a CEL rule pairs provider %s with spec.%s, and spec.%s is named like it; decide which block is the provider's before providerBlockKeys can follow", crdFile, provider, paired, key)
+				continue
+			}
+			crdBlocks[strings.ToLower(provider)] = key
 		}
 	}
 
@@ -83,6 +99,10 @@ func TestModelSettingsMapMatchesTheModelConfigCRD(t *testing.T) {
 		}
 	}
 }
+
+// providerBlockRule is kagent's CEL rule that keeps a provider block for its
+// own provider: !(has(self.openAI) && self.provider != 'OpenAI').
+var providerBlockRule = regexp.MustCompile(`^!\(has\(self\.(\w+)\) && self\.provider != '(\w+)'\)$`)
 
 // settingNames names the settings b has, for a failure message.
 func settingNames(b ModelSettingsBlock) string {
