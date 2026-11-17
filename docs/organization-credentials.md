@@ -287,7 +287,10 @@ The base is checked again once the pull request's branch is cut from it: a
 file another commit added after the first check is refused there too
 (`already_exists` with `create`, else `conflict`), before anything is
 committed. The branch stays, without a commit, and the next write brings it up
-to date. This holds for every commit-mode create, the organization's own
+to date. When another commit added the identical files and their
+kustomization entries before the change was planned, so that Git already
+carries the whole change, the create is refused the same way, and no branch
+is cut. This holds for every commit-mode create, the organization's own
 object and first admins included (see
 [repository requirements](organizations-commit-mode.md)).
 The receipt's credential state `committed` means a PR exists, not that Flux has
@@ -373,6 +376,30 @@ carry the `agent-manager.giantswarm.io/credential-operation`
 marker; committed files hold the desired state alone. An uncertain Git save
 verifies the same private branch against stored encrypted-file hashes and
 opens or reuses its PR. It never creates a second branch automatically.
+
+A Git save runs all its checks before it creates the branch: the Git files and
+the encryption policy against the preparation, the objects that use the key, a
+name already taken, and the encryption of each value. A refusal there writes
+nothing: the operation stays `pending`, a retry gets the same refusal, and a
+fresh preparation is what is needed. Only a failure after the branch exists
+leaves the operation `uncertain`.
+
+Once the checks pass, the branch, the commit and the pull request run to their
+end also when the caller goes away (its request is cancelled or times out):
+the operation ends `complete`, its credentials `committed`, with its pull
+request, as for a caller that waited, and a repeated call gives the receipt.
+These writes have their own time limit of two minutes, and recording their
+outcome has 15 seconds more; the operation does not expire before they end. A
+restart of agent-manager during the writes still stops them: the operation
+stays `saving` or `uncertain`, and a repeated save recovers it as above.
+
+A failed save logs `credential save failed` with the `step` that failed (for
+example `dry run`, `prepare commit`, `create branch`, `commit` or
+`open pull request`) and its `cause`, at `ERROR` for a failure and at `WARN`
+for a refusal the caller can act on. A Kubernetes API answer is logged by its
+reason and code only, since it may quote the refused object. Any other cause
+is logged with every value the save received removed, as typed, quoted and
+base64 encoded.
 
 A crash before a write, or after a write before recording its version, can leave
 an operation without enough evidence to complete it. Inspect the recorded branch or marked live resources;

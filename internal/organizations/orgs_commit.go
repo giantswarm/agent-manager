@@ -203,7 +203,7 @@ func (s *Service) deleteCommit(ctx context.Context, c kube.Client, u *unstructur
 		return false, err
 	}
 	what := fmt.Sprintf("AgentPlatformOrganization %s/%s", req.Parent, req.Name)
-	head := branch("delete", req.Parent, req.Name)
+	object := branch("delete", req.Parent, req.Name)
 	prURL := org.Annotations[DeletePullRequestAnnotation]
 	// merged tells only that the pull request the object names merged;
 	// whether that merge removed the file is asked of its files (changes)
@@ -241,9 +241,9 @@ func (s *Service) deleteCommit(ctx context.Context, c kube.Client, u *unstructur
 		// The delete pull request agent-manager opened is open: the object
 		// carries it, or a mark that failed after the pull request opened is
 		// written now.
-		open, has, err := cm.remote.FindPullRequest(ctx, cm.cfg.Objects.Repository, head)
+		open, has, err := cm.openPullRequest(ctx, object)
 		if err != nil {
-			return false, commitError(cm.gh, err)
+			return false, err
 		}
 		if has {
 			if prURL != open.URL && !req.DryRun {

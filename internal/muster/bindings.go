@@ -69,6 +69,7 @@ var (
 const (
 	callTimeout   = 10 * time.Second
 	maxErrorBytes = 4 << 10
+	maxBindBytes  = 16 << 10
 )
 
 // Client is muster's session bindings endpoint.
@@ -100,6 +101,9 @@ func (c *Client) Bind(ctx context.Context, token string, b Binding) error {
 	body, err := json.Marshal(b)
 	if err != nil {
 		return fmt.Errorf("muster: encode the binding: %w", err)
+	}
+	if len(body) > maxBindBytes {
+		return fmt.Errorf("%w: session binding encodes to %d bytes, more than the %d allowed; reduce the toolset or use a preset", ErrInvalid, len(body), maxBindBytes)
 	}
 	return c.call(ctx, http.MethodPut, c.endpoint.String(), token, body)
 }

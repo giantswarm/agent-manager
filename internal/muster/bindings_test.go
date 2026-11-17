@@ -2,9 +2,12 @@ package muster
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -92,6 +95,61 @@ func TestNoCallWithoutAToken(t *testing.T) {
 	c, err := New("http://muster.example/session-bindings", nil)
 	require.NoError(t, err)
 	require.ErrorIs(t, c.Bind(t.Context(), "", Binding{}), ErrUnauthenticated)
+}
+
+func TestBindEncodedBodyLimit(t *testing.T) {
+	for _, testCase := range []struct {
+		name string
+		tool string
+	}{
+		{"ASCII", strings.Repeat("x", 20000)},
+		{"JSON escaping", "tool:" + strings.Repeat("\"", 8187)},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			var called atomic.Bool
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				called.Store(true)
+				w.WriteHeader(http.StatusNoContent)
+			}))
+			t.Cleanup(server.Close)
+			client, err := New(server.URL+"/session-bindings", nil)
+			require.NoError(t, err)
+			err = client.Bind(t.Context(), "id-token", Binding{Actor: actor, Session: "kagent/0199", Providers: []string{"muster"}, Toolset: []string{testCase.tool}})
+			require.ErrorIs(t, err, ErrInvalid)
+			require.ErrorContains(t, err, "16384 allowed")
+			require.False(t, called.Load())
+		})
+	}
+}
+
+func TestBindSerializedBodyBoundary(t *testing.T) {
+	for _, size := range []int{16384, 16385} {
+		t.Run(fmt.Sprint(size), func(t *testing.T) {
+			var called atomic.Bool
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				called.Store(true)
+				w.WriteHeader(http.StatusNoContent)
+			}))
+			t.Cleanup(server.Close)
+			client, err := New(server.URL+"/session-bindings", nil)
+			require.NoError(t, err)
+			binding := Binding{Actor: actor, Providers: []string{"muster"}}
+			encoded, err := json.Marshal(binding)
+			require.NoError(t, err)
+			binding.Session = strings.Repeat("s", size-len(encoded))
+			encoded, err = json.Marshal(binding)
+			require.NoError(t, err)
+			require.Len(t, encoded, size)
+			err = client.Bind(t.Context(), "id-token", binding)
+			if size == 16384 {
+				require.NoError(t, err)
+				require.True(t, called.Load())
+			} else {
+				require.ErrorIs(t, err, ErrInvalid)
+				require.False(t, called.Load())
+			}
+		})
+	}
 }
 
 func TestTheEndpointIsAnHTTPURL(t *testing.T) {

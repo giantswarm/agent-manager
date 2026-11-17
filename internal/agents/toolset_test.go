@@ -2,7 +2,6 @@ package agents
 
 import (
 	"encoding/json"
-	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -10,11 +9,6 @@ import (
 )
 
 func TestValidateToolsetGrammar(t *testing.T) {
-	many := make([]string, MaxToolsetSelectors+1)
-	for i := range many {
-		many[i] = fmt.Sprintf("tool:x_a_%d", i)
-	}
-
 	cases := []struct {
 		name     string
 		toolset  []string
@@ -27,8 +21,6 @@ func TestValidateToolsetGrammar(t *testing.T) {
 		{name: "empty list points at preset:none", toolset: []string{}, required: true, wantErr: []string{"preset:none", "empty"}},
 		{name: "empty list on update too", toolset: []string{}, required: false, wantErr: []string{"preset:none"}},
 		{name: "one selector of each kind", toolset: []string{"preset:read-only", "server:github", "workflow:incident-triage", "tool:x_mcp-kubernetes_get_pods"}},
-		{name: "exactly the cap", toolset: many[:MaxToolsetSelectors]},
-		{name: "one over the cap says define a preset", toolset: many, wantErr: []string{"33 selectors", "define a preset"}},
 		{name: "toolset: is reserved", toolset: []string{"preset:read-only", "toolset:shared"}, wantErr: []string{`"toolset:shared"`, "reserved"}},
 		{name: "label: is preset-only", toolset: []string{"label:agent-platform.giantswarm.io/tool-group=infrastructure"}, wantErr: []string{"label:", "presets only", "preset:infrastructure"}},
 		{name: "unknown kind", toolset: []string{"pattern:core_*"}, wantErr: []string{`"pattern:core_*"`, "preset:<name>, server:<name>, workflow:<name> or tool:<name>"}},

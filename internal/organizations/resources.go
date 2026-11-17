@@ -396,10 +396,12 @@ func refuseProviderChangeOnSameSecret(obj *unstructured.Unstructured, current st
 // Anthropic block caches by default, as the platform's models do, and the
 // token limit of the old block, carried, moves into it when req gives none.
 // Caching that is on gets agents.DefaultCacheTTL when no cache time is
-// stored or given. A setting the provider's block does not have is refused:
-// the API server would prune it and the model would run without it in
-// silence. The values themselves (the cacheTTL enum, a minimum) are judged
-// by the API server's dry run.
+// stored or given. Whether the provider's block has a setting is judged by
+// the API server's strict dry run, which refuses a field the block does not
+// have and names it, as it judges the values (the cacheTTL enum, a
+// minimum). The carry of the old token limit alone reads the provider map:
+// it moves the limit only into a block that has one, so that a provider
+// change that gives no limit is not refused for the old one.
 func setModelSettings(obj *unstructured.Unstructured, req ModelRequest, provider string, fresh bool, carried map[string]any) error {
 	if req.DisplayName != nil {
 		annotations := obj.GetAnnotations()
@@ -413,20 +415,10 @@ func setModelSettings(obj *unstructured.Unstructured, req ModelRequest, provider
 		}
 		obj.SetAnnotations(annotations)
 	}
-	block, _ := agents.SettingsBlockOf(provider)
-	if limit := agents.IntValue(carried["maxTokens"]); limit > 0 && req.MaxTokens == nil && block.MaxTokens {
-		_ = unstructured.SetNestedField(obj.Object, limit, "spec", block.Key, "maxTokens")
-	}
-	if req.MaxTokens != nil {
-		switch {
-		case *req.MaxTokens < 0:
-			return invalidf("maxTokens must be 0 (the provider's default) or more, not %d", *req.MaxTokens)
-		case !block.MaxTokens:
-			return invalidf("provider %s has no maxTokens in kagent's ModelConfig (Anthropic, AnthropicVertexAI, AzureOpenAI, Mistral and OpenAI have one): leave maxTokens out", provider)
-		case *req.MaxTokens == 0:
-			removeBlockField(obj, block.Key, "maxTokens")
-		default:
-			_ = unstructured.SetNestedField(obj.Object, *req.MaxTokens, "spec", block.Key, "maxTokens")
+	key := agents.ProviderBlockKey(provider)
+	if block, _ := agents.SettingsBlockOf(provider); block.MaxTokens {
+		if limit := agents.IntValue(carried["maxTokens"]); limit > 0 && req.MaxTokens == nil {
+			_ = unstructured.SetNestedField(obj.Object, limit, "spec", key, "maxTokens")
 		}
 	}
 	caching := req.PromptCaching
@@ -434,18 +426,28 @@ func setModelSettings(obj *unstructured.Unstructured, req ModelRequest, provider
 		on := true
 		caching = &on
 	}
-	if (caching != nil || req.CacheTTL != "") && !block.Caching {
-		return invalidf("provider %s has no promptCaching or cacheTTL in kagent's ModelConfig (Anthropic and Bedrock have them): leave them out", provider)
+	if key == "" && (req.MaxTokens != nil || caching != nil || req.CacheTTL != "") {
+		return invalidf("provider %s is not one of kagent's ModelConfig providers, so it has no block for maxTokens, promptCaching or cacheTTL", provider)
+	}
+	if req.MaxTokens != nil {
+		switch {
+		case *req.MaxTokens < 0:
+			return invalidf("maxTokens must be 0 (the provider's default) or more, not %d", *req.MaxTokens)
+		case *req.MaxTokens == 0:
+			removeBlockField(obj, key, "maxTokens")
+		default:
+			_ = unstructured.SetNestedField(obj.Object, *req.MaxTokens, "spec", key, "maxTokens")
+		}
 	}
 	if caching != nil {
-		_ = unstructured.SetNestedField(obj.Object, *caching, "spec", block.Key, "promptCaching")
+		_ = unstructured.SetNestedField(obj.Object, *caching, "spec", key, "promptCaching")
 	}
 	ttl := req.CacheTTL
-	if stored, _, _ := unstructured.NestedString(obj.Object, "spec", block.Key, "cacheTTL"); ttl == "" && stored == "" && caching != nil && *caching {
+	if stored, _, _ := unstructured.NestedString(obj.Object, "spec", key, "cacheTTL"); ttl == "" && stored == "" && caching != nil && *caching {
 		ttl = agents.DefaultCacheTTL
 	}
 	if ttl != "" {
-		_ = unstructured.SetNestedField(obj.Object, ttl, "spec", block.Key, "cacheTTL")
+		_ = unstructured.SetNestedField(obj.Object, ttl, "spec", key, "cacheTTL")
 	}
 	return nil
 }
@@ -685,9 +687,44 @@ func (s *Service) SetConnector(ctx context.Context, req ConnectorRequest) (*Reso
 		obj = newObject(s.apiVersion(), "RemoteMCPServer", ns, req.Name)
 		res.Created = true
 	}
+	if err := setConnectorSpec(obj, req); err != nil {
+		return nil, err
+	}
+	op := opUpdate
+	if res.Created {
+		op = opCreate
+	}
+	wr := write{gvr: gvr, kind: "RemoteMCPServer", op: op, obj: obj.Object, ns: ns, name: req.Name, what: "RemoteMCPServer " + ns + "/" + req.Name, reason: wayOrganizationAdmin(ns)}
+	seenCredentials := map[string]bool{}
+	for _, cc := range connectorCredentials(obj) {
+		pair := cc.Secret + "/" + cc.Key
+		if seenCredentials[pair] {
+			continue
+		}
+		seenCredentials[pair] = true
+		cred, err := s.credential(ctx, c, org, "RemoteMCPServer", req.Name, cc.Secret, cc.Key)
+		if err != nil {
+			return nil, err
+		}
+		res.Credentials = append(res.Credentials, cred)
+	}
+	if err = s.landResource(ctx, w, []write{wr}, res, "connector-"+req.Name, "chore(organizations): set connector "+req.Name); err != nil {
+		return nil, createOnly(err, req.Create, "RemoteMCPServer", ns, req.Name)
+	}
+	if !req.DryRun && res.Commit == nil && res.CredentialOperation == "" {
+		s.log.Info("organization connector written", identity.LogAttr(ctx), fieldNamespace, ns, "name", req.Name, "created", res.Created)
+	}
+	return res, nil
+}
+
+// setConnectorSpec writes the URL, the description and the credential
+// header of req into the connector obj. withCredential and NoCredential are
+// checked by the caller not to be both set.
+func setConnectorSpec(obj *unstructured.Unstructured, req ConnectorRequest) error {
+	withCredential := req.CredentialHeader != "" || req.CredentialSecret != "" || req.CredentialKey != ""
 	if req.URL != "" {
 		if err := refuseCredentialInURL(req.URL); err != nil {
-			return nil, err
+			return err
 		}
 		_ = unstructured.SetNestedField(obj.Object, req.URL, "spec", "url")
 	}
@@ -726,7 +763,7 @@ func (s *Service) SetConnector(ctx context.Context, req ConnectorRequest) (*Reso
 				Key:    firstOf(req.CredentialKey, prev.Key, defaultTokenKey),
 			}
 			if err := credentialRef(cred.Secret, cred.Key); err != nil {
-				return nil, err
+				return err
 			}
 			kept = append(kept, map[string]any{"name": cred.Header, "valueFrom": map[string]any{"type": "Secret", "name": cred.Secret, "key": cred.Key}})
 		}
@@ -736,31 +773,7 @@ func (s *Service) SetConnector(ctx context.Context, req ConnectorRequest) (*Reso
 			_ = unstructured.SetNestedSlice(obj.Object, kept, "spec", "headersFrom")
 		}
 	}
-	op := opUpdate
-	if res.Created {
-		op = opCreate
-	}
-	wr := write{gvr: gvr, kind: "RemoteMCPServer", op: op, obj: obj.Object, ns: ns, name: req.Name, what: "RemoteMCPServer " + ns + "/" + req.Name, reason: wayOrganizationAdmin(ns)}
-	seenCredentials := map[string]bool{}
-	for _, cc := range connectorCredentials(obj) {
-		pair := cc.Secret + "/" + cc.Key
-		if seenCredentials[pair] {
-			continue
-		}
-		seenCredentials[pair] = true
-		cred, err := s.credential(ctx, c, org, "RemoteMCPServer", req.Name, cc.Secret, cc.Key)
-		if err != nil {
-			return nil, err
-		}
-		res.Credentials = append(res.Credentials, cred)
-	}
-	if err = s.landResource(ctx, w, []write{wr}, res, "connector-"+req.Name, "chore(organizations): set connector "+req.Name); err != nil {
-		return nil, createOnly(err, req.Create, "RemoteMCPServer", ns, req.Name)
-	}
-	if !req.DryRun && res.Commit == nil && res.CredentialOperation == "" {
-		s.log.Info("organization connector written", identity.LogAttr(ctx), fieldNamespace, ns, "name", req.Name, "created", res.Created)
-	}
-	return res, nil
+	return nil
 }
 
 // ---- egress policies --------------------------------------------------------------
@@ -814,6 +827,34 @@ type EgressRequest struct {
 	Mode string
 }
 
+// setEgressDestinations writes the destination list of req into the egress
+// policy obj, each credential by reference.
+func setEgressDestinations(obj *unstructured.Unstructured, req EgressRequest) error {
+	dests := make([]any, 0, len(req.Destinations))
+	for _, d := range req.Destinations {
+		if d.Origin == "" {
+			return invalidf("every destination needs an origin")
+		}
+		entry := map[string]any{"origin": d.Origin}
+		if d.CredentialHeader != "" {
+			secret := firstOf(d.CredentialSecret, CredentialPrefix+req.Name)
+			key := firstOf(d.CredentialKey, defaultTokenKey)
+			if err := credentialRef(secret, key); err != nil {
+				return err
+			}
+			auth := map[string]any{"header": d.CredentialHeader, "secretKeyRef": map[string]any{"name": secret, "key": key}}
+			if d.CredentialPrefix != "" {
+				auth["prefix"] = d.CredentialPrefix
+			}
+			entry["authentication"] = auth
+		} else if d.CredentialSecret != "" || d.CredentialKey != "" || d.CredentialPrefix != "" {
+			return invalidf("destination %s: credentialHeader names where the credential goes; without it the origin is reached without one", d.Origin)
+		}
+		dests = append(dests, entry)
+	}
+	return unstructured.SetNestedSlice(obj.Object, dests, "spec", "destinations")
+}
+
 // SetEgressPolicy creates or replaces an EgressPolicy as the caller, dry run
 // first.
 func (s *Service) SetEgressPolicy(ctx context.Context, req EgressRequest) (*ResourceResult, error) {
@@ -855,29 +896,9 @@ func (s *Service) SetEgressPolicy(ctx context.Context, req EgressRequest) (*Reso
 		obj = newObject(s.apiVersion(), "EgressPolicy", ns, req.Name)
 		res.Created = true
 	}
-	dests := make([]any, 0, len(req.Destinations))
-	for _, d := range req.Destinations {
-		if d.Origin == "" {
-			return nil, invalidf("every destination needs an origin")
-		}
-		entry := map[string]any{"origin": d.Origin}
-		if d.CredentialHeader != "" {
-			secret := firstOf(d.CredentialSecret, CredentialPrefix+req.Name)
-			key := firstOf(d.CredentialKey, defaultTokenKey)
-			if err := credentialRef(secret, key); err != nil {
-				return nil, err
-			}
-			auth := map[string]any{"header": d.CredentialHeader, "secretKeyRef": map[string]any{"name": secret, "key": key}}
-			if d.CredentialPrefix != "" {
-				auth["prefix"] = d.CredentialPrefix
-			}
-			entry["authentication"] = auth
-		} else if d.CredentialSecret != "" || d.CredentialKey != "" || d.CredentialPrefix != "" {
-			return nil, invalidf("destination %s: credentialHeader names where the credential goes; without it the origin is reached without one", d.Origin)
-		}
-		dests = append(dests, entry)
+	if err := setEgressDestinations(obj, req); err != nil {
+		return nil, err
 	}
-	_ = unstructured.SetNestedSlice(obj.Object, dests, "spec", "destinations")
 	op := opUpdate
 	if res.Created {
 		op = opCreate

@@ -587,13 +587,13 @@ func TestValidateCreateIsADryRun(t *testing.T) {
 	assert.Equal(t, chart.EmbeddedSchemaVersion, res.SchemaVersion)
 
 	// The toolset grammar is judged in the dry run too.
-	many := make([]string, MaxToolsetSelectors+1)
+	many := make([]string, 129)
 	for i := range many {
 		many[i] = fmt.Sprintf("tool:x_a_%d", i)
 	}
 	for toolset, want := range map[*[]string]string{
 		{}:                                  "preset:none",
-		&many:                               "define a preset",
+		&many:                               "maxItems",
 		{"toolset:shared"}:                  "reserved",
 		{"label:tool-group=infrastructure"}: "presets only",
 	} {

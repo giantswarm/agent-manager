@@ -36,12 +36,14 @@ namespace admits only the providers the listener serves.
   limit moves to the new provider's block when that block has one and the
   call gives none; a new Anthropic block caches by default, as a new model
   does.
-- A setting that the provider's block does not have (prompt caching on an
-  OpenAI model, a token limit on an Ollama model) is refused with
-  `invalid_request`: the API server would drop it and the model would run
-  without it. A negative `maxTokens` is refused too. The API server's dry run
-  judges the values themselves (the `cacheTTL` values, a minimum), in apply
-  and commit mode.
+- Every organization write asks the API server for strict field validation.
+  A setting that the provider's block does not have (prompt caching on an
+  OpenAI model, a token limit on an Ollama model), and any other field that
+  kagent's schema does not have (one in a model file in git, say), is refused
+  by the API server's dry run with `invalid_request` that names the field
+  (`spec.openAI.promptCaching`), in apply and commit mode, and nothing is
+  written. A negative `maxTokens` is refused too. The dry run also judges the
+  values themselves (the `cacheTTL` values, a minimum).
 - Apply mode writes the settings to the live object; commit mode writes the
   same fields into the model's file in git. An update in commit mode starts
   from the file in git: a setting changed on the live object by hand and not
