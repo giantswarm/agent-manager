@@ -564,8 +564,6 @@ one-time consent (`core_auth_login server=agent-manager`).
 
 ## Identity
 
-Configuration upgrades: [OAuth migration](docs/oauth-migration.md).
-
 The caller, not the ServiceAccount. With `--enable-oauth` agent-manager is an
 OAuth 2.1 resource server ([mcp-oauth](https://github.com/giantswarm/mcp-oauth))
 in front of **both** the MCP endpoint and the REST API; providers `dex` (with
