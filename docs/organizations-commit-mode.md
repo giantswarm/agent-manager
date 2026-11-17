@@ -8,7 +8,11 @@ installation's repository. Each write's pull request has a head branch of its ow
 from the base branch: the object's branch name (`agent-manager/<verb>-<parent>-<name>`),
 an underscore and a random suffix. A second write of the same object is refused while a
 pull request of the object is open, also one on the name without a suffix that an older
-agent-manager opened. This page states the repository layout the tools write and
+agent-manager opened. When two writes of the same object arrive at almost the same time
+and each opens a pull request, the pull request with the lower number stays: the write
+that opened the other one closes it and answers the same conflict. When that close
+fails, the answer names both pull requests and asks the caller to close the second one.
+This page states the repository layout the tools write and
 what the repository must have before an installation turns on
 `tenants.commit.repository`.
 

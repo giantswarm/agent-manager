@@ -533,7 +533,18 @@ standard manifests a kubectl or GitOps user would apply, returns them on
   release's file and a delete removes it (and the chart source's when no
   other release uses it); a release defined elsewhere in the repository is
   refused. A Kustomization that does not prune leaves a removed release in
-  place, which the answer's `liveSteps` names. The result carries
+  place, which the answer's `liveSteps` names. Each pull request has a head
+  branch of its own, cut from the base: the agent's branch name
+  (`agent-manager/<verb>-<namespace>-<name>`, verb `create`, `update` or
+  `delete`), an underscore and a random suffix, so no file of an earlier,
+  closed or merged, pull request of the agent rides along. While a pull
+  request of the same verb on the agent is open, also one on the name
+  without a suffix that an older agent-manager opened, a write adds its
+  commit to that pull request. When two writes arrive at almost the same
+  time and each opens one, the lower number stays and the other write closes
+  its own and answers `conflict`: call again to add the change. agent-manager
+  deletes no branch: turn on "Automatically delete head branches" in the
+  repository's settings, or the branch of each merged pull request stays. The result carries
   `commit: {repository, base, directory, kustomization, prune, branch, files:
   [{path, action, content (dry run)}], pullRequest, number, author}`.
 
