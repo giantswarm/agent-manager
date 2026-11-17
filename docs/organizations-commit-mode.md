@@ -153,6 +153,12 @@ The erase is refused:
   organization document a match. When the objects path cannot
   be read (a read fails, or the repository's tree is too large for one read), nothing
   is erased (see "What the scan is for" below);
+- when a kustomization under the objects path loads files from outside it: a
+  `resources`, `components` or `bases` entry that is a remote (it holds `://` or `//`),
+  a path that leaves the objects path, or one that names no file or directory under it.
+  The scan does not read what such an entry loads, so whether it still defines the
+  organization is unknown. The answer names the kustomization and the entry: bring
+  what it loads under the objects path, or remove the entry, and erase again;
 - when GitHub cannot list the merged pull request's files: whether it removed the file
   is unknown, so nothing is erased. Call again to retry. A pull request of more than
   3000 files never lists, since GitHub lists at most 3000: restore only the object's
@@ -187,19 +193,25 @@ make it that organization:
 | `namespace` with another value in clear text | none: Kustomize writes that value, which is not `<parent>` |
 | `namePrefix` or `nameSuffix` | a document of `<parent>` whose own name is a part of `<name>`: a prefix or a suffix only adds text |
 | a non-empty `transformers`, `patches`, `patchesJson6902`, `patchesStrategicMerge` or `replacements` | every document: these can set any namespace and any name |
+| a non-empty `vars` and a non-empty `configurations` | every document: a `varReference` in a configurations file can substitute `$(VAR)` in a namespace or a name |
 | a value of a form the scan does not know (a `namespace` that is not a string, for one) | every document that the field could change |
 | content that does not parse | every document |
 
 The fields combine: with `namespace: <parent>` and a `nameSuffix`, a document in any
 namespace whose name is a part of `<name>` counts. A document with no namespace, or
 whose own namespace and name are `<parent>/<name>`, always counts, and so does one
-whose own namespace or name the scan cannot read. The scan reads a kustomization's
-keys in any case (`Patches:` is `patches:`), as Kustomize does.
+whose own namespace or name the scan cannot read: SOPS-encrypted, or with a
+variable (`${...}` of Flux, `$(...)` of a Kustomize var). The scan reads a
+kustomization's keys in any case (`Patches:` is `patches:`), as Kustomize does.
 
-The scan reads only the files under the objects path. It does not follow a
-kustomization's `resources`, `components` or `bases` entry to a remote URL or to a path
-outside the objects path, and it does not read `vars` with `configurations`: only the
-second guard below covers what those bring in.
+The scan reads only the files under the objects path. A kustomization there whose
+`resources`, `components` or `bases` entry loads files from elsewhere refuses the
+erase, whatever those files hold: a remote entry (it holds `://` or `//`), a path that
+is not under the objects path once joined with the kustomization's directory, or a
+path that names no file or directory under the objects path, which Kustomize then
+loads as a remote or fails on. An entry that stays under the objects path, such as
+`../../base` from a sibling overlay, is read as above and refuses nothing by itself
+(giantswarm/agent-manager#437).
 
 The cost: in a repository that uses such an overlay, an erase can be refused although
 Flux's build no longer holds the organization. The answer names each kustomization and
