@@ -172,21 +172,25 @@ func (r *closingForge) CreateBranch(ctx context.Context, repo commit.Repository,
 	return r.Fake.CreateBranch(ctx, repo, branch, base)
 }
 
-// A pull request found open and closed before the write adds to it is not
-// reopened as a new pull request on its branch: the write closes the one it
-// opened there and asks for a call again, which cuts a head of its own.
-func TestAgentWriteToAPullRequestClosedMeanwhileIsRefused(t *testing.T) {
+// A pull request found open and closed before the write adds to it: the
+// change lands in a new pull request on its branch, which can carry the
+// closed one's files. Nothing proves this call opened it, so the write
+// closes nothing and answers conflict naming both; once that pull request is
+// closed, a call again cuts a head of its own.
+func TestAgentWriteToAPullRequestClosedMeanwhileIsNamed(t *testing.T) {
 	f, fake, ctx := gitOpsFixture(t, true)
 	pr := earlierPullRequest(t, fake, Head(gitopsUpdate))
 	forge := &closingForge{Fake: fake, closing: pr}
 	f.svc.cfg.GitHub = func(string) (GitHubRemote, error) { return forge, nil }
 	_, err := updateGitops(t, f, ctx, "reviews")
 	require.ErrorIs(t, err, ErrConflict)
-	require.ErrorContains(t, err, "call again")
-	for _, p := range fake.PullRequests() {
-		require.True(t, p.Closed, p.URL)
-	}
+	prs := fake.PullRequests()
+	require.Len(t, prs, 2)
+	require.ErrorContains(t, err, prs[0].URL)
+	require.ErrorContains(t, err, prs[1].URL)
+	require.False(t, prs[1].Closed, "the write closes no pull request it cannot prove it opened")
 
+	require.NoError(t, fake.Close(ctx, prs[1].PullRequest, false))
 	res, err := updateGitops(t, f, ctx, "reviews")
 	require.NoError(t, err)
 	require.NotEqual(t, pr.Head, res.Commit.Branch)

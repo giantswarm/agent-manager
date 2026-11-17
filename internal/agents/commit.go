@@ -390,13 +390,11 @@ func (c *agentCommit) open(ctx context.Context, write map[string][]byte, remove 
 	pr := prs[0]
 	if len(open) > 0 && pr.Number != open[0].Number {
 		// The pull request found open was closed or merged after the lookup,
-		// so commit.Open opened a new one on its branch, which can carry the
-		// files of the closed one: this write closes it and asks for a call
-		// that cuts a head of its own.
-		if err := c.remote.Close(ctx, pr, false); err != nil {
-			return nil, fmt.Errorf("%w: the pull request %s of this agent was closed or merged while this call added to it, so this call opened %s on its branch, which can carry the closed one's files; closing %s failed (%v): close %s yourself, then call again", ErrConflict, open[0].URL, pr.URL, pr.URL, err, pr.URL)
-		}
-		return nil, fmt.Errorf("%w: the pull request %s of this agent was closed or merged while this call added to it, so this call opened %s on its branch and closed it: call again", ErrConflict, open[0].URL, pr.URL)
+		// and the commit landed on its branch in another pull request: one
+		// this call opened, or one another writer opened there meanwhile. It
+		// can carry the closed one's files. Nothing proves this call opened
+		// it, so the write closes nothing and names both to the caller.
+		return nil, fmt.Errorf("%w: the pull request %s of this agent was closed or merged while this call added to it, and the change is now in %s on the same branch, which can carry the files of %s: review %s, or close it and call again for a pull request of its own", ErrConflict, open[0].URL, pr.URL, open[0].URL, pr.URL)
 	}
 	if len(open) == 0 {
 		// Another write of the agent may have opened its pull request since
