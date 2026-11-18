@@ -6,7 +6,7 @@ require (
 	buf.build/gen/go/bufbuild/protovalidate/protocolbuffers/go v1.36.12-20260825204119-511051f7f437.2
 	filippo.io/age v1.3.2
 	github.com/Masterminds/semver/v3 v3.5.0
-	github.com/a2aproject/a2a-go/v2 v2.8.0
+	github.com/a2aproject/a2a-go/v2 v2.9.0
 	github.com/giantswarm/agent-platform-operator v0.4.3
 	github.com/giantswarm/gitops-commit v0.12.0-rc.9
 	github.com/giantswarm/mcp-oauth v1.13.18
