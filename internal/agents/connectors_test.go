@@ -142,9 +142,14 @@ func TestConnectorsInCommitMode(t *testing.T) {
 func TestConnectorsRefused(t *testing.T) {
 	f := connectorFixture(t)
 	ctx := t.Context()
+	// helper is another agent's muster binding; vendor is a connector a
+	// HelmRelease of another chart renders.
 	helper := remoteMCPServer("org-a", "helper")
-	helper.SetLabels(map[string]string{HelmReleaseNameLabel: "helper", HelmReleaseNamespaceLabel: "org-a"})
+	helper.SetLabels(map[string]string{HelmReleaseNameLabel: "helper", HelmReleaseNamespaceLabel: "org-a", chartNameLabel: "agent"})
 	mustCreate(t, f, serverGVR, helper)
+	vendor := connector("vendor")
+	vendor.SetLabels(map[string]string{HelmReleaseNameLabel: "vendor-mcp", HelmReleaseNamespaceLabel: "org-a", chartNameLabel: "vendor-mcp"})
+	mustCreate(t, f, serverGVR, vendor)
 	for _, tc := range []struct {
 		name string
 		spec Spec
@@ -169,6 +174,9 @@ func TestConnectorsRefused(t *testing.T) {
 	}
 	_, err := f.dyn.Resource(hrGVR).Namespace("org-a").Get(ctx, "a", metav1.GetOptions{})
 	require.Error(t, err, "nothing is written")
+
+	_, err = f.svc.Create(ctx, connectorSpec("vendored", "vendor"))
+	require.NoError(t, err, "a connector of another chart's release is one")
 
 	_, err = f.svc.Create(ctx, connectorSpec("sre"))
 	require.NoError(t, err)

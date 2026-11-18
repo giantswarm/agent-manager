@@ -20,6 +20,10 @@ import (
 // after the muster binding.
 const extraToolsValuesKey = "extraTools"
 
+// chartNameLabel is the label the agent chart puts on what it renders, with
+// the chart's name.
+const chartNameLabel = "app.kubernetes.io/name"
+
 // connectorOf is the name of the connector an extraTools entry binds: an
 // `mcp` entry whose server is a kagent RemoteMCPServer. Any other entry
 // (a subAgent, a server of another kind) is no connector.
@@ -156,7 +160,11 @@ func (s *Service) requireConnectors(ctx context.Context, st *site, agent string,
 	for i := range list.Items {
 		item := &list.Items[i]
 		known[item.GetName()] = true
-		if release := item.GetLabels()[HelmReleaseNameLabel]; release != "" {
+		// The agent chart's muster binding: rendered by a HelmRelease of
+		// the agent chart. A connector a HelmRelease of another chart
+		// renders stays one.
+		labels := item.GetLabels()
+		if release := labels[HelmReleaseNameLabel]; release != "" && labels[chartNameLabel] == st.compose.ChartName {
 			ofRelease[item.GetName()] = release
 		}
 	}

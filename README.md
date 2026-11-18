@@ -118,7 +118,8 @@ kagent adds the connector's origin to the agent's egress itself; an agent on a
 coding Harness, in a namespace that is no organization namespace or on a
 workload cluster takes none, and neither does one whose values set
 `extraAgentSpec.tools`, which replaces the rendered tool list; an agent's own
-muster RemoteMCPServer, or another agent's, is no connector; `update_agent` replaces the connector entries,
+muster RemoteMCPServer, or another agent's (one a HelmRelease of the agent
+chart renders), is no connector; `update_agent` replaces the connector entries,
 keeps every other `extraTools` entry, and `[]` removes them (an empty
 `extraTools` list stays, to override one of the release's `valuesFrom`); `get_agent` and
 `list_agents` report them as `connectors`), `labels`, `annotations`,
