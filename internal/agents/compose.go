@@ -231,6 +231,9 @@ func BuildValues(spec Spec, cfg ComposeConfig) map[string]any {
 	if len(spec.Annotations) > 0 {
 		values["annotations"] = toAnyMap(spec.Annotations)
 	}
+	if len(spec.Connectors) > 0 {
+		setConnectors(values, spec.Connectors)
+	}
 	setDefaultWorkspace(values, spec.DefaultWorkspace)
 	setDefaultToolchains(values, spec.DefaultToolchains)
 	return values

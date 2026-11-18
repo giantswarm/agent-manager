@@ -277,6 +277,13 @@ type Spec struct {
 	// the Agent's spec.egressPolicyRefs). Each must exist, read as the
 	// caller (list_egress_policies); an agent on a coding Harness takes none.
 	EgressPolicyRefs []string `json:"egressPolicyRefs,omitempty"`
+	// Connectors names RemoteMCPServers of the agent's organization namespace
+	// the agent binds beside muster (chart value extraTools, one
+	// {mcp: {server: {kind: RemoteMCPServer, name}}} entry each). Each must
+	// exist, read as the caller (list_organization_connectors); an agent on a
+	// coding Harness, outside an organization namespace or on a workload
+	// cluster takes none.
+	Connectors []string `json:"connectors,omitempty"`
 	// GitAuthSecretName names the Secret in the agent's namespace whose key
 	// `token` reads the agent's private git skills and plugins (chart value
 	// skillsGitAuthSecretRef.name, fanned out to every git source). Empty
@@ -332,6 +339,9 @@ type Update struct {
 	// EgressPolicyRefs replaces the agent's whole list of EgressPolicy names;
 	// empty clears it.
 	EgressPolicyRefs *[]string `json:"egressPolicyRefs,omitempty"`
+	// Connectors replaces the agent's connector bindings; empty removes them.
+	// Its other extraTools entries stay.
+	Connectors *[]string `json:"connectors,omitempty"`
 	// GitAuthSecretName replaces the skills credential Secret; empty clears it
 	// back to the installation's.
 	GitAuthSecretName *string   `json:"gitAuthSecretName,omitempty"`
@@ -479,6 +489,10 @@ type Agent struct {
 	// EgressPolicyRefs are the names of the Agent's spec.egressPolicyRefs (the
 	// chart value agent.egressPolicyRefs while nothing is rendered).
 	EgressPolicyRefs []string `json:"egressPolicyRefs,omitempty"`
+	// Connectors are the RemoteMCPServers of the agent's namespace that its
+	// release binds beside muster: the extraTools entries of the mcp shape on
+	// a RemoteMCPServer, read from the HelmRelease values.
+	Connectors []string `json:"connectors,omitempty"`
 	// Toolset is the toolset the agent declares: the owning HelmRelease's
 	// `toolset` value, or, for a bare Agent object, the X-Muster-Toolset
 	// header of the agent's RemoteMCPServer. Absent when none is declared.
@@ -532,6 +546,7 @@ type AgentSummary struct {
 	ModelConfig               string   `json:"modelConfig,omitempty"`
 	Harness                   string   `json:"harness,omitempty"`
 	Toolset                   []string `json:"toolset,omitempty"`
+	Connectors                []string `json:"connectors,omitempty"`
 	ImplicitFullAccess        bool     `json:"implicitFullAccess,omitempty"`
 	ToolsetBound              bool     `json:"toolsetBound,omitempty"`
 	Ready                     *bool    `json:"ready"`
@@ -564,6 +579,7 @@ func (a Agent) Summary() AgentSummary {
 		ModelConfig:               a.ModelConfig,
 		Harness:                   a.Harness,
 		Toolset:                   a.Toolset,
+		Connectors:                a.Connectors,
 		ImplicitFullAccess:        a.ImplicitFullAccess,
 		ToolsetBound:              a.ToolsetBound,
 		Ready:                     a.Ready,
