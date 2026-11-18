@@ -1047,6 +1047,11 @@ components:
       uniqueItems: true
       description: "Names of EgressPolicies in the agent's namespace whose origins the agent may also reach (chart agent.egressPolicyRefs, the Agent's spec.egressPolicyRefs); each must exist, read as the caller (GET /egresspolicies); an agent on a coding Harness takes none"
       items: { type: string, minLength: 1 }
+    Connectors:
+      type: array
+      uniqueItems: true
+      description: "Names of RemoteMCPServers of the agent's organization namespace (list_organization_connectors) the agent binds beside muster: one extraTools entry {mcp: {server: {kind: RemoteMCPServer, name}}} each; each must exist, read as the caller; no namespace or kind part (a connector is always one of the agent's own organization). Refused on a coding Harness, outside an organization namespace and on a workload cluster"
+      items: { type: string, minLength: 1 }
     Tags:
       type: array
       description: "Free-form keywords as the agent chart's agent.tags takes them (its tag.schema.json; GET /info capabilities.tags), rendered as the ui.giantswarm.io/tags annotation; trimmed, lowercased and deduplicated, order kept"
@@ -1070,6 +1075,7 @@ components:
         plugins: { $ref: "#/components/schemas/Plugins" }
         egress: { $ref: "#/components/schemas/Egress" }
         egressPolicyRefs: { $ref: "#/components/schemas/EgressPolicyRefs" }
+        connectors: { $ref: "#/components/schemas/Connectors" }
         gitAuthSecretName: { type: string, description: "Secret (key token) in the agent's namespace its git skills and plugins are fetched with (chart skillsGitAuthSecretRef.name); omitted, the installation's (GET /info skillsGitAuthSecretName)" }
         toolset: { $ref: "#/components/schemas/Toolset" }
         labels: { type: object, additionalProperties: { type: string } }
@@ -1081,7 +1087,7 @@ components:
         path: { type: string, description: "mode commit with repository: the directory a Kustomization builds from; files go to its agent-manager/ subdirectory" }
     Update:
       type: object
-      description: Partial change; absent fields stay, "" clears, tags, skills, plugins, egress and egressPolicyRefs replace the whole list (skills pinned), toolset replaces the whole list, refreshSkills re-pins every git skill. harness moves the agent to another Harness after the create-time checks on it; "" selects the platform Harness
+      description: Partial change; absent fields stay, "" clears, tags, skills, plugins, egress, egressPolicyRefs and connectors replace the whole list (skills pinned), toolset replaces the whole list, refreshSkills re-pins every git skill. harness moves the agent to another Harness after the create-time checks on it; "" selects the platform Harness
       properties:
         displayName: { type: string }
         tags: { $ref: "#/components/schemas/Tags", description: "Replaces the agent's whole tag list; [] clears it" }
@@ -1094,6 +1100,7 @@ components:
         plugins: { $ref: "#/components/schemas/Plugins" }
         egress: { $ref: "#/components/schemas/Egress", description: "Replaces the agent's whole egress list; [] clears it" }
         egressPolicyRefs: { $ref: "#/components/schemas/EgressPolicyRefs", description: "Replaces the agent's whole list of EgressPolicies; [] clears it" }
+        connectors: { $ref: "#/components/schemas/Connectors", description: "Replaces the agent's connectors; [] removes them; the other extraTools entries stay" }
         gitAuthSecretName: { type: string, description: "Replaces the skills credential Secret; an empty string goes back to the installation's" }
         refreshSkills: { type: boolean, description: "Re-resolve every git skill to the head of its repository's default branch (a skill in skills with a ref goes to that ref's head; with skill-manager, one with none to its skill source's ref); nothing else changes" }
         toolset: { $ref: "#/components/schemas/Toolset" }
@@ -1171,6 +1178,7 @@ components:
         createdByName: { type: string, description: "The creator's display name (agent-platform.giantswarm.io/created-by-name); absent when the IdP gave none. Display only, never for authorization" }
         modelConfig: { type: string }
         toolset: { $ref: "#/components/schemas/Toolset" }
+        connectors: { $ref: "#/components/schemas/Connectors" }
         implicitFullAccess: { type: boolean }
         ready: { type: [boolean, "null"] }
         managed: { type: string, enum: [helmrelease, gitops, platform, none, unknown] }
@@ -1201,6 +1209,7 @@ components:
         plugins: { $ref: "#/components/schemas/Plugins" }
         egress: { $ref: "#/components/schemas/Egress", description: "The Agent's spec.egress (the chart value agent.egress while nothing is rendered)" }
         egressPolicyRefs: { $ref: "#/components/schemas/EgressPolicyRefs", description: "The names of the Agent's spec.egressPolicyRefs (the chart value agent.egressPolicyRefs while nothing is rendered)" }
+        connectors: { $ref: "#/components/schemas/Connectors", description: "The connectors the HelmRelease values bind: the extraTools entries of the mcp shape on a RemoteMCPServer" }
         toolset: { $ref: "#/components/schemas/Toolset", description: The declared toolset (the HelmRelease's `toolset` value; for a bare Agent the X-Muster-Toolset header of the agent's RemoteMCPServer); absent when none is declared }
         implicitFullAccess: { type: boolean, description: True when the agent declares no toolset but binds muster — its meta-tools see every tool the gateway exposes to the caller; such agents predate toolsets and still need one (update_agent) }
         tools: { type: array, items: { $ref: "#/components/schemas/ToolBinding" } }

@@ -116,6 +116,13 @@ name is the DNS-1123 name the person chose, never derived from displayName. mode
       "description": "With organization: the workload cluster the agent runs on; its HelmRelease stays on the installation. namespace is on the cluster.",
       "type": "string"
     },
+    "connectors": {
+      "description": "Organization connectors the agent binds: RemoteMCPServer names in the agent's organization namespace (list_organization_connectors).",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
     "defaultToolchains": {
       "description": "Toolchains, name[@version] (default latest), a start_session naming none mounts; none: github.",
       "items": {
@@ -571,7 +578,7 @@ Another person's session is refused as not_found. While another operation on it 
 ```text
 Get one agent: its HelmRelease values, Harness, pinned skills and plugins, toolset and Agent status.
 
-default: true is the installation's default agent, to preselect when starting a session. If you may not read the agent's HelmRelease, you get the Agent alone with releaseWithheld explaining the denial; managed is unknown unless its platform label establishes ownership.
+default: true is the installation's default agent, to preselect when starting a session. connectors are the organization's RemoteMCPServers the agent's values bind (extraTools). If you may not read the agent's HelmRelease, you get the Agent alone with releaseWithheld explaining the denial; managed is unknown unless its platform label establishes ownership.
 ```
 
 ```json
@@ -870,7 +877,7 @@ Each with provider, model, its Accepted and ResolvedRefs conditions, who manages
 ```text
 List an organization's connectors (RemoteMCPServers): URL, description and the credential headers by Secret name.
 
-Read as you. A credential in a URL written elsewhere is shown as REDACTED. curated marks a read-only copy of what the platform curates.
+Read as you. A credential in a URL written elsewhere is shown as REDACTED. curated marks a read-only copy of what the platform curates. A credential's state: present or missing, whether its Secret exists (a dry-run create as you, never a read; unknown if you may not create it), not whether it holds the key. accepted, reason, message: kagent's Accepted condition (tool discovery). create_agent takes the names as connectors.
 ```
 
 ```json
@@ -1474,6 +1481,13 @@ Lists are skills, plugins, egress and toolset. "" clears a text field back to th
       "description": "With organization: the workload cluster the agent runs on; its HelmRelease stays on the installation. namespace is on the cluster.",
       "type": "string"
     },
+    "connectors": {
+      "description": "Replaces the connectors ([] removes them): RemoteMCPServer names in the agent's organization namespace (list_organization_connectors).",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
     "defaultToolchains": {
       "description": "Toolchains, name[@version] (default latest), a start_session naming none mounts; none: github; [] removes them.",
       "items": {
@@ -1743,7 +1757,7 @@ An omitted field stays; harnesses replaces the whole list; displayName "" remove
 ```text
 Dry run of create_agent, or of update_agent with update: true: the manifests and every violation. Writes nothing.
 
-Checks the name, modelConfig (omitted: the default), egressPolicyRefs, harness and toolset (required for a create), pins the skills and plugins, validates the values against the chart schema and has the API server dry-run the rendered Agent and RemoteMCPServer (its field errors are the errors; an object the caller may not write is a note). mode answers as the write would. With update: true, lists, labels and annotations replace the whole value, as in update_agent.
+Checks the name, modelConfig (omitted: the default), egressPolicyRefs, connectors, harness and toolset (required for a create), pins the skills and plugins, validates the values against the chart schema and has the API server dry-run the rendered Agent and RemoteMCPServer (its field errors are the errors; an object the caller may not write is a note). mode answers as the write would. With update: true, lists, labels and annotations replace the whole value, as in update_agent.
 ```
 
 ```json
@@ -1760,6 +1774,13 @@ Checks the name, modelConfig (omitted: the default), egressPolicyRefs, harness a
     "cluster": {
       "description": "With organization: the workload cluster the agent runs on; its HelmRelease stays on the installation. namespace is on the cluster.",
       "type": "string"
+    },
+    "connectors": {
+      "description": "Organization connectors the agent binds: RemoteMCPServer names in the agent's organization namespace (list_organization_connectors).",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
     },
     "defaultToolchains": {
       "description": "Toolchains, name[@version] (default latest), a start_session naming none mounts; none: github.",

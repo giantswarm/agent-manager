@@ -108,7 +108,21 @@ EgressPolicies whose origins, and credential headers, the agent may also
 reach; each must exist, read as the caller, and `list_egress_policies` lists
 them; chart `agent.egressPolicyRefs` from 2.3.0, the Agent's
 `spec.egressPolicyRefs`; a change to a policy reaches the agent from its next
-Session without an update), `labels`, `annotations`,
+Session without an update), `connectors` (names of the organization's own
+connectors, the RemoteMCPServers of the agent's organization namespace that
+`list_organization_connectors` lists; each must exist, read as the caller,
+and becomes one `extraTools` entry `{mcp: {server: {kind: RemoteMCPServer,
+name}}}` that the chart binds after the muster binding; kagent's binding has
+no namespace field, so a name with a namespace or a kind part is refused, and
+kagent adds the connector's origin to the agent's egress itself; an agent on a
+coding Harness, in a namespace that is no organization namespace or on a
+workload cluster takes none, and neither does one whose values set
+`extraAgentSpec.tools`, which replaces the rendered tool list; an agent's own
+muster RemoteMCPServer, or another agent's (one a HelmRelease of the agent
+chart renders), is no connector; `update_agent` replaces the connector entries,
+keeps every other `extraTools` entry, and `[]` removes them (an empty
+`extraTools` list stays, to override one of the release's `valuesFrom`); `get_agent` and
+`list_agents` report them as `connectors`), `labels`, `annotations`,
 `namespace`. It emits only what was set so the chart's defaults apply to
 everything else (the portal's rule) plus the platform's own two values, the
 Harness (`agent.harness`) and, when configured, the muster URL (`muster.url`),
@@ -213,7 +227,9 @@ person.
 - **No `requireApproval` and no bindings beside muster's**
   (`muster.requireApproval`, `extraTools`, `extraAgentSpec.tools`): it
   reaches its tools through muster only, and approval is no boundary
-  against a coding CLI, which can answer it from its own sandbox.
+  against a coding CLI, which can answer it from its own sandbox. So it
+  takes no `connectors` either: a connector needs an agent on a kagent
+  Harness.
 - **The platform's egress.** `--harness-egress` (chart `harness.egress`)
   lists the origins per coding Harness, the installation's forge and git hosts
   and the toolchain's registries. agent-manager writes that list into
@@ -707,7 +723,14 @@ The organization tools (every name holds `organization`):
   caching, on by default for a new Anthropic model, are in
   [docs/organization-models.md](docs/organization-models.md));
   `list_organization_connectors` and
-  `set_organization_connector` (RemoteMCPServers);
+  `set_organization_connector` (RemoteMCPServers; the list gives each
+  credential's `state`, `present`, `missing` or, when the caller may not
+  create the Secret, `unknown`, from a dry-run create of the Secret as the
+  caller, never a read of it, so it says whether the Secret exists and not
+  whether it holds the key; and each connector's kagent `Accepted` condition
+  of its current generation as `accepted`, `reason` and `message`, where a
+  tool discovery that failed, on a missing key say, shows; a connector whose
+  discovery is off is accepted without it);
   `set_organization_egress_policy`; `delete_organization_object`; and
   `replace_organization_credential` (a new value for one key of a credential
   Secret, for every object that reads it, writing the Secret only).

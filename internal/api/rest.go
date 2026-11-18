@@ -392,6 +392,10 @@ func SpecToUpdate(s agents.Spec) agents.Update {
 		toolset := s.Toolset
 		upd.Toolset = &toolset
 	}
+	if s.Connectors != nil {
+		connectors := s.Connectors
+		upd.Connectors = &connectors
+	}
 	upd.RemovedToolNames = s.RemovedToolNames
 	upd.RemovedRuntime = s.RemovedRuntime
 	if s.Labels != nil {
