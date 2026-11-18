@@ -111,8 +111,8 @@ github.com/aws/aws-sdk-go-v2/service/internal/s3shared v1.20.12 h1:H0IaQayT3TLiG
 github.com/aws/aws-sdk-go-v2/service/internal/s3shared v1.20.12/go.mod h1:YuJJNxaOjnknLIrscBmkLhIpnmg9LzHd25sQRKUboGU=
 github.com/aws/aws-sdk-go-v2/service/kms v1.54.1 h1:aeJAJyvWS3gQ679pJbz8ZdOh3MViD1zvEdoZMVEawbg=
 github.com/aws/aws-sdk-go-v2/service/kms v1.54.1/go.mod h1:0RXNc6Yf3AvSMldGD6Lcch96Ojlw2TtGnHsqfD/L4u8=
-github.com/aws/aws-sdk-go-v2/service/s3 v1.114.10 h1:WBJb2VxRzzKnuN94YWqZPiu5a5zc3IleFqgZnmVCyvU=
-github.com/aws/aws-sdk-go-v2/service/s3 v1.114.10/go.mod h1:8NhAIBVYkVHq0hIbbzujdoou0VkKwMdG+De9e5oX6qI=
+github.com/aws/aws-sdk-go-v2/service/s3 v1.115.0 h1:oV2uKPg8nko04rMAed8TLFPIOzEOIx6roOYceImhcwg=
+github.com/aws/aws-sdk-go-v2/service/s3 v1.115.0/go.mod h1:8NhAIBVYkVHq0hIbbzujdoou0VkKwMdG+De9e5oX6qI=
 github.com/aws/aws-sdk-go-v2/service/signin v1.13.1 h1:ssrDA6AKfXEc3h0Pf4EI4vQ8sN5Zd136SrU9Tjr0XPc=
 github.com/aws/aws-sdk-go-v2/service/signin v1.13.1/go.mod h1:LdwHjKqPE9VCC7sTlWcOAizZx3ZJYjmfwC/EW2tIIAE=
 github.com/aws/aws-sdk-go-v2/service/sso v1.39.5 h1:ANAoa+qt3/9kXnvQVgUyxcTzhzZf4DqaBS+M2DQrELU=
@@ -193,8 +193,8 @@ github.com/getsops/gopgagent v0.0.0-20241224165529-7044f28e491e h1:y/1nzrdF+RPds
 github.com/getsops/gopgagent v0.0.0-20241224165529-7044f28e491e/go.mod h1:awFzISqLJoZLm+i9QQ4SgMNHDqljH6jWV0B36V5MrUM=
 github.com/getsops/sops/v3 v3.13.3 h1:saYczbT88kD1saNChe1cAbFQe5mrRhTIfEw3TaEcmK0=
 github.com/getsops/sops/v3 v3.13.3/go.mod h1:3mUuUtKnJ63IzIvU4LQoDXdp0ZvorY5s2hEc7UVNfx8=
-github.com/giantswarm/agent-platform-operator v0.4.3 h1:GAEdivjKCpzSaI9URichXO8f5/KoN1uFX5S5p3E3OgQ=
-github.com/giantswarm/agent-platform-operator v0.4.3/go.mod h1:BxTHW2+WyUBSBCuii2OcA5BQfquN0409B5GIRW9cRzg=
+github.com/giantswarm/agent-platform-operator v0.4.4 h1:cFerXq47EkEheymWOtgLt7ibuAw+b4aKnlIVSwvwWCo=
+github.com/giantswarm/agent-platform-operator v0.4.4/go.mod h1:BdvmLCpJuyqXDiuSgNaRje90u0UuNVoKU27eOrd6Snw=
 github.com/giantswarm/gitops-commit v0.12.0-rc.9 h1:l7yHKCV5AY5ymCoZ/ja0oQer0/koQFSn49XYqs82gVA=
 github.com/giantswarm/gitops-commit v0.12.0-rc.9/go.mod h1:vFt36EZxKq1YNowCWlDVyutRMtY3keoeVu9XxDKBtsw=
 github.com/giantswarm/mcp-oauth v1.13.18 h1:EUQt4N/Pp9RPxnkhXCV6nwy3SfuTXynsI+vMpmWmAzM=
