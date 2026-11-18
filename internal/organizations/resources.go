@@ -682,9 +682,10 @@ func connectorAccepted(u *unstructured.Unstructured, conn *Connector) {
 
 // credentialStates fills each credential's State: whether its Secret exists,
 // by a dry-run create as the caller (secretExists), once for each Secret.
-// Nothing of a Secret is read. A refusal of the dry run (the caller may not
-// create the Secret, or admission refuses its name) is unknown.
-func credentialStates(ctx context.Context, c kube.Client, ns string, connectors []Connector) error {
+// Nothing of a Secret is read. A dry run that fails (the caller may not
+// create the Secret, admission refuses its name, the API server does not
+// answer) is unknown: the state never fails the listing.
+func (s *Service) credentialStates(ctx context.Context, c kube.Client, ns string, connectors []Connector) {
 	states := map[string]string{}
 	for i := range connectors {
 		for j := range connectors[i].Credentials {
@@ -693,10 +694,11 @@ func credentialStates(ctx context.Context, c kube.Client, ns string, connectors 
 			if !ok {
 				exists, err := secretExists(ctx, c, ns, cred.Secret)
 				switch {
-				case apierrors.IsForbidden(err) || apierrors.IsInvalid(err):
-					state = CredentialUnknown
 				case err != nil:
-					return kubeErr(err, "check credential Secret "+ns+"/"+cred.Secret, wayOrganizationAdmin(ns))
+					state = CredentialUnknown
+					if !apierrors.IsForbidden(err) {
+						s.log.Warn("the state of a connector credential could not be checked", fieldNamespace, ns, "secret", cred.Secret, "error", err)
+					}
 				case exists:
 					state = CredentialPresent
 				default:
@@ -707,7 +709,6 @@ func credentialStates(ctx context.Context, c kube.Client, ns string, connectors 
 			cred.State = state
 		}
 	}
-	return nil
 }
 
 func connectorCredentials(u *unstructured.Unstructured) []ConnectorCredential {
@@ -755,9 +756,7 @@ func (s *Service) ListConnectors(ctx context.Context, ns string) ([]Connector, e
 		out = append(out, conn)
 	}
 	slices.SortFunc(out, func(a, b Connector) int { return strings.Compare(a.Name, b.Name) })
-	if err := credentialStates(ctx, c, ns, out); err != nil {
-		return nil, err
-	}
+	s.credentialStates(ctx, c, ns, out)
 	return out, nil
 }
 

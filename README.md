@@ -116,8 +116,11 @@ name}}}` that the chart binds after the muster binding; kagent's binding has
 no namespace field, so a name with a namespace or a kind part is refused, and
 kagent adds the connector's origin to the agent's egress itself; an agent on a
 coding Harness, in a namespace that is no organization namespace or on a
-workload cluster takes none; `update_agent` replaces the connector entries,
-keeps every other `extraTools` entry, and `[]` removes them; `get_agent` and
+workload cluster takes none, and neither does one whose values set
+`extraAgentSpec.tools`, which replaces the rendered tool list; an agent's own
+muster RemoteMCPServer, or another agent's, is no connector; `update_agent` replaces the connector entries,
+keeps every other `extraTools` entry, and `[]` removes them (an empty
+`extraTools` list stays, to override one of the release's `valuesFrom`); `get_agent` and
 `list_agents` report them as `connectors`), `labels`, `annotations`,
 `namespace`. It emits only what was set so the chart's defaults apply to
 everything else (the portal's rule) plus the platform's own two values, the

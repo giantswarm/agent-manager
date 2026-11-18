@@ -1192,7 +1192,7 @@ func (s *Service) ValidateCreate(ctx context.Context, spec Spec) (*ValidateResul
 		}
 		res.addError(err)
 	}
-	if err := s.requireConnectors(ctx, st, spec.Connectors); err != nil {
+	if err := s.requireConnectors(ctx, st, spec.Name, spec.Connectors); err != nil {
 		if !isDomainError(err) {
 			return nil, err
 		}
@@ -1513,7 +1513,7 @@ func (s *Service) Create(ctx context.Context, spec Spec) (*CreateResult, error) 
 	if err := s.requireEgressPolicies(ctx, st, spec.EgressPolicyRefs); err != nil {
 		return nil, err
 	}
-	if err := s.requireConnectors(ctx, st, spec.Connectors); err != nil {
+	if err := s.requireConnectors(ctx, st, spec.Name, spec.Connectors); err != nil {
 		return nil, err
 	}
 	harness, h, err := s.requireHarness(ctx, st.agent, ns, spec)
@@ -1754,10 +1754,13 @@ func (s *Service) mergedValues(ctx context.Context, st *site, upd Update, hr *un
 		}
 	}
 	if upd.Connectors != nil {
-		if err := s.requireConnectors(ctx, st, *upd.Connectors); err != nil {
+		if err := s.requireConnectors(ctx, st, upd.Name, *upd.Connectors); err != nil {
 			firstErr = err
 		}
 		setConnectors(after, *upd.Connectors)
+		if err := refuseConnectorsUnderToolsOverride(after); err != nil {
+			firstErr = err
+		}
 	}
 	if upd.ModelConfig != nil {
 		if err := s.requireModelConfig(ctx, st, *upd.ModelConfig); err != nil {

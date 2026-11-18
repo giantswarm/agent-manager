@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/util/validation"
 )
 
@@ -58,9 +59,11 @@ func connectorsFromValues(values map[string]any) []string {
 // setConnectors replaces the connector entries of values' extraTools with one
 // entry for each name. Every other entry stays, in its order, before them; the
 // entry of a connector that stays keeps its other fields (a tools list,
-// requireApproval). No entry left removes the key.
+// requireApproval). With no entry left, a key that was there becomes an empty
+// list, which still overrides a list of the release's valuesFrom; one that was
+// not there stays out.
 func setConnectors(values map[string]any, names []string) {
-	raw, _ := values[extraToolsValuesKey].([]any)
+	raw, had := values[extraToolsValuesKey].([]any)
 	out := make([]any, 0, len(raw)+len(names))
 	current := map[string]any{}
 	for _, entry := range raw {
@@ -80,11 +83,24 @@ func setConnectors(values map[string]any, names []string) {
 			out = append(out, connectorEntry(name))
 		}
 	}
-	if len(out) == 0 {
+	if len(out) == 0 && !had {
 		delete(values, extraToolsValuesKey)
 		return
 	}
 	values[extraToolsValuesKey] = out
+}
+
+// refuseConnectorsUnderToolsOverride refuses connectors on values whose
+// extraAgentSpec.tools the chart merges over the rendered tool list: it
+// replaces that list whole, the connector bindings with it.
+func refuseConnectorsUnderToolsOverride(values map[string]any) error {
+	if len(connectorsFromValues(values)) == 0 {
+		return nil
+	}
+	if tools, found, _ := unstructured.NestedFieldNoCopy(values, "extraAgentSpec", "tools"); found && tools != nil {
+		return invalidf("connectors: the agent's values set extraAgentSpec.tools, which replaces its whole tool list, so the chart would bind no connector; take extraAgentSpec.tools out where the values are managed first")
+	}
+	return nil
 }
 
 // ValidateConnectors checks the form of a connectors list: each a
@@ -110,8 +126,10 @@ func ValidateConnectors(names []string) error {
 // requireConnectors checks, as the caller and before any write, that each
 // name is a RemoteMCPServer of the agent's namespace, and that the namespace
 // is an organization namespace on the installation: connectors exist there
-// only (set_organization_connector, list_organization_connectors).
-func (s *Service) requireConnectors(ctx context.Context, st *site, names []string) error {
+// only (set_organization_connector, list_organization_connectors). The
+// muster RemoteMCPServer an agent release renders (the agent's own, or
+// another agent's, whose toolset it carries) is no connector.
+func (s *Service) requireConnectors(ctx context.Context, st *site, agent string, names []string) error {
 	if len(names) == 0 {
 		return nil
 	}
@@ -134,11 +152,22 @@ func (s *Service) requireConnectors(ctx context.Context, st *site, names []strin
 		return wrapKube(err, "list remotemcpservers in "+ns)
 	}
 	known := make(map[string]bool, len(list.Items))
+	ofRelease := make(map[string]string, len(list.Items))
 	for i := range list.Items {
-		known[list.Items[i].GetName()] = true
+		item := &list.Items[i]
+		known[item.GetName()] = true
+		if release := item.GetLabels()[HelmReleaseNameLabel]; release != "" {
+			ofRelease[item.GetName()] = release
+		}
 	}
 	var missing []string
 	for _, name := range names {
+		if name == agent {
+			return invalidf("connectors: %q is the agent's own muster binding, no connector (its toolset selects muster's tools)", name)
+		}
+		if release, ok := ofRelease[name]; ok {
+			return invalidf("connectors: RemoteMCPServer %q is rendered by HelmRelease %s: it is an agent's muster binding, no connector (list_organization_connectors)", name, release)
+		}
 		if !known[name] {
 			missing = append(missing, `"`+name+`"`)
 		}

@@ -18,11 +18,18 @@ func connectorFixture(t *testing.T) *fixture {
 	withTenants(f, &fakeTenants{namespaces: []string{"org-a"}})
 	mustCreate(t, f, mcGVR, modelConfig("org-a", "own", "Anthropic", "claude-sonnet-4-6"))
 	for _, name := range []string{"github", "jira"} {
-		server := remoteMCPServer("org-a", name)
-		_ = unstructured.SetNestedField(server.Object, "https://"+name+".example/mcp", "spec", "url")
-		mustCreate(t, f, serverGVR, server)
+		mustCreate(t, f, serverGVR, connector(name))
 	}
 	return f
+}
+
+// connector is a RemoteMCPServer of org-a as set_organization_connector
+// writes it: no agent release renders it.
+func connector(name string) *unstructured.Unstructured {
+	server := remoteMCPServer("org-a", name)
+	server.SetLabels(map[string]string{ManagedByLabel: ManagedByValue})
+	_ = unstructured.SetNestedField(server.Object, "https://"+name+".example/mcp", "spec", "url")
+	return server
 }
 
 func connectorSpec(name string, connectors ...string) Spec {
@@ -95,6 +102,14 @@ func TestConnectorsOnCreateUpdateAndGet(t *testing.T) {
 	got, err = f.svc.Get(ctx, In("org-a"), "sre")
 	require.NoError(t, err)
 	assert.Empty(t, got.Connectors)
+
+	// The last binding gone, the list stays as an empty one: it still
+	// overrides a list the release's valuesFrom may bring.
+	_, err = f.svc.Create(ctx, connectorSpec("solo", "github"))
+	require.NoError(t, err)
+	res, err = f.svc.Update(ctx, Update{Location: In("org-a"), Name: "solo", Connectors: &[]string{}})
+	require.NoError(t, err)
+	assert.Equal(t, []any{}, res.After["extraTools"])
 }
 
 // Commit mode writes the same values into the pull request's file.
@@ -102,7 +117,7 @@ func TestConnectorsInCommitMode(t *testing.T) {
 	f, fake, ctx := gitOpsFixture(t, true)
 	withTenants(f, &fakeTenants{namespaces: []string{"org-a"}})
 	mustCreate(t, f, mcGVR, modelConfig("org-a", "own", "Anthropic", "claude-sonnet-4-6"))
-	mustCreate(t, f, serverGVR, remoteMCPServer("org-a", "github"))
+	mustCreate(t, f, serverGVR, connector("github"))
 	spec := connectorSpec("sre", "github")
 	spec.WriteOptions = WriteOptions{Mode: ModeCommit, Repository: "giantswarm/fleet", Branch: "main", Path: "orgs"}
 
@@ -127,6 +142,9 @@ func TestConnectorsInCommitMode(t *testing.T) {
 func TestConnectorsRefused(t *testing.T) {
 	f := connectorFixture(t)
 	ctx := t.Context()
+	helper := remoteMCPServer("org-a", "helper")
+	helper.SetLabels(map[string]string{HelmReleaseNameLabel: "helper", HelmReleaseNamespaceLabel: "org-a"})
+	mustCreate(t, f, serverGVR, helper)
 	for _, tc := range []struct {
 		name string
 		spec Spec
@@ -136,6 +154,8 @@ func TestConnectorsRefused(t *testing.T) {
 		{"other namespace", connectorSpec("a", "org-b/github"), `connectors: "org-b/github" names a namespace or a kind: a connector is always a RemoteMCPServer of the agent's own organization namespace`},
 		{"other kind", connectorSpec("a", "server:github"), `connectors: "server:github" names a namespace or a kind`},
 		{"named twice", connectorSpec("a", "github", "github"), `connectors: "github" is named twice`},
+		{"own muster binding", connectorSpec("a", "a"), `connectors: "a" is the agent's own muster binding, no connector`},
+		{"another agent's muster binding", connectorSpec("a", "helper"), `connectors: RemoteMCPServer "helper" is rendered by HelmRelease helper: it is an agent's muster binding, no connector`},
 		{"platform namespace", Spec{Name: "a", ModelConfig: "default-model-config", Toolset: []string{"preset:read-only"}, Connectors: []string{"verifier"}}, "connectors: namespace kagent is no organization namespace"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -156,6 +176,16 @@ func TestConnectorsRefused(t *testing.T) {
 	require.ErrorIs(t, err, ErrInvalid)
 	assert.Contains(t, err.Error(), `RemoteMCPServer "gitlab" does not exist`)
 	assert.NotContains(t, mustValues(orgRelease(t, f, "sre")), "extraTools")
+
+	// extraAgentSpec.tools replaces the rendered tool list, connectors and all.
+	hr := orgRelease(t, f, "sre")
+	require.NoError(t, unstructured.SetNestedSlice(hr.Object, []any{map[string]any{"mcp": map[string]any{"server": map[string]any{"kind": "RemoteMCPServer", "name": "sre"}}}}, "spec", "values", "extraAgentSpec", "tools"))
+	_, err = f.dyn.Resource(hrGVR).Namespace("org-a").Update(ctx, hr, metav1.UpdateOptions{})
+	require.NoError(t, err)
+	_, err = f.svc.Update(ctx, Update{Location: In("org-a"), Name: "sre", Connectors: &[]string{"github"}})
+	require.ErrorIs(t, err, ErrInvalid)
+	assert.Contains(t, err.Error(), "extraAgentSpec.tools, which replaces its whole tool list")
+
 	_, err = f.svc.Update(ctx, Update{Name: "verifier", Connectors: &[]string{"verifier"}})
 	require.ErrorIs(t, err, ErrInvalid)
 	assert.Contains(t, err.Error(), "namespace kagent is no organization namespace")

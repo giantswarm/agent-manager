@@ -1342,4 +1342,17 @@ func TestListConnectorsReportsCredentialAndAcceptedState(t *testing.T) {
 	got = list()
 	assert.Equal(t, []struct{ Secret, State string }{{"tenant-credential-jira", "unknown"}}, got["jira"].Credentials)
 	assert.Equal(t, []struct{ Secret, State string }{{"tenant-credential-wiki", "unknown"}}, got["wiki"].Credentials)
+
+	// A dry run the API server does not answer leaves the state unknown and
+	// the listing whole.
+	f.deny = func(string, string, string, string) bool { return false }
+	f.dyn.PrependReactor("create", "secrets", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		if a.(k8stesting.CreateActionImpl).GetObject().(*unstructured.Unstructured).GetName() == "tenant-credential-wiki" {
+			return true, nil, apierrors.NewServiceUnavailable("etcd timeout")
+		}
+		return false, nil, nil
+	})
+	got = list()
+	assert.Equal(t, []struct{ Secret, State string }{{"tenant-credential-jira", "present"}}, got["jira"].Credentials)
+	assert.Equal(t, []struct{ Secret, State string }{{"tenant-credential-wiki", "unknown"}}, got["wiki"].Credentials)
 }
