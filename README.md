@@ -118,10 +118,15 @@ kagent adds the connector's origin to the agent's egress itself; an agent on a
 coding Harness, in a namespace that is no organization namespace or on a
 workload cluster takes none, and neither does one whose values set
 `extraAgentSpec.tools`, which replaces the rendered tool list; an agent's own
-muster RemoteMCPServer, or another agent's (one a HelmRelease of the agent
-chart renders), is no connector; `update_agent` replaces the connector entries,
+muster RemoteMCPServer, or another agent's (one rendered with an Agent of its
+name by the same HelmRelease, as Flux's `helm.toolkit.fluxcd.io/name` and
+`helm.toolkit.fluxcd.io/namespace` labels say, whatever labels or muster URL
+the agent's values set; `list_organization_connectors` marks it
+`musterBindingOf`), is no connector; `update_agent` replaces the connector entries,
 keeps every other `extraTools` entry, and `[]` removes them (an empty
-`extraTools` list stays, to override one of the release's `valuesFrom`); `get_agent` and
+`extraTools` list stays); `update_agent` refuses `connectors` on a HelmRelease
+with `spec.valuesFrom`, whose values can bind tools that agent-manager neither
+reads nor keeps; `get_agent` and
 `list_agents` report them as `connectors`), `labels`, `annotations`,
 `namespace`. It emits only what was set so the chart's defaults apply to
 everything else (the portal's rule) plus the platform's own two values, the
@@ -730,7 +735,11 @@ The organization tools (every name holds `organization`):
   whether it holds the key; and each connector's kagent `Accepted` condition
   of its current generation as `accepted`, `reason` and `message`, where a
   tool discovery that failed, on a missing key say, shows; a connector whose
-  discovery is off is accepted without it);
+  discovery is off is accepted without it; and `musterBindingOf`, the name of
+  the agent whose muster binding a RemoteMCPServer is, which `create_agent`
+  and `update_agent` refuse as a connector, absent on every other one, a
+  connector that another Helm chart renders included, and absent on all for a
+  caller who may not list the namespace's Agents);
   `set_organization_egress_policy`; `delete_organization_object`; and
   `replace_organization_credential` (a new value for one key of a credential
   Secret, for every object that reads it, writing the Secret only).

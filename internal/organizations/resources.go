@@ -647,6 +647,12 @@ type Connector struct {
 	// Curated: a copy agent-platform-operator keeps; read-only.
 	Curated   bool   `json:"curated,omitempty"`
 	ManagedBy string `json:"managedBy,omitempty"`
+	// MusterBindingOf names the agent whose muster binding this
+	// RemoteMCPServer is (agents.MusterBindings): no connector, and
+	// create_agent and update_agent refuse it in connectors. Empty for every
+	// other RemoteMCPServer, a Helm-rendered connector included, and for a
+	// caller who may not list the namespace's Agents.
+	MusterBindingOf string `json:"musterBindingOf,omitempty"`
 }
 
 // CredentialUnknown: the caller may not ask whether the Secret exists.
@@ -730,8 +736,9 @@ func connectorCredentials(u *unstructured.Unstructured) []ConnectorCredential {
 }
 
 // ListConnectors lists the RemoteMCPServers of an organization namespace as
-// the caller, each credential by reference with the state of its Secret, and
-// each connector's Accepted condition.
+// the caller, each credential by reference with the state of its Secret,
+// each connector's Accepted condition, and the agent whose muster binding a
+// server is.
 func (s *Service) ListConnectors(ctx context.Context, ns string) ([]Connector, error) {
 	if _, err := s.organization(ctx, ns); err != nil {
 		return nil, err
@@ -744,10 +751,21 @@ func (s *Service) ListConnectors(ctx context.Context, ns string) ([]Connector, e
 	if err != nil {
 		return nil, err
 	}
+	// The Agents tell which servers are muster bindings. Every member role
+	// reads them; a caller who may not still gets the list, unmarked, as
+	// before the mark existed.
+	var bindings map[string]string
+	agentList, err := c.Dynamic().Resource(s.kagentGVR("agents")).Namespace(ns).List(ctx, metav1.ListOptions{})
+	switch {
+	case err == nil:
+		bindings = agents.MusterBindings(items, agentList.Items)
+	case !apierrors.IsForbidden(err):
+		return nil, kubeErr(err, "list Agents in "+ns, wayOrganizationAdmin(ns))
+	}
 	out := make([]Connector, 0, len(items))
 	for i := range items {
 		u := &items[i]
-		conn := Connector{Name: u.GetName(), Credentials: connectorCredentials(u), ManagedBy: u.GetLabels()[agents.ManagedByLabel]}
+		conn := Connector{Name: u.GetName(), Credentials: connectorCredentials(u), ManagedBy: u.GetLabels()[agents.ManagedByLabel], MusterBindingOf: bindings[u.GetName()]}
 		raw, _, _ := unstructured.NestedString(u.Object, "spec", "url")
 		conn.URL = redactURL(raw)
 		conn.Description, _, _ = unstructured.NestedString(u.Object, "spec", "description")
