@@ -208,20 +208,18 @@ func TestTheFormatIsFoundByTheAskedAndTheCleanedPath(t *testing.T) {
 	assert.Equal(t, 1, f.calls())
 }
 
-// On the GitHub registration the bearer agent-manager received is the
-// person's GitHub token, the ID token rides in muster's forwarded header:
-// skill-manager is called the same way.
-func TestTheGitHubRegistrationsBearerIsForwardedAsReceived(t *testing.T) {
+// The caller's ID token is the one credential skill-manager is sent: its
+// own GitHub grant is skill-manager's to fetch.
+func TestTheCallersIDTokenIsTheOnlyCredentialSent(t *testing.T) {
 	f := &fakeSkillManager{}
 	c := newClient(t, f, "service")
 	ctx := identity.ContextWithToken(t.Context(), "id-token")
-	ctx = identity.ContextWithGitHub(ctx, &identity.GitHub{Login: "alice", Token: "gh-token"})
 
 	_, _, err := c.Resolve(ctx, []Item{{Name: "r", Git: &Git{URL: repo, Ref: "main"}}}, nil)
 	require.NoError(t, err)
 	req, _ := f.last()
-	assert.Equal(t, "Bearer gh-token", req.Header.Get("Authorization"))
-	assert.Equal(t, "id-token", req.Header.Get("X-Muster-Id-Token"))
+	assert.Equal(t, "Bearer id-token", req.Header.Get("Authorization"))
+	assert.Empty(t, req.Header.Get("X-Muster-Id-Token"))
 }
 
 // The migrate command has no caller: the service token is the bearer of a
@@ -375,19 +373,4 @@ func TestNewRefusesABadURL(t *testing.T) {
 		_, err := New(Config{URL: u})
 		require.Error(t, err, u)
 	}
-}
-
-// A GitHub bearer goes to skill-manager only with the ID token beside it;
-// without one the call is refused here, before skill-manager answers 401.
-func TestAGitHubBearerWithoutAnIDTokenIsUnauthenticated(t *testing.T) {
-	f := &fakeSkillManager{}
-	c := newClient(t, f, "service")
-	ctx := identity.ContextWithGitHub(t.Context(), &identity.GitHub{Login: "alice", Token: "gh-token"})
-
-	_, _, err := c.Resolve(ctx, []Item{{Git: &Git{URL: repo}}}, nil)
-	require.ErrorIs(t, err, ErrUnauthenticated)
-	assert.Contains(t, err.Error(), "ID token")
-	_, err = c.Skills(ctx, "", false)
-	require.ErrorIs(t, err, ErrUnauthenticated)
-	assert.Zero(t, f.calls(), "nothing was sent")
 }

@@ -3,7 +3,6 @@ package skills
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -73,23 +72,6 @@ func (g *github) repository(ctx context.Context, owner, repo string) (repoMeta, 
 func (g *github) defaultBranch(ctx context.Context, owner, repo string) (string, error) {
 	meta, err := g.repository(ctx, owner, repo)
 	return meta.DefaultBranch, err
-}
-
-// permission is login's permission on the repository (admin, write, read or
-// none); a login GitHub does not know as a collaborator is none.
-func (g *github) permission(ctx context.Context, owner, repo, login string) (string, error) {
-	var out struct {
-		Permission string `json:"permission"`
-	}
-	err := g.getJSON(ctx, fmt.Sprintf("%s/repos/%s/%s/collaborators/%s/permission", g.apiURL, owner, repo, url.PathEscape(login)), &out)
-	var api *apiError
-	if errors.As(err, &api) && api.status == http.StatusNotFound {
-		return "none", nil
-	}
-	if err != nil {
-		return "", err
-	}
-	return out.Permission, nil
 }
 
 // headCommit resolves a ref (branch, tag or commit) to the commit it points

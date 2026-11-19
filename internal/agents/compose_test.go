@@ -64,14 +64,14 @@ func (p *fakePinner) GitHead(_ context.Context, repoURL, ref string) (string, er
 	return "", fmt.Errorf("%w: ref %s of %s could not be resolved: unknown ref", skills.ErrUnresolvable, ref, repoURL)
 }
 
-// privateSkillsRepo is readable by the GitHub user jane only.
+// privateSkillsRepo is private: the in-process pinner refuses it.
 const privateSkillsRepo = "https://github.com/giantswarm/agent-skills-internal"
 
-func (p *fakePinner) RequireReadable(_ context.Context, repoURL, login string) error {
-	if repoURL != privateSkillsRepo || login == "jane" {
+func (p *fakePinner) RequireReadable(_ context.Context, repoURL string) error {
+	if repoURL != privateSkillsRepo {
 		return nil
 	}
-	return fmt.Errorf("%w: %s is private and the GitHub user %q cannot read it", skills.ErrNotReadable, repoURL, login)
+	return fmt.Errorf("%w: %s is private", skills.ErrNotReadable, repoURL)
 }
 
 // ClaudeFormatPlugin answers the plugin at path "claude-format" as

@@ -9,7 +9,6 @@ import (
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
-	"github.com/giantswarm/agent-manager/internal/identity"
 	"github.com/giantswarm/agent-manager/internal/oci"
 	"github.com/giantswarm/agent-manager/internal/skillmanager"
 	"github.com/giantswarm/agent-manager/internal/skills"
@@ -34,9 +33,9 @@ type SkillPinner interface {
 // ReadChecker is a SkillPinner that does not check readability as it pins:
 // every newly given repository is checked through it first.
 type ReadChecker interface {
-	// RequireReadable refuses a repository login (the caller's GitHub login,
-	// empty when unknown) cannot read: skills.ErrNotReadable.
-	RequireReadable(ctx context.Context, repoURL, login string) error
+	// RequireReadable refuses a repository the caller may not be shown:
+	// skills.ErrNotReadable.
+	RequireReadable(ctx context.Context, repoURL string) error
 }
 
 // batchItem is a skill's or plugin's source as skill-manager takes it: a
@@ -131,15 +130,6 @@ func skillManagerError(err error) error {
 	return err
 }
 
-// gitHubLogin is the caller's verified GitHub login (the App-pinned
-// registration), empty without one.
-func gitHubLogin(ctx context.Context) string {
-	if gh, ok := identity.GitHubFromContext(ctx); ok {
-		return gh.Login
-	}
-	return ""
-}
-
 // requireReadableSkills refuses skills from a repository the caller cannot
 // read: an agent never mounts a skill its creator could not read themselves,
 // though the platform's credential could.
@@ -178,7 +168,7 @@ func requireReadableRepo(ctx context.Context, pinner SkillPinner, seen map[strin
 		return nil
 	}
 	seen[repoURL] = true
-	if err := rc.RequireReadable(ctx, repoURL, gitHubLogin(ctx)); err != nil {
+	if err := rc.RequireReadable(ctx, repoURL); err != nil {
 		return sourceError(what, err)
 	}
 	return nil

@@ -184,9 +184,6 @@ spec:
             {{- end }}
             {{- end }}
             {{- if .Values.github.enabled }}
-            {{- if not $githubTokenExchange }}
-            - --github-authorization-server={{ .Values.github.authorizationServer.issuer }}
-            {{- end }}
             - --github-api-url={{ .Values.github.apiURL }}
             {{- end }}
             {{- if eq .Values.oauth.provider "dex" }}

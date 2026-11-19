@@ -55,7 +55,7 @@ func (pinner) GitHead(_ context.Context, repoURL, ref string) (string, error) {
 	}
 	return mainHead, nil
 }
-func (pinner) RequireReadable(context.Context, string, string) error { return nil }
+func (pinner) RequireReadable(context.Context, string) error { return nil }
 
 func (pinner) OCIDigest(_ context.Context, ref string) (string, error) {
 	return "", fmt.Errorf("unresolvable skill reference: %s", ref)

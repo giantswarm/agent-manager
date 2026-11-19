@@ -278,22 +278,11 @@ func (c *Client) do(ctx context.Context, method, p string, q url.Values, body an
 	return nil, answerError(method, p, resp.StatusCode, raw)
 }
 
-// authorize sets the bearer as agent-manager received it: on the GitHub
-// registration the person's GitHub token with the ID token in muster's
-// forwarded header, else the ID token; with no caller, the service token on
-// POST /v1/resolve, the one call skill-manager takes it on. skill-manager
-// refuses a GitHub token alone, so such a call is refused here.
+// authorize sets the bearer as agent-manager received it, the caller's ID
+// token; with no caller, the service token on POST /v1/resolve, the one call
+// skill-manager takes it on.
 func (c *Client) authorize(ctx context.Context, req *http.Request, p string) error {
-	idToken, _ := identity.TokenFromContext(ctx)
-	if gh, ok := identity.GitHubFromContext(ctx); ok {
-		if idToken == "" {
-			return fmt.Errorf("%w: the call carries a GitHub token but no ID token, which skill-manager needs beside it (muster forwards it with auth.forwardIdentity: true)", ErrUnauthenticated)
-		}
-		req.Header.Set("Authorization", "Bearer "+gh.Token)
-		req.Header.Set(identity.ForwardedIdentityHeader, idToken)
-		return nil
-	}
-	bearer := idToken
+	bearer, _ := identity.TokenFromContext(ctx)
 	if bearer == "" && p == resolvePath {
 		bearer = c.token
 	}
