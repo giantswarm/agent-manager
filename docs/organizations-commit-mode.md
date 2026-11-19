@@ -18,8 +18,7 @@ what the repository must have before an installation turns on
 
 Credential input uses a [prepared credential operation](organization-credentials.md).
 Its HTTPS save opens one pull request containing both the consumer and encrypted
-Secret. REST commits use the configured RFC 8693 manager App grant; the App-pinned
-MCP authorization mode alone cannot authorize an HTTPS credential save.
+Secret. Commits, over MCP and REST, use the configured RFC 8693 manager App grant.
 
 ## The layout
 

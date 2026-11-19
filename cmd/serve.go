@@ -110,7 +110,6 @@ type serveOptions struct {
 	ssoAllowPrivateIPs            bool
 	allowPublicClientRegistration bool
 	downstreamOAuth               bool
-	githubAuthorizationServer     string
 	githubAPIURL                  string
 	githubExchangeEndpoint        string
 	githubExchangeClient          string
@@ -176,7 +175,7 @@ environment variable named next to it; flags win over the environment.`,
 	f.DurationVar(&o.skillsCacheTTL, "skills-cache-ttl", envDuration("AGENT_MANAGER_SKILLS_CACHE_TTL", 5*time.Minute), "How long a repository's discovered skills are reused (AGENT_MANAGER_SKILLS_CACHE_TTL)")
 	f.StringVar(&o.kagentTarget, "kagent-target", envOr("AGENT_MANAGER_KAGENT_TARGET", ""), "The kagent controller's gRPC target through agentgateway, which list_sessions, get_session, get_session_turn, start_session and delete_session call as the caller: grpc://host:port (h2c, the in-cluster agentgateway Service) or grpcs://host[:port] (TLS). Empty: the session tools answer unsupported. Needs --enable-oauth for a caller token (AGENT_MANAGER_KAGENT_TARGET)")
 	f.BoolVar(&o.multiTenant, "multi-tenant", envBool("AGENT_MANAGER_MULTI_TENANT", false), "Manage the organization namespaces beside the configured ones: those labelled "+apov1alpha1.OrganizationLabel+", which agent-platform-operator keeps (never --kagent-namespace), found by label with the ServiceAccount's read of namespaces; and serve the organization tools, which act as the caller. Needs --downstream-oauth (AGENT_MANAGER_MULTI_TENANT)")
-	f.StringVar(&o.orgsRepository, "organizations-repository", envOr("AGENT_MANAGER_ORGANIZATIONS_REPOSITORY", ""), "The installation's repository (owner/name) the organization tools' mode commit opens its pull requests in, as the person: each organization's object under <objects path>/<parent>/<name>.yaml, its contents in <content prefix>/<parent>/<name>. Empty: mode commit is not offered for organizations. Needs --multi-tenant and --github-authorization-server (AGENT_MANAGER_ORGANIZATIONS_REPOSITORY)")
+	f.StringVar(&o.orgsRepository, "organizations-repository", envOr("AGENT_MANAGER_ORGANIZATIONS_REPOSITORY", ""), "The installation's repository (owner/name) the organization tools' mode commit opens its pull requests in, as the person: each organization's object under <objects path>/<parent>/<name>.yaml, its contents in <content prefix>/<parent>/<name>. Empty: mode commit is not offered for organizations. Needs --multi-tenant and --github-token-exchange-endpoint (AGENT_MANAGER_ORGANIZATIONS_REPOSITORY)")
 	f.StringVar(&o.orgsBranch, "organizations-branch", envOr("AGENT_MANAGER_ORGANIZATIONS_BRANCH", "main"), "The branch of --organizations-repository the pull requests go to (AGENT_MANAGER_ORGANIZATIONS_BRANCH)")
 	f.StringVar(&o.orgsObjectsPath, "organizations-objects-path", envOr("AGENT_MANAGER_ORGANIZATIONS_OBJECTS_PATH", ""), "The directory of --organizations-repository the installation's Kustomization applies the organization objects from, one directory per parent namespace; its kustomization.yaml lists them (AGENT_MANAGER_ORGANIZATIONS_OBJECTS_PATH)")
 	f.StringVar(&o.orgsContentPrefix, "organizations-content-prefix", envOr("AGENT_MANAGER_ORGANIZATIONS_CONTENT_PREFIX", organizations.DefaultContentPrefix), "The directory of --organizations-repository that holds the organizations' content paths, <prefix>/<parent>/<name>: agent-platform-operator's --organization-path without {parent}/{name} (AGENT_MANAGER_ORGANIZATIONS_CONTENT_PREFIX)")
@@ -197,7 +196,6 @@ environment variable named next to it; flags win over the environment.`,
 	f.BoolVar(&o.ssoAllowPrivateIPs, "sso-allow-private-ips", envBool("SSO_ALLOW_PRIVATE_IPS", false), "Let the IdP's JWKS endpoint resolve to a private address when validating forwarded tokens (SSO_ALLOW_PRIVATE_IPS)")
 	f.BoolVar(&o.allowPublicClientRegistration, "allow-public-client-registration", envBool("AGENT_MANAGER_OAUTH_ALLOW_PUBLIC_REGISTRATION", false), "Accept unauthenticated dynamic client registration; labs only (AGENT_MANAGER_OAUTH_ALLOW_PUBLIC_REGISTRATION)")
 	f.BoolVar(&o.downstreamOAuth, "downstream-oauth", envBool("AGENT_MANAGER_DOWNSTREAM_OAUTH", false), "Call the Kubernetes API as the caller, with the caller's IdP token, for everything a request does — the ServiceAccount holds no permissions (the chart renders none) and nothing runs without a caller. Needs --enable-oauth and an apiserver that trusts the IdP (AGENT_MANAGER_DOWNSTREAM_OAUTH)")
-	f.StringVar(&o.githubAuthorizationServer, "github-authorization-server", envOr("AGENT_MANAGER_GITHUB_AUTHORIZATION_SERVER", ""), "Issuer identity of the GitHub App muster pins this server's MCP registration to (https://github.com/apps/giantswarm-agent-manager): the bearer of every MCP call is then the person's App user token, verified with GET /user and used for commit mode's pull request, and the person's IdP ID token arrives in X-Muster-Id-Token (MCPServer auth.forwardIdentity). Empty: commit mode is not offered. Needs --enable-oauth (AGENT_MANAGER_GITHUB_AUTHORIZATION_SERVER)")
 	f.StringVar(&o.githubAPIURL, "github-api-url", envOr("AGENT_MANAGER_GITHUB_API_URL", server.DefaultGitHubAPIURL), "GitHub REST API base URL for GET /user and commit mode (AGENT_MANAGER_GITHUB_API_URL)")
 	f.StringVar(&o.githubExchangeEndpoint, "github-token-exchange-endpoint", envOr("AGENT_MANAGER_GITHUB_TOKEN_EXCHANGE_ENDPOINT", ""), "RFC 8693 endpoint for obtaining the manager App user grant (AGENT_MANAGER_GITHUB_TOKEN_EXCHANGE_ENDPOINT)")
 	f.StringVar(&o.githubExchangeClient, "github-token-exchange-client-id", envOr("AGENT_MANAGER_GITHUB_TOKEN_EXCHANGE_CLIENT_ID", ""), "Confidential token exchange client ID; empty reads --github-token-exchange-client-id-file (AGENT_MANAGER_GITHUB_TOKEN_EXCHANGE_CLIENT_ID)")
@@ -233,9 +231,6 @@ func runServe(ctx context.Context, o *serveOptions) error {
 	}
 	if strings.HasPrefix(o.skillsGitAuth, agents.TenantCredentialPrefix) {
 		log.Warn("the installation's skills credential is named "+agents.TenantCredentialPrefix+"*, the prefix of a tenant's own credentials: where it is present in an Organization's namespace, admission lets a tenant name it; rename the Secret and list the old name in --skills-git-auth-previous-secret-names", "secret", o.skillsGitAuth)
-	}
-	if o.githubAuthorizationServer != "" && !o.oauthEnabled {
-		return fmt.Errorf("--github-authorization-server needs --enable-oauth: the forwarded IdP ID token is validated by the OAuth resource server")
 	}
 	if o.kagentTarget != "" && !o.oauthEnabled {
 		return fmt.Errorf("--kagent-target needs --enable-oauth: the session tools call kagent as the caller, with the caller's IdP token, and never as the ServiceAccount")
@@ -401,7 +396,7 @@ func runServe(ctx context.Context, o *serveOptions) error {
 		}
 		var orgsCommit *organizations.CommitConfig
 		if o.orgsRepository != "" {
-			if orgsCommit, err = organizations.NewCommitConfig(gitHubRemote(o.githubAuthorizationServer != "" || resolveGitHub != nil, o.githubAPIURL), o.orgsRepository, o.orgsBranch, o.orgsObjectsPath, o.orgsContentPrefix); err != nil {
+			if orgsCommit, err = organizations.NewCommitConfig(gitHubRemote(resolveGitHub != nil, o.githubAPIURL), o.orgsRepository, o.orgsBranch, o.orgsObjectsPath, o.orgsContentPrefix); err != nil {
 				return fmt.Errorf("--organizations-repository: %w", err)
 			}
 			orgsCommit.User = resolveGitHub
@@ -477,7 +472,7 @@ func runServe(ctx context.Context, o *serveOptions) error {
 		SkillsBootSecret: bootSecret,
 		KagentAPIVersion: kagentVersion,
 		Version:          build.Version,
-		GitHub:           gitHubRemote(o.githubAuthorizationServer != "" || resolveGitHub != nil, o.githubAPIURL),
+		GitHub:           gitHubRemote(resolveGitHub != nil, o.githubAPIURL),
 		GitHubUser:       resolveGitHub,
 		Sessions:         sessions,
 		Bindings:         bindings,
@@ -509,9 +504,6 @@ func runServe(ctx context.Context, o *serveOptions) error {
 			SSOAllowPrivateIPs:            o.ssoAllowPrivateIPs,
 			AllowPublicClientRegistration: o.allowPublicClientRegistration,
 			DownstreamOAuth:               o.downstreamOAuth,
-		}
-		if o.githubAuthorizationServer != "" {
-			srvCfg.OAuth.GitHub = &server.GitHubPin{AuthorizationServer: o.githubAuthorizationServer, APIURL: o.githubAPIURL}
 		}
 	}
 	srvCfg.Organizations = orgs
@@ -686,8 +678,8 @@ func validateCredentialOptions(options *serveOptions) error {
 		}
 	}
 	if options.githubExchangeEndpoint != "" {
-		if !options.oauthEnabled || !options.downstreamOAuth || options.oauthProvider != server.ProviderDex || options.githubAuthorizationServer != "" {
-			return errors.New("GitHub token exchange requires Dex OAuth and downstream OAuth, and replaces the GitHub-pinned MCP registration")
+		if !options.oauthEnabled || !options.downstreamOAuth || options.oauthProvider != server.ProviderDex {
+			return errors.New("GitHub token exchange requires Dex OAuth and downstream OAuth")
 		}
 		return (server.GitHubExchangeConfig{TokenEndpoint: options.githubExchangeEndpoint, ClientID: options.githubExchangeClient, ClientIDFile: options.githubExchangeClientFile, ClientSecretFile: options.githubExchangeSecretFile, Audience: options.githubExchangeAudience, CAFile: options.githubExchangeCAFile, APIURL: options.githubAPIURL, SubjectIssuer: options.dexIssuerURL}).Validate()
 	}

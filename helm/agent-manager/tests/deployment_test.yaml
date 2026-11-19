@@ -75,17 +75,13 @@ tests:
           path: spec.template.spec.containers[0].args
           content: --dex-client-id=explicit-client
 
-  - it: passes the GitHub App pin with github.enabled
+  - it: refuses github.enabled without github.tokenExchange
     set:
       github:
         enabled: true
     asserts:
-      - contains:
-          path: spec.template.spec.containers[0].args
-          content: --github-authorization-server=https://github.com/apps/giantswarm-agent-manager
-      - contains:
-          path: spec.template.spec.containers[0].args
-          content: --github-api-url=https://api.github.com
+      - failedTemplate:
+          errorMessage: "github.enabled needs github.tokenExchange: commit mode fetches the person's grant of the GitHub App from muster's broker; set github.tokenExchange.tokenEndpoint, audience and existingSecret"
 
   - it: offers no commit mode by default
     asserts:
@@ -104,7 +100,7 @@ tests:
           path: spec.template.spec.containers[0].startupProbe.periodSeconds
           value: 10
 
-  - it: replaces the GitHub App pin with github.tokenExchange
+  - it: fetches the GitHub grant with github.tokenExchange
     set:
       oauth:
         downstream:
@@ -128,9 +124,6 @@ tests:
       - contains:
           path: spec.template.spec.containers[0].args
           content: --github-api-url=https://api.github.com
-      - notContains:
-          path: spec.template.spec.containers[0].args
-          content: --github-authorization-server=https://github.com/apps/giantswarm-agent-manager
       - notContains:
           path: spec.template.spec.containers[0].args
           content: --github-token-exchange-client-id=

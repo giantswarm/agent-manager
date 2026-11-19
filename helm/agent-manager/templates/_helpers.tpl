@@ -320,13 +320,17 @@ to the current name; while minting, each is rendered and kept filled as well.
 {{- end -}}
 
 {{/*
-Non-empty when github.tokenExchange is configured; fails on an incomplete
-configuration, one without github.enabled, without Dex OAuth and downstream
-OAuth (the person's Dex ID token is the subject token), or without
+Non-empty when github.tokenExchange is configured; fails on github.enabled
+without it (commit mode fetches the person's grant from muster's broker), on
+an incomplete configuration, one without github.enabled, without Dex OAuth and
+downstream OAuth (the person's Dex ID token is the subject token), or without
 muster.mcpServer.auth.forwardToken (providerApps needs the person's
 connection).
 */}}
 {{- define "agent-manager.githubTokenExchange" -}}
+{{- if and .Values.github.enabled (not (dig "tokenExchange" "tokenEndpoint" "" .Values.github)) }}
+{{- fail "github.enabled needs github.tokenExchange: commit mode fetches the person's grant of the GitHub App from muster's broker; set github.tokenExchange.tokenEndpoint, audience and existingSecret" }}
+{{- end }}
 {{- with .Values.github.tokenExchange }}
 {{- if .tokenEndpoint }}
 {{- if not $.Values.github.enabled }}

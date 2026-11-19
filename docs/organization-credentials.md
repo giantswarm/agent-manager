@@ -180,9 +180,8 @@ is empty; the chart mounts the whole Secret. With `clientSecret` instead of
 `existingSecret` the chart renders `<fullname>-github-token-exchange`. An
 optional CA Secret contains `ca.crt`. The endpoint and audience are
 operator-controlled; requests cannot change them. This mode requires
-`github.enabled`, Dex OAuth and downstream authorization, and replaces the
-App-pinned MCP registration (`github.authorizationServer`, deprecated). It
-also supplies ordinary agent and organization commits with the person's grant.
+`github.enabled`, Dex OAuth and downstream authorization. It also supplies
+ordinary agent and organization commits with the person's grant.
 
 The authorization server must independently validate the subject ID token and
 confidential client, allow that client only the manager App's target audience,
@@ -209,8 +208,6 @@ REST returns `auth_required`; the client owns the provider authorization UX.
 The App must be installed with contents and pull-request write on the target
 repository. GitHub documents the distinction between [user authorization and
 installation authorization](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/authenticating-with-a-github-app-on-behalf-of-a-user).
-The deprecated App-pinned mode remains available for MCP commits, but alone
-cannot authorize the credential HTTPS save.
 
 ## Storage and write boundaries
 

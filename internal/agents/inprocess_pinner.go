@@ -16,9 +16,9 @@ type SourceResolver interface {
 	GitHead(ctx context.Context, repoURL, ref string) (string, error)
 	// OCIDigest pins an OCI reference to <repository>@sha256:<digest>.
 	OCIDigest(ctx context.Context, ref string) (string, error)
-	// RequireReadable refuses a repository login (the caller's GitHub login,
-	// empty when unknown) cannot read: skills.ErrNotReadable.
-	RequireReadable(ctx context.Context, repoURL, login string) error
+	// RequireReadable refuses a repository the caller may not be shown:
+	// skills.ErrNotReadable.
+	RequireReadable(ctx context.Context, repoURL string) error
 }
 
 // InProcessPinner is the SkillPinner of r, item by item; a ReadChecker, and
@@ -88,11 +88,11 @@ func (p inProcessPinner) pin(ctx context.Context, it skillmanager.Item) (skillma
 	return it, nil
 }
 
-func (p inProcessPinner) RequireReadable(ctx context.Context, repoURL, login string) error {
+func (p inProcessPinner) RequireReadable(ctx context.Context, repoURL string) error {
 	if p.r == nil {
 		return fmt.Errorf("%w: no resolver to check that %s can be read", skills.ErrNotReadable, repoURL)
 	}
-	return p.r.RequireReadable(ctx, repoURL, login)
+	return p.r.RequireReadable(ctx, repoURL)
 }
 
 // ClaudeFormatPlugin answers through r; a resolver that cannot tell

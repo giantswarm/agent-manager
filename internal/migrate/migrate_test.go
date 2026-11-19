@@ -111,8 +111,8 @@ func (p pinner) GitHead(ctx context.Context, repoURL, ref string) (string, error
 	return p.git.GitHead(ctx, repoURL, ref)
 }
 
-func (p pinner) RequireReadable(ctx context.Context, repoURL, login string) error {
-	return p.git.RequireReadable(ctx, repoURL, login)
+func (p pinner) RequireReadable(ctx context.Context, repoURL string) error {
+	return p.git.RequireReadable(ctx, repoURL)
 }
 
 func (p pinner) OCIDigest(_ context.Context, ref string) (string, error) {

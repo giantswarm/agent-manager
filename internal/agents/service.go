@@ -52,8 +52,8 @@ type Config struct {
 	// Version is the service version reported by GET /info.
 	Version string
 	// GitHub offers commit mode: the pull request is opened as the person
-	// with the GitHub token the App-pinned registration carries. Nil: commit
-	// mode is refused as unsupported.
+	// with the grant GitHubUser fetches. Nil: commit mode is refused as
+	// unsupported.
 	GitHub     RemoteFor
 	GitHubUser func(context.Context) (*identity.GitHub, error)
 	// SkillsBootSecret keeps the installation's skills credential Secret
@@ -916,7 +916,7 @@ func (s *Service) ListSkills(ctx context.Context, repository, ref string, refres
 		if repo.Private {
 			err := fmt.Errorf("%w: %s: no check of who can read it", skills.ErrNotReadable, repo.RepoURL)
 			if rc, ok := s.pinner.(ReadChecker); ok {
-				err = rc.RequireReadable(ctx, repo.RepoURL, gitHubLogin(ctx))
+				err = rc.RequireReadable(ctx, repo.RepoURL)
 			}
 			if err != nil {
 				repo = skills.Repository{RepoURL: repo.RepoURL, Private: true, Skills: []skills.Skill{}, Error: err.Error(), FetchedAt: repo.FetchedAt}

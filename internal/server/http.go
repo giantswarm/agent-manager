@@ -89,7 +89,7 @@ func New(cfg Config, svc *agents.Service, mcpSrv *mcpserver.MCPServer, log *slog
 		// (CVE-2026-108859); the bound keeps that read to what the REST API
 		// accepts.
 		mcpHandler := mcpserver.NewStreamableHTTPServer(mcpSrv, mcpserver.WithEndpointPath(cfg.MCPPath))
-		mux.Handle(cfg.MCPPath, http.MaxBytesHandler(s.guardMCP(mcpHandler), maxMCPBodyBytes))
+		mux.Handle(cfg.MCPPath, http.MaxBytesHandler(s.guard(mcpHandler), maxMCPBodyBytes))
 	}
 	s.http = &http.Server{
 		Addr:              cfg.Addr,
@@ -130,16 +130,8 @@ func (s *Server) guard(next http.Handler) http.Handler {
 	return s.oauth.protect(next)
 }
 
-// guardMCP is guard for the MCP endpoint, where the GitHub App pin applies.
 // maxMCPBodyBytes bounds an MCP request body, as the REST API bounds its own.
 const maxMCPBodyBytes = 1 << 20
-
-func (s *Server) guardMCP(next http.Handler) http.Handler {
-	if s.oauth == nil {
-		return next
-	}
-	return s.oauth.protectMCP(next)
-}
 
 // Handler exposes the mux (tests).
 func (s *Server) Handler() http.Handler { return s.http.Handler }

@@ -38,7 +38,7 @@ func TestInProcessPinnerWithoutAResolver(t *testing.T) {
 
 	rc, ok := p.(ReadChecker)
 	require.True(t, ok)
-	require.ErrorIs(t, rc.RequireReadable(t.Context(), skillsRepo, ""), skills.ErrNotReadable)
+	require.ErrorIs(t, rc.RequireReadable(t.Context(), skillsRepo), skills.ErrNotReadable)
 
 	formats, ok := p.(PluginFormats)
 	require.True(t, ok)

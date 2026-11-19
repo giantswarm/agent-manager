@@ -79,11 +79,6 @@ type OAuthConfig struct {
 	// ServiceAccount then holds no permissions, so a request whose caller has
 	// no IdP token to present is refused (401) rather than run as nobody.
 	DownstreamOAuth bool
-	// GitHub, when set, pins the MCP registration to the App: the bearer on
-	// the MCP endpoint is the person's App user token and the IdP ID token
-	// arrives in ForwardedIdentityHeader (GitHubPin). The REST API keeps
-	// taking the IdP token as its bearer.
-	GitHub *GitHubPin
 }
 
 // Validate checks required fields.
@@ -128,7 +123,6 @@ type oauthRuntime struct {
 	cfg     OAuthConfig
 	mcpPath string
 	log     *slog.Logger
-	github  *gitHubGuard
 }
 
 func newOAuth(cfg OAuthConfig, mcpPath string, log *slog.Logger) (*oauthRuntime, error) {
@@ -160,13 +154,7 @@ func newOAuth(cfg OAuthConfig, mcpPath string, log *slog.Logger) (*oauthRuntime,
 	}
 	log.Info("OAuth resource server enabled", "provider", cfg.provider(), "issuer", cfg.BaseURL,
 		"trustedAudiences", cfg.TrustedAudiences, "downstreamOAuth", cfg.DownstreamOAuth)
-	o := &oauthRuntime{server: srv, handler: handler.New(srv, log), store: store, cfg: cfg, mcpPath: mcpPath, log: log}
-	if cfg.GitHub != nil {
-		if o.github, err = newGitHubGuard(*cfg.GitHub, log); err != nil {
-			return nil, err
-		}
-	}
-	return o, nil
+	return &oauthRuntime{server: srv, handler: handler.New(srv, log), store: store, cfg: cfg, mcpPath: mcpPath, log: log}, nil
 }
 
 func newProvider(cfg OAuthConfig, rootCAs *x509.CertPool, log *slog.Logger) (providers.Provider, error) {
@@ -234,17 +222,6 @@ func (o *oauthRuntime) register(mux *http.ServeMux) {
 // trusted) and then attaches the caller to the request.
 func (o *oauthRuntime) protect(next http.Handler) http.Handler {
 	return o.handler.ValidateToken(o.attachIdentity(next))
-}
-
-// protectMCP is protect for the MCP endpoint. Pinned to the App, the GitHub
-// bearer is verified first and the forwarded ID token is what mcp-oauth
-// validates.
-func (o *oauthRuntime) protectMCP(next http.Handler) http.Handler {
-	h := o.protect(next)
-	if o.github != nil {
-		return o.github.protect(h)
-	}
-	return h
 }
 
 // attachIdentity translates the validated mcp-oauth user into the request's
@@ -331,12 +308,6 @@ func unverifiedAudience(token string) ([]string, bool) {
 		return many, true
 	}
 	return nil, false
-}
-
-// headerQuotedString makes s safe inside a WWW-Authenticate quoted-string
-// (RFC 6750 §3: no double quote, no backslash).
-func headerQuotedString(s string) string {
-	return strings.NewReplacer(`"`, "", `\`, "").Replace(s)
 }
 
 func bearerToken(r *http.Request) string {
