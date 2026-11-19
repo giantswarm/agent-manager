@@ -647,6 +647,11 @@ type Connector struct {
 	// Curated: a copy agent-platform-operator keeps; read-only.
 	Curated   bool   `json:"curated,omitempty"`
 	ManagedBy string `json:"managedBy,omitempty"`
+	// MusterBindingOf names the agent whose muster binding this
+	// RemoteMCPServer is (agents.MusterBindings): no connector, and
+	// create_agent and update_agent refuse it in connectors. Empty for every
+	// other RemoteMCPServer, a Helm-rendered connector included.
+	MusterBindingOf string `json:"musterBindingOf,omitempty"`
 }
 
 // CredentialUnknown: the caller may not ask whether the Secret exists.
@@ -730,8 +735,9 @@ func connectorCredentials(u *unstructured.Unstructured) []ConnectorCredential {
 }
 
 // ListConnectors lists the RemoteMCPServers of an organization namespace as
-// the caller, each credential by reference with the state of its Secret, and
-// each connector's Accepted condition.
+// the caller, each credential by reference with the state of its Secret,
+// each connector's Accepted condition, and the agent whose muster binding a
+// server is.
 func (s *Service) ListConnectors(ctx context.Context, ns string) ([]Connector, error) {
 	if _, err := s.organization(ctx, ns); err != nil {
 		return nil, err
@@ -744,10 +750,15 @@ func (s *Service) ListConnectors(ctx context.Context, ns string) ([]Connector, e
 	if err != nil {
 		return nil, err
 	}
+	agentItems, err := s.existing(ctx, c, ns, s.kagentGVR("agents"), "Agents")
+	if err != nil {
+		return nil, err
+	}
+	bindings := agents.MusterBindings(items, agentItems)
 	out := make([]Connector, 0, len(items))
 	for i := range items {
 		u := &items[i]
-		conn := Connector{Name: u.GetName(), Credentials: connectorCredentials(u), ManagedBy: u.GetLabels()[agents.ManagedByLabel]}
+		conn := Connector{Name: u.GetName(), Credentials: connectorCredentials(u), ManagedBy: u.GetLabels()[agents.ManagedByLabel], MusterBindingOf: bindings[u.GetName()]}
 		raw, _, _ := unstructured.NestedString(u.Object, "spec", "url")
 		conn.URL = redactURL(raw)
 		conn.Description, _, _ = unstructured.NestedString(u.Object, "spec", "description")

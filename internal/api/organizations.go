@@ -380,7 +380,7 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service, l
 
 	t.addTool(s, mcp.NewTool(ToolListOrganizationConnector,
 		tooldesc.Describe("List an organization's connectors (RemoteMCPServers): URL, description and the credential headers by Secret name.",
-			"Read as you. A credential in a URL written elsewhere is shown as REDACTED. curated marks a read-only copy of what the platform curates. A credential's state: present or missing, whether its Secret exists (a dry-run create as you, never a read; unknown if you may not create it), not whether it holds the key. accepted, reason, message: kagent's Accepted condition (tool discovery). create_agent takes the names as connectors."),
+			"Read as you. A credential in a URL written elsewhere shows as REDACTED. curated marks a read-only copy of what the platform curates. A credential's state: present or missing, whether its Secret exists (a dry-run create as you, never a read; unknown if you may not create it), not whether it holds the key. accepted, reason, message: kagent's Accepted condition. musterBindingOf: the agent whose muster binding it is (no connector). create_agent takes the rest as connectors."),
 		orgNSProp,
 		mcp.WithReadOnlyHintAnnotation(true),
 		mcp.WithDestructiveHintAnnotation(false),

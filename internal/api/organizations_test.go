@@ -1283,6 +1283,43 @@ func TestCreateOrganizationGoesOnUnreadCallersAndRefusesHalfARight(t *testing.T)
 	}
 }
 
+// list_organization_connectors marks an agent's muster binding with the
+// agent's name, by the release that renders it with the Agent and not by a
+// label the agent's values can set; a connector of the organization and one
+// another chart's HelmRelease renders stay unmarked.
+func TestListConnectorsMarksMusterBindings(t *testing.T) {
+	object := func(kind, name, release string, labels map[string]any) *unstructured.Unstructured {
+		if release != "" {
+			labels["helm.toolkit.fluxcd.io/name"] = release
+			labels["helm.toolkit.fluxcd.io/namespace"] = orgNS
+		}
+		return &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "api.kagent.dev/v1alpha3", "kind": kind,
+			"metadata": map[string]any{"name": name, "namespace": orgNS, "labels": labels},
+			"spec":     map[string]any{"url": "https://" + name + ".example/mcp"},
+		}}
+	}
+	f := newOrgFixture(t,
+		object("RemoteMCPServer", "jira", "", map[string]any{}),
+		// helper's values set app.kubernetes.io/name and a muster URL of their own.
+		object("RemoteMCPServer", "helper", "helper", map[string]any{"app.kubernetes.io/managed-by": "Helm", "app.kubernetes.io/name": "helper"}),
+		object("Agent", "helper", "helper", map[string]any{"app.kubernetes.io/managed-by": "Helm"}),
+		object("RemoteMCPServer", "vendor", "vendor-mcp", map[string]any{"app.kubernetes.io/managed-by": "Helm", "app.kubernetes.io/name": "vendor-mcp"}),
+	)
+
+	text, isErr := f.call(t, ToolListOrganizationConnector, map[string]any{"namespace": orgNS})
+	require.False(t, isErr, text)
+	var out struct {
+		Connectors []struct{ Name, ManagedBy, MusterBindingOf string }
+	}
+	require.NoError(t, json.Unmarshal([]byte(text), &out))
+	assert.Equal(t, []struct{ Name, ManagedBy, MusterBindingOf string }{
+		{"helper", "Helm", "helper"},
+		{"jira", "", ""},
+		{"vendor", "Helm", ""},
+	}, out.Connectors)
+}
+
 // list_organization_connectors says, for each credential, whether its Secret
 // exists, asked as the caller with a dry-run create and never by a read; a
 // caller who may not create the Secret gets unknown. Each connector carries

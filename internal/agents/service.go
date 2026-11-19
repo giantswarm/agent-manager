@@ -1757,6 +1757,9 @@ func (s *Service) mergedValues(ctx context.Context, st *site, upd Update, hr *un
 		if err := s.requireConnectors(ctx, st, upd.Name, *upd.Connectors); err != nil {
 			firstErr = err
 		}
+		if err := refuseConnectorsUnderValuesFrom(hr); err != nil {
+			firstErr = err
+		}
 		setConnectors(after, *upd.Connectors)
 		if err := refuseConnectorsUnderToolsOverride(after); err != nil {
 			firstErr = err

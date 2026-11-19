@@ -142,13 +142,15 @@ func TestConnectorsInCommitMode(t *testing.T) {
 func TestConnectorsRefused(t *testing.T) {
 	f := connectorFixture(t)
 	ctx := t.Context()
-	// helper is another agent's muster binding; vendor is a connector a
+	// helper is another agent's muster binding, whose values override the
+	// chart's app.kubernetes.io/name label; vendor is a connector a
 	// HelmRelease of another chart renders.
 	helper := remoteMCPServer("org-a", "helper")
-	helper.SetLabels(map[string]string{HelmReleaseNameLabel: "helper", HelmReleaseNamespaceLabel: "org-a", chartNameLabel: "agent"})
+	helper.SetLabels(map[string]string{HelmReleaseNameLabel: "helper", HelmReleaseNamespaceLabel: "org-a", "app.kubernetes.io/name": "helper"})
 	mustCreate(t, f, serverGVR, helper)
+	mustCreate(t, f, agentGVR, agentObject("org-a", "helper", "helper", "org-a", true, true))
 	vendor := connector("vendor")
-	vendor.SetLabels(map[string]string{HelmReleaseNameLabel: "vendor-mcp", HelmReleaseNamespaceLabel: "org-a", chartNameLabel: "vendor-mcp"})
+	vendor.SetLabels(map[string]string{HelmReleaseNameLabel: "vendor-mcp", HelmReleaseNamespaceLabel: "org-a", "app.kubernetes.io/name": "vendor-mcp"})
 	mustCreate(t, f, serverGVR, vendor)
 	for _, tc := range []struct {
 		name string
@@ -160,7 +162,7 @@ func TestConnectorsRefused(t *testing.T) {
 		{"other kind", connectorSpec("a", "server:github"), `connectors: "server:github" names a namespace or a kind`},
 		{"named twice", connectorSpec("a", "github", "github"), `connectors: "github" is named twice`},
 		{"own muster binding", connectorSpec("a", "a"), `connectors: "a" is the agent's own muster binding, no connector`},
-		{"another agent's muster binding", connectorSpec("a", "helper"), `connectors: RemoteMCPServer "helper" is rendered by HelmRelease helper: it is an agent's muster binding, no connector`},
+		{"another agent's muster binding", connectorSpec("a", "helper"), `connectors: RemoteMCPServer "helper" is the muster binding of agent "helper"`},
 		{"platform namespace", Spec{Name: "a", ModelConfig: "default-model-config", Toolset: []string{"preset:read-only"}, Connectors: []string{"verifier"}}, "connectors: namespace kagent is no organization namespace"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -193,6 +195,18 @@ func TestConnectorsRefused(t *testing.T) {
 	_, err = f.svc.Update(ctx, Update{Location: In("org-a"), Name: "sre", Connectors: &[]string{"github"}})
 	require.ErrorIs(t, err, ErrInvalid)
 	assert.Contains(t, err.Error(), "extraAgentSpec.tools, which replaces its whole tool list")
+
+	// Bindings a release's valuesFrom brings, with no inline extraTools key:
+	// connectors are refused, even [], and the values stay.
+	inherited := orgRelease(t, f, "vendored")
+	unstructured.RemoveNestedField(inherited.Object, "spec", "values", "extraTools")
+	require.NoError(t, unstructured.SetNestedSlice(inherited.Object, []any{map[string]any{"kind": "ConfigMap", "name": "vendored-tools"}}, "spec", "valuesFrom"))
+	_, err = f.dyn.Resource(hrGVR).Namespace("org-a").Update(ctx, inherited, metav1.UpdateOptions{})
+	require.NoError(t, err)
+	_, err = f.svc.Update(ctx, Update{Location: In("org-a"), Name: "vendored", Connectors: &[]string{}})
+	require.ErrorIs(t, err, ErrInvalid)
+	assert.Contains(t, err.Error(), "connectors: HelmRelease org-a/vendored takes values from spec.valuesFrom")
+	assert.Equal(t, mustValues(inherited), mustValues(orgRelease(t, f, "vendored")))
 
 	_, err = f.svc.Update(ctx, Update{Name: "verifier", Connectors: &[]string{"verifier"}})
 	require.ErrorIs(t, err, ErrInvalid)

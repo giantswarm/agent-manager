@@ -20,10 +20,6 @@ import (
 // after the muster binding.
 const extraToolsValuesKey = "extraTools"
 
-// chartNameLabel is the label the agent chart puts on what it renders, with
-// the chart's name.
-const chartNameLabel = "app.kubernetes.io/name"
-
 // connectorOf is the name of the connector an extraTools entry binds: an
 // `mcp` entry whose server is a kagent RemoteMCPServer. Any other entry
 // (a subAgent, a server of another kind) is no connector.
@@ -127,12 +123,54 @@ func ValidateConnectors(names []string) error {
 	return nil
 }
 
+// MusterBindings maps each RemoteMCPServer of servers that is an agent's
+// muster binding to that agent's name. The agent chart renders an agent's
+// Agent and its muster RemoteMCPServer under one name (agent.name) from one
+// HelmRelease, and helm-controller labels every object it applies with that
+// release (HelmReleaseNameLabel, HelmReleaseNamespaceLabel) after the render,
+// over any label the values set. So a server is a binding when an Agent of
+// the same name carries the same two labels: whatever the agent's values
+// set (labels, muster.url), wherever its release lives. servers and agents
+// are of one namespace. A RemoteMCPServer that a release renders without an
+// Agent of its name (a connector of another chart) is none.
+func MusterBindings(servers, agents []unstructured.Unstructured) map[string]string {
+	releaseOf := make(map[string][2]string, len(agents))
+	for i := range agents {
+		if name, ns := ownerOf(&agents[i]); name != "" {
+			releaseOf[agents[i].GetName()] = [2]string{name, ns}
+		}
+	}
+	out := map[string]string{}
+	for i := range servers {
+		name, ns := ownerOf(&servers[i])
+		if name == "" {
+			continue
+		}
+		if release, ok := releaseOf[servers[i].GetName()]; ok && release == [2]string{name, ns} {
+			out[servers[i].GetName()] = servers[i].GetName()
+		}
+	}
+	return out
+}
+
+// refuseConnectorsUnderValuesFrom refuses connectors on a release with
+// spec.valuesFrom: Flux merges those values beneath spec.values, so an
+// extraTools list there binds connectors that get_agent (which reads
+// spec.values) does not report, and an inline extraTools list replaces it
+// whole, with its other entries.
+func refuseConnectorsUnderValuesFrom(hr *unstructured.Unstructured) error {
+	if from, _, _ := unstructured.NestedSlice(hr.Object, "spec", "valuesFrom"); len(from) > 0 {
+		return invalidf("connectors: HelmRelease %s/%s takes values from spec.valuesFrom, which can bind tools (extraTools) that agent-manager neither reads nor keeps; change its connectors where the valuesFrom values are managed", hr.GetNamespace(), hr.GetName())
+	}
+	return nil
+}
+
 // requireConnectors checks, as the caller and before any write, that each
 // name is a RemoteMCPServer of the agent's namespace, and that the namespace
 // is an organization namespace on the installation: connectors exist there
 // only (set_organization_connector, list_organization_connectors). The
-// muster RemoteMCPServer an agent release renders (the agent's own, or
-// another agent's, whose toolset it carries) is no connector.
+// muster RemoteMCPServer of an agent (the agent's own, or another agent's,
+// whose toolset it carries; MusterBindings) is no connector.
 func (s *Service) requireConnectors(ctx context.Context, st *site, agent string, names []string) error {
 	if len(names) == 0 {
 		return nil
@@ -155,26 +193,22 @@ func (s *Service) requireConnectors(ctx context.Context, st *site, agent string,
 	if err != nil {
 		return wrapKube(err, "list remotemcpservers in "+ns)
 	}
-	known := make(map[string]bool, len(list.Items))
-	ofRelease := make(map[string]string, len(list.Items))
-	for i := range list.Items {
-		item := &list.Items[i]
-		known[item.GetName()] = true
-		// The agent chart's muster binding: rendered by a HelmRelease of
-		// the agent chart. A connector a HelmRelease of another chart
-		// renders stays one.
-		labels := item.GetLabels()
-		if release := labels[HelmReleaseNameLabel]; release != "" && labels[chartNameLabel] == st.compose.ChartName {
-			ofRelease[item.GetName()] = release
-		}
+	agentList, err := st.agent.Resource(s.agentGVR()).Namespace(ns).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return wrapKube(err, "list agents in "+ns)
 	}
+	known := make(map[string]bool, len(list.Items))
+	for i := range list.Items {
+		known[list.Items[i].GetName()] = true
+	}
+	bindings := MusterBindings(list.Items, agentList.Items)
 	var missing []string
 	for _, name := range names {
 		if name == agent {
 			return invalidf("connectors: %q is the agent's own muster binding, no connector (its toolset selects muster's tools)", name)
 		}
-		if release, ok := ofRelease[name]; ok {
-			return invalidf("connectors: RemoteMCPServer %q is rendered by HelmRelease %s: it is an agent's muster binding, no connector (list_organization_connectors)", name, release)
+		if of, ok := bindings[name]; ok {
+			return invalidf("connectors: RemoteMCPServer %q is the muster binding of agent %q, rendered with it by one HelmRelease: no connector (list_organization_connectors marks it musterBindingOf)", name, of)
 		}
 		if !known[name] {
 			missing = append(missing, `"`+name+`"`)
