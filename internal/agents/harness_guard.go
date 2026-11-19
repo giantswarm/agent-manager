@@ -155,8 +155,12 @@ func refuseApproval(runtime string, values map[string]any) []error {
 	if on, _, _ := unstructured.NestedBool(values, "muster", "requireApproval"); on {
 		errs = append(errs, invalidf("muster.requireApproval: a coding agent takes no requireApproval binding: approval is no boundary against %s, which can answer it from its own sandbox; the agent reaches its tools through muster only, which authorizes every call as the person", runtimeLabel(runtime)))
 	}
-	if extra, _ := values["extraTools"].([]any); len(extra) > 0 {
-		errs = append(errs, invalidf("extraTools: a coding agent reaches tools through muster only (its toolset); drop the %d extra binding(s)", len(extra)))
+	if extra, _ := values[extraToolsValuesKey].([]any); len(extra) > 0 {
+		msg := fmt.Sprintf("extraTools: a coding agent reaches tools through muster only (its toolset); drop the %d extra binding(s)", len(extra))
+		if connectors := connectorsFromValues(values); len(connectors) > 0 {
+			msg += fmt.Sprintf(": connectors %s need an agent on a kagent Harness", strings.Join(connectors, ", "))
+		}
+		errs = append(errs, invalidf("%s", msg))
 	}
 	if tools, found, _ := unstructured.NestedFieldNoCopy(values, "extraAgentSpec", "tools"); found && tools != nil {
 		errs = append(errs, invalidf("extraAgentSpec.tools: a coding agent reaches tools through muster only (its toolset)"))

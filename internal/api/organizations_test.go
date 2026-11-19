@@ -1282,3 +1282,77 @@ func TestCreateOrganizationGoesOnUnreadCallersAndRefusesHalfARight(t *testing.T)
 		})
 	}
 }
+
+// list_organization_connectors says, for each credential, whether its Secret
+// exists, asked as the caller with a dry-run create and never by a read; a
+// caller who may not create the Secret gets unknown. Each connector carries
+// kagent's Accepted condition of its current generation.
+func TestListConnectorsReportsCredentialAndAcceptedState(t *testing.T) {
+	connector := func(name string, generation int64, condition map[string]any) *unstructured.Unstructured {
+		u := &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "api.kagent.dev/v1alpha3", "kind": "RemoteMCPServer",
+			"metadata": map[string]any{"name": name, "namespace": orgNS, "generation": generation},
+			"spec": map[string]any{"url": "https://" + name + ".example/mcp", "headersFrom": []any{
+				map[string]any{"name": "Authorization", "valueFrom": map[string]any{"type": "Secret", "name": "tenant-credential-" + name, "key": "token"}},
+			}},
+		}}
+		if condition != nil {
+			u.Object["status"] = map[string]any{"conditions": []any{condition}}
+		}
+		return u
+	}
+	f := newOrgFixture(t,
+		connector("jira", 2, map[string]any{"type": "Accepted", "status": "True", "reason": "DiscoverySucceeded", "message": "3 tools", "observedGeneration": int64(2)}),
+		connector("wiki", 1, map[string]any{"type": "Accepted", "status": "False", "reason": "DiscoveryFailed", "message": "401 Unauthorized", "observedGeneration": int64(1)}),
+		connector("stale", 3, map[string]any{"type": "Accepted", "status": "True", "reason": "DiscoverySucceeded", "observedGeneration": int64(2)}),
+	)
+	seedSecret(t, f, "tenant-credential-jira", "token")
+
+	type state struct {
+		Name        string
+		Accepted    *bool
+		Reason      string
+		Message     string
+		Credentials []struct{ Secret, State string }
+	}
+	list := func() map[string]state {
+		text, isErr := f.call(t, ToolListOrganizationConnector, map[string]any{"namespace": orgNS})
+		require.False(t, isErr, text)
+		var out struct{ Connectors []state }
+		require.NoError(t, json.Unmarshal([]byte(text), &out))
+		byName := map[string]state{}
+		for _, c := range out.Connectors {
+			byName[c.Name] = c
+		}
+		return byName
+	}
+	yes, no := true, false
+
+	got := list()
+	assert.Equal(t, &yes, got["jira"].Accepted)
+	assert.Equal(t, "DiscoverySucceeded", got["jira"].Reason)
+	assert.Equal(t, []struct{ Secret, State string }{{"tenant-credential-jira", "present"}}, got["jira"].Credentials)
+	assert.Equal(t, &no, got["wiki"].Accepted)
+	assert.Equal(t, "401 Unauthorized", got["wiki"].Message)
+	assert.Equal(t, []struct{ Secret, State string }{{"tenant-credential-wiki", "missing"}}, got["wiki"].Credentials)
+	assert.Nil(t, got["stale"].Accepted, "a condition of an earlier generation is not reported")
+	assert.Nil(t, f.get(t, secretGVR, orgNS, "tenant-credential-wiki"), "the check writes nothing")
+
+	f.deny = func(_, verb, resource, _ string) bool { return verb == "create" && resource == "secrets" }
+	got = list()
+	assert.Equal(t, []struct{ Secret, State string }{{"tenant-credential-jira", "unknown"}}, got["jira"].Credentials)
+	assert.Equal(t, []struct{ Secret, State string }{{"tenant-credential-wiki", "unknown"}}, got["wiki"].Credentials)
+
+	// A dry run the API server does not answer leaves the state unknown and
+	// the listing whole.
+	f.deny = func(string, string, string, string) bool { return false }
+	f.dyn.PrependReactor("create", "secrets", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		if a.(k8stesting.CreateActionImpl).GetObject().(*unstructured.Unstructured).GetName() == "tenant-credential-wiki" {
+			return true, nil, apierrors.NewServiceUnavailable("etcd timeout")
+		}
+		return false, nil, nil
+	})
+	got = list()
+	assert.Equal(t, []struct{ Secret, State string }{{"tenant-credential-jira", "present"}}, got["jira"].Credentials)
+	assert.Equal(t, []struct{ Secret, State string }{{"tenant-credential-wiki", "unknown"}}, got["wiki"].Credentials)
+}

@@ -1192,6 +1192,12 @@ func (s *Service) ValidateCreate(ctx context.Context, spec Spec) (*ValidateResul
 		}
 		res.addError(err)
 	}
+	if err := s.requireConnectors(ctx, st, spec.Name, spec.Connectors); err != nil {
+		if !isDomainError(err) {
+			return nil, err
+		}
+		res.addError(err)
+	}
 	harness, h, err := s.requireHarness(ctx, st.agent, ns, spec)
 	runtime := harnessRuntime(h)
 	if err != nil {
@@ -1507,6 +1513,9 @@ func (s *Service) Create(ctx context.Context, spec Spec) (*CreateResult, error) 
 	if err := s.requireEgressPolicies(ctx, st, spec.EgressPolicyRefs); err != nil {
 		return nil, err
 	}
+	if err := s.requireConnectors(ctx, st, spec.Name, spec.Connectors); err != nil {
+		return nil, err
+	}
 	harness, h, err := s.requireHarness(ctx, st.agent, ns, spec)
 	runtime := harnessRuntime(h)
 	if err != nil {
@@ -1741,6 +1750,15 @@ func (s *Service) mergedValues(ctx context.Context, st *site, upd Update, hr *un
 	var firstErr error
 	if upd.EgressPolicyRefs != nil {
 		if err := s.requireEgressPolicies(ctx, st, *upd.EgressPolicyRefs); err != nil {
+			firstErr = err
+		}
+	}
+	if upd.Connectors != nil {
+		if err := s.requireConnectors(ctx, st, upd.Name, *upd.Connectors); err != nil {
+			firstErr = err
+		}
+		setConnectors(after, *upd.Connectors)
+		if err := refuseConnectorsUnderToolsOverride(after); err != nil {
 			firstErr = err
 		}
 	}
@@ -2417,6 +2435,7 @@ func applyHelmRelease(a *Agent, hr *unstructured.Unstructured, rule *tags.Rule) 
 	a.Values = values
 	a.DefaultWorkspace = defaultWorkspaceOf(values)
 	a.DefaultToolchains = defaultToolchainsOf(values)
+	a.Connectors = connectorsFromValues(values)
 	// The HelmRelease values are the declaration: a declared toolset is
 	// reported as such, a release without one is implicit full access — even
 	// while the Agent has not been rendered yet.

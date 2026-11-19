@@ -7,7 +7,7 @@ require (
 	filippo.io/age v1.3.2
 	github.com/Masterminds/semver/v3 v3.5.0
 	github.com/a2aproject/a2a-go/v2 v2.9.0
-	github.com/giantswarm/agent-platform-operator v0.4.3
+	github.com/giantswarm/agent-platform-operator v0.4.4
 	github.com/giantswarm/gitops-commit v0.12.0-rc.9
 	github.com/giantswarm/mcp-oauth v1.14.2
 	github.com/giantswarm/mcp-toolkit v0.5.3
@@ -84,7 +84,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/internal/presigned-url v1.14.12 // indirect
 	github.com/aws/aws-sdk-go-v2/service/internal/s3shared v1.20.12 // indirect
 	github.com/aws/aws-sdk-go-v2/service/kms v1.54.1 // indirect
-	github.com/aws/aws-sdk-go-v2/service/s3 v1.114.10 // indirect
+	github.com/aws/aws-sdk-go-v2/service/s3 v1.115.0 // indirect
 	github.com/aws/aws-sdk-go-v2/service/signin v1.13.1 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sso v1.39.5 // indirect
 	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.44.5 // indirect

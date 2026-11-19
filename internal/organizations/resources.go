@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	apov1alpha1 "github.com/giantswarm/agent-platform-operator/api/v1alpha1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -623,6 +624,12 @@ type ConnectorCredential struct {
 	Header string `json:"header"`
 	Secret string `json:"secret"`
 	Key    string `json:"key"`
+	// State is whether the Secret exists, as list_organization_connectors
+	// asks it as the caller: present, missing, or unknown when the caller may
+	// not ask (only who may create the Secret may). It says nothing of the
+	// key: a Secret that exists without Key is present; the connector's
+	// Accepted condition can tell that case.
+	State string `json:"state,omitempty"`
 }
 
 // Connector is a RemoteMCPServer of an organization.
@@ -631,9 +638,77 @@ type Connector struct {
 	URL         string                `json:"url"`
 	Description string                `json:"description,omitempty"`
 	Credentials []ConnectorCredential `json:"credentials"`
+	// Accepted mirrors kagent's Accepted condition of the RemoteMCPServer
+	// (its tool discovery); nil while unreported or reported for an earlier
+	// generation. Reason and Message are the condition's.
+	Accepted *bool  `json:"accepted"`
+	Reason   string `json:"reason,omitempty"`
+	Message  string `json:"message,omitempty"`
 	// Curated: a copy agent-platform-operator keeps; read-only.
 	Curated   bool   `json:"curated,omitempty"`
 	ManagedBy string `json:"managedBy,omitempty"`
+}
+
+// CredentialUnknown: the caller may not ask whether the Secret exists.
+const CredentialUnknown = "unknown"
+
+// conditionAccepted is the condition kagent writes on a RemoteMCPServer
+// after its tool discovery (kagent go/core/internal/controller/remotemcpserver).
+const conditionAccepted = "Accepted"
+
+// connectorAccepted reads the RemoteMCPServer's Accepted condition kagent
+// writes, when it is of the object's current generation.
+func connectorAccepted(u *unstructured.Unstructured, conn *Connector) {
+	raw, _, _ := unstructured.NestedSlice(u.Object, "status", "conditions")
+	for _, item := range raw {
+		fields, _ := item.(map[string]any)
+		if fields["type"] != conditionAccepted {
+			continue
+		}
+		if generation, ok := fields["observedGeneration"].(int64); ok && generation != u.GetGeneration() {
+			return
+		}
+		status, _ := fields["status"].(string)
+		if status != string(metav1.ConditionTrue) && status != string(metav1.ConditionFalse) {
+			return
+		}
+		accepted := status == string(metav1.ConditionTrue)
+		conn.Accepted = &accepted
+		conn.Reason, _ = fields["reason"].(string)
+		conn.Message, _ = fields["message"].(string)
+		return
+	}
+}
+
+// credentialStates fills each credential's State: whether its Secret exists,
+// by a dry-run create as the caller (secretExists), once for each Secret.
+// Nothing of a Secret is read. A dry run that fails (the caller may not
+// create the Secret, admission refuses its name, the API server does not
+// answer) is unknown: the state never fails the listing.
+func (s *Service) credentialStates(ctx context.Context, c kube.Client, ns string, connectors []Connector) {
+	states := map[string]string{}
+	for i := range connectors {
+		for j := range connectors[i].Credentials {
+			cred := &connectors[i].Credentials[j]
+			state, ok := states[cred.Secret]
+			if !ok {
+				exists, err := secretExists(ctx, c, ns, cred.Secret)
+				switch {
+				case err != nil:
+					state = CredentialUnknown
+					if !apierrors.IsForbidden(err) {
+						s.log.Warn("the state of a connector credential could not be checked", fieldNamespace, ns, "secret", cred.Secret, "error", err)
+					}
+				case exists:
+					state = CredentialPresent
+				default:
+					state = CredentialMissing
+				}
+				states[cred.Secret] = state
+			}
+			cred.State = state
+		}
+	}
 }
 
 func connectorCredentials(u *unstructured.Unstructured) []ConnectorCredential {
@@ -655,7 +730,8 @@ func connectorCredentials(u *unstructured.Unstructured) []ConnectorCredential {
 }
 
 // ListConnectors lists the RemoteMCPServers of an organization namespace as
-// the caller, each credential by reference.
+// the caller, each credential by reference with the state of its Secret, and
+// each connector's Accepted condition.
 func (s *Service) ListConnectors(ctx context.Context, ns string) ([]Connector, error) {
 	if _, err := s.organization(ctx, ns); err != nil {
 		return nil, err
@@ -676,9 +752,11 @@ func (s *Service) ListConnectors(ctx context.Context, ns string) ([]Connector, e
 		conn.URL = redactURL(raw)
 		conn.Description, _, _ = unstructured.NestedString(u.Object, "spec", "description")
 		_, conn.Curated = u.GetLabels()[agents.OperatorObjectLabel]
+		connectorAccepted(u, &conn)
 		out = append(out, conn)
 	}
 	slices.SortFunc(out, func(a, b Connector) int { return strings.Compare(a.Name, b.Name) })
+	s.credentialStates(ctx, c, ns, out)
 	return out, nil
 }
 

@@ -79,6 +79,7 @@ const (
 	argPlugins        = "plugins"
 	argEgress         = "egress"
 	argEgressPolicies = "egressPolicyRefs"
+	argConnectors     = "connectors"
 	argGitAuthSecret  = "gitAuthSecretName" // #nosec G101 -- an argument name, not a credential
 	argRefreshSkills  = "refreshSkills"
 	argToolset        = "toolset"
@@ -267,6 +268,9 @@ func NewMCPServer(svc *agents.Service, version string, opts ...Option) *mcpserve
 	policiesShape := "names in the agent's namespace (list_egress_policies), at most 16; none on a coding Harness"
 	policiesProp := mcp.WithArray(argEgressPolicies, mcp.Description("EgressPolicies the agent may also reach: "+policiesShape+"."), mcp.Items(stringSchema))
 	policiesReplaceProp := mcp.WithArray(argEgressPolicies, mcp.Description("Replaces the EgressPolicy list ([] clears it): "+policiesShape+"."), mcp.Items(stringSchema))
+	connectorsShape := "RemoteMCPServer names in the agent's organization namespace (list_organization_connectors)"
+	connectorsProp := mcp.WithArray(argConnectors, mcp.Description("Organization connectors the agent binds: "+connectorsShape+"."), mcp.Items(stringSchema))
+	connectorsReplaceProp := mcp.WithArray(argConnectors, mcp.Description("Replaces the connectors ([] removes them): "+connectorsShape+"."), mcp.Items(stringSchema))
 	harnessDesc := "Harness that runs the agent; omit for the platform Harness. A coding Harness (claude, codex, …) fixes egress, refuses extra bindings."
 	maxBytesProp := mcp.WithNumber(argMaxBytes, mcp.Description(fmt.Sprintf("Max answer size in bytes, %d-%d, default %d", agents.MinSessionMaxBytes, agents.MaxSessionMaxBytes, agents.DefaultSessionMaxBytes)))
 	nsProp := mcp.WithString(argNamespace, mcp.Description("Namespace of the agent; default: the installation's kagent namespace (get_info lists the managed ones)."))
@@ -307,7 +311,7 @@ func NewMCPServer(svc *agents.Service, version string, opts ...Option) *mcpserve
 
 	s.AddTool(mcp.NewTool(ToolGetAgent,
 		tooldesc.Describe("Get one agent: its HelmRelease values, Harness, pinned skills and plugins, toolset and Agent status.",
-			"default: true is the installation's default agent, to preselect when starting a session. If you may not read the agent's HelmRelease, you get the Agent alone with releaseWithheld explaining the denial; managed is unknown unless its platform label establishes ownership."),
+			"default: true is the installation's default agent, to preselect when starting a session. connectors are the organization's RemoteMCPServers the agent's values bind (extraTools). If you may not read the agent's HelmRelease, you get the Agent alone with releaseWithheld explaining the denial; managed is unknown unless its platform label establishes ownership."),
 		mcp.WithString(argName, mcp.Required(), mcp.Description("Agent name")),
 		nsProp,
 		orgProp,
@@ -334,6 +338,7 @@ func NewMCPServer(svc *agents.Service, version string, opts ...Option) *mcpserve
 		pluginsProp,
 		egressProp,
 		policiesProp,
+		connectorsProp,
 		gitAuthProp,
 		defaultWSProp,
 		defaultTCProp,
@@ -364,6 +369,7 @@ func NewMCPServer(svc *agents.Service, version string, opts ...Option) *mcpserve
 		pluginsReplaceProp,
 		egressReplaceProp,
 		policiesReplaceProp,
+		connectorsReplaceProp,
 		gitAuthReplaceProp,
 		refreshSkillsProp,
 		toolsetReplaceProp,
@@ -412,7 +418,7 @@ func NewMCPServer(svc *agents.Service, version string, opts ...Option) *mcpserve
 
 	s.AddTool(mcp.NewTool(ToolValidateAgent,
 		tooldesc.Describe("Dry run of create_agent, or of update_agent with update: true: the manifests and every violation. Writes nothing.",
-			"Checks the name, modelConfig (omitted: the default), egressPolicyRefs, harness and toolset (required for a create), pins the skills and plugins, validates the values against the chart schema and has the API server dry-run the rendered Agent and RemoteMCPServer (its field errors are the errors; an object the caller may not write is a note). mode answers as the write would. With update: true, lists, labels and annotations replace the whole value, as in update_agent."),
+			"Checks the name, modelConfig (omitted: the default), egressPolicyRefs, connectors, harness and toolset (required for a create), pins the skills and plugins, validates the values against the chart schema and has the API server dry-run the rendered Agent and RemoteMCPServer (its field errors are the errors; an object the caller may not write is a note). mode answers as the write would. With update: true, lists, labels and annotations replace the whole value, as in update_agent."),
 		mcp.WithString(argName, mcp.Required(), mcp.Description("Agent name")),
 		mcp.WithString(argModelConfig, mcp.Description("ModelConfig name; omitted on a create, the namespace default. The result names the one a create writes, with a note when it is not ResolvedRefs=True")),
 		mcp.WithString(argHarness, mcp.Description(harnessDesc)),
@@ -426,6 +432,7 @@ func NewMCPServer(svc *agents.Service, version string, opts ...Option) *mcpserve
 		pluginsProp,
 		egressProp,
 		policiesProp,
+		connectorsProp,
 		gitAuthProp,
 		refreshSkillsProp,
 		defaultWSProp,
