@@ -157,15 +157,15 @@ func (f *fakeIdP) idTokenWithout(t *testing.T, aud []string, exp time.Time, clai
 
 func (f *fakeIdP) config(downstream bool) OAuthConfig {
 	return OAuthConfig{
-		BaseURL:            "http://localhost:8080",
-		Provider:           ProviderDex,
-		DexIssuerURL:       f.issuer,
-		DexClientID:        "agent-platform",
-		DexClientSecret:    "lab-only",
-		DexCAFile:          f.caFile,
-		TrustedAudiences:   []string{"agent-platform"},
-		SSOAllowPrivateIPs: true,
-		DownstreamOAuth:    downstream,
+		BaseURL:          "http://localhost:8080",
+		Provider:         ProviderDex,
+		DexIssuerURL:     f.issuer,
+		DexClientID:      "agent-platform",
+		DexClientSecret:  "lab-only",
+		DexCAFile:        f.caFile,
+		TrustedAudiences: []string{"agent-platform"},
+		loopbackJWKS:     true,
+		DownstreamOAuth:  downstream,
 	}
 }
 
