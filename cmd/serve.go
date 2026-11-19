@@ -108,6 +108,7 @@ type serveOptions struct {
 	googleClientSecret            string
 	oauthTrustedAudiences         string
 	ssoAllowPrivateIPs            bool
+	ssoAllowPrivateIPJWKSHosts    string
 	allowPublicClientRegistration bool
 	downstreamOAuth               bool
 	githubAPIURL                  string
@@ -193,7 +194,8 @@ environment variable named next to it; flags win over the environment.`,
 	f.StringVar(&o.googleClientID, "google-client-id", envOr("GOOGLE_CLIENT_ID", ""), "Google OAuth client ID (GOOGLE_CLIENT_ID)")
 	f.StringVar(&o.googleClientSecret, "google-client-secret", envOr("GOOGLE_CLIENT_SECRET", ""), "Google OAuth client secret; prefer the environment (GOOGLE_CLIENT_SECRET)")
 	f.StringVar(&o.oauthTrustedAudiences, "oauth-trusted-audiences", envOr("OAUTH_TRUSTED_AUDIENCES", ""), "Comma-separated OAuth client IDs whose IdP id_tokens are accepted as bearer tokens — the platform client and the audiences the MCPServer requires, which every forwarded token carries (OAUTH_TRUSTED_AUDIENCES)")
-	f.BoolVar(&o.ssoAllowPrivateIPs, "sso-allow-private-ips", envBool("SSO_ALLOW_PRIVATE_IPS", false), "Deprecated, no effect: the issuer host of the configured provider may resolve to a private address for its JWKS without it (SSO_ALLOW_PRIVATE_IPS)")
+	f.BoolVar(&o.ssoAllowPrivateIPs, "sso-allow-private-ips", envBool("SSO_ALLOW_PRIVATE_IPS", false), "Deprecated, no effect: the issuer host of the configured provider may resolve to a private address for its JWKS without it; list any other JWKS host in --sso-allow-private-ip-jwks-hosts (SSO_ALLOW_PRIVATE_IPS)")
+	f.StringVar(&o.ssoAllowPrivateIPJWKSHosts, "sso-allow-private-ip-jwks-hosts", envOr("SSO_ALLOW_PRIVATE_IP_JWKS_HOSTS", ""), "Comma-separated hosts, other than the issuer's own, whose JWKS may resolve to an RFC 1918 or RFC 4193 address: a jwks_uri the IdP's discovery document puts on another host. Loopback and link-local stay refused (SSO_ALLOW_PRIVATE_IP_JWKS_HOSTS)")
 	f.BoolVar(&o.allowPublicClientRegistration, "allow-public-client-registration", envBool("AGENT_MANAGER_OAUTH_ALLOW_PUBLIC_REGISTRATION", false), "Accept unauthenticated dynamic client registration; labs only (AGENT_MANAGER_OAUTH_ALLOW_PUBLIC_REGISTRATION)")
 	f.BoolVar(&o.downstreamOAuth, "downstream-oauth", envBool("AGENT_MANAGER_DOWNSTREAM_OAUTH", false), "Call the Kubernetes API as the caller, with the caller's IdP token, for everything a request does — the ServiceAccount holds no permissions (the chart renders none) and nothing runs without a caller. Needs --enable-oauth and an apiserver that trusts the IdP (AGENT_MANAGER_DOWNSTREAM_OAUTH)")
 	f.StringVar(&o.githubAPIURL, "github-api-url", envOr("AGENT_MANAGER_GITHUB_API_URL", server.DefaultGitHubAPIURL), "GitHub REST API base URL for GET /user and commit mode (AGENT_MANAGER_GITHUB_API_URL)")
@@ -214,7 +216,7 @@ func warnDeprecatedOAuthOptions(o *serveOptions, log *slog.Logger) {
 		log.Warn("--allow-private-oauth-urls (AGENT_MANAGER_OAUTH_ALLOW_PRIVATE_URLS) has no effect and will be removed: the Dex client reaches private addresses and follows HTTP_PROXY, HTTPS_PROXY and NO_PROXY without it")
 	}
 	if o.ssoAllowPrivateIPs {
-		log.Warn("--sso-allow-private-ips (SSO_ALLOW_PRIVATE_IPS) has no effect and will be removed: the issuer host of the configured provider may resolve to a private address for its JWKS without it")
+		log.Warn("--sso-allow-private-ips (SSO_ALLOW_PRIVATE_IPS) has no effect and will be removed: the issuer host of the configured provider may resolve to a private address for its JWKS without it; list any other JWKS host in --sso-allow-private-ip-jwks-hosts")
 	}
 }
 
@@ -504,6 +506,7 @@ func runServe(ctx context.Context, o *serveOptions) error {
 			GoogleClientID:                o.googleClientID,
 			GoogleClientSecret:            o.googleClientSecret,
 			TrustedAudiences:              splitList(o.oauthTrustedAudiences),
+			AllowPrivateIPJWKSHosts:       splitList(o.ssoAllowPrivateIPJWKSHosts),
 			AllowPublicClientRegistration: o.allowPublicClientRegistration,
 			DownstreamOAuth:               o.downstreamOAuth,
 		}
