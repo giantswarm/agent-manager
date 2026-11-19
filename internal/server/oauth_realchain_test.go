@@ -169,7 +169,7 @@ func resolveTestHosts(t *testing.T, ip net.IP, hosts ...string) {
 			name := strings.ToLower(question.Name.String())
 			switch {
 			case !known[name]:
-				reply.Header.RCode = dnsmessage.RCodeNameError
+				reply.RCode = dnsmessage.RCodeNameError
 			case question.Type == dnsmessage.TypeA:
 				var a [4]byte
 				copy(a[:], ip.To4())
