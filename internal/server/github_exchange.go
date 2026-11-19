@@ -95,14 +95,13 @@ func NewGitHubExchange(configuration GitHubExchangeConfig) (func(context.Context
 }
 
 func newGitHubExchange(configuration GitHubExchangeConfig, client *http.Client) func(context.Context) (*identity.GitHub, error) {
-	// The endpoint is operator configuration, never a caller's, and an
-	// in-cluster broker resolves to a private address: the client checks
-	// only that it is HTTPS.
-	exchanger := oidc.NewTokenExchangeClientWithOptions(oidc.TokenExchangeClientOptions{HTTPClient: client, Logger: slog.New(slog.DiscardHandler), AllowPrivateIP: true})
 	logger := configuration.Logger
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
+	// The endpoint is operator configuration and must be a hostname: mcp-oauth
+	// refuses an IP-literal private endpoint.
+	exchanger := oidc.NewTokenExchangeClientWithOptions(oidc.TokenExchangeClientOptions{HTTPClient: client, Logger: logger})
 	grantRequired := func(reason string) error {
 		return &agents.GrantRequiredError{App: configuration.Audience, Reason: fmt.Sprintf(reason, configuration.Audience, configuration.Audience)}
 	}

@@ -2,10 +2,12 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -103,10 +105,10 @@ func TestGitHubExchange(t *testing.T) {
 			})
 			upstream := httptest.NewTLSServer(handler)
 			defer upstream.Close()
-			client := upstream.Client()
+			client := hostnameClient(upstream)
 			client.CheckRedirect = func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }
 			var logs bytes.Buffer
-			configuration := GitHubExchangeConfig{TokenEndpoint: upstream.URL + "/token", ClientID: "manager-client", ClientSecretFile: secretFile, Audience: "manager-app", APIURL: upstream.URL, SubjectIssuer: "https://identity.example.com", Logger: slog.New(slog.NewTextHandler(&logs, nil))}
+			configuration := GitHubExchangeConfig{TokenEndpoint: "https://example.com:" + upstreamPort(t, upstream) + "/token", ClientID: "manager-client", ClientSecretFile: secretFile, Audience: "manager-app", APIURL: upstream.URL, SubjectIssuer: "https://identity.example.com", Logger: slog.New(slog.NewTextHandler(&logs, nil))}
 			ctx := identity.ContextWith(t.Context(), &identity.Identity{Issuer: configuration.SubjectIssuer, Subject: "alice"})
 			if scenario == "wrong identity issuer" {
 				ctx = identity.ContextWith(ctx, &identity.Identity{Issuer: "https://other.example.com", Subject: "alice"})
@@ -220,4 +222,42 @@ func TestGitHubExchangeClientID(t *testing.T) {
 			require.Error(t, err, "a missing client ID fails at startup")
 		})
 	}
+}
+
+// hostnameClient reaches the TLS test server under a hostname its certificate
+// covers.
+func hostnameClient(upstream *httptest.Server) *http.Client {
+	client := upstream.Client()
+	transport := client.Transport.(*http.Transport).Clone()
+	dialer := &net.Dialer{}
+	transport.DialContext = func(ctx context.Context, network, _ string) (net.Conn, error) {
+		return dialer.DialContext(ctx, network, upstream.Listener.Addr().String())
+	}
+	client.Transport = transport
+	client.CheckRedirect = func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }
+	return client
+}
+
+func upstreamPort(t *testing.T, upstream *httptest.Server) string {
+	t.Helper()
+	_, port, err := net.SplitHostPort(upstream.Listener.Addr().String())
+	require.NoError(t, err)
+	return port
+}
+
+func TestGitHubExchangeRefusesIPLiteralPrivateEndpoint(t *testing.T) {
+	requests := 0
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { requests++ }))
+	defer upstream.Close()
+	secretFile := filepath.Join(t.TempDir(), "client-secret")
+	require.NoError(t, os.WriteFile(secretFile, []byte("fixture-secret"), 0o600))
+	subjectToken := unsignedJWT(t, map[string]any{"iss": "https://identity.example.com", "sub": "alice"})
+	configuration := GitHubExchangeConfig{TokenEndpoint: upstream.URL + "/token", ClientID: "manager-client", ClientSecretFile: secretFile, Audience: "manager-app", SubjectIssuer: "https://identity.example.com"}
+	ctx := identity.ContextWith(t.Context(), &identity.Identity{Issuer: configuration.SubjectIssuer, Subject: "alice"})
+	ctx = identity.ContextWithToken(ctx, subjectToken)
+
+	result, err := newGitHubExchange(configuration, upstream.Client())(ctx)
+	require.Error(t, err)
+	require.Nil(t, result)
+	require.Zero(t, requests, "the endpoint is refused before any request")
 }

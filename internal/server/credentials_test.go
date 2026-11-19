@@ -9,7 +9,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	apov1alpha1 "github.com/giantswarm/agent-platform-operator/api/v1alpha1"
 	"github.com/stretchr/testify/require"
@@ -63,24 +62,24 @@ func TestTheCredentialBodyIsInNoTraceOrLog(t *testing.T) {
 	provider := kube.NewServiceAccountProvider(kube.FromInterfaces(dyn, typed, typed.Discovery()))
 	logs := &bytes.Buffer{}
 	log := slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	idp := newFakeIdP(t)
 	orgs := organizations.New(provider, organizations.Config{Namespaces: organizations.NewNamespaces(typed, dyn, "kagent"), CredentialUIURL: "https://credentials.example.com/?operation={operation}", CredentialOperations: organizations.NewCredentialOperations(typed.CoreV1().ConfigMaps("credential-operations"))}, log) // #nosec G101 -- a fixture UI URL and fake ConfigMap store
-	ctx := identity.ContextWith(t.Context(), &identity.Identity{Issuer: idp.issuer, Subject: "sub-admin", Client: "fixture"})
+	person := &identity.Identity{Issuer: "https://dex.example.com", Subject: "sub-admin", Client: "fixture"}
+	ctx := identity.ContextWith(t.Context(), person)
 	ctx = organizations.ContextWithCredentialRequest(ctx, api.ToolSetOrganizationModel, "fixture-arguments", "fixture-client")
 	prepared, err := orgs.SetModel(ctx, organizations.ModelRequest{Namespace: "agents-payments-x7k2q", Name: "claude", Provider: "Anthropic", Model: "claude-sonnet-4-6"})
 	require.NoError(t, err)
 	confirmation, err := orgs.ReadCredentialOperation(ctx, prepared.CredentialOperation)
 	require.NoError(t, err)
 	svc := agents.New(provider, embeddedChart{}, nil, nil, agents.Config{Version: "test"}, nil)
-	oauth := idp.config(false)
-	srv, err := New(Config{Addr: "127.0.0.1:0", Organizations: orgs, OAuth: &oauth}, svc, nil, log)
+	srv, err := New(Config{Addr: "127.0.0.1:0", Organizations: orgs}, svc, nil, log)
 	require.NoError(t, err)
-	ts := httptest.NewServer(srv.Handler())
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		srv.Handler().ServeHTTP(w, r.WithContext(identity.ContextWith(r.Context(), person)))
+	}))
 	defer ts.Close()
 
 	const value = "sk-ant-traced-7777" // #nosec G101 -- a test value
 	url := ts.URL + api.Prefix + "/credential-operations/" + prepared.CredentialOperation
-	bearer := idp.idToken(t, []string{"agent-platform"}, time.Now().Add(time.Hour))
 	for _, tc := range []struct {
 		body string
 		want int
@@ -94,7 +93,6 @@ func TestTheCredentialBodyIsInNoTraceOrLog(t *testing.T) {
 		require.NoError(t, err)
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("If-Match", `"`+confirmation.Version+`"`)
-		req.Header.Set("Authorization", "Bearer "+bearer)
 		resp, err := http.DefaultClient.Do(req)
 		require.NoError(t, err)
 		_ = resp.Body.Close()

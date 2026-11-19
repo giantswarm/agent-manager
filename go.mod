@@ -9,7 +9,7 @@ require (
 	github.com/a2aproject/a2a-go/v2 v2.9.0
 	github.com/giantswarm/agent-platform-operator v0.4.5
 	github.com/giantswarm/gitops-commit v0.12.0-rc.10
-	github.com/giantswarm/mcp-oauth v1.13.18
+	github.com/giantswarm/mcp-oauth v1.15.0
 	github.com/giantswarm/mcp-toolkit v0.5.3
 	github.com/go-jose/go-jose/v4 v4.1.9
 	github.com/golang-jwt/jwt/v5 v5.3.1
@@ -28,6 +28,7 @@ require (
 	go.opentelemetry.io/otel/sdk v1.47.0
 	go.opentelemetry.io/otel/sdk/metric v1.47.0
 	go.opentelemetry.io/otel/trace v1.47.0
+	golang.org/x/net v0.63.0
 	golang.org/x/sync v0.25.0
 	golang.org/x/text v0.44.0
 	google.golang.org/grpc v1.85.0
@@ -202,9 +203,8 @@ require (
 	go.opentelemetry.io/otel/sdk/log v1.47.0 // indirect
 	go.opentelemetry.io/proto/otlp v1.11.1 // indirect
 	go.yaml.in/yaml/v2 v2.4.4 // indirect
-	go.yaml.in/yaml/v3 v3.0.5 // indirect
+	go.yaml.in/yaml/v3 v3.0.6 // indirect
 	golang.org/x/crypto v0.59.0 // indirect
-	golang.org/x/net v0.62.0 // indirect
 	golang.org/x/oauth2 v0.38.0 // indirect
 	golang.org/x/sys v0.50.0 // indirect
 	golang.org/x/term v0.48.0 // indirect
