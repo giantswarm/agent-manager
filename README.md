@@ -738,7 +738,8 @@ The organization tools (every name holds `organization`):
   discovery is off is accepted without it; and `musterBindingOf`, the name of
   the agent whose muster binding a RemoteMCPServer is, which `create_agent`
   and `update_agent` refuse as a connector, absent on every other one, a
-  connector that another Helm chart renders included);
+  connector that another Helm chart renders included, and absent on all for a
+  caller who may not list the namespace's Agents);
   `set_organization_egress_policy`; `delete_organization_object`; and
   `replace_organization_credential` (a new value for one key of a credential
   Secret, for every object that reads it, writing the Secret only).

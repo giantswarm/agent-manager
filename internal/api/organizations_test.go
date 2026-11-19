@@ -1318,6 +1318,20 @@ func TestListConnectorsMarksMusterBindings(t *testing.T) {
 		{"jira", "", ""},
 		{"vendor", "Helm", ""},
 	}, out.Connectors)
+
+	// A caller who may not list the Agents still gets the list, unmarked.
+	f.dyn.PrependReactor("list", "agents", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewForbidden(a.GetResource().GroupResource(), "", errors.New("RBAC: access denied"))
+	})
+	text, isErr = f.call(t, ToolListOrganizationConnector, map[string]any{"namespace": orgNS})
+	require.False(t, isErr, text)
+	out.Connectors = nil
+	require.NoError(t, json.Unmarshal([]byte(text), &out))
+	assert.Equal(t, []struct{ Name, ManagedBy, MusterBindingOf string }{
+		{"helper", "Helm", ""},
+		{"jira", "", ""},
+		{"vendor", "Helm", ""},
+	}, out.Connectors)
 }
 
 // list_organization_connectors says, for each credential, whether its Secret

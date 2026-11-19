@@ -60,8 +60,8 @@ func connectorsFromValues(values map[string]any) []string {
 // entry for each name. Every other entry stays, in its order, before them; the
 // entry of a connector that stays keeps its other fields (a tools list,
 // requireApproval). With no entry left, a key that was there becomes an empty
-// list, which still overrides a list of the release's valuesFrom; one that was
-// not there stays out.
+// list; one that was not there stays out. A release with valuesFrom takes no
+// connectors (refuseConnectorsUnderValuesFrom).
 func setConnectors(values map[string]any, names []string) {
 	raw, had := values[extraToolsValuesKey].([]any)
 	out := make([]any, 0, len(raw)+len(names))

@@ -650,7 +650,8 @@ type Connector struct {
 	// MusterBindingOf names the agent whose muster binding this
 	// RemoteMCPServer is (agents.MusterBindings): no connector, and
 	// create_agent and update_agent refuse it in connectors. Empty for every
-	// other RemoteMCPServer, a Helm-rendered connector included.
+	// other RemoteMCPServer, a Helm-rendered connector included, and for a
+	// caller who may not list the namespace's Agents.
 	MusterBindingOf string `json:"musterBindingOf,omitempty"`
 }
 
@@ -750,11 +751,17 @@ func (s *Service) ListConnectors(ctx context.Context, ns string) ([]Connector, e
 	if err != nil {
 		return nil, err
 	}
-	agentItems, err := s.existing(ctx, c, ns, s.kagentGVR("agents"), "Agents")
-	if err != nil {
-		return nil, err
+	// The Agents tell which servers are muster bindings. Every member role
+	// reads them; a caller who may not still gets the list, unmarked, as
+	// before the mark existed.
+	var bindings map[string]string
+	agentList, err := c.Dynamic().Resource(s.kagentGVR("agents")).Namespace(ns).List(ctx, metav1.ListOptions{})
+	switch {
+	case err == nil:
+		bindings = agents.MusterBindings(items, agentList.Items)
+	case !apierrors.IsForbidden(err):
+		return nil, kubeErr(err, "list Agents in "+ns, wayOrganizationAdmin(ns))
 	}
-	bindings := agents.MusterBindings(items, agentItems)
 	out := make([]Connector, 0, len(items))
 	for i := range items {
 		u := &items[i]
