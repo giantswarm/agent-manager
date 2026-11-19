@@ -163,17 +163,15 @@ type orgCommit struct {
 }
 
 func (s *Service) newCommit(ctx context.Context) (*orgCommit, error) {
-	gh, ok := identity.GitHubFromContext(ctx)
-	if s.cfg.Commit.User != nil {
-		var err error
-		gh, err = s.cfg.Commit.User(ctx)
-		if err != nil {
-			return nil, err
-		}
-		ok = gh != nil && gh.Token != ""
+	if s.cfg.Commit.User == nil {
+		return nil, fmt.Errorf("%w: commit mode needs the GitHub grant exchange (github.tokenExchange), which this server is not configured with", agents.ErrUnsupported)
 	}
-	if !ok {
-		return nil, fmt.Errorf("%w: commit mode opens the pull request with your GitHub authorization, and this call carries none: connect agent-manager in muster (core_auth_login server=agent-manager), then call again", agents.ErrAuthRequired)
+	gh, err := s.cfg.Commit.User(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if gh == nil || gh.Token == "" {
+		return nil, errors.New("the GitHub grant exchange returned no grant")
 	}
 	remote, err := s.cfg.Commit.GitHub(gh.Token)
 	if err != nil {

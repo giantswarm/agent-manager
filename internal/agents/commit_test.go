@@ -60,8 +60,10 @@ func gitOpsFixture(t *testing.T, prune bool) (*fixture, *commit.Fake, context.Co
 		"agents/agent-manager/agent.yaml":         []byte(ToYAML(BuildOCIRepository("kagent", f.svc.cfg.Compose))),
 		"agents/agent-manager/gitops.yaml":        []byte(ToYAML(BuildHelmRelease("gitops", "kagent", values, f.svc.cfg.Compose))),
 	})
-	ctx := identity.ContextWithGitHub(context.Background(), &identity.GitHub{Login: "jane", Token: "ghu_person"})
-	return f, fake, ctx
+	f.svc.cfg.GitHubUser = func(context.Context) (*identity.GitHub, error) {
+		return &identity.GitHub{Login: "jane", Token: "ghu_person", App: "agent-manager"}, nil // #nosec G101 -- fixture grant
+	}
+	return f, fake, context.Background()
 }
 
 func filesByPath(c *CommitResult) map[string]CommitFile {
@@ -174,9 +176,17 @@ func TestCommitNeedsTheGitHubGrantAndATarget(t *testing.T) {
 	f, _, ctx := gitOpsFixture(t, true)
 	spec := Spec{Name: "sre", ModelConfig: "default-model-config", Toolset: []string{"preset:read-only"}, WriteOptions: WriteOptions{Mode: ModeCommit}}
 
-	_, err := f.svc.Create(context.Background(), spec)
+	granted := f.svc.cfg.GitHubUser
+	f.svc.cfg.GitHubUser = func(context.Context) (*identity.GitHub, error) {
+		return nil, &GrantRequiredError{App: "agent-manager", Reason: "grant it (core_auth_login app=agent-manager)"}
+	}
+	_, err := f.svc.Create(ctx, spec)
 	require.ErrorIs(t, err, ErrAuthRequired)
-	assert.Contains(t, err.Error(), "core_auth_login server=agent-manager")
+	assert.Contains(t, err.Error(), "core_auth_login app=agent-manager")
+	f.svc.cfg.GitHubUser = nil
+	_, err = f.svc.Create(ctx, spec)
+	require.ErrorIs(t, err, ErrUnsupported, "commit mode without the grant exchange")
+	f.svc.cfg.GitHubUser = granted
 
 	spec.Namespace = "tenant"
 	_, err = f.svc.Create(ctx, spec)
@@ -331,16 +341,9 @@ func TestCommitKeepsTheGrantRequiredApp(t *testing.T) {
 }
 
 func TestGitHubRefusalNamesWhatRenewsTheToken(t *testing.T) {
-	pinned := &identity.GitHub{Login: "alice", Token: "pinned"}
 	granted := &identity.GitHub{Login: "alice", Token: "granted", App: "manager-app"}
 
-	err := GitHubRefusal(pinned, &commit.AuthError{Op: "create branch", Status: 401})
-	require.ErrorIs(t, err, ErrAuthRequired)
-	require.ErrorContains(t, err, "core_auth_login server=agent-manager")
-	_, isGrant := errors.AsType[*GrantRequiredError](err)
-	require.False(t, isGrant)
-
-	err = GitHubRefusal(granted, &commit.AuthError{Op: "create branch", Status: 401})
+	err := GitHubRefusal(granted, &commit.AuthError{Op: "create branch", Status: 401})
 	grant, isGrant := errors.AsType[*GrantRequiredError](err)
 	require.True(t, isGrant)
 	require.Equal(t, "manager-app", grant.App)
@@ -357,34 +360,30 @@ func TestGitHubRefusalNamesWhatRenewsTheToken(t *testing.T) {
 
 // A 403 on a step that only reads is the App's permissions, which no new
 // sign-in or grant changes: the answer names the step and the App and asks
-// for no sign-in and no push access. A 401 on it still asks for the sign-in.
+// for no sign-in and no push access. A 401 on it still asks for the grant.
 func TestAReadRefusedWith403NamesTheAppsPermissions(t *testing.T) {
-	pinned := &identity.GitHub{Login: "alice", Token: "pinned"}
 	granted := &identity.GitHub{Login: "alice", Token: "granted", App: "manager-app"}
 	reads := []string{commit.OpStatus, commit.OpHead, commit.OpReadFile, commit.OpListFiles, commit.OpFindPullRequest, commit.OpFindByPrefix, commit.OpMergedFiles}
-	for _, gh := range []*identity.GitHub{pinned, granted} {
-		for _, op := range reads {
-			t.Run(gh.Token+"/"+op, func(t *testing.T) {
-				err := GitHubRefusal(gh, &commit.AuthError{Op: op, Status: http.StatusForbidden})
-				require.ErrorIs(t, err, ErrForbidden)
-				require.NotErrorIs(t, err, ErrAuthRequired)
-				_, isGrant := errors.AsType[*GrantRequiredError](err)
-				require.False(t, isGrant)
-				require.ErrorContains(t, err, op)
-				require.ErrorContains(t, err, "permissions")
-				require.NotContains(t, err.Error(), "core_auth_login")
-				require.NotContains(t, err.Error(), "push")
-				if gh.App != "" {
-					require.ErrorContains(t, err, gh.App)
-				}
-			})
-		}
+	for _, op := range reads {
+		t.Run(op, func(t *testing.T) {
+			err := GitHubRefusal(granted, &commit.AuthError{Op: op, Status: http.StatusForbidden})
+			require.ErrorIs(t, err, ErrForbidden)
+			require.NotErrorIs(t, err, ErrAuthRequired)
+			_, isGrant := errors.AsType[*GrantRequiredError](err)
+			require.False(t, isGrant)
+			require.ErrorContains(t, err, op)
+			require.ErrorContains(t, err, "permissions")
+			require.NotContains(t, err.Error(), "core_auth_login")
+			require.NotContains(t, err.Error(), "push")
+			require.ErrorContains(t, err, granted.App)
+		})
 	}
 
-	err := GitHubRefusal(pinned, &commit.AuthError{Op: commit.OpStatus, Status: http.StatusUnauthorized})
-	require.ErrorIs(t, err, ErrAuthRequired)
-	err = GitHubRefusal(pinned, &commit.AuthError{Op: commit.OpCommit, Status: http.StatusForbidden})
-	require.ErrorIs(t, err, ErrAuthRequired, "a write refused with 403 keeps its answer")
+	err := GitHubRefusal(granted, &commit.AuthError{Op: commit.OpStatus, Status: http.StatusUnauthorized})
+	_, isGrant := errors.AsType[*GrantRequiredError](err)
+	require.True(t, isGrant)
+	err = GitHubRefusal(granted, &commit.AuthError{Op: commit.OpCommit, Status: http.StatusForbidden})
+	require.ErrorIs(t, err, ErrForbidden, "a write refused with 403 names what the App and the person lack")
 }
 
 func TestCommitResolvesProviderAuthorizationWithoutAnMCPProviderBearer(t *testing.T) {
@@ -406,8 +405,6 @@ func TestCommitResolvesProviderAuthorizationWithoutAnMCPProviderBearer(t *testin
 			require.NoError(t, err)
 			require.Len(t, forge.PullRequests(), 1)
 			require.Equal(t, "jane", result.Commit.Author)
-			_, hasProviderBearer := identity.GitHubFromContext(t.Context())
-			require.False(t, hasProviderBearer)
 		})
 	}
 }

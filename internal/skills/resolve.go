@@ -58,24 +58,23 @@ type accessEntry struct {
 	until time.Time
 }
 
-// RequireReadable refuses repoURL unless login can read it. A public
-// repository is readable by everyone; a private one needs login's read
-// permission or more, which GitHub reports for the configured token's view of
-// the repository. An empty login (a caller without a verified GitHub
-// identity) can use public repositories only.
-func (r *Resolver) RequireReadable(ctx context.Context, repoURL, login string) error {
+// RequireReadable refuses a private repoURL: the in-process pinner has no
+// verified GitHub identity of the caller to check read access with, so it
+// serves public repositories only; skill-manager checks a private one with
+// the caller's own grant.
+func (r *Resolver) RequireReadable(ctx context.Context, repoURL string) error {
 	owner, repo, err := parseRepoURL(repoURL)
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrUnresolvable, err)
 	}
-	key := strings.ToLower(login + " " + owner + "/" + repo)
+	key := strings.ToLower(owner + "/" + repo)
 	r.mu.Lock()
 	e, ok := r.access[key]
 	r.mu.Unlock()
 	if ok && time.Now().Before(e.until) {
 		return e.err
 	}
-	err = r.readable(ctx, repoURL, owner, repo, login)
+	err = r.readable(ctx, repoURL, owner, repo)
 	if err != nil && !errors.Is(err, ErrNotReadable) {
 		return err // a failed lookup is not cached
 	}
@@ -85,26 +84,15 @@ func (r *Resolver) RequireReadable(ctx context.Context, repoURL, login string) e
 	return err
 }
 
-func (r *Resolver) readable(ctx context.Context, repoURL, owner, repo, login string) error {
+func (r *Resolver) readable(ctx context.Context, repoURL, owner, repo string) error {
 	meta, err := r.gh.repository(ctx, owner, repo)
 	if err != nil {
 		return r.unresolvable(ctx, repoURL, "the visibility", err)
 	}
-	if !meta.Private {
-		return nil
+	if meta.Private {
+		return fmt.Errorf("%w: %s is private, and only skill-manager checks who may read a private repository; pin it through skill-manager (--skill-manager-url)", ErrNotReadable, repoURL)
 	}
-	if login == "" {
-		return fmt.Errorf("%w: %s is private and your GitHub identity is unknown, so agent-manager cannot check that you may read it; use it through muster with agent-manager connected to GitHub (core_auth_login server=agent-manager)", ErrNotReadable, repoURL)
-	}
-	perm, err := r.gh.permission(ctx, owner, repo, login)
-	if err != nil {
-		return fmt.Errorf("%w: the permission of %s on %s could not be read: %v", ErrUnresolvable, login, repoURL, err)
-	}
-	switch perm {
-	case "admin", "maintain", "write", "triage", "read":
-		return nil
-	}
-	return fmt.Errorf("%w: %s is private and the GitHub user %s cannot read it (permission %s); ask its owners for read access", ErrNotReadable, repoURL, login, perm)
+	return nil
 }
 
 // GitHead resolves ref (a branch, tag or commit; empty for the default

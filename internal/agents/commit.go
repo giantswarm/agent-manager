@@ -244,17 +244,15 @@ func (s *Service) gitOpsRefusal(ctx context.Context, dyn dynamic.Interface, hr *
 // gitHubFor is the caller's GitHub remote, or the refusal naming the consent
 // that gives one.
 func (s *Service) gitHubFor(ctx context.Context) (GitHubRemote, *identity.GitHub, error) {
-	gh, ok := identity.GitHubFromContext(ctx)
-	if s.cfg.GitHubUser != nil {
-		var err error
-		gh, err = s.cfg.GitHubUser(ctx)
-		if err != nil {
-			return nil, nil, err
-		}
-		ok = gh != nil && gh.Token != ""
+	if s.cfg.GitHubUser == nil {
+		return nil, nil, fmt.Errorf("%w: commit mode needs the GitHub grant exchange (github.tokenExchange), which this server is not configured with", ErrUnsupported)
 	}
-	if !ok {
-		return nil, nil, authRequiredf("commit mode opens the pull request with your GitHub authorization, and this call carries none: connect agent-manager in muster (core_auth_login server=agent-manager), then call again")
+	gh, err := s.cfg.GitHubUser(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	if gh == nil || gh.Token == "" {
+		return nil, nil, errors.New("the GitHub grant exchange returned no grant")
 	}
 	remote, err := s.cfg.GitHub(gh.Token)
 	if err != nil {
@@ -268,22 +266,15 @@ func (s *Service) gitHubFor(ctx context.Context) (GitHubRemote, *identity.GitHub
 // access, and no new sign-in or grant changes it.
 var readOps = []string{commit.OpStatus, commit.OpHead, commit.OpReadFile, commit.OpListFiles, commit.OpFindPullRequest, commit.OpFindByPrefix, commit.OpMergedFiles}
 
-// GitHubRefusal answers GitHub refusing gh's token on an operation of
-// commit mode with what renews it: on the App-pinned registration the
-// consent to agent-manager; for a grant of a provider App (gh.App) a 401
-// asks for that grant again, and a 403 names what the App and the person
-// lack, which no new grant gives. A 403 on a read names the step and the
-// App's permissions, on either registration.
+// GitHubRefusal answers GitHub refusing gh's grant of its provider App
+// (gh.App) on an operation of commit mode with what renews it: a 401 asks for
+// that grant again, and a 403 names what the App and the person lack, which
+// no new grant gives. A 403 on a read names the step and the App's
+// permissions.
 func GitHubRefusal(gh *identity.GitHub, auth *commit.AuthError) error {
 	switch {
 	case auth.Status == http.StatusForbidden && slices.Contains(readOps, auth.Op):
-		app := "agent-manager's GitHub App"
-		if gh != nil && gh.App != "" {
-			app = "the GitHub App " + gh.App
-		}
-		return fmt.Errorf("%w: GitHub refused the step %q (status %d) for the permissions of %s: the App lacks the permission for this read or is not installed on the repository, which a new sign-in does not change", ErrForbidden, auth.Op, auth.Status, app)
-	case gh == nil || gh.App == "":
-		return authRequiredf("GitHub refused your token on %s (status %d): reconnect agent-manager in muster (core_auth_login server=agent-manager); the App must be installed on the repository and your account allowed to push to it", auth.Op, auth.Status)
+		return fmt.Errorf("%w: GitHub refused the step %q (status %d) for the permissions of the GitHub App %s: the App lacks the permission for this read or is not installed on the repository, which a new sign-in does not change", ErrForbidden, auth.Op, auth.Status, gh.App)
 	case auth.Status == http.StatusUnauthorized:
 		return &GrantRequiredError{App: gh.App, Reason: fmt.Sprintf("GitHub refused your grant of the GitHub App %s on %s: grant it again in muster (core_auth_login app=%s), then call again", gh.App, auth.Op, gh.App)}
 	}

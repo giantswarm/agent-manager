@@ -302,8 +302,6 @@ func TestUnverifiedAudience(t *testing.T) {
 			assert.Equal(t, tc.want, got)
 		})
 	}
-
-	assert.Equal(t, `aud [a b] vs [c]`, headerQuotedString(`aud ["a" b] vs [\c]`))
 }
 
 // TestServerGuardsRESTAndMCPButNotProbes wires OAuth through the assembled

@@ -41,8 +41,9 @@ info:
     writes the manifests as files into `agent-manager/` under the directory the
     owning Kustomization builds from (or under `path` of the `repository` and
     `branch` the caller names) and opens a pull request as the caller, with
-    the GitHub App user token muster puts on the MCP call; nothing is written
-    live. Without that token commit answers `401 auth_required`; where the
+    the caller's grant of the GitHub App fetched from muster's broker; nothing
+    is written live. Without that grant commit answers `401 auth_required`
+    naming the App; where the
     installation offers no commit mode, `501 unsupported` (`GET /info`
     `capabilities.commit`). A bare Agent (`managed: none`) has no HelmRelease
     to write to and is only deleted with `force`; a suspended release is

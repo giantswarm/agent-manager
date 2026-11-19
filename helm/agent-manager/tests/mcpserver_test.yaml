@@ -98,44 +98,13 @@ tests:
       - notExists:
           path: metadata.annotations
 
-  - it: pins the GitHub App and forwards the identity with github.enabled
+  - it: refuses github.enabled without github.tokenExchange
     set:
-      github:
-        enabled: true
-    asserts:
-      - equal:
-          path: spec.auth.type
-          value: oauth
-      - equal:
-          path: spec.auth.forwardIdentity
-          value: true
-      - notExists:
-          path: spec.auth.forwardToken
-      - equal:
-          path: spec.auth.authorizationServer
-          value:
-            issuer: https://github.com/apps/giantswarm-agent-manager
-            expectedIssuer: https://github.com/login/oauth
-            authorizationEndpoint: https://github.com/login/oauth/authorize
-            tokenEndpoint: https://github.com/login/oauth/access_token
-            clientCredentialsSecretRef:
-              name: giantswarm-agent-manager-oauth-client
-              namespace: NAMESPACE
-            grantScope: subject
-      - equal:
-          path: spec.auth.requiredAudiences
-          value:
-            - dex-k8s-authenticator
-
-  - it: refuses the GitHub pin without OAuth
-    set:
-      oauth:
-        enabled: false
       github:
         enabled: true
     asserts:
       - failedTemplate:
-          errorMessage: "github.enabled verifies the person's GitHub user token next to their ID token, which the server validates as an OAuth resource server: set oauth.enabled"
+          errorMessage: "github.enabled needs github.tokenExchange: commit mode fetches the person's grant of the GitHub App from muster's broker; set github.tokenExchange.tokenEndpoint, audience and existingSecret"
 
   - it: forwards the token and names the GitHub App with github.tokenExchange
     set:
@@ -156,10 +125,6 @@ tests:
           path: spec.auth.providerApps
           value:
             - github
-      - notExists:
-          path: spec.auth.authorizationServer
-      - notExists:
-          path: spec.auth.forwardIdentity
 
   - it: names no grant App without github.tokenExchange
     asserts:
