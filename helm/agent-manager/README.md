@@ -1,5 +1,8 @@
 # agent-manager
 
+CIMD is enabled by default. DCR is deprecated by MCP 2026-07-28 and remains a
+compatibility fallback; see the [OAuth registration guide](../../docs/oauth-client-registration.md).
+
 Agent lifecycle service for the Agent Platform — creates, updates, deletes and inspects kagent agents as Flux HelmReleases of the agent chart, validated against the chart schema, exposed as REST and MCP
 
 The chart deploys one Deployment that serves the REST/JSON API under `/api/v1`
