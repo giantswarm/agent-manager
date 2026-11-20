@@ -270,12 +270,13 @@ func TestServerConfig(t *testing.T) {
 	pool := x509.NewCertPool()
 	cfg := OAuthConfig{BaseURL: "https://am.example.com", TrustedAudiences: []string{"agent-platform", "kubernetes"}, AllowPublicClientRegistration: true}
 	assert.Equal(t, &oauth.ServerConfig{
-		Issuer:                        "https://am.example.com",
-		AllowRefreshTokenRotation:     true,
-		AllowPublicClientRegistration: true,
-		MaxClientsPerIP:               10,
-		TrustedAudiences:              []string{"agent-platform", "kubernetes"},
-		JWKSRootCAs:                   pool,
+		EnableClientIDMetadataDocuments: true,
+		Issuer:                          "https://am.example.com",
+		AllowRefreshTokenRotation:       true,
+		AllowPublicClientRegistration:   true,
+		MaxClientsPerIP:                 10,
+		TrustedAudiences:                []string{"agent-platform", "kubernetes"},
+		JWKSRootCAs:                     pool,
 	}, serverConfig(cfg, pool), "no private-address allowance: the issuer host is covered by the library")
 }
 
