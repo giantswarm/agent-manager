@@ -1015,9 +1015,6 @@ func checkSpec(spec Spec) []error {
 	if err := ValidatePlugins(spec.Plugins); err != nil {
 		errs = append(errs, err)
 	}
-	if err := validateSkillNames(spec.Skills, spec.Plugins); err != nil {
-		errs = append(errs, err)
-	}
 	if err := ValidateSystemMessage(spec.SystemMessage); err != nil {
 		errs = append(errs, err)
 	}
@@ -1817,11 +1814,6 @@ func (s *Service) mergedValues(ctx context.Context, st *site, upd Update, hr *un
 			} else {
 				delete(after, "plugins")
 			}
-		}
-	}
-	if upd.Skills != nil || upd.Plugins != nil {
-		if err := validateSkillNames(skillsFromValues(after), pluginsFromValues(after)); err != nil {
-			return after, before, err
 		}
 	}
 	mergeSkillsGitAuth(after, upd.GitAuthSecretName, st.compose)
