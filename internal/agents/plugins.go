@@ -19,7 +19,7 @@ const (
 // ValidatePlugins checks what can be checked before any lookup: exactly one
 // source per entry, an http(s) repository URL, ref or commit but not both, a
 // well-formed commit, a parseable OCI reference, a relative path without
-// "..", and a skill selection of unique names. The selection is optional: a
+// "..", and non-empty selected skill names. The selection is optional: a
 // Claude Code format plugin loads whole and needs none, an Agent Plugins
 // package without one enables none of its skills.
 func ValidatePlugins(list Plugins) error {
@@ -54,34 +54,10 @@ func ValidatePlugins(list Plugins) error {
 		if len(p.Skills) > MaxPluginSkills {
 			return invalidf("%s selects %d skills; at most %d", at, len(p.Skills), MaxPluginSkills)
 		}
-		seen := map[string]bool{}
 		for _, name := range p.Skills {
 			if name == "" {
 				return invalidf("%s.skills contains an empty name", at)
 			}
-			if seen[name] {
-				return invalidf("%s.skills names %q twice", at, name)
-			}
-			seen[name] = true
-		}
-	}
-	return nil
-}
-
-// validateSkillNames refuses a skill name used twice across the skills list
-// and the plugins' selections, which the chart's render refuses too: the
-// runtime mounts every enabled skill by its name in one directory.
-func validateSkillNames(list Skills, plugins Plugins) error {
-	owner := map[string]string{}
-	for i, s := range list {
-		owner[s.mountName()] = fmt.Sprintf("skills[%d]", i)
-	}
-	for i, p := range plugins {
-		for _, name := range p.Skills {
-			if prev, dup := owner[name]; dup {
-				return invalidf("plugins[%d] selects skill %q, which %s already uses; a skill name appears once across skills and every plugin's selection", i, name, prev)
-			}
-			owner[name] = fmt.Sprintf("plugins[%d]", i)
 		}
 	}
 	return nil

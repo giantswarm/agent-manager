@@ -1304,10 +1304,10 @@ func TestPluginsArePinnedAtWriteTime(t *testing.T) {
 		"short sha":       {Spec{Plugins: Plugins{{Git: &GitSkill{URL: skillsRepo, Commit: "abc123"}}}}, "plugins[0].git.commit \"abc123\" is not a full commit id"},
 		"unknown ref":     {Spec{Plugins: Plugins{{Git: &GitSkill{URL: skillsRepo, Ref: "nope"}}}}, "ref nope of " + skillsRepo},
 		"unknown image":   {Spec{Plugins: Plugins{{OCI: "ghcr.io/x/y:1"}}}, "ghcr.io/x/y:1 could not be resolved"},
-		"twice":           {Spec{Plugins: Plugins{{OCI: pinnedOCI.OCI, Skills: []string{"a", "a"}}}}, `plugins[0].skills names "a" twice`},
+		"twice":           {Spec{Plugins: Plugins{{OCI: pinnedOCI.OCI, Skills: []string{"a", "a"}}}}, `/plugins/0/skills: items at 0 and 1 are equal`},
 		"climbing path":   {Spec{Plugins: Plugins{{OCI: pinnedOCI.OCI, Path: "../x"}}}, `".."`},
-		"across plugins":  {Spec{Plugins: Plugins{pinnedOCI, {OCI: pinnedOCI.OCI, Skills: []string{"k8s"}}}}, `plugins[1] selects skill "k8s", which plugins[0] already uses`},
-		"a skill's name":  {Spec{Skills: Skills{{Name: "k8s", OCI: pinnedOCI.OCI}}, Plugins: Plugins{pinnedOCI}}, `plugins[0] selects skill "k8s", which skills[0] already uses`},
+		"across plugins":  {Spec{Plugins: Plugins{pinnedOCI, {OCI: pinnedOCI.OCI, Skills: []string{"k8s"}}}}, `plugins[1].skills[0] "k8s" is already used by plugins[0].skills[0]`},
+		"a skill's name":  {Spec{Skills: Skills{{Name: "k8s", OCI: pinnedOCI.OCI}}, Plugins: Plugins{pinnedOCI}}, `plugins[0].skills[0] "k8s" is already used by skills[0]`},
 		"too many skills": {Spec{Plugins: Plugins{{OCI: pinnedOCI.OCI, Skills: make([]string, MaxPluginSkills+1)}}}, "selects 51 skills"},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -1349,7 +1349,7 @@ func TestPluginsArePinnedAtWriteTime(t *testing.T) {
 	// An update that makes a skill name clash is refused.
 	_, err = f.svc.Update(ctx, Update{Name: "verifier", Skills: &Skills{{Name: "runbooks", OCI: pinnedOCI.OCI}}, Plugins: &Plugins{{OCI: pinnedOCI.OCI, Skills: []string{"runbooks"}}}})
 	require.ErrorIs(t, err, ErrInvalid)
-	assert.Contains(t, err.Error(), `plugins[0] selects skill "runbooks", which skills[0] already uses`)
+	assert.Contains(t, err.Error(), `plugins[0].skills[0] "runbooks" is already used by skills[0]`)
 
 	res, err = f.svc.Update(ctx, Update{Name: "verifier", Plugins: &Plugins{}})
 	require.NoError(t, err)
