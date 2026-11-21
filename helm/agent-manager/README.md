@@ -177,6 +177,7 @@ meta chart (`components.agent-manager.enabled`), which sets `kagent.namespace`,
 | tenants.commit.platformModelsPath | string | `""` | Trusted repository-relative directory for installation model commits. |
 | credentials.uiURL | string | `""` | HTTPS RFC 6570 URI template with one {operation} expression, for organization and installation models. It uses only {operation}, {parent}, {organization} and {namespace}, in the path or query, never in the host. Installation model links need {namespace} and no {parent} or {organization}, required without tenants.enabled. The UI owns its routes; agent-manager supplies only a non-authorizing operation ID. Requires downstream OAuth. |
 | credentials.operationsNamespace | string | `""` | Dedicated namespace for nonsecret operation metadata. Empty derives a namespace from the release. Do not share it with application config. |
+| devPortal.url | string | `""` | Deprecated and ignored. Accepted for compatibility with platform releases that still forward the Dev Portal URL; credential operations use the REST API. |
 | installation | string | `""` | The installation's name in the Dev Portal, reported by `get_info` as `installation`: a portal agent id is `<installation>/<namespace>/<name>`. Empty: not reported. |
 | podAnnotations | object | `{}` | Annotations on the pod. |
 | podLabels | object | `{}` | Labels on the pod. |
