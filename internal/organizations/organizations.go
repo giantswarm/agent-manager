@@ -35,6 +35,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 
+	toolkitk8s "github.com/giantswarm/mcp-toolkit/k8s"
+
 	"github.com/giantswarm/agent-manager/internal/agents"
 	"github.com/giantswarm/agent-manager/internal/kagent"
 	"github.com/giantswarm/agent-manager/internal/kube"
@@ -243,14 +245,11 @@ func requireAccess(ctx context.Context, c kube.Client, way string, checks ...acc
 // namespace asks for the right in every namespace, which only a
 // ClusterRoleBinding gives.
 func reviewAccess(ctx context.Context, c kube.Client, a access) (bool, error) {
-	review := &authorizationv1.SelfSubjectAccessReview{Spec: authorizationv1.SelfSubjectAccessReviewSpec{
-		ResourceAttributes: &authorizationv1.ResourceAttributes{Namespace: a.namespace, Verb: a.verb, Group: a.group, Resource: a.resource, Name: a.name},
-	}}
-	res, err := c.Typed().AuthorizationV1().SelfSubjectAccessReviews().Create(ctx, review, metav1.CreateOptions{})
+	allowed, err := toolkitk8s.ReviewAccess(ctx, c.Typed(), authorizationv1.ResourceAttributes{Namespace: a.namespace, Verb: a.verb, Group: a.group, Resource: a.resource, Name: a.name})
 	if err != nil {
 		return false, kubeErr(err, "access review for "+a.String(), "")
 	}
-	return res.Status.Allowed, nil
+	return allowed, nil
 }
 
 var dryRunAll = []string{metav1.DryRunAll}

@@ -2,7 +2,6 @@ package organizations
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -10,7 +9,8 @@ import (
 	"golang.org/x/sync/errgroup"
 	authorizationv1 "k8s.io/api/authorization/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	toolkitk8s "github.com/giantswarm/mcp-toolkit/k8s"
 
 	"github.com/giantswarm/agent-manager/internal/agents"
 	"github.com/giantswarm/agent-manager/internal/identity"
@@ -162,19 +162,15 @@ func (s *Service) List(ctx context.Context, parent string) (*Listing, error) {
 // that neither allows nor denies and carries an evaluation error (a failed
 // authorization webhook, for one) failed too.
 func (s *Service) allowed(ctx context.Context, c kube.Client, attributes authorizationv1.ResourceAttributes) (allowed, known bool, err error) {
-	review := &authorizationv1.SelfSubjectAccessReview{Spec: authorizationv1.SelfSubjectAccessReviewSpec{ResourceAttributes: &attributes}}
-	res, err := c.Typed().AuthorizationV1().SelfSubjectAccessReviews().Create(ctx, review, metav1.CreateOptions{})
+	allowed, err = toolkitk8s.ReviewAccess(ctx, c.Typed(), attributes)
 	if apierrors.IsUnauthorized(err) {
 		// No review answers, and "no organization" would be the wrong
 		// answer. The error names nothing the ServiceAccount found.
 		return false, false, errTokenRefused
 	}
-	if err == nil && !res.Status.Allowed && !res.Status.Denied && res.Status.EvaluationError != "" {
-		err = errors.New(res.Status.EvaluationError)
-	}
 	if err != nil {
 		s.log.Debug("access review failed", identity.LogAttr(ctx), "namespace", attributes.Namespace, "verb", attributes.Verb, "resource", attributes.Resource, "error", err)
 		return false, false, nil
 	}
-	return res.Status.Allowed, true, nil
+	return allowed, true, nil
 }
