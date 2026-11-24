@@ -685,7 +685,9 @@ The organization tools (every name holds `organization`):
   An `Organization` of that name that exists is refused. An update changes
   the display name, `spec.agentPlatform` (harnesses, worker replicas) and
   `spec.admins` (`adminGroups` and `adminUsers` each replace their kind). A
-  delete answers what it erases until the caller passes `confirm: <name>`,
+  delete answers what it erases (where organization-operator runs, also its
+  namespace of the Organization, which it deletes with it) until the caller
+  passes `confirm: <name>`,
   then marks the object `kustomize.toolkit.fluxcd.io/prune: enabled` (the
   delete intent the admission policy requires) and deletes it; the operator
   erases it. An organization Flux applies from git is refused live: commit
