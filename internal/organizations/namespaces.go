@@ -42,6 +42,9 @@ type Namespace struct {
 	// UID.
 	Organization    string `json:"organization"`
 	OrganizationUID string `json:"organizationUID,omitempty"`
+	// prepared marks the target a credential operation recorded: its
+	// Organization must still exist with OrganizationUID when it is saved.
+	prepared bool
 }
 
 // Namespaces finds the organization namespaces and the Organizations with

@@ -155,7 +155,7 @@ func newOrgFixtureWith(t *testing.T, configure func(*organizations.Config), objs
 		return true, review, nil
 	})
 	sa := kubefake.NewClientset(
-		namespace(orgNS, map[string]string{apov1alpha1.OrganizationLabel: "payments", apov1alpha1.OrganizationUIDLabel: "uid-payments"}),
+		namespace(orgNS, map[string]string{apov1alpha1.OrganizationLabel: "payments"}),
 		namespace("agents-billing-a1b2c", map[string]string{apov1alpha1.OrganizationLabel: "billing"}),
 		// A Giant Swarm Organization's namespace, with its own label alone:
 		// no organization namespace.

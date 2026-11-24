@@ -904,19 +904,26 @@ func TestCredentialSaveRefusesASecretCreatedSinceThePreparation(t *testing.T) {
 	require.Nil(t, fixture.get(t, mcGVR, orgNS, "claude"))
 }
 
+// labelOrganizationUID gives orgNS the organization UID label that
+// agent-platform-operator writes, as uid.
+func labelOrganizationUID(t *testing.T, fixture *orgFixture, uid string) {
+	t.Helper()
+	ns, err := fixture.sa.CoreV1().Namespaces().Get(t.Context(), orgNS, metav1.GetOptions{})
+	require.NoError(t, err)
+	ns.Labels[apov1alpha1.OrganizationUIDLabel] = uid
+	_, err = fixture.sa.CoreV1().Namespaces().Update(t.Context(), ns, metav1.UpdateOptions{})
+	require.NoError(t, err)
+}
+
 // An organization deleted and created again under the same name since the
 // preparation has a namespace of the same name and another organization UID:
 // the save is refused and writes nothing into the new organization.
 func TestCredentialSaveRefusesAnOrganizationCreatedAgain(t *testing.T) {
 	fixture := newOrgFixture(t)
+	labelOrganizationUID(t, fixture, "uid-payments")
 	result := prepareModelOperation(t, fixture, nil)
 	confirmation := confirmOperation(t, fixture, result.CredentialOperation)
-
-	recreated, err := fixture.sa.CoreV1().Namespaces().Get(t.Context(), orgNS, metav1.GetOptions{})
-	require.NoError(t, err)
-	recreated.Labels[apov1alpha1.OrganizationUIDLabel] = "uid-payments-again"
-	_, err = fixture.sa.CoreV1().Namespaces().Update(t.Context(), recreated, metav1.UpdateOptions{})
-	require.NoError(t, err)
+	labelOrganizationUID(t, fixture, "uid-payments-again")
 
 	status, answer, _ := operationHTTP(t, fixture, http.MethodPost, result.CredentialOperation, confirmation.Version, valuesBody(t, result, "synthetic-value"), nil)
 	require.Equal(t, http.StatusConflict, status, answer)
@@ -930,6 +937,7 @@ func TestCredentialSaveRefusesAnOrganizationCreatedAgain(t *testing.T) {
 // replacement receives no credential.
 func TestCredentialSaveRefusesAReplacementOrganizationAtTheWrite(t *testing.T) {
 	fixture := newOrgFixture(t, organization("payments", nil))
+	labelOrganizationUID(t, fixture, "uid-payments")
 	result := prepareModelOperation(t, fixture, nil)
 	confirmation := confirmOperation(t, fixture, result.CredentialOperation)
 
@@ -938,6 +946,22 @@ func TestCredentialSaveRefusesAReplacementOrganizationAtTheWrite(t *testing.T) {
 	replacement := organization("payments", nil)
 	replacement.SetUID("uid-payments-again")
 	require.NoError(t, fixture.dyn.Tracker().Update(orgGVR, replacement, ""))
+
+	status, answer, _ := operationHTTP(t, fixture, http.MethodPost, result.CredentialOperation, confirmation.Version, valuesBody(t, result, "synthetic-value"), nil)
+	require.Equal(t, http.StatusConflict, status, answer)
+	require.Nil(t, fixture.get(t, secretGVR, orgNS, "tenant-credential-claude"))
+	require.Nil(t, fixture.get(t, mcGVR, orgNS, "claude"))
+}
+
+// A save whose Organization was deleted since the preparation, while its
+// namespace still carries the recorded UID, is refused where it writes and
+// writes nothing.
+func TestCredentialSaveRefusesADeletedOrganizationAtTheWrite(t *testing.T) {
+	fixture := newOrgFixture(t, organization("payments", nil))
+	labelOrganizationUID(t, fixture, "uid-payments")
+	result := prepareModelOperation(t, fixture, nil)
+	confirmation := confirmOperation(t, fixture, result.CredentialOperation)
+	require.NoError(t, fixture.dyn.Tracker().Delete(orgGVR, "", "payments"))
 
 	status, answer, _ := operationHTTP(t, fixture, http.MethodPost, result.CredentialOperation, confirmation.Version, valuesBody(t, result, "synthetic-value"), nil)
 	require.Equal(t, http.StatusConflict, status, answer)

@@ -614,6 +614,9 @@ func (s *Service) writable(ctx context.Context, org Namespace) error {
 		return fmt.Errorf("%w: %v", agents.ErrUnsupported, err)
 	}
 	if !ok {
+		if org.prepared && org.OrganizationUID != "" {
+			return fmt.Errorf("%w: organization %s was deleted since this write was prepared: nothing is written into namespace %s", agents.ErrConflict, org.Organization, org.Name)
+		}
 		return nil
 	}
 	if org.OrganizationUID != "" && string(o.UID) != org.OrganizationUID {

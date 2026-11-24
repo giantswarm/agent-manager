@@ -199,6 +199,7 @@ func (s *Service) credentialOperation(ctx context.Context, id string) (*credenti
 	if time.Now().After(operation.ExpiresAt) {
 		return nil, fmt.Errorf("%w: credential operation expired; prepare it again", agents.ErrConflict)
 	}
+	operation.Namespace.prepared = true
 	var organization Namespace
 	if operation.Namespace.Scope == scopePlatform {
 		organization, err = s.modelNamespace(ctx, operation.Namespace.Name)
