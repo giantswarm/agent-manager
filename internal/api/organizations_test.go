@@ -64,9 +64,12 @@ func (callerOnly) Remote(context.Context, []byte) (kube.Client, error) {
 // caller's fake clients, and find organization namespaces through the
 // ServiceAccount's own fake, which holds nothing but namespaces.
 type orgFixture struct {
-	srv     *mcpserver.MCPServer
-	dyn     *dynamicfake.FakeDynamicClient
-	typed   *kubefake.Clientset
+	srv   *mcpserver.MCPServer
+	dyn   *dynamicfake.FakeDynamicClient
+	typed *kubefake.Clientset
+	// sa is the ServiceAccount's own client, which finds the organization
+	// namespaces.
+	sa      *kubefake.Clientset
 	dryRuns *kubetest.DryRuns
 	// deny is what RBAC refuses the caller: a SelfSubjectAccessReview with
 	// these attributes is answered not allowed, and a write of a matching
@@ -152,13 +155,14 @@ func newOrgFixtureWith(t *testing.T, configure func(*organizations.Config), objs
 		return true, review, nil
 	})
 	sa := kubefake.NewClientset(
-		namespace(orgNS, map[string]string{apov1alpha1.OrganizationLabel: "payments"}),
+		namespace(orgNS, map[string]string{apov1alpha1.OrganizationLabel: "payments", apov1alpha1.OrganizationUIDLabel: "uid-payments"}),
 		namespace("agents-billing-a1b2c", map[string]string{apov1alpha1.OrganizationLabel: "billing"}),
 		// A Giant Swarm Organization's namespace, with its own label alone:
 		// no organization namespace.
 		namespace("org-acme", map[string]string{"giantswarm.io/organization": "acme"}),
 		namespace("plain", nil),
 	)
+	f.sa = sa
 	cfg := organizations.Config{ // #nosec G101 -- synthetic UI URL and isolated fake store
 		Namespaces:           organizations.NewNamespaces(sa, f.dyn, "kagent"),
 		CredentialUIURL:      "https://portal.example.com/credentials?operation={operation}",

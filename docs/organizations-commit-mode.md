@@ -29,7 +29,12 @@ Secret. Commits, over MCP and REST, use the configured RFC 8693 manager App gran
 | A credential Secret | `<contentPrefix>/<name>/<secret>-secret.enc.yaml` | the organization's own Kustomization, decrypted with the installation's SOPS key |
 
 - `objectsPath` (`--organizations-objects-path`) is a directory that the installation's
-  Kustomization builds. Its `kustomization.yaml` lists one file per organization.
+  Kustomization builds. Its `kustomization.yaml` lists one file per organization. It
+  stays, with `resources: []`, when the last organization goes, and agent-manager never
+  changes a `kustomization.yaml` above it.
+- A create writes the organization's content path with an empty `kustomization.yaml`,
+  so the organization's own Kustomization builds it before it has content. The removal
+  of the last object keeps that file, with `resources: []`.
 - `contentPrefix` (`--organizations-content-prefix`, default
   `agent-platform/organizations`) must be agent-platform-operator's `commitMode.path`
   without its `{name}`. The installation's Kustomization must never include it,

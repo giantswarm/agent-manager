@@ -36,8 +36,12 @@ type Namespace struct {
 	Scope string `json:"scope,omitempty"`
 	// Name is the namespace.
 	Name string `json:"namespace"`
-	// Organization names its Organization (security.giantswarm.io).
-	Organization string `json:"organization"`
+	// Organization names its Organization (security.giantswarm.io), and
+	// OrganizationUID is that Organization's UID: an organization deleted and
+	// created again under the same name keeps its namespace's name, never its
+	// UID.
+	Organization    string `json:"organization"`
+	OrganizationUID string `json:"organizationUID,omitempty"`
 }
 
 // Namespaces finds the organization namespaces and the Organizations with
@@ -186,7 +190,7 @@ func (n *Namespaces) of(obj *corev1.Namespace) (Namespace, bool) {
 	if !ok || obj.Name == n.platform || obj.DeletionTimestamp != nil || obj.Status.Phase == corev1.NamespaceTerminating {
 		return Namespace{}, false
 	}
-	return Namespace{Name: obj.Name, Organization: org}, true
+	return Namespace{Name: obj.Name, Organization: org, OrganizationUID: obj.Labels[apov1alpha1.OrganizationUIDLabel]}, true
 }
 
 // Names are the organization namespaces' names: what the agent tools manage

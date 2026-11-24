@@ -15,6 +15,7 @@ import (
 	"sync"
 	"testing"
 
+	apov1alpha1 "github.com/giantswarm/agent-platform-operator/api/v1alpha1"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -900,6 +901,26 @@ func TestCredentialSaveRefusesASecretCreatedSinceThePreparation(t *testing.T) {
 	value, _, err := unstructured.NestedString(secret.Object, "data", "apiKey")
 	require.NoError(t, err)
 	require.Equal(t, base64.StdEncoding.EncodeToString([]byte(liveValue)), value)
+	require.Nil(t, fixture.get(t, mcGVR, orgNS, "claude"))
+}
+
+// An organization deleted and created again under the same name since the
+// preparation has a namespace of the same name and another organization UID:
+// the save is refused and writes nothing into the new organization.
+func TestCredentialSaveRefusesAnOrganizationCreatedAgain(t *testing.T) {
+	fixture := newOrgFixture(t)
+	result := prepareModelOperation(t, fixture, nil)
+	confirmation := confirmOperation(t, fixture, result.CredentialOperation)
+
+	recreated, err := fixture.sa.CoreV1().Namespaces().Get(t.Context(), orgNS, metav1.GetOptions{})
+	require.NoError(t, err)
+	recreated.Labels[apov1alpha1.OrganizationUIDLabel] = "uid-payments-again"
+	_, err = fixture.sa.CoreV1().Namespaces().Update(t.Context(), recreated, metav1.UpdateOptions{})
+	require.NoError(t, err)
+
+	status, answer, _ := operationHTTP(t, fixture, http.MethodPost, result.CredentialOperation, confirmation.Version, valuesBody(t, result, "synthetic-value"), nil)
+	require.Equal(t, http.StatusConflict, status, answer)
+	require.Nil(t, fixture.get(t, secretGVR, orgNS, "tenant-credential-claude"))
 	require.Nil(t, fixture.get(t, mcGVR, orgNS, "claude"))
 }
 

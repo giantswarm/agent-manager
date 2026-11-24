@@ -1,6 +1,7 @@
 package organizations
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -288,9 +289,15 @@ type fileChange struct {
 	// create are files the change creates: each must still be absent on the
 	// pull request's branch once it is cut from the base.
 	create []string
-	// objects marks the objects path: its own kustomization.yaml stays, with
-	// an empty list once the last organization goes, and the kustomization
-	// above it is never changed (keepObjectsPath).
+	// add are files added beside layout.Build, which takes object files
+	// only: the empty kustomization.yaml of a new content path.
+	add map[string][]byte
+	// keep keeps the directory's own kustomization.yaml, with an empty
+	// list, when its last object goes: a Flux Kustomization builds the
+	// directory, and would fail on a path that does not exist.
+	keep bool
+	// objects marks the objects path: it is kept, and the kustomization
+	// above it, outside the objects path, is never changed.
 	objects bool
 }
 
@@ -307,22 +314,50 @@ func (c *orgCommit) open(ctx context.Context, changes []fileChange, object, titl
 		if len(ch.replace) > 0 {
 			opts = append(opts, layout.ReplaceSecrets(ch.replace...))
 		}
-		plan, err := layout.Build(ctx, c.remote, ch.dir, ch.write, ch.remove, opts...)
-		if err != nil {
-			return nil, commitError(c.gh, err)
-		}
-		for _, f := range plan.Files {
-			file := agents.CommitFile{Path: f.Path, Action: string(f.Action)}
-			if dryRun {
-				file.Content = string(f.Content)
+		change := commit.Change{Location: ch.dir.Location, Files: map[string][]byte{}}
+		// A change of added files alone takes no plan: layout.Build of a
+		// directory without object files would remove its kustomization.yaml.
+		if len(ch.write) > 0 || len(ch.remove) > 0 {
+			plan, err := layout.Build(ctx, c.remote, ch.dir, ch.write, ch.remove, opts...)
+			if err != nil {
+				return nil, commitError(c.gh, err)
 			}
-			out.Files = append(out.Files, file)
+			for _, f := range plan.Files {
+				file := agents.CommitFile{Path: f.Path, Action: string(f.Action)}
+				if dryRun {
+					file.Content = string(f.Content)
+				}
+				out.Files = append(out.Files, file)
+			}
+			change = plan.Change()
 		}
-		change := plan.Change()
 		if ch.objects {
-			if err := c.keepObjectsPath(ctx, ch.dir, &change, out, dryRun); err != nil {
+			above := path.Join(ch.dir.Directory, layout.KustomizationFile)
+			delete(change.Files, above)
+			out.Files = slices.DeleteFunc(out.Files, func(f agents.CommitFile) bool { return f.Path == above })
+		}
+		if ch.keep || ch.objects {
+			if err := c.keepKustomization(ctx, ch.dir, &change, out, dryRun); err != nil {
 				return nil, err
 			}
+		}
+		for p, content := range ch.add {
+			old, err := c.remote.ReadFile(ctx, c.cfg.Objects.Repository, c.cfg.Objects.Branch, p)
+			switch {
+			case err == nil && bytes.Equal(old, content):
+				// Git carries it already, as layout.Build leaves an
+				// unchanged file.
+				out.Files = append(out.Files, agents.CommitFile{Path: p, Action: string(layout.Unchanged)})
+				continue
+			case err != nil && !errors.Is(err, commit.ErrFileNotFound):
+				return nil, commitError(c.gh, err)
+			}
+			change.Files[p] = content
+			file := agents.CommitFile{Path: p, Action: string(layout.Add)}
+			if dryRun {
+				file.Content = string(content)
+			}
+			out.Files = append(out.Files, file)
 		}
 		for _, p := range ch.drop {
 			change.Files[p] = nil
@@ -376,16 +411,13 @@ func (c *orgCommit) open(ctx context.Context, changes []fileChange, object, titl
 	return out, nil
 }
 
-// keepObjectsPath keeps the objects path whole in change, the plan
-// layout.Build made for it: the installation's Kustomization builds that
-// directory, so its kustomization.yaml stays, with an empty list, when the
-// last organization's file goes, and the kustomization.yaml above it, which
-// is outside the objects path, is not changed. Without it the merge of the
-// last delete would leave the Kustomization a path that does not exist.
-func (c *orgCommit) keepObjectsPath(ctx context.Context, dir layout.Directory, change *commit.Change, out *CommitResult, dryRun bool) error {
-	above := path.Join(dir.Directory, layout.KustomizationFile)
-	delete(change.Files, above)
-	out.Files = slices.DeleteFunc(out.Files, func(f agents.CommitFile) bool { return f.Path == above })
+// keepKustomization keeps the directory's kustomization.yaml in change, the
+// plan layout.Build made for it, with an empty list when the plan removes it
+// with the directory's last object: a Flux Kustomization builds the
+// directory (the installation's the objects path, the organization's its
+// content path), and the merge would otherwise leave it a path that does
+// not exist.
+func (c *orgCommit) keepKustomization(ctx context.Context, dir layout.Directory, change *commit.Change, out *CommitResult, dryRun bool) error {
 	own := path.Join(dir.Path(), layout.KustomizationFile)
 	if content, present := change.Files[own]; !present || content != nil {
 		return nil
@@ -757,7 +789,7 @@ func (w *contentWriter) land(ctx context.Context, s *Service, writes []write, dr
 	if err != nil {
 		return nil, err
 	}
-	ch := fileChange{dir: w.dir, write: map[string][]byte{}}
+	ch := fileChange{dir: w.dir, write: map[string][]byte{}, keep: w.org.Scope != scopePlatform}
 	for _, wr := range writes {
 		if err := segment(wr.kind+" name", wr.name); err != nil {
 			return nil, err

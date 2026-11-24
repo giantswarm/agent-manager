@@ -133,9 +133,14 @@ func TestCreateOrganizationInCommitModeOpensOnePullRequest(t *testing.T) {
 	assert.Equal(t, true, obj.Object["spec"].(map[string]any)["agentPlatform"].(map[string]any)["enabled"])
 	assert.Contains(t, string(head[objectsPath+"/kustomization.yaml"]), "payments.yaml", "the file is listed")
 	assert.Equal(t, aboveObjectsContent, string(head[aboveObjects]), "the kustomization above the objects path is not changed")
+	// The content path starts as an empty kustomization, which the
+	// organization's Kustomization builds; no admins file goes there.
 	for p := range head {
-		assert.False(t, strings.HasPrefix(p, "agent-platform/organizations/"), "no file in a content path: %s", p)
+		if strings.HasPrefix(p, "agent-platform/organizations/") {
+			assert.Equal(t, paymentsPath+"/kustomization.yaml", p)
+		}
 	}
+	assert.Equal(t, "resources: []\n", string(head[paymentsPath+"/kustomization.yaml"]))
 	var dry []string
 	for _, d := range f.dryRuns.Received() {
 		dry = append(dry, d.Object.GetKind()+"/"+d.Object.GetName())
@@ -1031,6 +1036,34 @@ func TestEveryContentToolCommits(t *testing.T) {
 			assert.Len(t, fake.PullRequests(), 1)
 		})
 	}
+}
+
+// The removal of the last object of an organization's content path keeps
+// its kustomization.yaml, with an empty list: the organization's
+// Kustomization builds that path, and would fail on one that does not exist.
+func TestRemovingTheLastContentObjectKeepsTheContentPath(t *testing.T) {
+	editors := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "rbac.authorization.k8s.io/v1", "kind": "RoleBinding",
+		"metadata": map[string]any{"name": "organization-editors"},
+		"roleRef":  map[string]any{"apiGroup": "rbac.authorization.k8s.io", "kind": "ClusterRole", "name": organizations.RoleEditor},
+		"subjects": []any{map[string]any{"apiGroup": "rbac.authorization.k8s.io", "kind": "Group", "name": "payments-team"}},
+	}}
+	file, err := yaml.Marshal(editors.Object)
+	require.NoError(t, err)
+	live := editors.DeepCopy()
+	live.SetNamespace(orgNS)
+	live.SetLabels(fromGitLabels("agents-payments-x7k2q"))
+	f, fake := commitFixture(t, map[string][]byte{
+		paymentsPath + "/kustomization.yaml":                    []byte("resources:\n  - rolebinding-organization-editors.yaml\n"),
+		paymentsPath + "/rolebinding-organization-editors.yaml": file,
+	}, live)
+
+	text, isErr := f.call(t, ToolRemoveOrganizationMember, map[string]any{"namespace": orgNS, "group": "payments-team", "mode": "commit"})
+	require.False(t, isErr, text)
+	require.Len(t, fake.PullRequests(), 1)
+	head := fake.Files(mcRepo, fake.PullRequests()[0].Head)
+	assert.NotContains(t, head, paymentsPath+"/rolebinding-organization-editors.yaml")
+	assert.Equal(t, "resources: []\n", string(head[paymentsPath+"/kustomization.yaml"]))
 }
 
 // A .sops.yaml rule that makes a plain object's file secret is refused:

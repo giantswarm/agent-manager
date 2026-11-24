@@ -73,11 +73,16 @@ func (s *Service) createCommit(ctx context.Context, c kube.Client, req CreateReq
 		return nil, err
 	}
 
+	// The organization's own Kustomization applies the content path from the
+	// operator's first reconcile on: an empty kustomization.yaml makes it a
+	// path Flux can build before the organization has any content.
+	contentKustomization := path.Join(content.Path(), layout.KustomizationFile)
 	changes := []fileChange{
 		{dir: cm.objectDir(), write: map[string][]byte{objFile: manifest(obj, false)}, create: []string{objFile}, objects: true},
+		{dir: content, add: map[string][]byte{contentKustomization: []byte("resources: []\n")}, create: []string{contentKustomization}},
 	}
 	title := "feat(organizations): add organization " + req.Name
-	body := fmt.Sprintf("Adds the organization %s with the Agent Platform enabled: its Organization object in %s. Its admins are spec.admins, which agent-platform-operator binds to %s in the organization namespace; its contents go in its content path %s, which its own Flux Kustomization applies.", req.Name, objFile, RoleAdmin, content.Path())
+	body := fmt.Sprintf("Adds the organization %s with the Agent Platform enabled: its Organization object in %s. Its admins are spec.admins, which agent-platform-operator binds to %s in the organization namespace. Its content path %s starts with an empty kustomization.yaml, so its own Flux Kustomization builds it before it has content.", req.Name, objFile, RoleAdmin, content.Path())
 	res.Commit, err = cm.open(ctx, changes, branch("create", req.Name), title, body, req.DryRun)
 	if err != nil {
 		return nil, err

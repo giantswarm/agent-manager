@@ -208,7 +208,10 @@ func (s *Service) credentialOperation(ctx context.Context, id string) (*credenti
 	if err != nil {
 		return nil, err
 	}
-	if organization.Name != operation.Namespace.Name {
+	// The name of an organization's namespace is fixed (agents-<name>): an
+	// organization deleted and created again since the preparation has the
+	// same one, and its UID tells them apart.
+	if organization.Name != operation.Namespace.Name || organization.OrganizationUID != operation.Namespace.OrganizationUID {
 		return nil, fmt.Errorf("%w: organization namespace changed", agents.ErrConflict)
 	}
 	caller, err := s.caller(ctx)

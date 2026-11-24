@@ -58,6 +58,15 @@ func (s *Service) orgNamespace(ctx context.Context, organization string) (Namesp
 	if err != nil {
 		return Namespace{}, fmt.Errorf("%w: %v", agents.ErrUnsupported, err)
 	}
+	if ok {
+		// The list may be up to listTTL old: read the namespace by its name,
+		// so its organization UID is the one it carries now.
+		org, ok, err = s.cfg.Namespaces.Get(ctx, org.Name)
+		if err != nil {
+			return Namespace{}, fmt.Errorf("%w: %v", agents.ErrUnsupported, err)
+		}
+		ok = ok && org.Organization == organization
+	}
 	if !ok {
 		return Namespace{}, fmt.Errorf("%w: organization %s has no organization namespace", agents.ErrNotFound, organization)
 	}
