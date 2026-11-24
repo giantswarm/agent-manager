@@ -924,6 +924,27 @@ func TestCredentialSaveRefusesAnOrganizationCreatedAgain(t *testing.T) {
 	require.Nil(t, fixture.get(t, mcGVR, orgNS, "claude"))
 }
 
+// A save delayed past the organization's deletion and creation again, after
+// the namespace still carried the first organization's UID, is refused where
+// it writes: the Organization of that name has another UID now, and the
+// replacement receives no credential.
+func TestCredentialSaveRefusesAReplacementOrganizationAtTheWrite(t *testing.T) {
+	fixture := newOrgFixture(t, organization("payments", nil))
+	result := prepareModelOperation(t, fixture, nil)
+	confirmation := confirmOperation(t, fixture, result.CredentialOperation)
+
+	// The namespace's label still names the first organization; its
+	// Organization is the replacement.
+	replacement := organization("payments", nil)
+	replacement.SetUID("uid-payments-again")
+	require.NoError(t, fixture.dyn.Tracker().Update(orgGVR, replacement, ""))
+
+	status, answer, _ := operationHTTP(t, fixture, http.MethodPost, result.CredentialOperation, confirmation.Version, valuesBody(t, result, "synthetic-value"), nil)
+	require.Equal(t, http.StatusConflict, status, answer)
+	require.Nil(t, fixture.get(t, secretGVR, orgNS, "tenant-credential-claude"))
+	require.Nil(t, fixture.get(t, mcGVR, orgNS, "claude"))
+}
+
 // A Secret its ModelConfig reports without the key (kagent's ResolvedRefs
 // False, APIKeySecretKeyNotFound, for the current generation) is missing: the
 // person enters the value and the Secret is written whole. A condition of an

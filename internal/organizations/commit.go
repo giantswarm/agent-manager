@@ -598,9 +598,13 @@ type contentWriter struct {
 // deleted, or is in Pending erase: its delete pull request merged
 // (Orphaned, reason DeleteMerged) and Erase now removes what is in it. Every
 // write tool of an organization's contents builds a contentWriter, so this
-// is their one check; reads and delete_organization build none. A namespace
-// that does not name its organization, or whose organization is gone, is
-// not refused here.
+// is their one check; reads and delete_organization build none. It also
+// refuses a write for an organization UID (org.OrganizationUID, a credential
+// operation's recorded one) that is not the Organization's now: one deleted
+// and created again under the same name has the same namespace name, and a
+// write prepared for the first must not reach the second. A namespace that
+// does not name its organization, or whose organization is gone, is not
+// refused here.
 func (s *Service) writable(ctx context.Context, org Namespace) error {
 	if org.Organization == "" {
 		return nil
@@ -611,6 +615,9 @@ func (s *Service) writable(ctx context.Context, org Namespace) error {
 	}
 	if !ok {
 		return nil
+	}
+	if org.OrganizationUID != "" && string(o.UID) != org.OrganizationUID {
+		return fmt.Errorf("%w: organization %s was deleted and created again since this write was prepared: nothing is written into namespace %s; prepare it again", agents.ErrConflict, o.Name, org.Name)
 	}
 	return s.erasing(o, org.Name)
 }

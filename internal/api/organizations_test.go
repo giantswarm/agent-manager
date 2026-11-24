@@ -359,11 +359,12 @@ func readyStatus(ns string) map[string]any {
 }
 
 // organization is an Organization with the Agent Platform enabled, Ready
-// in orgNS.
+// in orgNS, of UID uid-<name>: the UID the organization namespaces' label
+// names.
 func organization(name string, labels map[string]string) *unstructured.Unstructured {
 	u := &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": orgv1alpha1.GroupVersion.String(), "kind": "Organization",
-		"metadata": map[string]any{"name": name},
+		"metadata": map[string]any{"name": name, "uid": "uid-" + name},
 		"spec": map[string]any{
 			"admins":        []any{map[string]any{"kind": "Group", "name": "payments-leads"}, map[string]any{"kind": "User", "name": "jane@example.com"}},
 			"agentPlatform": map[string]any{"enabled": true, "harnesses": []any{"kagent"}},
