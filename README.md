@@ -787,6 +787,18 @@ argument, result, operation record, log or trace. See
 [Credential operations](docs/organization-credentials.md) for the API,
 replacement rules, trust policy and recovery behavior.
 
+`start_session` asks the workspace-manager and the toolchain-manager, through
+muster and as the caller, about the default workspace and the toolchains.
+When muster needs the caller's sign-in to one of them, and
+`oauth.requestStateSecret` names this server's request state key, the tool
+answers with muster's sign-in as an MCP URL elicitation (mcp-toolkit
+`urlelicitation`): an `InputRequiredResult` with a sealed `requestState` from
+protocol 2026-07-28, error -32042 to a 2025-11-25 client that declares
+`elicitation.url`, and a tool error naming the URL to any other. The retry
+that accepts goes back to muster as the same call with muster's own
+`requestState`; decline or cancel starts nothing. Without the key, the tool
+error names muster's sign-in URL.
+
 A muster toolset preset excludes them all with the rule
 `pattern: x_agent-manager_*organization*`: the curated
 `agent-manager-assistant` carries the agent tools and not these.

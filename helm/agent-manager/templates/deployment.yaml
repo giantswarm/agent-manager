@@ -236,6 +236,16 @@ spec:
                   key: dex-client-secret
             {{- end }}
             {{- end }}
+            {{- with .Values.oauth.requestStateSecret }}
+            {{- if .name }}
+            - name: OAUTH_REQUEST_STATE_KEY_FILE
+              value: /etc/agent-manager/request-state/{{ .key }}
+            {{- with .previousKey }}
+            - name: OAUTH_REQUEST_STATE_PREVIOUS_KEY_FILE
+              value: /etc/agent-manager/request-state/{{ . }}
+            {{- end }}
+            {{- end }}
+            {{- end }}
             {{- with .Values.skills.github.app.secretName }}
             - name: AGENT_MANAGER_SKILLS_GITHUB_APP_ID
               valueFrom:
@@ -355,6 +365,11 @@ spec:
               mountPath: /etc/agent-manager/skills-github-app
               readOnly: true
             {{- end }}
+            {{- if .Values.oauth.requestStateSecret.name }}
+            - name: request-state
+              mountPath: /etc/agent-manager/request-state
+              readOnly: true
+            {{- end }}
             {{- if $toolchainRegistry }}
             - name: toolchain-registry
               mountPath: /etc/agent-manager/toolchain-registry
@@ -380,6 +395,20 @@ spec:
             items:
               - key: {{ include "agent-manager.oauthDexCASecretKey" . }}
                 path: {{ include "agent-manager.oauthDexCASecretKey" . }}
+        {{- end }}
+        {{- with .Values.oauth.requestStateSecret }}
+        {{- if .name }}
+        - name: request-state
+          secret:
+            secretName: {{ .name }}
+            items:
+              - key: {{ .key }}
+                path: {{ .key }}
+              {{- with .previousKey }}
+              - key: {{ . }}
+                path: {{ . }}
+              {{- end }}
+        {{- end }}
         {{- end }}
         {{- with .Values.skills.github.app.secretName }}
         - name: skills-github-app

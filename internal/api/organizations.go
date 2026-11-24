@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"sync"
 
@@ -107,6 +108,8 @@ type Option func(*serverOptions)
 type serverOptions struct {
 	orgs      *organizations.Service
 	lifecycle context.Context
+	signIns   *SignInElicitor
+	log       *slog.Logger
 }
 
 func WithLifecycle(ctx context.Context) Option {
