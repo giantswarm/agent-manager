@@ -170,6 +170,11 @@ type Erasure struct {
 	// (agent-platform:admin, editor and user).
 	Members        []string `json:"members"`
 	SnapshotPrefix string   `json:"snapshotPrefix,omitempty"`
+	// OrganizationNamespace is organization-operator's namespace of the
+	// Organization (status.namespace, org-<name>), on an installation where
+	// it runs: it deletes that namespace, and everything in it, with the
+	// Organization.
+	OrganizationNamespace string `json:"organizationNamespace,omitempty"`
 	// Sessions counts, per Agent, the sessions of the organization the erase
 	// deletes, as the caller sees them across every creator: running ones
 	// stop, stopped ones lose their worker snapshots and cannot be resumed.
@@ -198,11 +203,25 @@ func (s *Service) Get(ctx context.Context, name string) (*Details, error) {
 	if err != nil {
 		return nil, err
 	}
-	out := &Details{Organization: s.summary(org)}
+	return &Details{Organization: s.summary(org), Erases: s.erases(ctx, c.Dynamic(), org)}, nil
+}
+
+// erases is what deleting org erases: its Agent Platform namespace as the
+// caller reads it, once the operator reported one, and organization-operator's
+// namespace, which goes with the Organization. Nil when it has neither.
+func (s *Service) erases(ctx context.Context, dyn dynamic.Interface, org *orgv1alpha1.Organization) *Erasure {
+	var out *Erasure
 	if namespaceOf(org) != "" {
-		out.Erases = s.erasure(ctx, c.Dynamic(), org)
+		out = s.erasure(ctx, dyn, org)
 	}
-	return out, nil
+	if ns := org.Status.Namespace; ns != "" {
+		if out == nil {
+			out = &Erasure{Kept: "the organization has no Agent Platform namespace yet"}
+		}
+		out.OrganizationNamespace = ns
+		out.Kept += fmt.Sprintf("; organization-operator deletes the namespace %s, and everything in it, with the Organization", ns)
+	}
+	return out
 }
 
 // get reads an organization as the caller: the object as the API server
@@ -730,10 +749,7 @@ func (s *Service) Delete(ctx context.Context, req DeleteRequest) (*DeleteResult,
 		}
 	}
 	confirm := req.Name
-	res := &DeleteResult{Organization: s.summary(org), DryRun: req.DryRun, RequestedBy: identity.Caller(ctx)}
-	if namespaceOf(org) != "" {
-		res.Erases = s.erasure(ctx, c.Dynamic(), org)
-	}
+	res := &DeleteResult{Organization: s.summary(org), Erases: s.erases(ctx, c.Dynamic(), org), DryRun: req.DryRun, RequestedBy: identity.Caller(ctx)}
 	if org.DeletionTimestamp != nil {
 		res.Next = "the organization is being erased already (" + orDefault(res.Organization.ErasureStep, "starting") + ")"
 		return res, nil

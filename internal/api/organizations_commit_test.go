@@ -35,7 +35,13 @@ const (
 	objectsPath  = "management-clusters/gazelle/agent-platform-organizations"
 	paymentsFile = objectsPath + "/payments.yaml"
 	paymentsPath = "agent-platform/organizations/payments"
+	// aboveObjects is a kustomization above the objects path, outside it:
+	// no organization write changes it.
+	aboveObjects = "management-clusters/gazelle/kustomization.yaml"
 )
+
+// aboveObjectsContent is what aboveObjects holds on the base branch.
+const aboveObjectsContent = "resources:\n  - apps\n"
 
 // sopsCovering is a .sops.yaml whose one creation rule covers pathRegex,
 // for a fresh age key; no private key is kept and nothing is decrypted.
@@ -65,6 +71,7 @@ func commitFixtureWith(t *testing.T, base map[string][]byte, wrap func(*commit.F
 	}
 	files := map[string][]byte{
 		objectsPath + "/kustomization.yaml": []byte("resources: []\n"),
+		aboveObjects:                        []byte(aboveObjectsContent),
 		".sops.yaml":                        sopsCovering(t, `^agent-platform/organizations/.*\.enc\.yaml$`),
 	}
 	for p, c := range base {
@@ -125,6 +132,7 @@ func TestCreateOrganizationInCommitModeOpensOnePullRequest(t *testing.T) {
 	assert.Equal(t, []any{map[string]any{"kind": "Group", "name": "payments-leads"}}, obj.Object["spec"].(map[string]any)["admins"])
 	assert.Equal(t, true, obj.Object["spec"].(map[string]any)["agentPlatform"].(map[string]any)["enabled"])
 	assert.Contains(t, string(head[objectsPath+"/kustomization.yaml"]), "payments.yaml", "the file is listed")
+	assert.Equal(t, aboveObjectsContent, string(head[aboveObjects]), "the kustomization above the objects path is not changed")
 	for p := range head {
 		assert.False(t, strings.HasPrefix(p, "agent-platform/organizations/"), "no file in a content path: %s", p)
 	}
@@ -237,6 +245,10 @@ func TestDeleteOrganizationInCommitModeTakesTwoSteps(t *testing.T) {
 	}
 	assert.NotContains(t, head, paymentsFile)
 	assert.Contains(t, head, "agent-platform/organizations/billing/modelconfig-x.yaml", "another organization's path stays")
+	// The last organization's delete keeps the objects path that the
+	// installation's Kustomization builds, and leaves the one above it.
+	assert.Equal(t, "resources: []\n", string(head[objectsPath+"/kustomization.yaml"]))
+	assert.Equal(t, aboveObjectsContent, string(head[aboveObjects]))
 	live := f.get(t, orgGVR, "", "payments")
 	require.NotNil(t, live)
 	assert.Equal(t, pr.URL, live.GetAnnotations()[organizations.DeletePullRequestAnnotation])

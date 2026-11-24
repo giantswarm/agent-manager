@@ -74,7 +74,7 @@ func (s *Service) createCommit(ctx context.Context, c kube.Client, req CreateReq
 	}
 
 	changes := []fileChange{
-		{dir: cm.objectDir(), write: map[string][]byte{objFile: manifest(obj, false)}, create: []string{objFile}},
+		{dir: cm.objectDir(), write: map[string][]byte{objFile: manifest(obj, false)}, create: []string{objFile}, objects: true},
 	}
 	title := "feat(organizations): add organization " + req.Name
 	body := fmt.Sprintf("Adds the organization %s with the Agent Platform enabled: its Organization object in %s. Its admins are spec.admins, which agent-platform-operator binds to %s in the organization namespace; its contents go in its content path %s, which its own Flux Kustomization applies.", req.Name, objFile, RoleAdmin, content.Path())
@@ -159,7 +159,7 @@ func (s *Service) updateCommit(ctx context.Context, c kube.Client, u *unstructur
 	}
 	title := "chore(organizations): update organization " + req.Name
 	body := fmt.Sprintf("Changes %s of the organization %s.", strings.Join(res.Changed, ", "), req.Name)
-	res.Commit, err = cm.open(ctx, []fileChange{{dir: cm.objectDir(), write: map[string][]byte{p: manifest(file, false)}}}, branch("update", req.Name), title, body, req.DryRun)
+	res.Commit, err = cm.open(ctx, []fileChange{{dir: cm.objectDir(), write: map[string][]byte{p: manifest(file, false)}, objects: true}}, branch("update", req.Name), title, body, req.DryRun)
 	if err != nil {
 		return nil, err
 	}
@@ -642,7 +642,7 @@ func (s *Service) openDelete(ctx context.Context, c kube.Client, cm *orgCommit, 
 		}
 		ch.remove = append(ch.remove, f)
 	}
-	changes := []fileChange{{dir: cm.objectDir(), remove: []string{p}}}
+	changes := []fileChange{{dir: cm.objectDir(), remove: []string{p}, objects: true}}
 	if len(ch.remove) > 0 || len(ch.drop) > 0 {
 		changes = append(changes, ch)
 	}

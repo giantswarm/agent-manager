@@ -24,6 +24,10 @@ var memberRoles = map[string]string{roleAdminShort: RoleAdmin, "editor": RoleEdi
 // agent-platform-operator binds to RoleAdmin in the organization namespace.
 const roleAdminShort = "admin"
 
+// adminsBinding is the RoleBinding to RoleAdmin that agent-platform-operator
+// derives from the Organization's spec.admins.
+const adminsBinding = "organization-admins"
+
 // adminsFrom says where the admins come from and how they change.
 const adminsFrom = "the Organization's spec.admins, which agent-platform-operator binds to " + RoleAdmin + "; update_organization (adminGroups, adminUsers) changes them"
 
@@ -88,7 +92,7 @@ func (s *Service) ListMembers(ctx context.Context, ns string) (*Members, error) 
 	for _, b := range bindings {
 		for _, sub := range bindingSubjects(&b.obj) {
 			m := Member{Kind: sub.Kind, Name: sub.Name, Namespace: sub.Namespace, Role: b.role, Binding: b.obj.GetName()}
-			if b.role == roleAdminShort {
+			if b.role == roleAdminShort && b.obj.GetName() == adminsBinding {
 				m.From = adminsFrom
 			}
 			out.Members = append(out.Members, m)
@@ -344,7 +348,7 @@ func (s *Service) RemoveMember(ctx context.Context, req MemberRequest) (*MemberR
 		if !slices.ContainsFunc(bindingSubjects(&b.obj), sub.matches) {
 			continue
 		}
-		if b.role == roleAdminShort {
+		if b.role == roleAdminShort && b.obj.GetName() == adminsBinding {
 			res.Note = fmt.Sprintf("%s %s stays an admin: the admins are %s", sub.Kind, sub.Name, adminsFrom)
 			continue
 		}

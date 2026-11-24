@@ -456,7 +456,7 @@ The chart's shared OCIRepository goes too when nothing else in the namespace use
 ```text
 Delete an organization as you, which erases it: its namespace, agents, sessions, snapshots and credentials.
 
-Without confirm it only answers what would be erased: show that to the person and ask them to type its name, then call again with confirm set to it. Marks the object kustomize.toolkit.fluxcd.io/prune: enabled, the delete intent, then deletes it; the operator erases it. mode commit: without confirm it opens the pull request removing it from git and marks the object; once merged (Pending erase), confirm erases it. Session tombstones stay. Needs agent-platform:organizations-admin.
+Without confirm it answers what is erased (erases.organizationNamespace: organization-operator's namespace, deleted too): show it to the person, who types the name; call again with that confirm. Sets the delete intent (kustomize.toolkit.fluxcd.io/prune: enabled), then deletes; the operator erases it. mode commit: without confirm it opens a pull request removing it from git; once merged (Pending erase), confirm erases it. Session tombstones stay. Needs agent-platform:organizations-admin.
 ```
 
 ```json

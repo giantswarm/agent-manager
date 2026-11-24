@@ -288,6 +288,10 @@ type fileChange struct {
 	// create are files the change creates: each must still be absent on the
 	// pull request's branch once it is cut from the base.
 	create []string
+	// objects marks the objects path: its own kustomization.yaml stays, with
+	// an empty list once the last organization goes, and the kustomization
+	// above it is never changed (keepObjectsPath).
+	objects bool
 }
 
 // open decides every change against the base (layout.Build) and lands them
@@ -315,6 +319,11 @@ func (c *orgCommit) open(ctx context.Context, changes []fileChange, object, titl
 			out.Files = append(out.Files, file)
 		}
 		change := plan.Change()
+		if ch.objects {
+			if err := c.keepObjectsPath(ctx, ch.dir, &change, out, dryRun); err != nil {
+				return nil, err
+			}
+		}
 		for _, p := range ch.drop {
 			change.Files[p] = nil
 			i := slices.IndexFunc(out.Files, func(f agents.CommitFile) bool { return f.Path == p })
@@ -365,6 +374,40 @@ func (c *orgCommit) open(ctx context.Context, changes []fileChange, object, titl
 	}
 	out.PullRequest, out.Number = pr.URL, pr.Number
 	return out, nil
+}
+
+// keepObjectsPath keeps the objects path whole in change, the plan
+// layout.Build made for it: the installation's Kustomization builds that
+// directory, so its kustomization.yaml stays, with an empty list, when the
+// last organization's file goes, and the kustomization.yaml above it, which
+// is outside the objects path, is not changed. Without it the merge of the
+// last delete would leave the Kustomization a path that does not exist.
+func (c *orgCommit) keepObjectsPath(ctx context.Context, dir layout.Directory, change *commit.Change, out *CommitResult, dryRun bool) error {
+	above := path.Join(dir.Directory, layout.KustomizationFile)
+	delete(change.Files, above)
+	out.Files = slices.DeleteFunc(out.Files, func(f agents.CommitFile) bool { return f.Path == above })
+	own := path.Join(dir.Path(), layout.KustomizationFile)
+	if content, present := change.Files[own]; !present || content != nil {
+		return nil
+	}
+	old, err := c.remote.ReadFile(ctx, c.cfg.Objects.Repository, c.cfg.Objects.Branch, own)
+	if err != nil {
+		return commitError(c.gh, err)
+	}
+	empty, err := layout.WithResources(old, []string{})
+	if err != nil {
+		return commitError(c.gh, err)
+	}
+	change.Files[own] = empty
+	for i := range out.Files {
+		if out.Files[i].Path == own {
+			out.Files[i].Action = string(layout.Update)
+			if dryRun {
+				out.Files[i].Content = string(empty)
+			}
+		}
+	}
+	return nil
 }
 
 // land is commit.Open for the one repository and base of c, with the files

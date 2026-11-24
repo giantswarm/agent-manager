@@ -425,6 +425,42 @@ func TestUpdateAndDeleteOrganizationInApplyMode(t *testing.T) {
 	assert.Equal(t, []string{"update prune=enabled", "dry run of delete", "delete"}, live)
 }
 
+// Where organization-operator runs, it deletes its namespace of the
+// Organization (status.namespace) with it: the delete's answer names that
+// namespace, also before the Agent Platform's namespace exists.
+func TestDeleteOrganizationNamesOrganizationOperatorsNamespace(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		agentsNS    bool
+		wantModels  bool
+		wantErasure string
+	}{
+		{"with the Agent Platform namespace", true, true, "agents-payments-x7k2q"},
+		{"before the Agent Platform namespace", false, false, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			org := organization("payments", nil)
+			require.NoError(t, unstructured.SetNestedField(org.Object, "org-payments", "status", "namespace"))
+			if !tc.agentsNS {
+				unstructured.RemoveNestedField(org.Object, "status", "agentPlatform", "namespace")
+			}
+			f := newOrgFixture(t, org, model("claude", true))
+			text, isErr := f.call(t, ToolDeleteOrganization, map[string]any{"name": "payments"})
+			require.False(t, isErr, text)
+			erases := decode(t, text)["erases"].(map[string]any)
+			assert.Equal(t, "org-payments", erases["organizationNamespace"])
+			assert.Contains(t, erases["kept"], "organization-operator deletes the namespace org-payments")
+			if tc.wantModels {
+				assert.Equal(t, tc.wantErasure, erases["namespace"])
+				assert.Equal(t, []any{"claude"}, erases["models"])
+			} else {
+				assert.Empty(t, erases["namespace"])
+			}
+			assert.NotNil(t, f.get(t, orgGVR, "", "payments"), "nothing is deleted without confirm")
+		})
+	}
+}
+
 // update_organization replaces the admin groups, or the admin users, of
 // spec.admins and keeps the other kind; an empty list removes them.
 func TestUpdateOrganizationChangesItsAdmins(t *testing.T) {
@@ -894,6 +930,23 @@ func TestOrganizationMembers(t *testing.T) {
 	assert.Equal(t, "admin", admin["role"])
 	assert.Equal(t, "organization-admins", admin["binding"])
 	assert.Contains(t, admin["from"], "spec.admins")
+
+	// An admin binding of another name is not the Organization's: it is
+	// listed by its name, without from.
+	_, err = f.dyn.Resource(rbGVR).Namespace(orgNS).Create(context.Background(), &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "rbac.authorization.k8s.io/v1", "kind": "RoleBinding",
+		"metadata": map[string]any{"name": "legacy-admins", "namespace": orgNS},
+		"roleRef":  map[string]any{"apiGroup": "rbac.authorization.k8s.io", "kind": "ClusterRole", "name": organizations.RoleAdmin},
+		"subjects": []any{map[string]any{"kind": "User", "name": "zoe@example.com", "apiGroup": "rbac.authorization.k8s.io"}},
+	}}, metav1.CreateOptions{})
+	require.NoError(t, err)
+	text, isErr = f.call(t, ToolListOrganizationMembers, map[string]any{"namespace": orgNS})
+	require.False(t, isErr, text)
+	members = decode(t, text)["members"].([]any)
+	require.Len(t, members, 3)
+	legacy := members[2].(map[string]any)
+	assert.Equal(t, "legacy-admins", legacy["binding"])
+	assert.NotContains(t, legacy, "from")
 
 	for _, call := range []struct {
 		tool string
