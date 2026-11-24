@@ -951,6 +951,12 @@ func TestOrganizationMembers(t *testing.T) {
 	legacy := members[2].(map[string]any)
 	assert.Equal(t, "legacy-admins", legacy["binding"])
 	assert.NotContains(t, legacy, "from")
+	// Nor does a remove without a role change it.
+	text, isErr = f.call(t, ToolRemoveOrganizationMember, map[string]any{"namespace": orgNS, "user": "zoe@example.com"})
+	require.False(t, isErr, text)
+	assert.Equal(t, false, decode(t, text)["changed"])
+	assert.Contains(t, decode(t, text)["note"], "legacy-admins")
+	assert.Len(t, f.get(t, rbGVR, orgNS, "legacy-admins").Object["subjects"], 1)
 
 	for _, call := range []struct {
 		tool string

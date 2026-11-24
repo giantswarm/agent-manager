@@ -348,8 +348,15 @@ func (s *Service) RemoveMember(ctx context.Context, req MemberRequest) (*MemberR
 		if !slices.ContainsFunc(bindingSubjects(&b.obj), sub.matches) {
 			continue
 		}
-		if b.role == roleAdminShort && b.obj.GetName() == adminsBinding {
-			res.Note = fmt.Sprintf("%s %s stays an admin: the admins are %s", sub.Kind, sub.Name, adminsFrom)
+		if b.role == roleAdminShort {
+			// The member tools write no admin binding: the operator's
+			// organization-admins follows spec.admins, and another one is
+			// not the member tools' to change.
+			if b.obj.GetName() == adminsBinding {
+				res.Note = fmt.Sprintf("%s %s stays an admin: the admins are %s", sub.Kind, sub.Name, adminsFrom)
+			} else {
+				res.Note = fmt.Sprintf("%s %s stays an admin by the RoleBinding %s, which the member tools do not change; the organization's admins are %s", sub.Kind, sub.Name, b.obj.GetName(), adminsFrom)
+			}
 			continue
 		}
 		src, err := cw.source(ctx, &b.obj, kindRoleBinding)
