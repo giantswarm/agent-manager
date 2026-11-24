@@ -268,7 +268,7 @@ func TestRequestStateIsBoundToTheCaller(t *testing.T) {
 	state := res.RequestState
 
 	t.Run("tampered", func(t *testing.T) {
-		_, err := callRelayTool(t, alice, answer(state[:len(state)-2]+"AA", mcp.ElicitationResponseActionAccept))
+		_, err := callRelayTool(t, alice, answer(tamper(state), mcp.ElicitationResponseActionAccept))
 		require.ErrorContains(t, err, "invalid requestState")
 	})
 	t.Run("another user", func(t *testing.T) {
@@ -316,4 +316,18 @@ func TestWithoutAKeyMusterAnswersAuthRequired(t *testing.T) {
 	calls := muster.Calls()
 	require.Len(t, calls, 1)
 	require.False(t, calls[0].DeclaredURL)
+}
+
+// tamper changes a character in the middle of state: unlike its last
+// characters, a middle one carries no base64 padding bits, so the sealed
+// bytes always change.
+func tamper(state string) string {
+	b := []byte(state)
+	i := len(b) / 2
+	if b[i] == 'A' {
+		b[i] = 'B'
+	} else {
+		b[i] = 'A'
+	}
+	return string(b)
 }
