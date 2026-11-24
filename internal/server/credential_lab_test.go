@@ -57,7 +57,7 @@ func TestCredentialLab(t *testing.T) {
 	require.Equal(t, "127.0.0.1", address.Hostname())
 	administrator, err := kubernetes.NewForConfig(administratorREST)
 	require.NoError(t, err)
-	namespace, err := administrator.CoreV1().Namespaces().Create(t.Context(), &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{GenerateName: "agents-slice14-", Labels: map[string]string{"agent-platform.giantswarm.io/organization": "credential-proof-" + uuid.NewString()[:8], "agent-platform.giantswarm.io/parent": "org-lab"}}}, metav1.CreateOptions{})
+	namespace, err := administrator.CoreV1().Namespaces().Create(t.Context(), &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{GenerateName: "agents-slice14-", Labels: map[string]string{"agent-platform.giantswarm.io/organization": "credential-proof-" + uuid.NewString()[:8]}}}, metav1.CreateOptions{})
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		cleanup, cancel := context.WithTimeout(context.Background(), 10*time.Second)

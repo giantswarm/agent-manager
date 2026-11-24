@@ -7,24 +7,20 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"path"
 	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	apov1alpha1 "github.com/giantswarm/agent-platform-operator/api/v1alpha1"
-	"github.com/giantswarm/agent-platform-operator/pkg/adminmirror"
+	orgv1alpha1 "github.com/giantswarm/organization-operator/api/v1alpha1"
 	mcpserver "github.com/mark3labs/mcp-go/server"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	authenticationv1 "k8s.io/api/authentication/v1"
 	authorizationv1 "k8s.io/api/authorization/v1"
 	corev1 "k8s.io/api/core/v1"
-	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -79,11 +75,8 @@ type orgFixture struct {
 	// ready makes the operator report an organization Ready with its
 	// namespace as soon as it is created.
 	ready bool
-	// user is who the API server authenticates the caller as (a
-	// SelfSubjectReview).
-	user authenticationv1.UserInfo
-	ctx  context.Context
-	orgs *organizations.Service
+	ctx   context.Context
+	orgs  *organizations.Service
 	// logs is what the organizations service logged.
 	logs *logBuffer
 	// cfg and provider build the tools again, with another logger.
@@ -110,10 +103,9 @@ func refuseSecretRead(a k8stesting.Action) (bool, runtime.Object, error) {
 // by configure.
 func newOrgFixtureWith(t *testing.T, configure func(*organizations.Config), objs ...runtime.Object) *orgFixture {
 	t.Helper()
-	f := &orgFixture{ready: true, deny: func(string, string, string, string) bool { return false },
-		user: authenticationv1.UserInfo{Username: "alice@example.com"}}
+	f := &orgFixture{ready: true, deny: func(string, string, string, string) bool { return false }}
 	f.dyn = dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{
-		orgGVR: "AgentPlatformOrganizationList", rbGVR: "RoleBindingList", mcGVR: "ModelConfigList", connGVR: "RemoteMCPServerList",
+		orgGVR: "OrganizationList", rbGVR: "RoleBindingList", mcGVR: "ModelConfigList", connGVR: "RemoteMCPServerList",
 		egressGVR: "EgressPolicyList", orgAgentGV: "AgentList", hrGVR: "HelmReleaseList", ociGVR: "OCIRepositoryList",
 	}, objs...)
 	f.dryRuns = kubetest.AnswerDryRuns(f.dyn)
@@ -137,14 +129,11 @@ func newOrgFixtureWith(t *testing.T, configure func(*organizations.Config), objs
 		})
 	}
 	// The operator: a created organization becomes Ready with its namespace.
-	f.dyn.PrependReactor("create", "agentplatformorganizations", func(a k8stesting.Action) (bool, runtime.Object, error) {
+	f.dyn.PrependReactor("create", "organizations", func(a k8stesting.Action) (bool, runtime.Object, error) {
 		c := a.(k8stesting.CreateActionImpl)
 		if f.ready && len(c.CreateOptions.DryRun) == 0 {
 			u := c.GetObject().(*unstructured.Unstructured)
-			_ = unstructured.SetNestedField(u.Object, map[string]any{
-				"namespace":  orgNS,
-				"conditions": []any{map[string]any{"type": "Ready", "status": "True", "reason": "Reconciled", "lastTransitionTime": "2026-11-04T00:00:00Z"}},
-			}, "status")
+			_ = unstructured.SetNestedField(u.Object, readyStatus(orgNS), "status")
 		}
 		return false, nil, nil
 	})
@@ -162,14 +151,11 @@ func newOrgFixtureWith(t *testing.T, configure func(*organizations.Config), objs
 		review.Status.Allowed = !f.deny(ra.Namespace, ra.Verb, ra.Resource, ra.Name)
 		return true, review, nil
 	})
-	f.typed.PrependReactor("create", "selfsubjectreviews", func(k8stesting.Action) (bool, runtime.Object, error) {
-		return true, &authenticationv1.SelfSubjectReview{Status: authenticationv1.SelfSubjectReviewStatus{UserInfo: f.user}}, nil
-	})
 	sa := kubefake.NewClientset(
-		namespace(orgNS, map[string]string{apov1alpha1.OrganizationLabel: "payments", apov1alpha1.ParentLabel: "org-acme"}),
-		namespace("agents-billing-a1b2c", map[string]string{apov1alpha1.OrganizationLabel: "billing", apov1alpha1.ParentLabel: "org-acme"}),
-		// The parent of the organizations: a Giant Swarm Organization's
-		// namespace, with the old label alone.
+		namespace(orgNS, map[string]string{apov1alpha1.OrganizationLabel: "payments"}),
+		namespace("agents-billing-a1b2c", map[string]string{apov1alpha1.OrganizationLabel: "billing"}),
+		// A Giant Swarm Organization's namespace, with its own label alone:
+		// no organization namespace.
 		namespace("org-acme", map[string]string{"giantswarm.io/organization": "acme"}),
 		namespace("plain", nil),
 	)
@@ -177,7 +163,6 @@ func newOrgFixtureWith(t *testing.T, configure func(*organizations.Config), objs
 		Namespaces:           organizations.NewNamespaces(sa, f.dyn, "kagent"),
 		CredentialUIURL:      "https://portal.example.com/credentials?operation={operation}",
 		CredentialOperations: organizations.NewCredentialOperations(operationMaps(t)),
-		ReadyTimeout:         time.Second, ReadyPoll: 10 * time.Millisecond,
 	}
 	if configure != nil {
 		configure(&cfg)
@@ -239,85 +224,92 @@ func decode(t *testing.T, text string) map[string]any {
 	return out
 }
 
-// A create writes the object in its parent as the caller, waits for Ready,
-// then writes the first admins there, a group first; nothing is written
-// without the caller's identity.
-func TestCreateOrganizationWritesTheObjectAndTheFirstAdminsAsTheCaller(t *testing.T) {
+// A create writes one Organization with the Agent Platform on and its admins
+// in spec.admins, as the caller, a group first, and no RoleBinding: the
+// operator binds the admins. Nothing is written without the caller's
+// identity.
+func TestCreateOrganizationWritesTheObjectWithItsAdminsAsTheCaller(t *testing.T) {
 	f := newOrgFixture(t)
-	args := map[string]any{"namespace": "org-acme", "name": "payments", "displayName": "Payments",
+	args := map[string]any{"name": "payments", "displayName": "Payments",
 		"adminUsers": []any{"jane@example.com"}, "adminGroups": []any{"payments-leads"}, "harnesses": []any{"kagent"}}
 
 	text, isErr := callTool(t, f.srv, ToolCreateOrganization, args)
 	require.True(t, isErr)
 	assert.True(t, strings.HasPrefix(text, "unauthenticated:"), text)
-	assert.Nil(t, f.get(t, orgGVR, "org-acme", "payments"), "nothing is written without a caller")
+	assert.Nil(t, f.get(t, orgGVR, "", "payments"), "nothing is written without a caller")
 
 	text, isErr = f.call(t, ToolCreateOrganization, args)
 	require.False(t, isErr, text)
 	res := decode(t, text)
 	assert.Equal(t, true, res["created"])
 	assert.Equal(t, "alice@example.com", res["requestedBy"])
+	assert.Contains(t, res["next"], "binds spec.admins")
 
-	org := f.get(t, orgGVR, "org-acme", "payments")
+	org := f.get(t, orgGVR, "", "payments")
 	require.NotNil(t, org)
 	assert.Equal(t, "Payments", org.GetAnnotations()[apov1alpha1.DisplayNameAnnotation])
-	_, found, _ := unstructured.NestedFieldNoCopy(org.Object, "spec", "workers", "replicas")
-	assert.False(t, found, "an omitted workerReplicas writes no field: the CRD's default of 1 applies")
-	binding := f.get(t, rbGVR, orgNS, organizations.FirstAdminsBinding)
-	require.NotNil(t, binding)
-	assert.Equal(t, organizations.RoleAdmin, binding.Object["roleRef"].(map[string]any)["name"])
-	subjects := binding.Object["subjects"].([]any)
-	require.Len(t, subjects, 2)
-	assert.Equal(t, map[string]any{"kind": "Group", "name": "payments-leads", "apiGroup": "rbac.authorization.k8s.io"}, subjects[0])
-	assert.Equal(t, "jane@example.com", subjects[1].(map[string]any)["name"])
+	assert.Equal(t, map[string]any{"enabled": true, "harnesses": []any{"kagent"}}, org.Object["spec"].(map[string]any)["agentPlatform"],
+		"an omitted workerReplicas writes no field: the CRD's default of 1 applies")
+	assert.Equal(t, []any{
+		map[string]any{"kind": "Group", "name": "payments-leads"},
+		map[string]any{"kind": "User", "name": "jane@example.com"},
+	}, org.Object["spec"].(map[string]any)["admins"])
 
-	// Both writes were dry-run first.
+	// The Organization alone is written, dry run first: no RoleBinding.
 	var dry []string
 	for _, d := range f.dryRuns.Received() {
 		dry = append(dry, d.Object.GetKind()+"/"+d.Object.GetName())
 	}
-	assert.Equal(t, []string{"AgentPlatformOrganization/payments", "RoleBinding/" + organizations.FirstAdminsBinding}, dry)
+	assert.Equal(t, []string{"Organization/payments"}, dry)
+	for _, a := range f.dyn.Actions() {
+		assert.NotEqual(t, "rolebindings", a.GetResource().Resource, "%s of a RoleBinding", a.GetVerb())
+	}
 
 	text, isErr = f.call(t, ToolCreateOrganization, args)
 	require.True(t, isErr)
 	assert.True(t, strings.HasPrefix(text, "conflict:"), text)
 }
 
-// An organization the operator has not made Ready yet keeps its first
-// admins for a second call, which binds them once it is.
-func TestCreateOrganizationFinishesTheFirstAdminsOnASecondCall(t *testing.T) {
+// A created organization is listed at once, and with its namespace once the
+// operator reports it in status.agentPlatform.namespace.
+func TestACreatedOrganizationIsListedWithItsNamespaceOnceReported(t *testing.T) {
 	f := newOrgFixture(t)
 	f.ready = false
-	args := map[string]any{"namespace": "org-acme", "name": "payments", "adminGroups": []any{"payments-leads"}}
-	text, isErr := f.call(t, ToolCreateOrganization, args)
+	text, isErr := f.call(t, ToolCreateOrganization, map[string]any{"name": "payments", "adminGroups": []any{"payments-leads"}})
 	require.False(t, isErr, text)
-	assert.Contains(t, decode(t, text)["pending"], "call create_organization again")
-	assert.NotNil(t, f.get(t, orgGVR, "org-acme", "payments"))
 
-	org := f.get(t, orgGVR, "org-acme", "payments")
-	require.NoError(t, unstructured.SetNestedField(org.Object, map[string]any{"namespace": orgNS,
-		"conditions": []any{map[string]any{"type": "Ready", "status": "True", "reason": "Reconciled", "lastTransitionTime": "2026-11-04T00:00:00Z"}}}, "status"))
-	_, err := f.dyn.Resource(orgGVR).Namespace("org-acme").Update(context.Background(), org, metav1.UpdateOptions{})
+	listed := func() map[string]any {
+		text, isErr := f.call(t, ToolListOrganizations, nil)
+		require.False(t, isErr, text)
+		orgs := decode(t, text)["organizations"].([]any)
+		require.Len(t, orgs, 1, text)
+		return orgs[0].(map[string]any)
+	}
+	before := listed()
+	assert.NotContains(t, before, "namespace")
+	assert.Equal(t, map[string]any{"manage": true, "member": false, "createAgents": false}, before["permissions"])
+
+	org := f.get(t, orgGVR, "", "payments")
+	require.NoError(t, unstructured.SetNestedField(org.Object, readyStatus(orgNS), "status"))
+	_, err := f.dyn.Resource(orgGVR).Update(context.Background(), org, metav1.UpdateOptions{})
 	require.NoError(t, err)
 
-	text, isErr = f.call(t, ToolCreateOrganization, args)
-	require.False(t, isErr, text)
-	assert.Equal(t, false, decode(t, text)["created"])
-	assert.NotNil(t, f.get(t, rbGVR, orgNS, organizations.FirstAdminsBinding))
+	after := listed()
+	assert.Equal(t, orgNS, after["namespace"])
+	assert.Equal(t, map[string]any{"manage": true, "member": true, "createAgents": true}, after["permissions"])
 }
 
-// A caller who may create the object but not bind the first admins is
-// refused before the object exists, and the refusal names the role.
+// A caller who may not create Organizations is refused before anything is
+// written, and the refusal names the role.
 func TestCreateOrganizationRefusesACallerWithoutRightsBeforeAnyWrite(t *testing.T) {
 	f := newOrgFixture(t)
-	f.deny = func(_, verb, resource, _ string) bool {
-		return (verb == "bind" && resource == "clusterroles") || resource == "rolebindings"
-	}
-	text, isErr := f.call(t, ToolCreateOrganization, map[string]any{"namespace": "org-acme", "name": "payments", "adminGroups": []any{"payments-leads"}})
+	f.deny = func(_, verb, resource, _ string) bool { return verb == "create" && resource == "organizations" }
+	text, isErr := f.call(t, ToolCreateOrganization, map[string]any{"name": "payments", "adminGroups": []any{"payments-leads"}})
 	require.True(t, isErr)
 	assert.True(t, strings.HasPrefix(text, "forbidden:"), text)
 	assert.Contains(t, text, organizations.RoleOrganizationsAdmin)
-	assert.Nil(t, f.get(t, orgGVR, "org-acme", "payments"), "no organization without its first admins")
+	assert.Nil(t, f.get(t, orgGVR, "", "payments"))
+	assert.Empty(t, f.dryRuns.Received(), "not even a dry run is sent")
 }
 
 // What the API server's dry run refuses is never written: neither the object
@@ -334,12 +326,12 @@ func TestTheDryRunRefusesBeforeAnyWrite(t *testing.T) {
 
 	t.Run("create_organization", func(t *testing.T) {
 		f := newOrgFixture(t)
-		f.dryRuns.Refuse = refuse("AgentPlatformOrganization", "payments")
-		text, isErr := f.call(t, ToolCreateOrganization, map[string]any{"namespace": "org-acme", "name": "payments", "adminGroups": []any{"g"}})
+		f.dryRuns.Refuse = refuse("Organization", "payments")
+		text, isErr := f.call(t, ToolCreateOrganization, map[string]any{"name": "payments", "adminGroups": []any{"g"}})
 		require.True(t, isErr)
-		assert.Contains(t, text, "dry run of create AgentPlatformOrganization org-acme/payments")
+		assert.Contains(t, text, "dry run of create Organization payments")
 		assert.Contains(t, text, organizations.RoleOrganizationsAdmin)
-		assert.Nil(t, f.get(t, orgGVR, "org-acme", "payments"))
+		assert.Nil(t, f.get(t, orgGVR, "", "payments"))
 	})
 
 	t.Run("moving the default mark", func(t *testing.T) {
@@ -353,44 +345,68 @@ func TestTheDryRunRefusesBeforeAnyWrite(t *testing.T) {
 	})
 }
 
-func organization(parent, name string, labels map[string]string) *unstructured.Unstructured {
+// readyStatus is what agent-platform-operator reports of an organization
+// whose namespace ns is Ready.
+func readyStatus(ns string) map[string]any {
+	return map[string]any{
+		"agentPlatform": map[string]any{"namespace": ns, "snapshotPrefix": "s3://bucket/uid"},
+		"conditions":    []any{map[string]any{"type": "Ready", "status": "True", "reason": "Reconciled", "lastTransitionTime": "2026-11-04T00:00:00Z"}},
+	}
+}
+
+// organization is an Organization with the Agent Platform enabled, Ready
+// in orgNS.
+func organization(name string, labels map[string]string) *unstructured.Unstructured {
 	u := &unstructured.Unstructured{Object: map[string]any{
-		"apiVersion": apov1alpha1.GroupVersion.String(), "kind": "AgentPlatformOrganization",
-		"metadata": map[string]any{"name": name, "namespace": parent},
-		"spec":     map[string]any{"harnesses": []any{"kagent"}},
-		"status": map[string]any{"namespace": orgNS, "snapshotPrefix": "s3://bucket/uid",
-			"conditions": []any{map[string]any{"type": "Ready", "status": "True", "reason": "Reconciled", "lastTransitionTime": "2026-11-04T00:00:00Z"}}},
+		"apiVersion": orgv1alpha1.GroupVersion.String(), "kind": "Organization",
+		"metadata": map[string]any{"name": name},
+		"spec": map[string]any{
+			"admins":        []any{map[string]any{"kind": "Group", "name": "payments-leads"}, map[string]any{"kind": "User", "name": "jane@example.com"}},
+			"agentPlatform": map[string]any{"enabled": true, "harnesses": []any{"kagent"}},
+		},
+		"status": readyStatus(orgNS),
 	}}
 	u.SetLabels(labels)
 	return u
+}
+
+// kaasOrganization is an Organization without the Agent Platform: no
+// organization of the tools.
+func kaasOrganization(name string) *unstructured.Unstructured {
+	return &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": orgv1alpha1.GroupVersion.String(), "kind": "Organization",
+		"metadata": map[string]any{"name": name},
+		"status":   map[string]any{"namespace": "org-" + name},
+	}}
 }
 
 // Update and delete work live; a delete answers what it erases until the
 // person typed the organization's name, and marks Flux's delete intent
 // before it deletes.
 func TestUpdateAndDeleteOrganizationInApplyMode(t *testing.T) {
-	f := newOrgFixture(t, organization("org-acme", "payments", nil), model("claude", true))
+	f := newOrgFixture(t, organization("payments", nil), model("claude", true))
 
-	text, isErr := f.call(t, ToolUpdateOrganization, map[string]any{"namespace": "org-acme", "name": "payments", "harnesses": []any{"kagent", "claude"}, "workerReplicas": 2})
+	text, isErr := f.call(t, ToolUpdateOrganization, map[string]any{"name": "payments", "harnesses": []any{"kagent", "claude"}, "workerReplicas": 2})
 	require.False(t, isErr, text)
 	assert.ElementsMatch(t, []any{"harnesses", "workerReplicas"}, decode(t, text)["changed"])
-	spec := f.get(t, orgGVR, "org-acme", "payments").Object["spec"].(map[string]any)
+	spec := f.get(t, orgGVR, "", "payments").Object["spec"].(map[string]any)["agentPlatform"].(map[string]any)
 	assert.Equal(t, []any{"kagent", "claude"}, spec["harnesses"])
 	assert.EqualValues(t, 2, spec["workers"].(map[string]any)["replicas"])
 
-	text, isErr = f.call(t, ToolDeleteOrganization, map[string]any{"namespace": "org-acme", "name": "payments"})
+	text, isErr = f.call(t, ToolDeleteOrganization, map[string]any{"name": "payments"})
 	require.False(t, isErr, text)
 	res := decode(t, text)
 	assert.Equal(t, false, res["deleted"])
 	assert.Equal(t, []any{"claude"}, res["erases"].(map[string]any)["models"])
 	assert.Equal(t, []any{"tenant-credential-claude"}, res["erases"].(map[string]any)["credentials"])
-	assert.NotNil(t, f.get(t, orgGVR, "org-acme", "payments"))
+	assert.Contains(t, res["next"], `confirm "payments"`)
+	assert.NotNil(t, f.get(t, orgGVR, "", "payments"))
 
 	f.dyn.ClearActions()
-	text, isErr = f.call(t, ToolDeleteOrganization, map[string]any{"namespace": "org-acme", "name": "payments", "confirm": "org-acme/payments"})
+	text, isErr = f.call(t, ToolDeleteOrganization, map[string]any{"name": "payments", "confirm": "payments"})
 	require.False(t, isErr, text)
 	assert.Equal(t, true, decode(t, text)["deleted"])
-	assert.Nil(t, f.get(t, orgGVR, "org-acme", "payments"))
+	assert.Nil(t, f.get(t, orgGVR, "", "payments"))
 	var live []string
 	for _, a := range f.dyn.Actions() {
 		switch a := a.(type) {
@@ -409,31 +425,57 @@ func TestUpdateAndDeleteOrganizationInApplyMode(t *testing.T) {
 	assert.Equal(t, []string{"update prune=enabled", "dry run of delete", "delete"}, live)
 }
 
+// update_organization replaces the admin groups, or the admin users, of
+// spec.admins and keeps the other kind; an empty list removes them.
+func TestUpdateOrganizationChangesItsAdmins(t *testing.T) {
+	f := newOrgFixture(t, organization("payments", nil))
+	admins := func() any { return f.get(t, orgGVR, "", "payments").Object["spec"].(map[string]any)["admins"] }
+
+	text, isErr := f.call(t, ToolUpdateOrganization, map[string]any{"name": "payments", "adminGroups": []any{"payments-owners", "platform"}})
+	require.False(t, isErr, text)
+	res := decode(t, text)
+	assert.Equal(t, []any{"admins"}, res["changed"])
+	assert.Equal(t, []any{
+		map[string]any{"kind": "Group", "name": "payments-owners"},
+		map[string]any{"kind": "Group", "name": "platform"},
+		map[string]any{"kind": "User", "name": "jane@example.com"},
+	}, admins(), "the users stay")
+	assert.Len(t, res["after"].(map[string]any)["admins"], 3)
+
+	text, isErr = f.call(t, ToolUpdateOrganization, map[string]any{"name": "payments", "adminGroups": []any{"payments-owners", "platform"}})
+	require.False(t, isErr, text)
+	assert.Empty(t, decode(t, text)["changed"], "the same admins are no change")
+
+	text, isErr = f.call(t, ToolUpdateOrganization, map[string]any{"name": "payments", "adminGroups": []any{}, "adminUsers": []any{}})
+	require.False(t, isErr, text)
+	assert.Nil(t, admins(), "no admins: the platform team manages it")
+}
+
 // A delete the API server refuses after the delete intent is written
 // leaves the organization as it was, without the intent.
 func TestARefusedDeleteTakesTheDeleteIntentOffAgain(t *testing.T) {
-	f := newOrgFixture(t, organization("org-acme", "payments", nil))
+	f := newOrgFixture(t, organization("payments", nil))
 	f.dryRuns.Refuse = func(u *unstructured.Unstructured) error {
-		if u.GetKind() == "agentplatformorganizations" {
-			return apierrors.NewForbidden(schema.GroupResource{Resource: "agentplatformorganizations"}, u.GetName(), errors.New("denied by policy"))
+		if u.GetKind() == "organizations" {
+			return apierrors.NewForbidden(schema.GroupResource{Resource: "organizations"}, u.GetName(), errors.New("denied by policy"))
 		}
 		return nil
 	}
-	text, isErr := f.call(t, ToolDeleteOrganization, map[string]any{"namespace": "org-acme", "name": "payments", "confirm": "org-acme/payments"})
+	text, isErr := f.call(t, ToolDeleteOrganization, map[string]any{"name": "payments", "confirm": "payments"})
 	require.True(t, isErr)
 	assert.Contains(t, text, "dry run of delete")
-	org := f.get(t, orgGVR, "org-acme", "payments")
+	org := f.get(t, orgGVR, "", "payments")
 	require.NotNil(t, org)
 	assert.NotContains(t, org.GetAnnotations(), organizations.PruneAnnotation)
 }
 
 // An organization Flux applies from git is not changed live.
 func TestOrganizationFromGitIsNotWrittenLive(t *testing.T) {
-	f := newOrgFixture(t, organization("org-acme", "payments", map[string]string{"kustomize.toolkit.fluxcd.io/name": "flux"}))
-	text, isErr := f.call(t, ToolDeleteOrganization, map[string]any{"namespace": "org-acme", "name": "payments", "confirm": "org-acme/payments"})
+	f := newOrgFixture(t, organization("payments", map[string]string{"kustomize.toolkit.fluxcd.io/name": "flux"}))
+	text, isErr := f.call(t, ToolDeleteOrganization, map[string]any{"name": "payments", "confirm": "payments"})
 	require.True(t, isErr)
 	assert.True(t, strings.HasPrefix(text, "gitops_owned:"), text)
-	assert.NotNil(t, f.get(t, orgGVR, "org-acme", "payments"))
+	assert.NotNil(t, f.get(t, orgGVR, "", "payments"))
 }
 
 func model(name string, isDefault bool) *unstructured.Unstructured {
@@ -592,13 +634,13 @@ func TestCredentialsAreReferencesOnly(t *testing.T) {
 // review asked as the caller; a member who does not manage one sees its
 // status only.
 func TestListOrganizationsByTheCallersAccess(t *testing.T) {
-	lost := organization("org-acme", "payments", nil)
+	lost := organization("payments", nil)
 	lost.Object["status"].(map[string]any)["conditions"] = append(lost.Object["status"].(map[string]any)["conditions"].([]any),
 		map[string]any{"type": "Orphaned", "status": "True", "reason": "MissingFromGit", "message": "gone from git", "lastTransitionTime": "2026-11-04T00:00:00Z"})
-	billing := organization("org-acme", "billing", nil)
-	_ = unstructured.SetNestedField(billing.Object, "agents-billing-a1b2c", "status", "namespace")
-	other := organization("org-other", "treasury", nil)
-	_ = unstructured.SetNestedField(other.Object, "agents-treasury-z9y8x", "status", "namespace")
+	billing := organization("billing", nil)
+	_ = unstructured.SetNestedField(billing.Object, "agents-billing-a1b2c", "status", "agentPlatform", "namespace")
+	other := organization("treasury", nil)
+	_ = unstructured.SetNestedField(other.Object, "agents-treasury-z9y8x", "status", "agentPlatform", "namespace")
 	f := newOrgFixture(t, lost, billing, other)
 	// A member of payments only, who may create agents there; the manager of
 	// billing only; treasury neither.
@@ -606,8 +648,8 @@ func TestListOrganizationsByTheCallersAccess(t *testing.T) {
 		switch {
 		case resource == "agents", resource == "helmreleases":
 			return ns != orgNS
-		case verb == "update" && resource == "agentplatformorganizations":
-			return ns != "org-acme" || name != "billing"
+		case verb == "update" && resource == "organizations":
+			return ns != "" || name != "billing"
 		}
 		return false
 	}
@@ -622,12 +664,13 @@ func TestListOrganizationsByTheCallersAccess(t *testing.T) {
 	assert.Equal(t, "s3://bucket/uid", billingListed["organization"].(map[string]any)["snapshotPrefix"], "a manager reads the summary")
 
 	member := listed[1].(map[string]any)
-	assert.Equal(t, map[string]any{"name": "payments", "parent": "org-acme", "namespace": orgNS,
+	assert.Equal(t, map[string]any{"name": "payments", "namespace": orgNS,
 		"orphaned":    map[string]any{"status": "True", "reason": "MissingFromGit", "message": "gone from git"},
 		"permissions": map[string]any{"manage": false, "member": true, "createAgents": true}}, member, "a member reads the status only")
 	assert.NotContains(t, text, "treasury", "an organization the caller neither manages nor belongs to is not listed")
 
-	text, isErr = f.call(t, ToolListOrganizations, map[string]any{"namespace": "org-other"})
+	f.deny = func(string, string, string, string) bool { return true }
+	text, isErr = f.call(t, ToolListOrganizations, nil)
 	require.False(t, isErr, text)
 	res := decode(t, text)
 	assert.Empty(t, res["organizations"])
@@ -652,12 +695,11 @@ func TestListOrganizationsSaysWhoMayCreateAgents(t *testing.T) {
 	roles := map[string]func(ns, verb, resource, name string) bool{
 		// agent-platform:user reads and runs the agents of its organization.
 		"user": func(_, verb, resource, _ string) bool {
-			return resource == "agentplatformorganizations" || resource == "helmreleases" || (resource == "agents" && verb != "list")
+			return resource == "organizations" || resource == "helmreleases" || (resource == "agents" && verb != "list")
 		},
 		// agent-platform:editor also writes them.
-		"editor": func(_, _, resource, _ string) bool { return resource == "agentplatformorganizations" },
-		// agent-platform:admin of the organization and organizations-admin of
-		// its parent.
+		"editor": func(_, _, resource, _ string) bool { return resource == "organizations" },
+		// agent-platform:admin of the organization and organizations-admin.
 		"admin": func(string, string, string, string) bool { return false },
 	}
 	for _, tc := range []struct {
@@ -669,7 +711,7 @@ func TestListOrganizationsSaysWhoMayCreateAgents(t *testing.T) {
 		{"admin", map[string]any{"manage": true, "member": true, "createAgents": true}},
 	} {
 		t.Run(tc.role, func(t *testing.T) {
-			f := newOrgFixture(t, organization("org-acme", "payments", nil))
+			f := newOrgFixture(t, organization("payments", nil))
 			f.deny = roles[tc.role]
 			reviews := recordAccessReviews(f)
 			text, isErr := f.call(t, ToolListOrganizations, nil)
@@ -684,8 +726,8 @@ func TestListOrganizationsSaysWhoMayCreateAgents(t *testing.T) {
 	}
 
 	t.Run("no namespace yet", func(t *testing.T) {
-		pending := organization("org-acme", "payments", nil)
-		unstructured.RemoveNestedField(pending.Object, "status", "namespace")
+		pending := organization("payments", nil)
+		unstructured.RemoveNestedField(pending.Object, "status", "agentPlatform", "namespace")
 		f := newOrgFixture(t, pending)
 		reviews := recordAccessReviews(f)
 		text, isErr := f.call(t, ToolListOrganizations, nil)
@@ -693,9 +735,8 @@ func TestListOrganizationsSaysWhoMayCreateAgents(t *testing.T) {
 		listed := decode(t, text)["organizations"].([]any)
 		require.Len(t, listed, 1, text)
 		assert.Equal(t, map[string]any{"manage": true, "member": false, "createAgents": false}, listed[0].(map[string]any)["permissions"])
-		for _, r := range reviews() {
-			assert.NotEmpty(t, r.Namespace, "no review is asked across every namespace: %+v", r)
-		}
+		assert.Equal(t, []authorizationv1.ResourceAttributes{{Verb: "update", Group: orgGVR.Group, Resource: orgGVR.Resource, Name: "payments"}}, reviews(),
+			"the manage review of the cluster-scoped Organization alone: none in a namespace it does not have")
 	})
 }
 
@@ -715,7 +756,7 @@ func TestCreateAgentsIsTheRightCreateAgentNeeds(t *testing.T) {
 		{"helmreleases only", "agents", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			f := newOrgFixture(t, organization("org-acme", "payments", nil),
+			f := newOrgFixture(t, organization("payments", nil),
 				&unstructured.Unstructured{Object: map[string]any{
 					"apiVersion": "api.kagent.dev/v1alpha3", "kind": "ModelConfig",
 					"metadata": map[string]any{"name": "own", "namespace": orgNS},
@@ -795,7 +836,7 @@ func TestListOrganizationsLeavesOutCreateAgentsItCouldNotAsk(t *testing.T) {
 		{"allowed", func(*orgFixture) {}, map[string]any{"manage": true, "member": true, "createAgents": true}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			f := newOrgFixture(t, organization("org-acme", "payments", nil))
+			f := newOrgFixture(t, organization("payments", nil))
 			tc.review(f)
 			text, isErr := f.call(t, ToolListOrganizations, nil)
 			require.False(t, isErr, text)
@@ -825,14 +866,15 @@ func recordAccessReviews(f *orgFixture) func() []authorizationv1.ResourceAttribu
 	}
 }
 
-// Members are added into their role's binding and removed from it; when
-// admission keeps the first admins' last admin, the refusal says how to go
-// on.
+// Editors and users are added into their role's binding and removed from
+// it. The admins are listed from organization-admins, which the operator
+// derives from spec.admins, and say so; the member tools neither give nor
+// take the admin role, and name update_organization instead.
 func TestOrganizationMembers(t *testing.T) {
 	f := newOrgFixture(t)
 	_, err := f.dyn.Resource(rbGVR).Namespace(orgNS).Create(context.Background(), &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "rbac.authorization.k8s.io/v1", "kind": "RoleBinding",
-		"metadata": map[string]any{"name": organizations.FirstAdminsBinding, "namespace": orgNS},
+		"metadata": map[string]any{"name": "organization-admins", "namespace": orgNS},
 		"roleRef":  map[string]any{"apiGroup": "rbac.authorization.k8s.io", "kind": "ClusterRole", "name": organizations.RoleAdmin},
 		"subjects": []any{map[string]any{"kind": "User", "name": "jane@example.com", "apiGroup": "rbac.authorization.k8s.io"}},
 	}}, metav1.CreateOptions{})
@@ -847,18 +889,32 @@ func TestOrganizationMembers(t *testing.T) {
 	members := decode(t, text)["members"].([]any)
 	require.Len(t, members, 2)
 	assert.Equal(t, "Group", members[0].(map[string]any)["kind"], "groups first")
+	assert.NotContains(t, members[0], "from")
+	admin := members[1].(map[string]any)
+	assert.Equal(t, "admin", admin["role"])
+	assert.Equal(t, "organization-admins", admin["binding"])
+	assert.Contains(t, admin["from"], "spec.admins")
 
-	f.dryRuns.Refuse = func(u *unstructured.Unstructured) error {
-		if u.GetKind() == "rolebindings" && u.GetName() == organizations.FirstAdminsBinding {
-			return apierrors.NewForbidden(schema.GroupResource{Group: "rbac.authorization.k8s.io", Resource: "rolebindings"}, u.GetName(), errors.New("the first admins' binding is kept while the namespace lives"))
-		}
-		return nil
+	for _, call := range []struct {
+		tool string
+		args map[string]any
+	}{
+		{ToolAddOrganizationMember, map[string]any{"namespace": orgNS, "role": "admin", "user": "bob@example.com"}},
+		{ToolRemoveOrganizationMember, map[string]any{"namespace": orgNS, "role": "admin", "user": "jane@example.com"}},
+	} {
+		text, isErr = f.call(t, call.tool, call.args)
+		require.True(t, isErr, call.tool)
+		assert.True(t, strings.HasPrefix(text, "invalid_request:"), text)
+		assert.Contains(t, text, "spec.admins", call.tool)
+		assert.Contains(t, text, "update_organization", call.tool)
 	}
+	// Without a role, an admin stays one, and the answer says why.
 	text, isErr = f.call(t, ToolRemoveOrganizationMember, map[string]any{"namespace": orgNS, "user": "jane@example.com"})
-	require.True(t, isErr)
-	assert.NotNil(t, f.get(t, rbGVR, orgNS, organizations.FirstAdminsBinding))
-	assert.True(t, strings.HasPrefix(text, "forbidden:"), text)
-	assert.Contains(t, text, "add another admin first")
+	require.False(t, isErr, text)
+	res := decode(t, text)
+	assert.Equal(t, false, res["changed"])
+	assert.Contains(t, res["note"], "update_organization")
+	assert.Len(t, f.get(t, rbGVR, orgNS, "organization-admins").Object["subjects"], 1)
 
 	text, isErr = f.call(t, ToolRemoveOrganizationMember, map[string]any{"namespace": orgNS, "group": "payments-team"})
 	require.False(t, isErr, text)
@@ -870,61 +926,47 @@ func TestOrganizationMembers(t *testing.T) {
 	assert.NotContains(t, text, "tenant", "an org-* namespace is no tenant of any kind")
 }
 
-// A creator whose rights have not reached the new namespace by Ready (the
-// operator has not mirrored them yet) gets the organization without a
-// Forbidden write, and an answer naming who can bind the first admins; a
-// second call finishes it.
-func TestCreateOrganizationNamesWhoBindsTheFirstAdminsWhenTheCreatorCannot(t *testing.T) {
-	f := newOrgFixture(t)
-	f.deny = func(ns, verb, resource, _ string) bool {
-		return ns == orgNS && (resource == "rolebindings" || verb == "bind")
-	}
-	args := map[string]any{"namespace": "org-acme", "name": "payments", "adminGroups": []any{"payments-leads"}}
-	text, isErr := f.call(t, ToolCreateOrganization, args)
-	require.False(t, isErr, text)
-	pending := decode(t, text)["pending"].(string)
-	assert.Contains(t, pending, "first admins are not bound")
-	assert.Contains(t, pending, organizations.RoleOrganizationsAdmin)
-	assert.NotNil(t, f.get(t, orgGVR, "org-acme", "payments"))
-	assert.Nil(t, f.get(t, rbGVR, orgNS, organizations.FirstAdminsBinding))
-	for _, d := range f.dryRuns.Received() {
-		assert.NotEqual(t, "RoleBinding", d.Object.GetKind(), "no write is tried that RBAC refuses")
-	}
-
-	f.deny = func(string, string, string, string) bool { return false }
-	text, isErr = f.call(t, ToolCreateOrganization, args)
-	require.False(t, isErr, text)
-	assert.NotNil(t, f.get(t, rbGVR, orgNS, organizations.FirstAdminsBinding))
-}
-
-// An organization being erased is not "not Ready yet".
-func TestCreateOrganizationRefusesOneBeingErased(t *testing.T) {
-	org := organization("org-acme", "payments", nil)
+// A create of an Organization that exists is refused at once: one being
+// erased, one with the Agent Platform, and one without it, which the tools
+// do not turn on.
+func TestCreateOrganizationRefusesOneThatExists(t *testing.T) {
+	erased := organization("payments", nil)
 	now := metav1.Now()
-	org.SetDeletionTimestamp(&now)
-	org.SetFinalizers([]string{apov1alpha1.Finalizer})
-	f := newOrgFixture(t, org)
-	start := time.Now()
-	text, isErr := f.call(t, ToolCreateOrganization, map[string]any{"namespace": "org-acme", "name": "payments", "adminGroups": []any{"g"}})
-	require.True(t, isErr)
-	assert.True(t, strings.HasPrefix(text, "conflict:"), text)
-	assert.Contains(t, text, "being erased")
-	assert.Less(t, time.Since(start), time.Second, "no wait for a Ready that never comes")
+	erased.SetDeletionTimestamp(&now)
+	erased.SetFinalizers([]string{apov1alpha1.Finalizer})
+	for _, tc := range []struct {
+		name     string
+		existing *unstructured.Unstructured
+		want     string
+	}{
+		{"being erased", erased, "being erased"},
+		{"with the Agent Platform", organization("payments", nil), "update_organization changes it"},
+		{"without the Agent Platform", kaasOrganization("payments"), "do not turn it on"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newOrgFixture(t, tc.existing)
+			text, isErr := f.call(t, ToolCreateOrganization, map[string]any{"name": "payments", "adminGroups": []any{"g"}})
+			require.True(t, isErr)
+			assert.True(t, strings.HasPrefix(text, "conflict:"), text)
+			assert.Contains(t, text, tc.want)
+			assert.Empty(t, f.dryRuns.Received(), "nothing is sent")
+		})
+	}
 }
 
 // A delete the API server refuses after its dry run passed takes the delete
 // intent off again: the admission guard keeps protecting the object.
 func TestAFailedDeleteTakesTheDeleteIntentOffAgain(t *testing.T) {
-	f := newOrgFixture(t, organization("org-acme", "payments", nil))
-	f.dyn.PrependReactor("delete", "agentplatformorganizations", func(a k8stesting.Action) (bool, runtime.Object, error) {
+	f := newOrgFixture(t, organization("payments", nil))
+	f.dyn.PrependReactor("delete", "organizations", func(a k8stesting.Action) (bool, runtime.Object, error) {
 		if len(a.(k8stesting.DeleteActionImpl).DeleteOptions.DryRun) == 0 {
 			return true, nil, apierrors.NewServiceUnavailable("webhook unavailable")
 		}
 		return false, nil, nil
 	})
-	text, isErr := f.call(t, ToolDeleteOrganization, map[string]any{"namespace": "org-acme", "name": "payments", "confirm": "org-acme/payments"})
+	text, isErr := f.call(t, ToolDeleteOrganization, map[string]any{"name": "payments", "confirm": "payments"})
 	require.True(t, isErr, text)
-	org := f.get(t, orgGVR, "org-acme", "payments")
+	org := f.get(t, orgGVR, "", "payments")
 	require.NotNil(t, org)
 	assert.NotContains(t, org.GetAnnotations(), organizations.PruneAnnotation)
 }
@@ -1007,29 +1049,31 @@ func TestConnectorURLsAndHeaders(t *testing.T) {
 	}, headers)
 }
 
-// list_organizations lists a parent's organizations, or every parent's; a
-// ServiceAccount that may not list them answers unsupported.
+// list_organizations lists the Organizations with the Agent Platform
+// enabled, by name, and no other; a ServiceAccount that may not list them
+// answers unsupported.
 func TestListOrganizations(t *testing.T) {
-	other := organization("org-other", "billing", nil)
-	f := newOrgFixture(t, organization("org-acme", "payments", nil), other)
+	f := newOrgFixture(t, organization("payments", nil), organization("billing", nil), kaasOrganization("treasury"))
 	names := func(text string) []string {
 		var out []string
 		for _, o := range decode(t, text)["organizations"].([]any) {
-			out = append(out, o.(map[string]any)["parent"].(string)+"/"+o.(map[string]any)["name"].(string))
+			out = append(out, o.(map[string]any)["name"].(string))
 		}
 		return out
 	}
-	text, isErr := f.call(t, ToolListOrganizations, map[string]any{"namespace": "org-acme"})
+	text, isErr := f.call(t, ToolListOrganizations, nil)
 	require.False(t, isErr, text)
-	assert.Equal(t, []string{"org-acme/payments"}, names(text))
-	text, isErr = f.call(t, ToolListOrganizations, nil)
-	require.False(t, isErr, text)
-	assert.Equal(t, []string{"org-acme/payments", "org-other/billing"}, names(text))
+	assert.Equal(t, []string{"billing", "payments"}, names(text))
 
-	f.dyn.PrependReactor("list", "agentplatformorganizations", func(a k8stesting.Action) (bool, runtime.Object, error) {
+	text, isErr = f.call(t, ToolGetOrganization, map[string]any{"name": "treasury"})
+	require.True(t, isErr)
+	assert.True(t, strings.HasPrefix(text, "not_found:"), text)
+	assert.Contains(t, text, "does not have the Agent Platform enabled")
+
+	f.dyn.PrependReactor("list", "organizations", func(a k8stesting.Action) (bool, runtime.Object, error) {
 		return true, nil, apierrors.NewForbidden(orgGVR.GroupResource(), "", errors.New("RBAC: access denied"))
 	})
-	text, isErr = f.call(t, ToolListOrganizations, map[string]any{"namespace": "org-acme"})
+	text, isErr = f.call(t, ToolListOrganizations, nil)
 	require.True(t, isErr)
 	assert.True(t, strings.HasPrefix(text, "unsupported:"), text)
 }
@@ -1038,28 +1082,32 @@ func TestListOrganizations(t *testing.T) {
 // of 1, and the tools report it so. An omitted workerReplicas writes no
 // field; an explicit 0 is written, also over an object without the field.
 func TestWorkerReplicasDefaultIsOneAndAnExplicitZeroIsWritten(t *testing.T) {
-	f := newOrgFixture(t, organization("org-acme", "payments", nil))
+	f := newOrgFixture(t, organization("payments", nil))
+	replicasOf := func() (any, bool) {
+		v, found, _ := unstructured.NestedFieldNoCopy(f.get(t, orgGVR, "", "payments").Object, "spec", "agentPlatform", "workers", "replicas")
+		return v, found
+	}
 
-	text, isErr := f.call(t, ToolGetOrganization, map[string]any{"namespace": "org-acme", "name": "payments"})
+	text, isErr := f.call(t, ToolGetOrganization, map[string]any{"name": "payments"})
 	require.False(t, isErr, text)
 	assert.EqualValues(t, 1, decode(t, text)["workerReplicas"])
 
-	text, isErr = f.call(t, ToolUpdateOrganization, map[string]any{"namespace": "org-acme", "name": "payments", "displayName": "Payments"})
+	text, isErr = f.call(t, ToolUpdateOrganization, map[string]any{"name": "payments", "displayName": "Payments"})
 	require.False(t, isErr, text)
-	_, found, _ := unstructured.NestedFieldNoCopy(f.get(t, orgGVR, "org-acme", "payments").Object, "spec", "workers", "replicas")
+	_, found := replicasOf()
 	assert.False(t, found, "an omitted workerReplicas writes no field")
 
-	text, isErr = f.call(t, ToolUpdateOrganization, map[string]any{"namespace": "org-acme", "name": "payments", "workerReplicas": 0})
+	text, isErr = f.call(t, ToolUpdateOrganization, map[string]any{"name": "payments", "workerReplicas": 0})
 	require.False(t, isErr, text)
 	res := decode(t, text)
 	assert.Equal(t, []any{"workerReplicas"}, res["changed"])
 	assert.EqualValues(t, 1, res["before"].(map[string]any)["workerReplicas"])
 	assert.EqualValues(t, 0, res["after"].(map[string]any)["workerReplicas"])
-	replicas, found, _ := unstructured.NestedFieldNoCopy(f.get(t, orgGVR, "org-acme", "payments").Object, "spec", "workers", "replicas")
+	replicas, found := replicasOf()
 	require.True(t, found, "an explicit 0 is written")
 	assert.EqualValues(t, 0, replicas)
 
-	text, isErr = f.call(t, ToolUpdateOrganization, map[string]any{"namespace": "org-acme", "name": "payments", "workerReplicas": 0})
+	text, isErr = f.call(t, ToolUpdateOrganization, map[string]any{"name": "payments", "workerReplicas": 0})
 	require.False(t, isErr, text)
 	assert.Empty(t, decode(t, text)["changed"], "a stored 0 is no change")
 }
@@ -1068,18 +1116,18 @@ func TestWorkerReplicasDefaultIsOneAndAnExplicitZeroIsWritten(t *testing.T) {
 // object without the field, so it stays when the operator's default
 // changes; a create with an explicit 0 writes 0.
 func TestWorkerReplicasExplicitValuesAreWritten(t *testing.T) {
-	f := newOrgFixture(t, organization("org-acme", "payments", nil))
-	text, isErr := f.call(t, ToolUpdateOrganization, map[string]any{"namespace": "org-acme", "name": "payments", "workerReplicas": 1})
+	f := newOrgFixture(t, organization("payments", nil))
+	text, isErr := f.call(t, ToolUpdateOrganization, map[string]any{"name": "payments", "workerReplicas": 1})
 	require.False(t, isErr, text)
 	assert.Equal(t, []any{"workerReplicas"}, decode(t, text)["changed"])
-	replicas, found, _ := unstructured.NestedFieldNoCopy(f.get(t, orgGVR, "org-acme", "payments").Object, "spec", "workers", "replicas")
+	replicas, found, _ := unstructured.NestedFieldNoCopy(f.get(t, orgGVR, "", "payments").Object, "spec", "agentPlatform", "workers", "replicas")
 	require.True(t, found, "an explicit 1 is written")
 	assert.EqualValues(t, 1, replicas)
 
 	f = newOrgFixture(t)
-	text, isErr = f.call(t, ToolCreateOrganization, map[string]any{"namespace": "org-acme", "name": "payments", "adminGroups": []any{"payments-leads"}, "workerReplicas": 0})
+	text, isErr = f.call(t, ToolCreateOrganization, map[string]any{"name": "payments", "adminGroups": []any{"payments-leads"}, "workerReplicas": 0})
 	require.False(t, isErr, text)
-	replicas, found, _ = unstructured.NestedFieldNoCopy(f.get(t, orgGVR, "org-acme", "payments").Object, "spec", "workers", "replicas")
+	replicas, found, _ = unstructured.NestedFieldNoCopy(f.get(t, orgGVR, "", "payments").Object, "spec", "agentPlatform", "workers", "replicas")
 	require.True(t, found, "a create writes an explicit 0")
 	assert.EqualValues(t, 0, replicas)
 }
@@ -1087,14 +1135,14 @@ func TestWorkerReplicasExplicitValuesAreWritten(t *testing.T) {
 // get_organization answers what a delete erases as far as the caller can
 // read it, and names what it cannot read instead of failing.
 func TestGetOrganizationNamesWhatItCannotRead(t *testing.T) {
-	f := newOrgFixture(t, organization("org-acme", "payments", nil), model("claude", true))
+	f := newOrgFixture(t, organization("payments", nil), model("claude", true))
 	f.dyn.PrependReactor("list", "*", func(a k8stesting.Action) (bool, runtime.Object, error) {
 		if a.GetNamespace() == orgNS && (a.GetResource().Resource == "agents" || a.GetResource().Resource == "rolebindings") {
 			return true, nil, apierrors.NewForbidden(a.GetResource().GroupResource(), "", errors.New("RBAC: access denied"))
 		}
 		return false, nil, nil
 	})
-	text, isErr := f.call(t, ToolGetOrganization, map[string]any{"namespace": "org-acme", "name": "payments"})
+	text, isErr := f.call(t, ToolGetOrganization, map[string]any{"name": "payments"})
 	require.False(t, isErr, text)
 	erases := decode(t, text)["erases"].(map[string]any)
 	assert.Equal(t, []any{"claude"}, erases["models"])
@@ -1118,17 +1166,17 @@ func TestGitOwnedObjectsAreNotWrittenLive(t *testing.T) {
 		"roleRef":  map[string]any{"apiGroup": "rbac.authorization.k8s.io", "kind": "ClusterRole", "name": organizations.RoleEditor},
 		"subjects": []any{map[string]any{"kind": "Group", "name": "payments-team", "apiGroup": "rbac.authorization.k8s.io"}},
 	}}
-	gitOrg := organization("org-acme", "payments", fromGit)
+	gitOrg := organization("payments", fromGit)
 	for name, call := range map[string]struct {
 		tool string
 		args map[string]any
 	}{
-		"change a model":        {ToolSetOrganizationModel, map[string]any{"namespace": orgNS, "name": "claude", "model": "other"}},
-		"move the mark off one": {ToolSetOrganizationModel, map[string]any{"namespace": orgNS, "name": "haiku", "provider": "Anthropic", "model": "m", "default": true}},
-		"delete a model":        {ToolDeleteOrganizationObject, map[string]any{"namespace": orgNS, "kind": "model", "name": "claude"}},
-		"add to a git binding":  {ToolAddOrganizationMember, map[string]any{"namespace": orgNS, "role": "editor", "user": "jane@example.com"}},
-		"remove from one":       {ToolRemoveOrganizationMember, map[string]any{"namespace": orgNS, "group": "payments-team"}},
-		"bind the first admins": {ToolCreateOrganization, map[string]any{"namespace": "org-acme", "name": "payments", "adminGroups": []any{"g"}}},
+		"change a model":          {ToolSetOrganizationModel, map[string]any{"namespace": orgNS, "name": "claude", "model": "other"}},
+		"move the mark off one":   {ToolSetOrganizationModel, map[string]any{"namespace": orgNS, "name": "haiku", "provider": "Anthropic", "model": "m", "default": true}},
+		"delete a model":          {ToolDeleteOrganizationObject, map[string]any{"namespace": orgNS, "kind": "model", "name": "claude"}},
+		"add to a git binding":    {ToolAddOrganizationMember, map[string]any{"namespace": orgNS, "role": "editor", "user": "jane@example.com"}},
+		"remove from one":         {ToolRemoveOrganizationMember, map[string]any{"namespace": orgNS, "group": "payments-team"}},
+		"change the organization": {ToolUpdateOrganization, map[string]any{"name": "payments", "adminGroups": []any{"g"}}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := newOrgFixture(t, gitModel.DeepCopy(), gitEditors.DeepCopy(), gitOrg.DeepCopy())
@@ -1164,123 +1212,6 @@ func TestDeleteOrganizationObject(t *testing.T) {
 	require.True(t, isErr)
 	assert.True(t, strings.HasPrefix(text, "conflict:"), text)
 	assert.NotNil(t, f.get(t, connGVR, orgNS, "muster"))
-}
-
-// parentBinding writes rb into the parent org-acme, as its admins did before
-// the create.
-func (f *orgFixture) parentBinding(t *testing.T, rb rbacv1.RoleBinding) {
-	t.Helper()
-	rb.Namespace = "org-acme"
-	obj, err := runtime.DefaultUnstructuredConverter.ToUnstructured(&rb)
-	require.NoError(t, err)
-	u := &unstructured.Unstructured{Object: obj}
-	u.SetAPIVersion("rbac.authorization.k8s.io/v1")
-	u.SetKind("RoleBinding")
-	_, err = f.dyn.Resource(rbGVR).Namespace("org-acme").Create(t.Context(), u, metav1.CreateOptions{})
-	require.NoError(t, err)
-}
-
-// callerNamed is who the API server authenticates as the subject s of a
-// RoleBinding.
-func callerNamed(s rbacv1.Subject) authenticationv1.UserInfo {
-	switch s.Kind {
-	case rbacv1.GroupKind:
-		return authenticationv1.UserInfo{Username: "carol@example.com", Groups: []string{s.Name}}
-	case rbacv1.ServiceAccountKind:
-		return authenticationv1.UserInfo{Username: "system:serviceaccount:" + s.Namespace + ":" + s.Name}
-	}
-	return authenticationv1.UserInfo{Username: s.Name}
-}
-
-// A caller without a right cluster-wide whose right in the parent comes from
-// a binding agent-platform-operator does not mirror for them is refused
-// before anything is written, dry run or not; one the operator mirrors goes
-// on and binds the first admins. The bindings and their mirrored subjects are
-// the operator's own table, so the two cannot drift: a binding counts when
-// Case.Mirrors (a binding being deleted does not), and then its mirror binds
-// Case.Mirrored.
-func TestCreateOrganizationRefusesBeforeTheWriteWhenTheParentRightIsNotMirrored(t *testing.T) {
-	for _, c := range adminmirror.Cases() {
-		for _, subject := range c.Binding.Subjects {
-			mirrored := c.Mirrors && slices.ContainsFunc(c.Mirrored, func(m rbacv1.Subject) bool { return m.Kind == subject.Kind && m.Name == subject.Name })
-			for _, dryRun := range []bool{false, true} {
-				t.Run(fmt.Sprintf("%s/%s %s/dryRun=%t", c.Binding.Name, subject.Kind, path.Join(subject.Namespace, subject.Name), dryRun), func(t *testing.T) {
-					f := newOrgFixture(t)
-					f.deny = func(ns, _, _, _ string) bool { return ns == "" }
-					f.user = callerNamed(subject)
-					f.parentBinding(t, c.Binding)
-					text, isErr := f.call(t, ToolCreateOrganization, map[string]any{"namespace": "org-acme", "name": "payments", "adminGroups": []any{"payments-leads"}, "dryRun": dryRun})
-
-					if mirrored {
-						require.False(t, isErr, text)
-						assert.Equal(t, true, decode(t, text)["created"], text)
-						assert.Equal(t, !dryRun, f.get(t, rbGVR, orgNS, organizations.FirstAdminsBinding) != nil, "the first admins are bound unless it is a dry run")
-						return
-					}
-					require.True(t, isErr, text)
-					assert.True(t, strings.HasPrefix(text, "forbidden:"), text)
-					assert.Contains(t, text, c.Binding.Name+" (", "the refusal names the binding")
-					if c.IsMirroredAdmin && !c.Mirrors {
-						assert.Contains(t, text, "; it is being deleted, so the operator will not mirror it)", "the refusal says the binding is being deleted")
-					}
-					if strings.HasPrefix(f.user.Username, "system:") {
-						assert.Contains(t, text, "a cluster-admin creates the organization, or binds the right to you cluster-wide", "a system: name is never mirrored")
-					} else {
-						assert.Contains(t, text, "binds "+organizations.RoleOrganizationsAdmin+" to you", "the first way out")
-						assert.Contains(t, text, "or a cluster-admin creates the organization", "the second way out")
-					}
-					assert.Nil(t, f.get(t, orgGVR, "org-acme", "payments"))
-					assert.Empty(t, f.dryRuns.Received(), "not even a dry run is sent")
-				})
-			}
-		}
-	}
-}
-
-// The check beyond the operator's table: a caller whose bindings cannot be
-// read goes on, and the access review in the organization namespace after
-// Ready answers pending when the right has not reached it; a caller with only
-// half the right cluster-wide, and no parent binding, is refused.
-func TestCreateOrganizationGoesOnUnreadCallersAndRefusesHalfARight(t *testing.T) {
-	forbidden := func(a k8stesting.Action) (bool, runtime.Object, error) {
-		return true, nil, apierrors.NewForbidden(a.GetResource().GroupResource(), "", errors.New("RBAC: access denied"))
-	}
-	for _, tc := range []struct {
-		name    string
-		deny    func(ns, verb, resource, name string) bool
-		prepare func(f *orgFixture)
-		refused string
-	}{{
-		name:    "may not list the parent's RoleBindings",
-		deny:    func(ns, _, _, _ string) bool { return ns == "" || ns == orgNS },
-		prepare: func(f *orgFixture) { f.dyn.PrependReactor("list", "rolebindings", forbidden) },
-	}, {
-		name:    "may not ask who it is",
-		deny:    func(ns, _, _, _ string) bool { return ns == "" || ns == orgNS },
-		prepare: func(f *orgFixture) { f.typed.PrependReactor("create", "selfsubjectreviews", forbidden) },
-	}, {
-		name:    "may create RoleBindings cluster-wide but not bind the role",
-		deny:    func(ns, verb, _, _ string) bool { return ns == "" && verb == "bind" },
-		prepare: func(*orgFixture) {},
-		refused: "No RoleBinding in org-acme that agent-platform-operator mirrors names you",
-	}} {
-		t.Run(tc.name, func(t *testing.T) {
-			f := newOrgFixture(t)
-			f.deny = tc.deny
-			tc.prepare(f)
-			text, isErr := f.call(t, ToolCreateOrganization, map[string]any{"namespace": "org-acme", "name": "payments", "adminGroups": []any{"payments-leads"}})
-			if tc.refused != "" {
-				require.True(t, isErr, text)
-				assert.True(t, strings.HasPrefix(text, "forbidden:"), text)
-				assert.Contains(t, text, tc.refused)
-				assert.Nil(t, f.get(t, orgGVR, "org-acme", "payments"))
-				return
-			}
-			require.False(t, isErr, text)
-			assert.Contains(t, decode(t, text)["pending"], "first admins are not bound")
-			assert.NotNil(t, f.get(t, orgGVR, "org-acme", "payments"))
-		})
-	}
 }
 
 // list_organization_connectors marks an agent's muster binding with the

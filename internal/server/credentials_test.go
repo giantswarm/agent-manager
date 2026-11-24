@@ -49,7 +49,7 @@ func TestTheCredentialBodyIsInNoTraceOrLog(t *testing.T) {
 	})
 	kubetest.AnswerDryRuns(dyn)
 	typed := kubefake.NewClientset(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "agents-payments-x7k2q",
-		Labels: map[string]string{apov1alpha1.OrganizationLabel: "payments", apov1alpha1.ParentLabel: "org-acme"}}})
+		Labels: map[string]string{apov1alpha1.OrganizationLabel: "payments"}}})
 	typed.PrependReactor("create", "selfsubjectaccessreviews", func(action k8stesting.Action) (bool, runtime.Object, error) {
 		review := action.(k8stesting.CreateAction).GetObject().(*authorizationv1.SelfSubjectAccessReview)
 		review.Status.Allowed = true

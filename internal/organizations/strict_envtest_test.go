@@ -29,8 +29,7 @@ var (
 
 // TestEnvtestOrganizationWritesAreStrict sends the organization writes to a
 // kube-apiserver that serves kagent's own CRDs (internal/agents/testdata/crds)
-// and the AgentPlatformOrganization CRD (testdata/crds, from
-// agent-platform-operator's chart). A field the schema does not have is
+// and the Organization CRD (testdata/crds, from organization-operator). A field the schema does not have is
 // refused by the dry run, which apply mode and the server-side check of
 // commit mode both run, as an invalid request that names the field; the
 // objects the organization tools write today pass, created and updated.
@@ -55,11 +54,9 @@ func TestEnvtestOrganizationWritesAreStrict(t *testing.T) {
 	require.NoError(t, err)
 	dyn, err := dynamic.NewForConfig(cfg)
 	require.NoError(t, err)
-	const ns, parent = "agents-payments-x7k2q", "org-acme"
-	for _, name := range []string{ns, parent} {
-		_, err = typed.CoreV1().Namespaces().Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: name}}, metav1.CreateOptions{})
-		require.NoError(t, err)
-	}
+	const ns = "agents-payments"
+	_, err = typed.CoreV1().Namespaces().Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns}}, metav1.CreateOptions{})
+	require.NoError(t, err)
 
 	// modelWrite builds a ModelConfig as SetModel does for a new model: the
 	// provider, the model, the endpoint and the Vertex fields, the
@@ -138,8 +135,9 @@ func TestEnvtestOrganizationWritesAreStrict(t *testing.T) {
 	writes["RoleBinding organization-admins"] = write{gvr: rbacGVR, kind: kindRoleBinding, ns: ns, name: "organization-admins",
 		obj: roleBinding(ns, "organization-admins", RoleAdmin, []Subject{{Kind: "Group", Name: "payments-admins"}, {Kind: "ServiceAccount", Name: "deployer", Namespace: ns}})}
 	replicas := int32(2)
-	writes["AgentPlatformOrganization payments"] = write{gvr: GVR, kind: orgKind, ns: parent, name: "payments",
-		obj: (&Service{}).organizationObject(CreateRequest{Parent: parent, Name: "payments", DisplayName: "Payments", Harnesses: []string{"kagent"}, WorkerReplicas: &replicas})}
+	writes["Organization payments"] = write{gvr: GVR, kind: orgKind, name: "payments",
+		obj: (&Service{}).organizationObject(CreateRequest{Name: "payments", DisplayName: "Payments", Harnesses: []string{"kagent"}, WorkerReplicas: &replicas},
+			[]Subject{{Kind: "Group", Name: "payments-admins"}, {Kind: "User", Name: "alice@example.com"}})}
 
 	for what, w := range writes {
 		t.Run(what+" passes strict validation", func(t *testing.T) {

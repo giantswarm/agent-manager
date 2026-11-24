@@ -15,11 +15,20 @@ import (
 	"github.com/giantswarm/agent-manager/internal/kube"
 )
 
-// The member roles, by their short names.
-var memberRoles = map[string]string{"admin": RoleAdmin, "editor": RoleEditor, "user": RoleUser}
+// The organization roles, by their short names: what list_organization_members
+// reads.
+var memberRoles = map[string]string{roleAdminShort: RoleAdmin, "editor": RoleEditor, "user": RoleUser}
+
+// roleAdminShort is the admin role's short name. The admins are not written
+// by the member tools: they are spec.admins of the Organization, which
+// agent-platform-operator binds to RoleAdmin in the organization namespace.
+const roleAdminShort = "admin"
+
+// adminsFrom says where the admins come from and how they change.
+const adminsFrom = "the Organization's spec.admins, which agent-platform-operator binds to " + RoleAdmin + "; update_organization (adminGroups, adminUsers) changes them"
 
 // memberBinding is the RoleBinding add_organization_member writes a role's
-// members into; for admin it is the first admins' binding.
+// members into.
 func memberBinding(role string) string { return "organization-" + role + "s" }
 
 // Member is one subject bound to an organization role.
@@ -31,6 +40,9 @@ type Member struct {
 	Role string `json:"role"`
 	// Binding is the RoleBinding that grants it.
 	Binding string `json:"binding"`
+	// From says where an admin comes from: the Organization, not a binding
+	// the member tools write.
+	From string `json:"from,omitempty"`
 }
 
 // Members is list_organization_members's answer.
@@ -75,7 +87,11 @@ func (s *Service) ListMembers(ctx context.Context, ns string) (*Members, error) 
 	out := &Members{Namespace: ns, Members: []Member{}}
 	for _, b := range bindings {
 		for _, sub := range bindingSubjects(&b.obj) {
-			out.Members = append(out.Members, Member{Kind: sub.Kind, Name: sub.Name, Namespace: sub.Namespace, Role: b.role, Binding: b.obj.GetName()})
+			m := Member{Kind: sub.Kind, Name: sub.Name, Namespace: sub.Namespace, Role: b.role, Binding: b.obj.GetName()}
+			if b.role == roleAdminShort {
+				m.From = adminsFrom
+			}
+			out.Members = append(out.Members, m)
 		}
 	}
 	slices.SortStableFunc(out.Members, func(a, b Member) int {
@@ -107,7 +123,7 @@ type roleBindingOf struct {
 // 4.179.0 on (giantswarm/agent-platform#1369); before, agent-platform:admin
 // alone did.
 func wayMemberRead(ns string) string {
-	return fmt.Sprintf("reading the members needs the right to list RoleBindings in organization namespace %s. Every member role (%s, %s or %s) has it from agent-platform chart 4.179.0 on; before that chart, %s alone. An admin of the organization adds you with one of these roles (add_organization_member), or an organizations-admin (%s) does", ns, RoleUser, RoleEditor, RoleAdmin, RoleAdmin, RoleOrganizationsAdmin)
+	return fmt.Sprintf("reading the members needs the right to list RoleBindings in organization namespace %s. Every member role (%s, %s or %s) has it from agent-platform chart 4.179.0 on; before that chart, %s alone. An admin of the organization adds you as a user or an editor (add_organization_member), or an organizations-admin (%s) makes you an admin (update_organization)", ns, RoleUser, RoleEditor, RoleAdmin, RoleAdmin, RoleOrganizationsAdmin)
 }
 
 // roleBindings are the RoleBindings of ns to the organization's roles; way
@@ -155,7 +171,8 @@ func bindingSubjects(obj *unstructured.Unstructured) []Subject {
 // arguments: exactly one of Group and User.
 type MemberRequest struct {
 	Namespace string
-	// Role is admin, editor or user; on a remove empty means every role.
+	// Role is editor or user; on a remove empty means both. admin is
+	// refused: the admins are the Organization's spec.admins.
 	Role   string
 	Group  string
 	User   string
@@ -176,10 +193,15 @@ func (r MemberRequest) subject() (Subject, error) {
 	return Subject{}, invalidf("group (an identity provider group, preferred: membership then changes in the identity provider) or user is required")
 }
 
+// roleOf is the ClusterRole of a role the member tools write: editor or
+// user. admin is refused with the way to change the admins.
 func roleOf(short string) (string, error) {
+	if short == roleAdminShort {
+		return "", invalidf("the member tools do not give or remove the admin role: the admins are %s", adminsFrom)
+	}
 	role, ok := memberRoles[short]
 	if !ok {
-		return "", invalidf("role %q: admin, editor or user", short)
+		return "", invalidf("role %q: editor or user", short)
 	}
 	return role, nil
 }
@@ -197,6 +219,9 @@ type MemberResult struct {
 	RequestedBy string   `json:"requestedBy,omitempty"`
 	// Commit is the pull request of a change in mode commit.
 	Commit *CommitResult `json:"commit,omitempty"`
+	// Note says what a remove left: an admin role, which comes from the
+	// Organization.
+	Note string `json:"note,omitempty"`
 }
 
 // AddMember binds a group or a user to an organization role as the caller,
@@ -276,11 +301,10 @@ func (s Subject) matches(o Subject) bool {
 	return s.Kind == o.Kind && s.Name == o.Name && s.Namespace == o.Namespace
 }
 
-// RemoveMember unbinds a group or a user from an organization role (every
-// role when Role is empty) as the caller, dry run first: from every
-// RoleBinding of the role that holds it, deleting a binding it empties. The
-// first admins' binding is never emptied: an admission policy keeps it, so a
-// lockout needs a cluster-admin.
+// RemoveMember unbinds a group or a user from an organization role (editor
+// and user when Role is empty) as the caller, dry run first: from every
+// RoleBinding of the role that holds it, deleting a binding it empties. An
+// admin stays: the admins are the Organization's spec.admins.
 func (s *Service) RemoveMember(ctx context.Context, req MemberRequest) (*MemberResult, error) {
 	sub, err := req.subject()
 	if err != nil {
@@ -320,6 +344,10 @@ func (s *Service) RemoveMember(ctx context.Context, req MemberRequest) (*MemberR
 		if !slices.ContainsFunc(bindingSubjects(&b.obj), sub.matches) {
 			continue
 		}
+		if b.role == roleAdminShort {
+			res.Note = fmt.Sprintf("%s %s stays an admin: the admins are %s", sub.Kind, sub.Name, adminsFrom)
+			continue
+		}
 		src, err := cw.source(ctx, &b.obj, kindRoleBinding)
 		if err != nil {
 			return nil, err
@@ -339,11 +367,6 @@ func (s *Service) RemoveMember(ctx context.Context, req MemberRequest) (*MemberR
 		name := b.obj.GetName()
 		what := fmt.Sprintf("RoleBinding %s/%s", ns, name)
 		reason := way
-		if name == FirstAdminsBinding {
-			// Admission keeps the first admins' binding from being deleted
-			// or emptied while the organization lives; its dry run answers.
-			reason = "if " + FirstAdminsBinding + " would lose its last admin: add another admin first (add_organization_member role admin); a lockout is a cluster-admin's to fix; otherwise " + way
-		}
 		if len(kept) == 0 {
 			writes = append(writes, write{gvr: rbacGVR, kind: kindRoleBinding, op: opDelete, ns: ns, name: name, what: what, reason: reason})
 		} else {

@@ -53,11 +53,11 @@ type commitRaceSubject struct {
 
 func commitRaceSubjects() []commitRaceSubject {
 	subjects := []commitRaceSubject{{ // #nosec G101 -- a Secret's name, no credential
-		tool: ToolSetOrganizationModel, secret: "tenant-credential-claude", key: "apiKey", file: paymentsPath + "/modelconfig-claude.yaml", branch: "agent-manager/model-claude-org-acme-payments",
+		tool: ToolSetOrganizationModel, secret: "tenant-credential-claude", key: "apiKey", file: paymentsPath + "/modelconfig-claude.yaml", branch: "agent-manager/model-claude-payments",
 		arguments: map[string]any{"namespace": orgNS, "name": "claude", "provider": "OpenAI", "model": "gpt-5"},
 		other:     model("claude", true),
 	}}
-	branches := map[string]string{ToolSetOrganizationConnector: "agent-manager/connector-gh-org-acme-payments", ToolSetOrganizationEgress: "agent-manager/egress-github-org-acme-payments"}
+	branches := map[string]string{ToolSetOrganizationConnector: "agent-manager/connector-gh-payments", ToolSetOrganizationEgress: "agent-manager/egress-github-payments"}
 	for _, s := range createOnlySubjects() {
 		subjects = append(subjects, commitRaceSubject{tool: s.tool, secret: s.secret, key: "token", file: s.file, branch: branches[s.tool], arguments: s.arguments, other: s.existing()})
 	}
@@ -199,13 +199,13 @@ func TestCommitModeWriteAfterAnEndedPullRequestUsesANewBranch(t *testing.T) {
 // An organization whose object file another writer adds to git after the
 // check and before the branch is cut is refused, with no pull request.
 func TestCommitModeCreateOrganizationRefusesAFileAddedBeforeTheBranch(t *testing.T) {
-	other := []byte("apiVersion: agent-platform.giantswarm.io/v1alpha1\nkind: AgentPlatformOrganization\nmetadata:\n  name: payments\n  namespace: org-acme\n")
+	other := []byte("apiVersion: security.giantswarm.io/v1alpha1\nkind: Organization\nmetadata:\n  name: payments\n")
 	remote := &racingRemote{file: paymentsFile, content: other}
 	fixture, forge := commitFixtureWith(t, nil, func(fake *commit.Fake) organizations.GitHubRemote {
 		remote.Fake = fake
 		return remote
 	})
-	text, failed := fixture.call(t, ToolCreateOrganization, map[string]any{"namespace": "org-acme", "name": "payments", "adminGroups": []any{"payments-leads"}, "mode": "commit"})
+	text, failed := fixture.call(t, ToolCreateOrganization, map[string]any{"name": "payments", "adminGroups": []any{"payments-leads"}, "mode": "commit"})
 	require.True(t, failed, text)
 	require.True(t, strings.HasPrefix(text, "conflict:"), text)
 	require.Contains(t, text, "already and not applied yet")

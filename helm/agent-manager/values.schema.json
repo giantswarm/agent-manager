@@ -71,7 +71,7 @@
                 },
                 "uiURL": {
                     "type": "string",
-                    "description": "HTTPS RFC 6570 URI template with one {operation} expression, for organization and installation models. It uses only {operation}, {parent}, {organization} and {namespace}, in the path or query, never in the host. Installation model links need {namespace} and no {parent} or {organization}, required without tenants.enabled. The UI owns its routes; agent-manager supplies only a non-authorizing operation ID. Requires downstream OAuth."
+                    "description": "HTTPS RFC 6570 URI template with one {operation} expression, for organization and installation models. It uses only {operation}, {organization} and {namespace}, in the path or query, never in the host. Installation model links need {namespace} and no {organization}, required without tenants.enabled. The UI owns its routes; agent-manager supplies only a non-authorizing operation ID. Requires downstream OAuth."
                 }
             }
         },
@@ -936,11 +936,11 @@
                         },
                         "contentPrefix": {
                             "type": "string",
-                            "description": "The directory of the organizations' content paths, `<contentPrefix>/<parent>/<name>`: agent-platform-operator's `commitMode.path` without `{parent}/{name}`."
+                            "description": "The directory of the organizations' content paths, `<contentPrefix>/<name>`: agent-platform-operator's `commitMode.path` without `{name}`."
                         },
                         "objectsPath": {
                             "type": "string",
-                            "description": "The directory the installation's Kustomization applies the organization objects from: `<objectsPath>/<parent>/<name>.yaml`."
+                            "description": "The directory the installation's Kustomization applies the organization objects from: `<objectsPath>/<name>.yaml`."
                         },
                         "platformModelsPath": {
                             "type": "string",
@@ -954,7 +954,7 @@
                 },
                 "enabled": {
                     "type": "boolean",
-                    "description": "Manage the organization namespaces beside `kagent.namespace` and `kagent.additionalNamespaces`, and serve the organization tools (`create_organization`, `add_organization_member`, `set_organization_model`, `list_organizations` and the rest). An organization namespace is labelled `agent-platform.giantswarm.io/organization` (agent-platform-operator keeps it and what it holds); a Giant Swarm Organization's `org-<name>`, labelled `giantswarm.io/organization`, is not one. Everything a request does there runs as the caller. The ServiceAccount only finds the namespaces by label and lists the organizations: the chart grants it `get` and `list` on namespaces and AgentPlatformOrganizations, read-only. Needs `oauth.downstream.enabled` and `flux.helmReleaseServiceAccount`, and the ClusterRole `agent-platform-tenant-flux` the agents' HelmReleases run as there, which the Agent Platform chart renders. An agent in an organization namespace gets no installation skills credential (`skills.gitAuthSecretName`, `skills.mintGitAuthSecret`): it names its own. Read before you enable it: Helm keeps its release Secrets in the namespace and must `list` them, so `agent-platform-tenant-flux` can read every Secret of an organization namespace. A chart rendered through it can copy such a Secret with Helm `lookup` into an object it renders, overwrite or delete any Secret there, and get the token of any ServiceAccount there. Whoever may create or change a HelmRelease in the namespace can trigger that: the members bound to `agent-platform:editor` or `agent-platform:admin`."
+                    "description": "Manage the organization namespaces beside `kagent.namespace` and `kagent.additionalNamespaces`, and serve the organization tools (`create_organization`, `add_organization_member`, `set_organization_model`, `list_organizations` and the rest). An organization namespace is labelled `agent-platform.giantswarm.io/organization` (agent-platform-operator keeps it and what it holds); a Giant Swarm Organization's `org-<name>`, labelled `giantswarm.io/organization`, is not one. Everything a request does there runs as the caller. The ServiceAccount only finds the namespaces by label and lists the organizations: the chart grants it `get` and `list` on namespaces and Organizations (`security.giantswarm.io`), read-only. Needs `oauth.downstream.enabled` and `flux.helmReleaseServiceAccount`, and the ClusterRole `agent-platform-tenant-flux` the agents' HelmReleases run as there, which the Agent Platform chart renders. An agent in an organization namespace gets no installation skills credential (`skills.gitAuthSecretName`, `skills.mintGitAuthSecret`): it names its own. Read before you enable it: Helm keeps its release Secrets in the namespace and must `list` them, so `agent-platform-tenant-flux` can read every Secret of an organization namespace. A chart rendered through it can copy such a Secret with Helm `lookup` into an object it renders, overwrite or delete any Secret there, and get the token of any ServiceAccount there. Whoever may create or change a HelmRelease in the namespace can trigger that: the members bound to `agent-platform:editor` or `agent-platform:admin`."
                 }
             }
         },

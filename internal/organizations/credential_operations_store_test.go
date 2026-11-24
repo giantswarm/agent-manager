@@ -33,7 +33,7 @@ func TestCredentialOperationMetadataExpires(t *testing.T) {
 }
 
 func TestCredentialUIURLHasAFixedOrigin(t *testing.T) {
-	require.NoError(t, ValidateCredentialUIURL("https://portal.example.com/organizations/gazelle/{parent}/{organization}/credentials?operation={operation}"))
+	require.NoError(t, ValidateCredentialUIURL("https://portal.example.com/organizations/gazelle/{organization}/credentials?operation={operation}"))
 	for _, value := range []string{"http://portal.example.com/?operation={operation}", "https://{operation}.example.com/", "https://portal.example.com/#operation={operation}", "https://user:password@portal.example.com/?operation={operation}", "https://portal.example.com/{unknown}?operation={operation}", "https://portal.example.com/"} {
 		require.Error(t, ValidateCredentialUIURL(value))
 	}
@@ -42,7 +42,7 @@ func TestCredentialUIURLHasAFixedOrigin(t *testing.T) {
 func TestCredentialUIURLIsAnRFC6570Template(t *testing.T) {
 	for _, value := range []string{
 		"https://portal.example.com/credentials{?operation}",
-		"https://portal.example.com/organizations/{parent}/{organization}/credentials{?operation}",
+		"https://portal.example.com/organizations/{organization}/credentials{?operation}",
 	} {
 		require.NoError(t, ValidateCredentialUIURL(value), value)
 	}
@@ -55,7 +55,7 @@ func TestCredentialUIURLIsAnRFC6570Template(t *testing.T) {
 		require.Error(t, ValidateCredentialUIURL(value), value)
 	}
 
-	tpl, err := uritemplate.New("https://portal.example.com/{parent}/credentials{?operation}")
+	tpl, err := uritemplate.New("https://portal.example.com/{organization}/credentials{?operation}")
 	require.NoError(t, err)
 	link, err := expandCredentialUIURL(tpl, "op/1&x=2", "org a", "b")
 	require.NoError(t, err)

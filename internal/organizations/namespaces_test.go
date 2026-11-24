@@ -28,7 +28,7 @@ func TestNamesAreTheOrganizationNamespacesOnly(t *testing.T) {
 		}
 		return n
 	}
-	org := map[string]string{apov1alpha1.OrganizationLabel: "payments", apov1alpha1.ParentLabel: "org-acme"}
+	org := map[string]string{apov1alpha1.OrganizationLabel: "payments"}
 	gone := metav1.NewTime(time.Now())
 	finder := NewNamespaces(kubefake.NewClientset(
 		ns("agents-payments-x7k2q", org, nil),
@@ -45,7 +45,7 @@ func TestNamesAreTheOrganizationNamespacesOnly(t *testing.T) {
 	got, ok, err := finder.Get(t.Context(), "agents-payments-x7k2q")
 	require.NoError(t, err)
 	require.True(t, ok)
-	assert.Equal(t, Namespace{Name: "agents-payments-x7k2q", Organization: "payments", Parent: "org-acme"}, got)
+	assert.Equal(t, Namespace{Name: "agents-payments-x7k2q", Organization: "payments"}, got)
 	for _, name := range []string{"org-acme", "kagent", "plain", "agents-gone-a1b2c", "missing"} {
 		_, ok, err = finder.Get(t.Context(), name)
 		require.NoError(t, err)
@@ -77,7 +77,7 @@ func cachedFinder(t *testing.T, objs ...runtime.Object) (*Namespaces, *kubefake.
 }
 
 func orgNamespace(name, organization string) *corev1.Namespace {
-	return &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: name, Labels: map[string]string{apov1alpha1.OrganizationLabel: organization, apov1alpha1.ParentLabel: "org-acme"}}}
+	return &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: name, Labels: map[string]string{apov1alpha1.OrganizationLabel: organization}}}
 }
 
 // A burst of concurrent organization and agent tool calls lists the
@@ -90,7 +90,7 @@ func TestABurstListsTheNamespacesOnce(t *testing.T) {
 			names, err := finder.Names(t.Context())
 			assert.NoError(t, err)
 			assert.Equal(t, []string{"agents-payments-x7k2q"}, names)
-			got, ok, err := finder.Find(t.Context(), "org-acme", "payments")
+			got, ok, err := finder.Find(t.Context(), "payments")
 			assert.NoError(t, err)
 			assert.True(t, ok)
 			assert.Equal(t, "agents-payments-x7k2q", got.Name)
@@ -117,12 +117,12 @@ func TestANewNamespaceIsFoundAtOnce(t *testing.T) {
 	holds, err := finder.Holds(t.Context(), "agents-billing-a1b2c")
 	require.NoError(t, err)
 	assert.True(t, holds)
-	got, ok, err := finder.Find(t.Context(), "org-acme", "billing")
+	got, ok, err := finder.Find(t.Context(), "billing")
 	require.NoError(t, err)
 	require.True(t, ok)
-	assert.Equal(t, Namespace{Name: "agents-billing-a1b2c", Organization: "billing", Parent: "org-acme"}, got)
-	// A pair that can be no label value selects nothing, and is no error.
-	_, ok, err = finder.Find(t.Context(), "org-acme", "not a label value")
+	assert.Equal(t, Namespace{Name: "agents-billing-a1b2c", Organization: "billing"}, got)
+	// A name that can be no label value selects nothing, and is no error.
+	_, ok, err = finder.Find(t.Context(), "not a label value")
 	require.NoError(t, err)
 	assert.False(t, ok)
 

@@ -10,9 +10,9 @@ Model operations also accept the configured installation namespace, requiring
 cluster-admin authorization again when an operation is read or saved. Its target
 declares `scope: platform`, without a synthetic organization. Connector and egress
 operations remain organization-scoped. Installation models require
-`credentials.uiURL` with a `{namespace}` expression and no `{parent}` or
-`{organization}`: an installation model has neither, so they would leave empty
-path segments in its link. OAuth and downstream authorization are
+`credentials.uiURL` with a `{namespace}` expression and no `{organization}`:
+an installation model has none, so it would leave an empty path segment in
+its link. OAuth and downstream authorization are
 required. Without tenancy the template must be such a template, and the form and
 model tools work for installation models only. Tenant management tools stay
 disabled, and organization discovery is empty.
@@ -113,8 +113,8 @@ credentials:
 
 The template is an [RFC 6570](https://www.rfc-editor.org/rfc/rfc6570) URI
 template. One `{operation}` expression is required in the path or query
-(`{?operation}` works too). `{parent}`, `{organization}` and `{namespace}` are optional, but installation
-model links need `{namespace}` and no `{parent}` or `{organization}`, and
+(`{?operation}` works too). `{organization}` and `{namespace}` are optional, but installation
+model links need `{namespace}` and no `{organization}`, and
 without tenancy such a template is required; the scheme and host are fixed,
 and no other variable is accepted. The chart refuses the same templates as the
 server. Routes and the
@@ -288,7 +288,7 @@ to date. When another commit added the identical files and their
 kustomization entries before the change was planned, so that Git already
 carries the whole change, the create is refused the same way, and no branch
 is cut. This holds for every commit-mode create, the organization's own
-object and first admins included (see
+object included (see
 [repository requirements](organizations-commit-mode.md)).
 The receipt's credential state `committed` means a PR exists, not that Flux has
 applied it. See [repository requirements](organizations-commit-mode.md).

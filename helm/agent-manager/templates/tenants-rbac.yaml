@@ -3,9 +3,9 @@ What tenants.enabled needs besides the caller's own RBAC.
 
 agent-manager manages the organization namespaces beside the configured ones
 and serves the organization tools, all as the caller. Its ServiceAccount only
-finds the organization namespaces and the AgentPlatformOrganizations: RBAC
-cannot narrow a list by label or by the caller, so it may get and list every
-namespace and every AgentPlatformOrganization, read-only, and keeps the
+finds the organization namespaces and the Organizations (security.giantswarm.io,
+cluster-scoped): RBAC cannot narrow a list by label or by the caller, so it
+may get and list every namespace and every Organization, read-only, and keeps the
 namespaces labelled agent-platform.giantswarm.io/organization.
 list_organizations then answers only what SelfSubjectAccessReviews as the
 caller allow. It writes nothing, binds nothing and reads no Secret:
@@ -31,8 +31,8 @@ rules:
   - apiGroups: [""]
     resources: ["namespaces"]
     verbs: ["get", "list"]
-  - apiGroups: ["agent-platform.giantswarm.io"]
-    resources: ["agentplatformorganizations"]
+  - apiGroups: ["security.giantswarm.io"]
+    resources: ["organizations"]
     verbs: ["get", "list"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1

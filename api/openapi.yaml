@@ -553,17 +553,12 @@ paths:
         "400": { $ref: "#/components/responses/Error" }
         "401": { $ref: "#/components/responses/Error" }
         "501": { $ref: "#/components/responses/Error" }
-  /api/v1/organizations/{parent}/{organization}/credentials/{secret}:
+  /api/v1/organizations/{organization}/credentials/{secret}:
     parameters:
-      - name: parent
-        in: path
-        required: true
-        description: The parent namespace of the AgentPlatformOrganization, e.g. org-acme
-        schema: { type: string }
       - name: organization
         in: path
         required: true
-        description: The AgentPlatformOrganization's name
+        description: The organization's name, the name of its Organization (security.giantswarm.io)
         schema: { type: string }
       - name: secret
         in: path
@@ -1609,7 +1604,6 @@ components:
       type: object
       properties:
         namespace: { type: string, description: The organization namespace }
-        parent: { type: string }
         organization: { type: string }
         secret: { type: string }
         references: { type: array, items: { $ref: "#/components/schemas/CredentialReference" } }
@@ -1628,7 +1622,6 @@ components:
           properties:
             namespace: { type: string }
             scope: { type: string, enum: [platform], description: "Explicit installation model target; absent for an organization" }
-            parent: { type: string }
             organization: { type: string }
         changes:
           type: array

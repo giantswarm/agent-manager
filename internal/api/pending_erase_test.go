@@ -28,18 +28,18 @@ func orphaned(t *testing.T, org *unstructured.Unstructured, reason string) {
 // pendingErase is payments in Pending erase: its delete pull request merged.
 func pendingErase(t *testing.T, labels map[string]string) *unstructured.Unstructured {
 	t.Helper()
-	org := organization("org-acme", "payments", labels)
+	org := organization("payments", labels)
 	orphaned(t, org, apov1alpha1.ReasonDeleteMerged)
 	return org
 }
 
 // beingErased is payments deleted, its finalizer still on.
 func beingErased() *unstructured.Unstructured {
-	org := organization("org-acme", "payments", nil)
+	org := organization("payments", nil)
 	now := metav1.Now()
 	org.SetDeletionTimestamp(&now)
 	org.SetFinalizers([]string{apov1alpha1.Finalizer})
-	_ = unstructured.SetNestedField(org.Object, "DeletingNamespace", "status", "erasureStep")
+	_ = unstructured.SetNestedField(org.Object, "Namespace", "status", "agentPlatform", "erasureStep")
 	return org
 }
 
@@ -76,9 +76,9 @@ func TestWritesToAnOrganizationInPendingEraseAreRefused(t *testing.T) {
 		org      func(t *testing.T, labels map[string]string) *unstructured.Unstructured
 		contains []string
 	}{
-		"pending erase": {pendingErase, []string{"Pending erase", "DeleteMerged", "Erase now", `confirm "org-acme/payments"`, "restore its file"}},
+		"pending erase": {pendingErase, []string{"Pending erase", "DeleteMerged", "Erase now", `confirm "payments"`, "restore its file"}},
 		"being erased": {func(*testing.T, map[string]string) *unstructured.Unstructured { return beingErased() },
-			[]string{"being erased", "DeletingNamespace"}},
+			[]string{"being erased", "(Namespace)"}},
 	}
 	for state, s := range states {
 		for kind, w := range oneWriteOfEachKind {
@@ -99,7 +99,7 @@ func TestWritesToAnOrganizationInPendingEraseAreRefused(t *testing.T) {
 					text, isErr := f.call(t, w.tool, args)
 					require.True(t, isErr, text)
 					assert.True(t, strings.HasPrefix(text, "conflict:"), text)
-					assert.Contains(t, text, "organization org-acme/payments")
+					assert.Contains(t, text, "organization payments")
 					for _, c := range s.contains {
 						assert.Contains(t, text, c)
 					}
@@ -151,7 +151,7 @@ func TestACallerWithoutRightsIsNotToldThePendingErase(t *testing.T) {
 // Orphaned for another reason than a merged delete is not Pending erase:
 // the write goes on.
 func TestAnOrganizationMissingFromGitIsStillWritten(t *testing.T) {
-	org := organization("org-acme", "payments", nil)
+	org := organization("payments", nil)
 	orphaned(t, org, "MissingFromGit")
 	f := newOrgFixture(t, org)
 	text, isErr := f.call(t, ToolAddOrganizationMember, map[string]any{"namespace": orgNS, "role": "editor", "group": "payments-team"})
@@ -163,14 +163,14 @@ func TestAnOrganizationMissingFromGitIsStillWritten(t *testing.T) {
 // still erases.
 func TestPendingEraseKeepsReadsAndEraseNow(t *testing.T) {
 	f, fake := gitOrganization(t)
-	text, isErr := f.call(t, ToolDeleteOrganization, map[string]any{"namespace": "org-acme", "name": "payments", "mode": "commit"})
+	text, isErr := f.call(t, ToolDeleteOrganization, map[string]any{"name": "payments", "mode": "commit"})
 	require.False(t, isErr, text)
 	require.Len(t, fake.PullRequests(), 1)
 	require.NoError(t, fake.Merge(context.Background(), fake.PullRequests()[0].PullRequest))
 	// The operator reports the merged delete.
-	live := f.get(t, orgGVR, "org-acme", "payments")
+	live := f.get(t, orgGVR, "", "payments")
 	orphaned(t, live, apov1alpha1.ReasonDeleteMerged)
-	_, err := f.dyn.Resource(orgGVR).Namespace("org-acme").UpdateStatus(t.Context(), live, metav1.UpdateOptions{})
+	_, err := f.dyn.Resource(orgGVR).UpdateStatus(t.Context(), live, metav1.UpdateOptions{})
 	require.NoError(t, err)
 
 	text, isErr = f.call(t, ToolSetOrganizationModel, map[string]any{"namespace": orgNS, "name": "haiku", "provider": "Anthropic", "model": "claude-haiku", "mode": "commit"})
@@ -182,7 +182,7 @@ func TestPendingEraseKeepsReadsAndEraseNow(t *testing.T) {
 		tool string
 		args map[string]any
 	}{
-		{ToolGetOrganization, map[string]any{"namespace": "org-acme", "name": "payments"}},
+		{ToolGetOrganization, map[string]any{"name": "payments"}},
 		{ToolListOrganizationMembers, map[string]any{"namespace": orgNS}},
 		{ToolListOrganizationConnector, map[string]any{"namespace": orgNS}},
 	} {
@@ -190,10 +190,10 @@ func TestPendingEraseKeepsReadsAndEraseNow(t *testing.T) {
 		require.False(t, isErr, "%s: %s", read.tool, text)
 	}
 
-	text, isErr = f.call(t, ToolDeleteOrganization, map[string]any{"namespace": "org-acme", "name": "payments", "mode": "commit", "confirm": "org-acme/payments"})
+	text, isErr = f.call(t, ToolDeleteOrganization, map[string]any{"name": "payments", "mode": "commit", "confirm": "payments"})
 	require.False(t, isErr, text)
 	assert.Equal(t, true, decode(t, text)["deleted"])
-	assert.Nil(t, f.get(t, orgGVR, "org-acme", "payments"))
+	assert.Nil(t, f.get(t, orgGVR, "", "payments"))
 }
 
 // update_organization refuses an organization in Pending erase, or one being
@@ -205,9 +205,9 @@ func TestUpdateOrganizationInPendingEraseIsRefused(t *testing.T) {
 		org      func(t *testing.T, labels map[string]string) *unstructured.Unstructured
 		contains []string
 	}{
-		"pending erase": {pendingErase, []string{"Pending erase", "DeleteMerged", "Erase now", `confirm "org-acme/payments"`, "restore its file", "namespace " + orgNS}},
+		"pending erase": {pendingErase, []string{"Pending erase", "DeleteMerged", "Erase now", `confirm "payments"`, "restore its file", "namespace " + orgNS}},
 		"being erased": {func(*testing.T, map[string]string) *unstructured.Unstructured { return beingErased() },
-			[]string{"being erased", "DeletingNamespace"}},
+			[]string{"being erased", "(Namespace)"}},
 	}
 	for state, s := range states {
 		for _, mode := range []string{"apply", "commit"} {
@@ -220,10 +220,10 @@ func TestUpdateOrganizationInPendingEraseIsRefused(t *testing.T) {
 				} else {
 					f = newOrgFixture(t, s.org(t, nil))
 				}
-				text, isErr := f.call(t, ToolUpdateOrganization, map[string]any{"namespace": "org-acme", "name": "payments", "displayName": "Payments", "mode": mode})
+				text, isErr := f.call(t, ToolUpdateOrganization, map[string]any{"name": "payments", "displayName": "Payments", "mode": mode})
 				require.True(t, isErr, text)
 				assert.True(t, strings.HasPrefix(text, "conflict:"), text)
-				assert.Contains(t, text, "organization org-acme/payments")
+				assert.Contains(t, text, "organization payments")
 				for _, c := range s.contains {
 					assert.Contains(t, text, c)
 				}
@@ -241,10 +241,10 @@ func TestUpdateOrganizationInPendingEraseIsRefused(t *testing.T) {
 // update_organization, not its Pending erase.
 func TestUpdateOrganizationWithoutRightsIsNotToldThePendingErase(t *testing.T) {
 	f := newOrgFixture(t, pendingErase(t, nil))
-	f.dyn.PrependReactor("get", "agentplatformorganizations", func(a k8stesting.Action) (bool, runtime.Object, error) {
+	f.dyn.PrependReactor("get", "organizations", func(a k8stesting.Action) (bool, runtime.Object, error) {
 		return true, nil, apierrors.NewForbidden(a.GetResource().GroupResource(), "payments", errors.New("RBAC: access denied"))
 	})
-	text, isErr := f.call(t, ToolUpdateOrganization, map[string]any{"namespace": "org-acme", "name": "payments", "displayName": "Payments"})
+	text, isErr := f.call(t, ToolUpdateOrganization, map[string]any{"name": "payments", "displayName": "Payments"})
 	require.True(t, isErr, text)
 	assert.True(t, strings.HasPrefix(text, "forbidden:"), text)
 	assert.NotContains(t, text, "Pending erase")
@@ -254,10 +254,10 @@ func TestUpdateOrganizationWithoutRightsIsNotToldThePendingErase(t *testing.T) {
 // Orphaned for another reason than a merged delete is not Pending erase:
 // update_organization goes on.
 func TestUpdateOrganizationMissingFromGitIsStillWritten(t *testing.T) {
-	org := organization("org-acme", "payments", nil)
+	org := organization("payments", nil)
 	orphaned(t, org, "MissingFromGit")
 	f := newOrgFixture(t, org)
-	text, isErr := f.call(t, ToolUpdateOrganization, map[string]any{"namespace": "org-acme", "name": "payments", "displayName": "Payments"})
+	text, isErr := f.call(t, ToolUpdateOrganization, map[string]any{"name": "payments", "displayName": "Payments"})
 	require.False(t, isErr, text)
 	assert.Equal(t, []any{"displayName"}, decode(t, text)["changed"])
 }

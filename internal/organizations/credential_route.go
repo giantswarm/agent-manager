@@ -39,7 +39,6 @@ type CredentialReference struct {
 // credential Secret, as the caller can read them.
 type CredentialUse struct {
 	Namespace    string                `json:"namespace"`
-	Parent       string                `json:"parent"`
 	Organization string                `json:"organization"`
 	Secret       string                `json:"secret"`
 	References   []CredentialReference `json:"references"`
@@ -48,19 +47,19 @@ type CredentialUse struct {
 	Mode string `json:"mode,omitempty"`
 }
 
-func (s *Service) orgNamespace(ctx context.Context, parent, organization string) (Namespace, error) {
+func (s *Service) orgNamespace(ctx context.Context, organization string) (Namespace, error) {
 	if s.cfg.Namespaces == nil {
 		return Namespace{}, fmt.Errorf("%w: organization management is disabled", agents.ErrUnsupported)
 	}
-	if parent == "" || organization == "" {
-		return Namespace{}, invalidf("parent and organization are required")
+	if organization == "" {
+		return Namespace{}, invalidf("organization is required")
 	}
-	org, ok, err := s.cfg.Namespaces.Find(ctx, parent, organization)
+	org, ok, err := s.cfg.Namespaces.Find(ctx, organization)
 	if err != nil {
 		return Namespace{}, fmt.Errorf("%w: %v", agents.ErrUnsupported, err)
 	}
 	if !ok {
-		return Namespace{}, fmt.Errorf("%w: organization %s/%s has no organization namespace", agents.ErrNotFound, parent, organization)
+		return Namespace{}, fmt.Errorf("%w: organization %s has no organization namespace", agents.ErrNotFound, organization)
 	}
 	return org, nil
 }
@@ -168,15 +167,15 @@ func checkSecretName(secret string) error {
 }
 
 // CredentialReferences lists, as the caller, the objects of the
-// organization parent/organization that name secret, and for an
+// organization that name secret, and for an
 // EgressPolicy the origins it sends the value to: what the credential form
 // shows before it accepts a value. kind and name, when given, are the
 // object that asked; Mode then says how a write for it lands.
-func (s *Service) CredentialReferences(ctx context.Context, parent, organization, secret, kind, name string) (*CredentialUse, error) {
+func (s *Service) CredentialReferences(ctx context.Context, organization, secret, kind, name string) (*CredentialUse, error) {
 	if err := checkSecretName(secret); err != nil {
 		return nil, err
 	}
-	org, err := s.orgNamespace(ctx, parent, organization)
+	org, err := s.orgNamespace(ctx, organization)
 	if err != nil {
 		return nil, err
 	}
@@ -188,7 +187,7 @@ func (s *Service) CredentialReferences(ctx context.Context, parent, organization
 	if err != nil {
 		return nil, err
 	}
-	out := &CredentialUse{Namespace: org.Name, Parent: org.Parent, Organization: org.Organization, Secret: secret, References: refs}
+	out := &CredentialUse{Namespace: org.Name, Organization: org.Organization, Secret: secret, References: refs}
 	if kind != "" && name != "" {
 		if !slices.Contains(credentialKinds, kind) {
 			return nil, invalidf("kind %q: %s", kind, strings.Join(credentialKinds, ", "))

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	apov1alpha1 "github.com/giantswarm/agent-platform-operator/api/v1alpha1"
+	orgv1alpha1 "github.com/giantswarm/organization-operator/api/v1alpha1"
 	"golang.org/x/sync/singleflight"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -35,14 +36,12 @@ type Namespace struct {
 	Scope string `json:"scope,omitempty"`
 	// Name is the namespace.
 	Name string `json:"namespace"`
-	// Organization and Parent name its AgentPlatformOrganization
-	// (Parent/Organization).
+	// Organization names its Organization (security.giantswarm.io).
 	Organization string `json:"organization"`
-	Parent       string `json:"parent"`
 }
 
-// Namespaces finds the organization namespaces and the
-// AgentPlatformOrganizations with agent-manager's own ServiceAccount, which
+// Namespaces finds the organization namespaces and the Organizations with
+// agent-manager's own ServiceAccount, which
 // may list both read-only: RBAC cannot narrow a list by label or by the
 // caller, so it reads them all. Nothing it answers grants anything: what a
 // caller may see of them, and do with them, is asked as the caller.
@@ -59,40 +58,41 @@ type Namespaces struct {
 	at     time.Time
 }
 
-// NewNamespaces finds organization namespaces with typed and
-// AgentPlatformOrganizations with dyn, the ServiceAccount's clients.
+// NewNamespaces finds organization namespaces with typed and Organizations
+// with dyn, the ServiceAccount's clients.
 // platform (kagent.namespace) is never an organization namespace.
 func NewNamespaces(typed kubernetes.Interface, dyn dynamic.Interface, platform string) *Namespaces {
 	return &Namespaces{typed: typed, dyn: dyn, platform: platform, now: time.Now}
 }
 
-// Organizations is every AgentPlatformOrganization of parent, or of every
-// namespace when parent is empty.
-func (n *Namespaces) Organizations(ctx context.Context, parent string) ([]apov1alpha1.AgentPlatformOrganization, error) {
-	list, err := n.dyn.Resource(GVR).Namespace(parent).List(ctx, metav1.ListOptions{})
+// Organizations is every Organization that has the Agent Platform enabled.
+func (n *Namespaces) Organizations(ctx context.Context) ([]orgv1alpha1.Organization, error) {
+	list, err := n.dyn.Resource(GVR).List(ctx, metav1.ListOptions{})
 	if err != nil {
-		return nil, fmt.Errorf("list the AgentPlatformOrganizations: %w", err)
+		return nil, fmt.Errorf("list the Organizations: %w", err)
 	}
-	out := make([]apov1alpha1.AgentPlatformOrganization, 0, len(list.Items))
+	out := make([]orgv1alpha1.Organization, 0, len(list.Items))
 	for i := range list.Items {
 		org, err := organizationOf(&list.Items[i])
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, *org)
+		if agentPlatformEnabled(org) {
+			out = append(out, *org)
+		}
 	}
 	return out, nil
 }
 
-// Organization reads the AgentPlatformOrganization parent/name: ok is false
-// when it does not exist.
-func (n *Namespaces) Organization(ctx context.Context, parent, name string) (*apov1alpha1.AgentPlatformOrganization, bool, error) {
-	u, err := n.dyn.Resource(GVR).Namespace(parent).Get(ctx, name, metav1.GetOptions{})
+// Organization reads the Organization name: ok is false when it does not
+// exist.
+func (n *Namespaces) Organization(ctx context.Context, name string) (*orgv1alpha1.Organization, bool, error) {
+	u, err := n.dyn.Resource(GVR).Get(ctx, name, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
 		return nil, false, nil
 	}
 	if err != nil {
-		return nil, false, fmt.Errorf("read AgentPlatformOrganization %s/%s: %w", parent, name, err)
+		return nil, false, fmt.Errorf("read Organization %s: %w", name, err)
 	}
 	org, err := organizationOf(u)
 	if err != nil {
@@ -186,7 +186,7 @@ func (n *Namespaces) of(obj *corev1.Namespace) (Namespace, bool) {
 	if !ok || obj.Name == n.platform || obj.DeletionTimestamp != nil || obj.Status.Phase == corev1.NamespaceTerminating {
 		return Namespace{}, false
 	}
-	return Namespace{Name: obj.Name, Organization: org, Parent: obj.Labels[apov1alpha1.ParentLabel]}, true
+	return Namespace{Name: obj.Name, Organization: org}, true
 }
 
 // Names are the organization namespaces' names: what the agent tools manage
@@ -209,23 +209,23 @@ func (n *Namespaces) Holds(ctx context.Context, name string) (bool, error) {
 	return ok, err
 }
 
-// Find is the organization namespace of the AgentPlatformOrganization
-// parent/organization: ok is false when there is none, or more than one
-// namespace carries the pair. The cached list answers when it holds exactly
-// one; otherwise the pair's own labels are listed from the API server, so a
-// namespace created after the cache filled is found at once.
-func (n *Namespaces) Find(ctx context.Context, parent, organization string) (Namespace, bool, error) {
+// Find is the organization namespace of the Organization organization: ok
+// is false when there is none, or more than one namespace carries its label.
+// The cached list answers when it holds exactly one; otherwise the label is
+// listed from the API server, so a namespace created after the cache filled
+// is found at once.
+func (n *Namespaces) Find(ctx context.Context, organization string) (Namespace, bool, error) {
 	list, err := n.List(ctx)
 	if err != nil {
 		return Namespace{}, false, err
 	}
-	found := withPair(list, parent, organization)
-	if len(found) != 1 && validLabelValues(parent, organization) {
-		fresh, err := n.list(ctx, labels.Set{apov1alpha1.OrganizationLabel: organization, apov1alpha1.ParentLabel: parent}.String())
+	found := withOrganization(list, organization)
+	if len(found) != 1 && len(validation.IsValidLabelValue(organization)) == 0 {
+		fresh, err := n.list(ctx, labels.Set{apov1alpha1.OrganizationLabel: organization}.String())
 		if err != nil {
 			return Namespace{}, false, err
 		}
-		found = withPair(fresh, parent, organization)
+		found = withOrganization(fresh, organization)
 	}
 	if len(found) != 1 {
 		return Namespace{}, false, nil
@@ -233,21 +233,10 @@ func (n *Namespaces) Find(ctx context.Context, parent, organization string) (Nam
 	return found[0], true, nil
 }
 
-// validLabelValues reports whether every value can be a label's value: one
-// that cannot is on no namespace, and the API server refuses a selector of it.
-func validLabelValues(values ...string) bool {
-	for _, v := range values {
-		if len(validation.IsValidLabelValue(v)) > 0 {
-			return false
-		}
-	}
-	return true
-}
-
-func withPair(list []Namespace, parent, organization string) []Namespace {
+func withOrganization(list []Namespace, organization string) []Namespace {
 	var found []Namespace
 	for _, ns := range list {
-		if ns.Parent == parent && ns.Organization == organization {
+		if ns.Organization == organization {
 			found = append(found, ns)
 		}
 	}

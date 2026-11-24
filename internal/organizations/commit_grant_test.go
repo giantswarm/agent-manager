@@ -26,7 +26,7 @@ func TestOrganizationCommitGitHubRefusals(t *testing.T) {
 					remote: remote,
 					gh:     &identity.GitHub{App: "agent-manager"},
 				}
-				_, err := writer.land(t.Context(), []commit.Change{{Location: location, Files: map[string][]byte{"organization.yaml": []byte("kind: AgentPlatformOrganization\n")}}}, []string{"organization.yaml"}, "change", "Change organization", "Change organization")
+				_, err := writer.land(t.Context(), []commit.Change{{Location: location, Files: map[string][]byte{"organization.yaml": []byte("kind: Organization\n")}}}, []string{"organization.yaml"}, "change", "Change organization", "Change organization")
 				if status == http.StatusUnauthorized {
 					var required *agents.GrantRequiredError
 					require.ErrorAs(t, err, &required)

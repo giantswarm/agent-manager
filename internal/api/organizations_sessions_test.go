@@ -80,10 +80,10 @@ func TestTheErasePreviewCountsTheSessions(t *testing.T) {
 			ctrl, conn := kagenttest.New(t)
 			tc.seed(ctrl)
 			f := newOrgFixtureWith(t, func(cfg *organizations.Config) { cfg.Sessions = kagent.NewClient(conn) },
-				organization("org-acme", "payments", nil), orgAgent("review"), orgAgent("triage"))
+				organization("payments", nil), orgAgent("review"), orgAgent("triage"))
 			f.ctx = identity.ContextWithToken(f.ctx, "id-token-of-alice")
 
-			text, isErr := f.call(t, ToolGetOrganization, map[string]any{"namespace": "org-acme", "name": "payments"})
+			text, isErr := f.call(t, ToolGetOrganization, map[string]any{"name": "payments"})
 			require.False(t, isErr, text)
 			erases := decode(t, text)["erases"].(map[string]any)
 
@@ -110,8 +110,8 @@ func TestTheErasePreviewCountsTheSessions(t *testing.T) {
 	}
 
 	t.Run("without an agent runtime target", func(t *testing.T) {
-		f := newOrgFixture(t, organization("org-acme", "payments", nil), orgAgent("review"))
-		text, isErr := f.call(t, ToolGetOrganization, map[string]any{"namespace": "org-acme", "name": "payments"})
+		f := newOrgFixture(t, organization("payments", nil), orgAgent("review"))
+		text, isErr := f.call(t, ToolGetOrganization, map[string]any{"name": "payments"})
 		require.False(t, isErr, text)
 		erases := decode(t, text)["erases"].(map[string]any)
 		assert.Nil(t, erases["sessions"])
@@ -122,10 +122,10 @@ func TestTheErasePreviewCountsTheSessions(t *testing.T) {
 		ctrl, conn := kagenttest.New(t)
 		ctrl.AddSession(orgNS, "review")
 		f := newOrgFixtureWith(t, func(cfg *organizations.Config) { cfg.Sessions = kagent.NewClient(conn) },
-			organization("org-acme", "payments", nil), orgAgent("review"))
+			organization("payments", nil), orgAgent("review"))
 		f.ctx = identity.ContextWithToken(f.ctx, "id-token-of-alice")
 
-		text, isErr := f.call(t, ToolDeleteOrganization, map[string]any{"namespace": "org-acme", "name": "payments"})
+		text, isErr := f.call(t, ToolDeleteOrganization, map[string]any{"name": "payments"})
 		require.False(t, isErr, text)
 		erases := decode(t, text)["erases"].(map[string]any)
 		assert.Equal(t, []any{map[string]any{"agent": "review", "running": float64(1), "stopped": float64(0)}}, erases["sessions"])

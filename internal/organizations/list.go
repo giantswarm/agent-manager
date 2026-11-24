@@ -20,8 +20,8 @@ import (
 // Permissions is what the caller may do with an organization, each the
 // answer of a SelfSubjectAccessReview asked with the caller's own token.
 type Permissions struct {
-	// Manage: update the AgentPlatformOrganization in its parent namespace,
-	// the right of agent-platform:organizations-admin. A failed review
+	// Manage: update the Organization, the right of
+	// agent-platform:organizations-admin. A failed review
 	// answers false: Manage and Member decide whether the organization is
 	// listed at all.
 	Manage bool `json:"manage"`
@@ -45,7 +45,6 @@ type Permissions struct {
 // manages it.
 type Listed struct {
 	Name        string `json:"name"`
-	Parent      string `json:"parent"`
 	DisplayName string `json:"displayName,omitempty"`
 	// Namespace is the organization namespace, once the operator created it.
 	Namespace string     `json:"namespace,omitempty"`
@@ -66,22 +65,22 @@ type Listing struct {
 	None string `json:"none,omitempty"`
 }
 
-// List lists the organizations of parent, or of every parent namespace when
-// parent is empty, that the caller manages or belongs to. agent-manager's
-// ServiceAccount reads the AgentPlatformOrganizations; for each, up to three
+// List lists the organizations, the Organizations with the Agent Platform
+// enabled, that the caller manages or belongs to. agent-manager's
+// ServiceAccount reads the Organizations; for each, up to three
 // SelfSubjectAccessReviews with the caller's own token, run concurrently,
 // decide its Permissions, whether it is listed (manage or member) and what of
 // it: the API server decides on the caller's identity. A review that fails
 // answers no for manage and member, and leaves createAgents out (not known);
 // a refused token fails the call.
-func (s *Service) List(ctx context.Context, parent string) (*Listing, error) {
+func (s *Service) List(ctx context.Context) (*Listing, error) {
 	if s.cfg.Namespaces == nil {
 		if s.cfg.PlatformNamespace == "" {
 			return nil, fmt.Errorf("%w: organization management is not configured", agents.ErrUnsupported)
 		}
 		return &Listing{Organizations: []Listed{}}, nil
 	}
-	objects, err := s.cfg.Namespaces.Organizations(ctx, parent)
+	objects, err := s.cfg.Namespaces.Organizations(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", agents.ErrUnsupported, err)
 	}
@@ -116,10 +115,10 @@ func (s *Service) List(ctx context.Context, parent string) (*Listing, error) {
 	for i := range objects {
 		org, p := &objects[i], &permissions[i]
 		ask(&p.Manage, authorizationv1.ResourceAttributes{
-			Namespace: org.Namespace, Verb: "update", Group: GVR.Group, Resource: GVR.Resource, Name: org.Name,
+			Verb: "update", Group: GVR.Group, Resource: GVR.Resource, Name: org.Name,
 		})
 		// No namespace yet: nothing to belong to or create agents in.
-		if ns := org.Status.Namespace; ns != "" {
+		if ns := namespaceOf(org); ns != "" {
 			ask(&p.Member, authorizationv1.ResourceAttributes{
 				Namespace: ns, Verb: "list", Group: agentsGVR.Group, Resource: agentsGVR.Resource,
 			})
@@ -139,7 +138,7 @@ func (s *Service) List(ctx context.Context, parent string) (*Listing, error) {
 		}
 		summary := s.summary(&objects[i])
 		listed := Listed{
-			Name: summary.Name, Parent: summary.Parent, DisplayName: summary.DisplayName, Namespace: summary.Namespace,
+			Name: summary.Name, DisplayName: summary.DisplayName, Namespace: summary.Namespace,
 			Orphaned: summary.Orphaned, Deleting: summary.Deleting, Permissions: p,
 		}
 		if p.Manage {
@@ -148,7 +147,7 @@ func (s *Service) List(ctx context.Context, parent string) (*Listing, error) {
 		out.Organizations = append(out.Organizations, listed)
 	}
 	slices.SortFunc(out.Organizations, func(a, b Listed) int {
-		return strings.Compare(a.Parent+"/"+a.Name, b.Parent+"/"+b.Name)
+		return strings.Compare(a.Name, b.Name)
 	})
 	if len(out.Organizations) == 0 {
 		out.None = fmt.Sprintf("you manage and belong to no organization: an admin of an organization adds you (add_organization_member), or someone with %s creates one with you as its first admin", RoleOrganizationsAdmin)

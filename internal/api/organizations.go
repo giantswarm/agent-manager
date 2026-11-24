@@ -8,8 +8,8 @@ import (
 	"strconv"
 	"sync"
 
-	apov1alpha1 "github.com/giantswarm/agent-platform-operator/api/v1alpha1"
 	"github.com/giantswarm/mcp-toolkit/tooldesc"
+	orgv1alpha1 "github.com/giantswarm/organization-operator/api/v1alpha1"
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
 
@@ -81,10 +81,9 @@ const (
 )
 
 // The workerReplicas argument of create_organization and update_organization:
-// the operator's default (agent-platform-operator's DefaultWorkerReplicas) and
-// when the workers run.
+// the default of spec.agentPlatform.workers.replicas and when the workers run.
 var (
-	defaultWorkerReplicas           = strconv.Itoa(int(apov1alpha1.DefaultWorkerReplicas))
+	defaultWorkerReplicas           = strconv.Itoa(int(orgv1alpha1.DefaultAgentPlatformWorkerReplicas))
 	workerReplicasRule              = "0 runs none. They run only while the organization has a model and an agent or a session"
 	createWorkerReplicasDescription = "Warm workers of its WorkerPool; omitted means " + defaultWorkerReplicas + ", " + workerReplicasRule
 	updateWorkerReplicasDescription = "Warm workers; omitted keeps the value (none set means " + defaultWorkerReplicas + "), " + workerReplicasRule
@@ -167,9 +166,8 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service, l
 		lifecycle = context.Background()
 	}
 	t := &orgTools{svc: orgs, server: s, lifecycle: lifecycle}
-	parentProp := mcp.WithString(argNamespace, mcp.Required(), mcp.Description("The parent namespace the organization lives in, e.g. org-acme"))
-	orgNameProp := mcp.WithString(argName, mcp.Required(), mcp.Description("The organization's name (at most 50 characters, no dot)"))
-	orgNSProp := mcp.WithString(argNamespace, mcp.Required(), mcp.Description("The organization namespace, e.g. agents-payments-x7k2q (list_organizations, get_organization)"))
+	orgNameProp := mcp.WithString(argName, mcp.Required(), mcp.Description("The organization's name: the name of its Organization (at most 56 characters, no dot)"))
+	orgNSProp := mcp.WithString(argNamespace, mcp.Required(), mcp.Description("The organization namespace, e.g. agents-payments (list_organizations, get_organization)"))
 	modelNSProp := mcp.WithString(argNamespace, mcp.Required(), mcp.Description("Organization namespace, or the configured installation namespace for cluster admins"))
 	dryRun := mcp.WithBoolean(argDryRun, mcp.Description("Check every write with the API server as you and write nothing (default false)"))
 	modeProp := mcp.WithString(argMode, mcp.Enum(agents.ModeApply, agents.ModeCommit), mcp.Description("apply (default): write live as you; refused with gitops_owned for what git applies. commit: dry-run as you, then open a pull request as you"))
@@ -178,36 +176,35 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service, l
 	credSecretDesc := "Secret in the target namespace, by name; organizations need tenant-credential-...; never a value"
 
 	t.addTool(s, mcp.NewTool(ToolListOrganizations,
-		tooldesc.Describe("List the organizations you manage or belong to, of one parent namespace or of all.",
-			"Each with its namespace, Orphaned condition, deleting, and permissions (manage, member, createAgents: create on HelmReleases there, what create_agent needs), asked as you; a missing createAgents is not known. Where you manage it, organization is its summary: harnesses, workers, Ready, DefaultModelConfigured, the last revision Flux applied (lastAppliedRevision) and in mode commit its commit and file (lastAppliedRevisionUrl, lastAppliedFile, lastAppliedFileUrl). none (no organization) says who can add you."),
-		mcp.WithString(argNamespace, mcp.Description("Parent namespace; omit for all")),
+		tooldesc.Describe("List the organizations (Organizations with the Agent Platform) you manage or belong to.",
+			"Each with its namespace, Orphaned condition, deleting, and permissions (manage, member, createAgents: create on HelmReleases there, what create_agent needs), asked as you; a missing createAgents is not known. Where you manage it, organization is its summary (admins, harnesses, workers, Ready, DefaultModelConfigured, the last revision Flux applied (lastAppliedRevision) and in mode commit its commit and file (lastAppliedRevisionUrl, lastAppliedFile, lastAppliedFileUrl)). none says who can add you."),
 		mcp.WithReadOnlyHintAnnotation(true),
 		mcp.WithDestructiveHintAnnotation(false),
 		mcp.WithIdempotentHintAnnotation(false),
 		mcp.WithOpenWorldHintAnnotation(false),
 	), t.run(func(ctx context.Context, req mcp.CallToolRequest) (any, error) {
-		return t.svc.List(ctx, req.GetString(argNamespace, ""))
+		return t.svc.List(ctx)
 	}))
 
 	t.addTool(s, mcp.NewTool(ToolGetOrganization,
 		tooldesc.Describe("Read one organization and what deleting it would erase.",
 			"erases lists, as you can read them in the organization namespace, its agents, HelmReleases, models, connectors, egress policies, credential Secrets (names only), member bindings and snapshot prefix; what you may not read is named in unreadable. sessions counts, per agent and across every person, the running and stopped sessions the erase deletes; when they cannot be listed it is null and sessionsUnavailable says why."),
-		parentProp, orgNameProp,
+		orgNameProp,
 		mcp.WithReadOnlyHintAnnotation(true),
 		mcp.WithDestructiveHintAnnotation(false),
 		mcp.WithIdempotentHintAnnotation(false),
 		mcp.WithOpenWorldHintAnnotation(false),
 	), t.run(func(ctx context.Context, req mcp.CallToolRequest) (any, error) {
-		return t.svc.Get(ctx, req.GetString(argNamespace, ""), req.GetString(argName, ""))
+		return t.svc.Get(ctx, req.GetString(argName, ""))
 	}))
 
 	t.addTool(s, mcp.NewTool(ToolCreateOrganization,
-		tooldesc.Describe("Create an organization as you, then bind its first admins in its namespace.",
-			"Before any write, dry run too, refuses when you may not bind them or your right will not reach the new namespace (it does cluster-wide, or by a parent RoleBinding naming you that the operator mirrors: organizations-admin, or rbac-operator's cluster-admin). Waits for Ready, then writes organization-admins to agent-platform:admin as you. pending: call again with the same arguments. mode commit opens one pull request instead. Prefer a group as admin. Needs agent-platform:organizations-admin in the parent namespace."),
-		parentProp, orgNameProp,
+		tooldesc.Describe("Create an organization as you: an Organization with the Agent Platform enabled and its admins.",
+			"Dry-runs as you first. The admins go in spec.admins: agent-platform-operator creates the organization namespace and binds them to agent-platform:admin there; list_organizations shows the namespace once it reports it. An Organization of that name that exists is refused. mode commit opens one pull request instead. Prefer a group as admin. Needs agent-platform:organizations-admin, bound cluster-wide."),
+		orgNameProp,
 		mcp.WithString(argDisplayName, mcp.Description("Name people see")),
-		mcp.WithArray(argAdminGroups, mcp.Description("First admins: identity provider groups, as the API server sees them (preferred)"), mcp.Items(stringList)),
-		mcp.WithArray(argAdminUsers, mcp.Description("First admins: users, as the API server sees them"), mcp.Items(stringList)),
+		mcp.WithArray(argAdminGroups, mcp.Description("Admins: identity provider groups, as the API server sees them (preferred)"), mcp.Items(stringList)),
+		mcp.WithArray(argAdminUsers, mcp.Description("Admins: users, as the API server sees them"), mcp.Items(stringList)),
 		mcp.WithArray(argHarnesses, mcp.Description("Curated Harnesses the organization gets"), mcp.Items(stringList)),
 		mcp.WithNumber(argWorkerReplicas, mcp.Description(createWorkerReplicasDescription)),
 		dryRun, modeProp,
@@ -217,7 +214,6 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service, l
 		mcp.WithOpenWorldHintAnnotation(false),
 	), t.run(func(ctx context.Context, req mcp.CallToolRequest) (any, error) {
 		var in struct {
-			Namespace      string   `json:"namespace"`
 			Name           string   `json:"name"`
 			DisplayName    string   `json:"displayName"`
 			AdminGroups    []string `json:"adminGroups"`
@@ -230,15 +226,17 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service, l
 		if err := bindArgs(req, &in); err != nil {
 			return nil, err
 		}
-		return t.svc.Create(ctx, organizations.CreateRequest{Parent: in.Namespace, Name: in.Name, DisplayName: in.DisplayName,
+		return t.svc.Create(ctx, organizations.CreateRequest{Name: in.Name, DisplayName: in.DisplayName,
 			Harnesses: in.Harnesses, WorkerReplicas: in.WorkerReplicas, AdminGroups: in.AdminGroups, AdminUsers: in.AdminUsers, DryRun: in.DryRun, Mode: in.Mode})
 	}))
 
 	t.addTool(s, mcp.NewTool(ToolUpdateOrganization,
-		tooldesc.Describe("Change an organization's display name, harnesses or worker replicas as you.",
-			"An omitted field stays; harnesses replaces the whole list; displayName \"\" removes it. Dry-runs as you first. An organization Flux applies from git is changed with mode commit. Needs agent-platform:organizations-admin."),
-		parentProp, orgNameProp,
+		tooldesc.Describe("Change an organization's display name, admins, harnesses or worker replicas as you.",
+			"An omitted field stays; harnesses replaces the whole list, adminGroups the admin groups and adminUsers the admin users ([] removes them); displayName \"\" removes it. Dry-runs as you first. agent-platform-operator follows spec.admins with the admins' binding. An organization Flux applies from git is changed with mode commit. Needs agent-platform:organizations-admin."),
+		orgNameProp,
 		mcp.WithString(argDisplayName, mcp.Description("Name people see")),
+		mcp.WithArray(argAdminGroups, mcp.Description("Admin groups, replacing the ones in spec.admins"), mcp.Items(stringList)),
+		mcp.WithArray(argAdminUsers, mcp.Description("Admin users, replacing the ones in spec.admins"), mcp.Items(stringList)),
 		mcp.WithArray(argHarnesses, mcp.Description("Curated Harnesses the organization gets"), mcp.Items(stringList)),
 		mcp.WithNumber(argWorkerReplicas, mcp.Description(updateWorkerReplicasDescription)),
 		dryRun, modeProp,
@@ -248,9 +246,10 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service, l
 		mcp.WithOpenWorldHintAnnotation(false),
 	), t.run(func(ctx context.Context, req mcp.CallToolRequest) (any, error) {
 		var in struct {
-			Namespace      string    `json:"namespace"`
 			Name           string    `json:"name"`
 			DisplayName    *string   `json:"displayName"`
+			AdminGroups    *[]string `json:"adminGroups"`
+			AdminUsers     *[]string `json:"adminUsers"`
 			Harnesses      *[]string `json:"harnesses"`
 			WorkerReplicas *int32    `json:"workerReplicas"`
 			DryRun         bool      `json:"dryRun"`
@@ -259,28 +258,28 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service, l
 		if err := bindArgs(req, &in); err != nil {
 			return nil, err
 		}
-		return t.svc.Update(ctx, organizations.UpdateRequest{Parent: in.Namespace, Name: in.Name, DisplayName: in.DisplayName,
-			Harnesses: in.Harnesses, WorkerReplicas: in.WorkerReplicas, DryRun: in.DryRun, Mode: in.Mode})
+		return t.svc.Update(ctx, organizations.UpdateRequest{Name: in.Name, DisplayName: in.DisplayName,
+			AdminGroups: in.AdminGroups, AdminUsers: in.AdminUsers, Harnesses: in.Harnesses, WorkerReplicas: in.WorkerReplicas, DryRun: in.DryRun, Mode: in.Mode})
 	}))
 
 	t.addTool(s, mcp.NewTool(ToolDeleteOrganization,
 		tooldesc.Describe("Delete an organization as you, which erases it: its namespace, agents, sessions, snapshots and credentials.",
-			"Without confirm it only answers what would be erased: show that to the person and ask them to type <parent>/<name>, then call again with confirm set to it. Marks the object kustomize.toolkit.fluxcd.io/prune: enabled, the delete intent, then deletes it; the operator erases it. mode commit: without confirm it opens the pull request removing it from git and marks the object; once merged (Pending erase), confirm erases it. Session tombstones stay. Needs agent-platform:organizations-admin."),
-		parentProp, orgNameProp,
-		mcp.WithString(argConfirm, mcp.Description("<parent>/<name>, as the person typed it")),
+			"Without confirm it only answers what would be erased: show that to the person and ask them to type its name, then call again with confirm set to it. Marks the object kustomize.toolkit.fluxcd.io/prune: enabled, the delete intent, then deletes it; the operator erases it. mode commit: without confirm it opens the pull request removing it from git and marks the object; once merged (Pending erase), confirm erases it. Session tombstones stay. Needs agent-platform:organizations-admin."),
+		orgNameProp,
+		mcp.WithString(argConfirm, mcp.Description("The organization's name, as the person typed it")),
 		dryRun, modeProp,
 		mcp.WithReadOnlyHintAnnotation(false),
 		mcp.WithDestructiveHintAnnotation(true),
 		mcp.WithIdempotentHintAnnotation(false),
 		mcp.WithOpenWorldHintAnnotation(false),
 	), t.run(func(ctx context.Context, req mcp.CallToolRequest) (any, error) {
-		return t.svc.Delete(ctx, organizations.DeleteRequest{Parent: req.GetString(argNamespace, ""), Name: req.GetString(argName, ""),
+		return t.svc.Delete(ctx, organizations.DeleteRequest{Name: req.GetString(argName, ""),
 			Confirm: req.GetString(argConfirm, ""), DryRun: req.GetBool(argDryRun, false), Mode: req.GetString(argMode, "")})
 	}))
 
 	t.addTool(s, mcp.NewTool(ToolListOrganizationMembers,
 		tooldesc.Describe("List an organization's members: the groups and people bound to agent-platform:admin, editor or user, groups first.",
-			"Read as you; every member role (user, editor or admin) may read them, from agent-platform chart 4.179.0 on."),
+			"Read as you; every member role (user, editor or admin) may read them, from agent-platform chart 4.179.0 on. An admin's from says it comes from the Organization's spec.admins, which update_organization changes."),
 		orgNSProp,
 		mcp.WithReadOnlyHintAnnotation(true),
 		mcp.WithDestructiveHintAnnotation(false),
@@ -299,27 +298,27 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service, l
 		}
 	}
 	addOpts := append(memberProps(),
-		mcp.WithString(argRole, mcp.Required(), mcp.Description("admin manages members, models and credentials; editor creates agents; user uses them"), mcp.Enum("admin", "editor", "user")),
+		mcp.WithString(argRole, mcp.Required(), mcp.Description("editor creates agents; user uses them. Not admin: the admins are the Organization's spec.admins (update_organization)"), mcp.Enum("editor", "user")),
 		mcp.WithReadOnlyHintAnnotation(false),
 		mcp.WithDestructiveHintAnnotation(false),
 		mcp.WithIdempotentHintAnnotation(true),
 		mcp.WithOpenWorldHintAnnotation(false))
 	t.addTool(s, mcp.NewTool(ToolAddOrganizationMember, append([]mcp.ToolOption{
 		tooldesc.Describe("Add a group or a person to an organization with a role, as you.",
-			"Writes the RoleBinding organization-<role>s (admins: organization-admins), dry run first; a member already holding the role is left as is. Needs agent-platform:admin in the organization, or agent-platform:organizations-admin."),
+			"Writes the RoleBinding organization-<role>s, dry run first; a member already holding the role is left as is. The admin role is refused: the admins are the Organization's spec.admins, changed with update_organization. Needs agent-platform:admin in the organization, or agent-platform:organizations-admin."),
 	}, addOpts...)...), t.run(func(ctx context.Context, req mcp.CallToolRequest) (any, error) {
 		return t.svc.AddMember(ctx, memberRequest(req))
 	}))
 
 	removeOpts := append(memberProps(),
-		mcp.WithString(argRole, mcp.Description("Only this role; omit for every role"), mcp.Enum("admin", "editor", "user")),
+		mcp.WithString(argRole, mcp.Description("Only this role; omit for editor and user"), mcp.Enum("editor", "user")),
 		mcp.WithReadOnlyHintAnnotation(false),
 		mcp.WithDestructiveHintAnnotation(true),
 		mcp.WithIdempotentHintAnnotation(true),
 		mcp.WithOpenWorldHintAnnotation(false))
 	t.addTool(s, mcp.NewTool(ToolRemoveOrganizationMember, append([]mcp.ToolOption{
 		tooldesc.Describe("Remove a group or a person from an organization's roles, as you.",
-			"From every binding of the role that holds them, dry run first; an emptied binding goes, except organization-admins: admission keeps its last admin. Needs agent-platform:admin in the organization."),
+			"From every binding of the role that holds them, dry run first; an emptied binding goes. An admin stays one (note says so): the admins are the Organization's spec.admins, changed with update_organization. Needs agent-platform:admin in the organization."),
 	}, removeOpts...)...), t.run(func(ctx context.Context, req mcp.CallToolRequest) (any, error) {
 		return t.svc.RemoveMember(ctx, memberRequest(req))
 	}))

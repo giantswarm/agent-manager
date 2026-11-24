@@ -26,7 +26,7 @@ func (s *Service) modelNamespace(ctx context.Context, namespace string) (Namespa
 		return s.organization(ctx, namespace)
 	}
 	if !CredentialUIURLServesInstallations(s.cfg.CredentialUIURL) {
-		return Namespace{}, fmt.Errorf("%w: installation model management requires a credential UI URL with a {namespace} expression and no {parent} or {organization}", agents.ErrUnsupported)
+		return Namespace{}, fmt.Errorf("%w: installation model management requires a credential UI URL with a {namespace} expression and no {organization}", agents.ErrUnsupported)
 	}
 	caller, err := s.caller(ctx)
 	if err != nil {
@@ -63,7 +63,7 @@ func writableModelCredential(target Namespace, secret string) error {
 
 func (c *orgCommit) credentialDirectory(target Namespace) (layout.Directory, error) {
 	if target.Scope != scopePlatform {
-		return c.contentDir(target.Parent, target.Organization), nil
+		return c.contentDir(target.Organization), nil
 	}
 	configured := c.cfg.PlatformModelsPath
 	if configured == "" || path.IsAbs(configured) || path.Clean(configured) != configured || configured == "." || configured == ".." || strings.HasPrefix(configured, "../") {

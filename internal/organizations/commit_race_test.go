@@ -79,14 +79,14 @@ func openOf(fake *commit.Fake, object string) []commit.FakePullRequest {
 // with both pull requests.
 func TestTwoWritesOfAnObjectAtTheSameTimeLeaveOnePullRequest(t *testing.T) {
 	repository := commit.Repository{Owner: "acme", Name: "config"}
-	object := branch("model-claude", "org-acme", "payments")
+	object := branch("model-claude", "payments")
 	setup := func(beforeCut bool) (*racingRemote, *orgCommit, []fileChange) {
 		fake := commit.NewFake()
 		fake.AddBranch(repository, "main", map[string][]byte{})
 		remote := &racingRemote{Fake: fake, object: object, beforeCut: beforeCut}
 		cfg := &CommitConfig{Objects: provenance.Location{Repository: repository, Branch: "main", Directory: "organizations"}, ContentPrefix: DefaultContentPrefix}
 		c := &orgCommit{cfg: cfg, remote: remote, gh: &identity.GitHub{Login: "jane"}}
-		changes := []fileChange{{dir: c.objectDir("org-acme"), write: map[string][]byte{c.objectFile("org-acme", "payments"): []byte("kind: AgentPlatformOrganization\n")}}}
+		changes := []fileChange{{dir: c.objectDir(), write: map[string][]byte{c.objectFile("payments"): []byte("kind: Organization\n")}}}
 		return remote, c, changes
 	}
 

@@ -102,7 +102,7 @@ func TestCredentialOptionsWithoutTenants(t *testing.T) {
 		}
 		require.Error(t, validateCredentialOptions(&incomplete), missing)
 	}
-	options.credentialUIURL = "https://portal.example.com/organizations/{parent}/{organization}/{operation}"
+	options.credentialUIURL = "https://portal.example.com/organizations/{organization}/{operation}"
 	require.ErrorContains(t, validateCredentialOptions(&options), "{namespace}")
 	options.multiTenant = true
 	require.NoError(t, validateCredentialOptions(&options))
@@ -121,7 +121,6 @@ func TestCredentialUIURLWithoutTenantsNamesTheNamespace(t *testing.T) {
 		"https://portal.example.com/models/{namespace}/{operation}":              true,
 		"https://portal.example.com/models?namespace={namespace}&op={operation}": true,
 		"https://portal.example.com/models/{operation}":                          false,
-		"https://portal.example.com/models/{parent}/{namespace}/{operation}":     false,
 		"https://portal.example.com/x/{organization}/{namespace}/{operation}":    false,
 		"https://portal.example.com/models{?namespace,operation}":                true,
 		"https://portal.example.com/models/{namespace}":                          false,

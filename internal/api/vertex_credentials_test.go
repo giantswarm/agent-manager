@@ -105,8 +105,8 @@ func TestInstallationDefaultMoveAllowsOwnedAndUnmanagedModels(t *testing.T) {
 func TestInstallationModelsNeedANamespaceInTheCredentialUIURL(t *testing.T) {
 	for name, template := range map[string]string{
 		"no form":           "",
-		"organization form": "https://portal.example.com/organizations/test/{parent}/{organization}/credentials/{operation}",
-		"organization path": "https://portal.example.com/x/{parent}/{organization}/{namespace}/{operation}",
+		"organization form": "https://portal.example.com/organizations/test/{organization}/credentials/{operation}",
+		"organization path": "https://portal.example.com/x/{organization}/{namespace}/{operation}",
 	} {
 		t.Run(name, func(t *testing.T) {
 			fixture := newOrgFixtureWith(t, func(configuration *organizations.Config) {

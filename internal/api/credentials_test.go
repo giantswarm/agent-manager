@@ -46,15 +46,15 @@ func seedSecret(t *testing.T, f *orgFixture, name, key string) {
 // none of them carries a credential Secret's value, whether the Secret is
 // present or replaced.
 func TestNoOrganizationToolAnswerCarriesASecretValue(t *testing.T) {
-	f := newOrgFixture(t, organization("org-acme", "payments", nil), model("claude", true))
+	f := newOrgFixture(t, organization("payments", nil), model("claude", true))
 	seedSecret(t, f, "tenant-credential-claude", "apiKey")
 	seedSecret(t, f, "tenant-credential-gh", "token")
 	args := map[string]map[string]any{
-		ToolListOrganizations:         {"namespace": "org-acme"},
-		ToolGetOrganization:           {"namespace": "org-acme", "name": "payments"},
-		ToolCreateOrganization:        {"namespace": "org-acme", "name": "billing", "adminGroups": []any{"billing-leads"}, "dryRun": true},
-		ToolUpdateOrganization:        {"namespace": "org-acme", "name": "payments", "displayName": "Payments"},
-		ToolDeleteOrganization:        {"namespace": "org-acme", "name": "payments"},
+		ToolListOrganizations:         {},
+		ToolGetOrganization:           {"name": "payments"},
+		ToolCreateOrganization:        {"name": "billing", "adminGroups": []any{"billing-leads"}, "dryRun": true},
+		ToolUpdateOrganization:        {"name": "payments", "displayName": "Payments"},
+		ToolDeleteOrganization:        {"name": "payments"},
 		ToolListOrganizationMembers:   {"namespace": orgNS},
 		ToolAddOrganizationMember:     {"namespace": orgNS, "group": "payments-devs", "role": "editor"},
 		ToolRemoveOrganizationMember:  {"namespace": orgNS, "group": "payments-devs"},

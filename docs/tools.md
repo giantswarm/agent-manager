@@ -41,7 +41,7 @@ Generated from the registered tools (`make tools-doc`); through muster every too
 ```text
 Add a group or a person to an organization with a role, as you.
 
-Writes the RoleBinding organization-<role>s (admins: organization-admins), dry run first; a member already holding the role is left as is. Needs agent-platform:admin in the organization, or agent-platform:organizations-admin.
+Writes the RoleBinding organization-<role>s, dry run first; a member already holding the role is left as is. The admin role is refused: the admins are the Organization's spec.admins, changed with update_organization. Needs agent-platform:admin in the organization, or agent-platform:organizations-admin.
 ```
 
 ```json
@@ -64,13 +64,12 @@ Writes the RoleBinding organization-<role>s (admins: organization-admins), dry r
       "type": "string"
     },
     "namespace": {
-      "description": "The organization namespace, e.g. agents-payments-x7k2q (list_organizations, get_organization)",
+      "description": "The organization namespace, e.g. agents-payments (list_organizations, get_organization)",
       "type": "string"
     },
     "role": {
-      "description": "admin manages members, models and credentials; editor creates agents; user uses them",
+      "description": "editor creates agents; user uses them. Not admin: the admins are the Organization's spec.admins (update_organization)",
       "enum": [
-        "admin",
         "editor",
         "user"
       ],
@@ -328,23 +327,23 @@ name is the DNS-1123 name the person chose, never derived from displayName. mode
 ## `create_organization`
 
 ```text
-Create an organization as you, then bind its first admins in its namespace.
+Create an organization as you: an Organization with the Agent Platform enabled and its admins.
 
-Before any write, dry run too, refuses when you may not bind them or your right will not reach the new namespace (it does cluster-wide, or by a parent RoleBinding naming you that the operator mirrors: organizations-admin, or rbac-operator's cluster-admin). Waits for Ready, then writes organization-admins to agent-platform:admin as you. pending: call again with the same arguments. mode commit opens one pull request instead. Prefer a group as admin. Needs agent-platform:organizations-admin in the parent namespace.
+Dry-runs as you first. The admins go in spec.admins: agent-platform-operator creates the organization namespace and binds them to agent-platform:admin there; list_organizations shows the namespace once it reports it. An Organization of that name that exists is refused. mode commit opens one pull request instead. Prefer a group as admin. Needs agent-platform:organizations-admin, bound cluster-wide.
 ```
 
 ```json
 {
   "properties": {
     "adminGroups": {
-      "description": "First admins: identity provider groups, as the API server sees them (preferred)",
+      "description": "Admins: identity provider groups, as the API server sees them (preferred)",
       "items": {
         "type": "string"
       },
       "type": "array"
     },
     "adminUsers": {
-      "description": "First admins: users, as the API server sees them",
+      "description": "Admins: users, as the API server sees them",
       "items": {
         "type": "string"
       },
@@ -374,11 +373,7 @@ Before any write, dry run too, refuses when you may not bind them or your right 
       "type": "string"
     },
     "name": {
-      "description": "The organization's name (at most 50 characters, no dot)",
-      "type": "string"
-    },
-    "namespace": {
-      "description": "The parent namespace the organization lives in, e.g. org-acme",
+      "description": "The organization's name: the name of its Organization (at most 56 characters, no dot)",
       "type": "string"
     },
     "workerReplicas": {
@@ -387,7 +382,6 @@ Before any write, dry run too, refuses when you may not bind them or your right 
     }
   },
   "required": [
-    "namespace",
     "name"
   ],
   "type": "object"
@@ -462,14 +456,14 @@ The chart's shared OCIRepository goes too when nothing else in the namespace use
 ```text
 Delete an organization as you, which erases it: its namespace, agents, sessions, snapshots and credentials.
 
-Without confirm it only answers what would be erased: show that to the person and ask them to type <parent>/<name>, then call again with confirm set to it. Marks the object kustomize.toolkit.fluxcd.io/prune: enabled, the delete intent, then deletes it; the operator erases it. mode commit: without confirm it opens the pull request removing it from git and marks the object; once merged (Pending erase), confirm erases it. Session tombstones stay. Needs agent-platform:organizations-admin.
+Without confirm it only answers what would be erased: show that to the person and ask them to type its name, then call again with confirm set to it. Marks the object kustomize.toolkit.fluxcd.io/prune: enabled, the delete intent, then deletes it; the operator erases it. mode commit: without confirm it opens the pull request removing it from git and marks the object; once merged (Pending erase), confirm erases it. Session tombstones stay. Needs agent-platform:organizations-admin.
 ```
 
 ```json
 {
   "properties": {
     "confirm": {
-      "description": "<parent>/<name>, as the person typed it",
+      "description": "The organization's name, as the person typed it",
       "type": "string"
     },
     "dryRun": {
@@ -485,16 +479,11 @@ Without confirm it only answers what would be erased: show that to the person an
       "type": "string"
     },
     "name": {
-      "description": "The organization's name (at most 50 characters, no dot)",
-      "type": "string"
-    },
-    "namespace": {
-      "description": "The parent namespace the organization lives in, e.g. org-acme",
+      "description": "The organization's name: the name of its Organization (at most 56 characters, no dot)",
       "type": "string"
     }
   },
   "required": [
-    "namespace",
     "name"
   ],
   "type": "object"
@@ -671,16 +660,11 @@ erases lists, as you can read them in the organization namespace, its agents, He
 {
   "properties": {
     "name": {
-      "description": "The organization's name (at most 50 characters, no dot)",
-      "type": "string"
-    },
-    "namespace": {
-      "description": "The parent namespace the organization lives in, e.g. org-acme",
+      "description": "The organization's name: the name of its Organization (at most 56 characters, no dot)",
       "type": "string"
     }
   },
   "required": [
-    "namespace",
     "name"
   ],
   "type": "object"
@@ -884,7 +868,7 @@ Read as you. A credential in a URL written elsewhere shows as REDACTED. curated 
 {
   "properties": {
     "namespace": {
-      "description": "The organization namespace, e.g. agents-payments-x7k2q (list_organizations, get_organization)",
+      "description": "The organization namespace, e.g. agents-payments (list_organizations, get_organization)",
       "type": "string"
     }
   },
@@ -900,14 +884,14 @@ Read as you. A credential in a URL written elsewhere shows as REDACTED. curated 
 ```text
 List an organization's members: the groups and people bound to agent-platform:admin, editor or user, groups first.
 
-Read as you; every member role (user, editor or admin) may read them, from agent-platform chart 4.179.0 on.
+Read as you; every member role (user, editor or admin) may read them, from agent-platform chart 4.179.0 on. An admin's from says it comes from the Organization's spec.admins, which update_organization changes.
 ```
 
 ```json
 {
   "properties": {
     "namespace": {
-      "description": "The organization namespace, e.g. agents-payments-x7k2q (list_organizations, get_organization)",
+      "description": "The organization namespace, e.g. agents-payments (list_organizations, get_organization)",
       "type": "string"
     }
   },
@@ -921,19 +905,14 @@ Read as you; every member role (user, editor or admin) may read them, from agent
 ## `list_organizations`
 
 ```text
-List the organizations you manage or belong to, of one parent namespace or of all.
+List the organizations (Organizations with the Agent Platform) you manage or belong to.
 
-Each with its namespace, Orphaned condition, deleting, and permissions (manage, member, createAgents: create on HelmReleases there, what create_agent needs), asked as you; a missing createAgents is not known. Where you manage it, organization is its summary: harnesses, workers, Ready, DefaultModelConfigured, the last revision Flux applied (lastAppliedRevision) and in mode commit its commit and file (lastAppliedRevisionUrl, lastAppliedFile, lastAppliedFileUrl). none (no organization) says who can add you.
+Each with its namespace, Orphaned condition, deleting, and permissions (manage, member, createAgents: create on HelmReleases there, what create_agent needs), asked as you; a missing createAgents is not known. Where you manage it, organization is its summary (admins, harnesses, workers, Ready, DefaultModelConfigured, the last revision Flux applied (lastAppliedRevision) and in mode commit its commit and file (lastAppliedRevisionUrl, lastAppliedFile, lastAppliedFileUrl)). none says who can add you.
 ```
 
 ```json
 {
-  "properties": {
-    "namespace": {
-      "description": "Parent namespace; omit for all",
-      "type": "string"
-    }
-  },
+  "properties": {},
   "required": [],
   "type": "object"
 }
@@ -1016,7 +995,7 @@ Per repository: the ref read, the commit it resolved to (what a skills entry pin
 ```text
 Remove a group or a person from an organization's roles, as you.
 
-From every binding of the role that holds them, dry run first; an emptied binding goes, except organization-admins: admission keeps its last admin. Needs agent-platform:admin in the organization.
+From every binding of the role that holds them, dry run first; an emptied binding goes. An admin stays one (note says so): the admins are the Organization's spec.admins, changed with update_organization. Needs agent-platform:admin in the organization.
 ```
 
 ```json
@@ -1039,13 +1018,12 @@ From every binding of the role that holds them, dry run first; an emptied bindin
       "type": "string"
     },
     "namespace": {
-      "description": "The organization namespace, e.g. agents-payments-x7k2q (list_organizations, get_organization)",
+      "description": "The organization namespace, e.g. agents-payments (list_organizations, get_organization)",
       "type": "string"
     },
     "role": {
-      "description": "Only this role; omit for every role",
+      "description": "Only this role; omit for editor and user",
       "enum": [
-        "admin",
         "editor",
         "user"
       ],
@@ -1160,7 +1138,7 @@ A credential field sets the Secret-backed header it names (default: the only one
       "type": "string"
     },
     "namespace": {
-      "description": "The organization namespace, e.g. agents-payments-x7k2q (list_organizations, get_organization)",
+      "description": "The organization namespace, e.g. agents-payments (list_organizations, get_organization)",
       "type": "string"
     },
     "noCredential": {
@@ -1248,7 +1226,7 @@ destinations replaces the whole list. A credentialHeader makes the egress gatewa
       "type": "string"
     },
     "namespace": {
-      "description": "The organization namespace, e.g. agents-payments-x7k2q (list_organizations, get_organization)",
+      "description": "The organization namespace, e.g. agents-payments (list_organizations, get_organization)",
       "type": "string"
     },
     "requestId": {
@@ -1700,14 +1678,28 @@ Lists are skills, plugins, egress and toolset. "" clears a text field back to th
 ## `update_organization`
 
 ```text
-Change an organization's display name, harnesses or worker replicas as you.
+Change an organization's display name, admins, harnesses or worker replicas as you.
 
-An omitted field stays; harnesses replaces the whole list; displayName "" removes it. Dry-runs as you first. An organization Flux applies from git is changed with mode commit. Needs agent-platform:organizations-admin.
+An omitted field stays; harnesses replaces the whole list, adminGroups the admin groups and adminUsers the admin users ([] removes them); displayName "" removes it. Dry-runs as you first. agent-platform-operator follows spec.admins with the admins' binding. An organization Flux applies from git is changed with mode commit. Needs agent-platform:organizations-admin.
 ```
 
 ```json
 {
   "properties": {
+    "adminGroups": {
+      "description": "Admin groups, replacing the ones in spec.admins",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "adminUsers": {
+      "description": "Admin users, replacing the ones in spec.admins",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
     "displayName": {
       "description": "Name people see",
       "type": "string"
@@ -1732,11 +1724,7 @@ An omitted field stays; harnesses replaces the whole list; displayName "" remove
       "type": "string"
     },
     "name": {
-      "description": "The organization's name (at most 50 characters, no dot)",
-      "type": "string"
-    },
-    "namespace": {
-      "description": "The parent namespace the organization lives in, e.g. org-acme",
+      "description": "The organization's name: the name of its Organization (at most 56 characters, no dot)",
       "type": "string"
     },
     "workerReplicas": {
@@ -1745,7 +1733,6 @@ An omitted field stays; harnesses replaces the whole list; displayName "" remove
     }
   },
   "required": [
-    "namespace",
     "name"
   ],
   "type": "object"

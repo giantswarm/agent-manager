@@ -497,7 +497,7 @@ tenants:
   # does there runs as the caller. The ServiceAccount only finds the
   # namespaces by label and lists the organizations:
   # the chart grants it `get` and `list` on namespaces and
-  # AgentPlatformOrganizations, read-only. Needs
+  # Organizations (`security.giantswarm.io`), read-only. Needs
   # `oauth.downstream.enabled` and `flux.helmReleaseServiceAccount`, and the
   # ClusterRole `agent-platform-tenant-flux` the agents' HelmReleases run as
   # there, which the Agent Platform chart renders. An agent in an
@@ -523,21 +523,21 @@ tenants:
     # -- The branch the pull requests go to.
     branch: main
     # -- The directory the installation's Kustomization applies the
-    # organization objects from: `<objectsPath>/<parent>/<name>.yaml`.
+    # organization objects from: `<objectsPath>/<name>.yaml`.
     objectsPath: ""
     # -- The directory of the organizations' content paths,
-    # `<contentPrefix>/<parent>/<name>`: agent-platform-operator's
-    # `commitMode.path` without `{parent}/{name}`.
+    # `<contentPrefix>/<name>`: agent-platform-operator's
+    # `commitMode.path` without `{name}`.
     contentPrefix: agent-platform/organizations
     # -- Trusted repository-relative directory for installation model commits.
     platformModelsPath: ""
 
 credentials:
   # -- HTTPS RFC 6570 URI template with one {operation} expression, for
-  # organization and installation models. It uses only {operation}, {parent},
+  # organization and installation models. It uses only {operation},
   # {organization} and {namespace}, in the path or query, never in the host.
-  # Installation model links need {namespace} and no {parent} or
-  # {organization}, required without tenants.enabled. The UI owns its
+  # Installation model links need {namespace} and no {organization},
+  # required without tenants.enabled. The UI owns its
   # routes; agent-manager supplies only a non-authorizing operation ID.
   # Requires downstream OAuth.
   uiURL: ""

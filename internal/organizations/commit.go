@@ -14,6 +14,7 @@ import (
 	"github.com/giantswarm/gitops-commit/layout"
 	"github.com/giantswarm/gitops-commit/provenance"
 	"github.com/giantswarm/gitops-commit/sopsenc"
+	orgv1alpha1 "github.com/giantswarm/organization-operator/api/v1alpha1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -27,14 +28,14 @@ import (
 // instead of live (epic giantswarm/giantswarm#38891, slice
 // giantswarm/agent-manager#292). The layout:
 //
-//   - the AgentPlatformOrganization object is one file under its parent in
-//     the objects path, <objects>/<parent>/<name>.yaml, which the
-//     installation's Kustomization applies (deletionPolicy: Orphan); the
+//   - the Organization object is one file in the objects path,
+//     <objects>/<name>.yaml, which the installation's Kustomization applies
+//     (deletionPolicy: Orphan); the
 //     file carries kustomize.toolkit.fluxcd.io/prune: disabled, so a file
 //     that leaves git never erases the organization;
 //   - its contents (members, models, connectors, egress policies and their
 //     credential Secrets) are one file per object in its content path,
-//     <content prefix>/<parent>/<name>, which the organization's own Flux
+//     <content prefix>/<name>, which the organization's own Flux
 //     Kustomization applies into the organization namespace
 //     (agent-platform-operator's --organization-path);
 //   - a Secret is one file of its own named by gitops-commit's secret-file
@@ -50,11 +51,11 @@ const (
 	// file: agent-platform-operator reports the organization Orphaned with
 	// reason DeleteMerged instead of MissingFromGit once it merged.
 	DeletePullRequestAnnotation = apov1alpha1.DeletePullRequestAnnotation
-	// PruneDisabled is the value of PruneAnnotation on the object's file
-	// and on the organization-admins file: Flux never prunes either.
+	// PruneDisabled is the value of PruneAnnotation on the object's file:
+	// Flux never prunes it.
 	PruneDisabled = "disabled"
 	// DefaultContentPrefix is agent-platform-operator's default
-	// --organization-path without its {parent}/{name}.
+	// --organization-path without its {name}.
 	DefaultContentPrefix = "agent-platform/organizations"
 	// commitBranchPrefix starts every head branch agent-manager opens.
 	commitBranchPrefix = "agent-manager"
@@ -77,11 +78,10 @@ type CommitConfig struct {
 	// GitHub builds the caller's remote.
 	GitHub RemoteFor
 	// Objects is the installation's repository, its branch, and the
-	// directory that holds one directory per parent namespace with the
-	// organization objects' files.
+	// directory that holds the organization objects' files.
 	Objects provenance.Location
 	// ContentPrefix is the repository-relative directory of the content
-	// paths, <ContentPrefix>/<parent>/<name>.
+	// paths, <ContentPrefix>/<name>.
 	ContentPrefix string
 }
 
@@ -194,24 +194,28 @@ func commitError(gh *identity.GitHub, err error) error {
 	return fmt.Errorf("commit: %w", err)
 }
 
-// objectDir is the directory of a parent's organization objects.
-func (c *orgCommit) objectDir(parent string) layout.Directory { return c.cfg.objectDir(parent) }
+// objectDir is the directory of the organization objects.
+func (c *orgCommit) objectDir() layout.Directory { return c.cfg.objectDir() }
 
-// objectFile is the file of the organization parent/name.
-func (c *orgCommit) objectFile(parent, name string) string { return c.cfg.objectFile(parent, name) }
+// objectFile is the file of the organization name.
+func (c *orgCommit) objectFile(name string) string { return c.cfg.objectFile(name) }
 
-func (c *CommitConfig) objectDir(parent string) layout.Directory {
-	return layout.Directory{Location: c.Objects, Name: parent}
+// objectDir is the objects path as a layout directory: its own
+// kustomization.yaml lists the organizations' files.
+func (c *CommitConfig) objectDir() layout.Directory {
+	loc := c.Objects
+	loc.Directory = path.Dir(c.Objects.Directory)
+	return layout.Directory{Location: loc, Name: path.Base(c.Objects.Directory)}
 }
 
-func (c *CommitConfig) objectFile(parent, name string) string {
-	return path.Join(c.objectDir(parent).Path(), name+".yaml")
+func (c *CommitConfig) objectFile(name string) string {
+	return path.Join(c.Objects.Directory, name+".yaml")
 }
 
-// contentDir is the content path of the organization parent/name.
-func (c *orgCommit) contentDir(parent, name string) layout.Directory {
+// contentDir is the content path of the organization name.
+func (c *orgCommit) contentDir(name string) layout.Directory {
 	loc := c.cfg.Objects
-	loc.Directory = path.Join(c.cfg.ContentPrefix, parent)
+	loc.Directory = c.cfg.ContentPrefix
 	return layout.Directory{Location: loc, Name: name}
 }
 
@@ -420,8 +424,8 @@ func (c *orgCommit) absent(ctx context.Context, creates []string) error {
 // object a write changes, which every write of it shares. Each write's pull
 // request has a head branch of its own (head); an older agent-manager used
 // this name itself as the head.
-func branch(verb, parent, name string) string {
-	return fmt.Sprintf("%s/%s-%s-%s", commitBranchPrefix, verb, parent, name)
+func branch(verb, name string) string {
+	return fmt.Sprintf("%s/%s-%s", commitBranchPrefix, verb, name)
 }
 
 // head is a write's own head branch (agents.Head): the object's branch
@@ -523,27 +527,28 @@ type contentWriter struct {
 // that does not name its organization, or whose organization is gone, is
 // not refused here.
 func (s *Service) writable(ctx context.Context, org Namespace) error {
-	if org.Parent == "" || org.Organization == "" {
+	if org.Organization == "" {
 		return nil
 	}
-	o, ok, err := s.cfg.Namespaces.Organization(ctx, org.Parent, org.Organization)
+	o, ok, err := s.cfg.Namespaces.Organization(ctx, org.Organization)
 	if err != nil {
 		return fmt.Errorf("%w: %v", agents.ErrUnsupported, err)
 	}
 	if !ok {
 		return nil
 	}
-	return s.erasing(o, org.Parent, org.Organization, org.Name)
+	return s.erasing(o, org.Name)
 }
 
-// erasing refuses a write to the organization parent/name, or into its
-// namespace ns, while o (that organization) is being deleted or is in
-// Pending erase. writable reads o with agent-manager's ServiceAccount;
-// update_organization passes the object the caller read.
-func (s *Service) erasing(o *apov1alpha1.AgentPlatformOrganization, parent, name, ns string) error {
-	what := "organization " + parent + "/" + name
+// erasing refuses a write to the organization o, or into its namespace ns,
+// while o is being deleted or is in Pending erase. writable reads o with
+// agent-manager's ServiceAccount; update_organization passes the object the
+// caller read.
+func (s *Service) erasing(o *orgv1alpha1.Organization, ns string) error {
+	what := "organization " + o.Name
 	if o.DeletionTimestamp != nil {
-		return fmt.Errorf("%w: %s is being erased (%s): nothing is written into namespace %s; get_organization reports its erasure step until it is gone", agents.ErrConflict, what, orDefault(o.Status.ErasureStep, "starting"), ns)
+		_, status := agentPlatformOf(o)
+		return fmt.Errorf("%w: %s is being erased (%s): nothing is written into namespace %s; get_organization reports its erasure step until it is gone", agents.ErrConflict, what, orDefault(status.ErasureStep, "starting"), ns)
 	}
 	c := meta.FindStatusCondition(o.Status.Conditions, apov1alpha1.ConditionOrphaned)
 	if c == nil || c.Status != metav1.ConditionTrue || c.Reason != apov1alpha1.ReasonDeleteMerged {
@@ -551,9 +556,9 @@ func (s *Service) erasing(o *apov1alpha1.AgentPlatformOrganization, parent, name
 	}
 	file := "its file"
 	if s.cfg.Commit != nil {
-		file += " " + s.cfg.Commit.objectFile(parent, name)
+		file += " " + s.cfg.Commit.objectFile(o.Name)
 	}
-	return fmt.Errorf("%w: %s is in Pending erase: its delete pull request merged (Orphaned, reason %s), so nothing is written into namespace %s. Erase it with delete_organization, mode commit and confirm %q (Erase now), or restore %s in git to keep it", agents.ErrConflict, what, apov1alpha1.ReasonDeleteMerged, ns, parent+"/"+name, file)
+	return fmt.Errorf("%w: %s is in Pending erase: its delete pull request merged (Orphaned, reason %s), so nothing is written into namespace %s. Erase it with delete_organization, mode commit and confirm %q (Erase now), or restore %s in git to keep it", agents.ErrConflict, what, apov1alpha1.ReasonDeleteMerged, ns, o.Name, file)
 }
 
 func (s *Service) contentWriter(ctx context.Context, org Namespace, mode string) (*contentWriter, error) {
@@ -568,8 +573,8 @@ func (s *Service) contentWriter(ctx context.Context, org Namespace, mode string)
 	if mode != agents.ModeCommit {
 		return w, nil
 	}
-	if org.Scope != scopePlatform && (org.Parent == "" || org.Organization == "") {
-		return nil, fmt.Errorf("%w: namespace %s does not name its organization (labels %s and %s): its content path is unknown", agents.ErrConflict, org.Name, "agent-platform.giantswarm.io/parent", "agent-platform.giantswarm.io/organization")
+	if org.Scope != scopePlatform && org.Organization == "" {
+		return nil, fmt.Errorf("%w: namespace %s does not name its organization (label %s): its content path is unknown", agents.ErrConflict, org.Name, apov1alpha1.OrganizationLabel)
 	}
 	if w.commit, err = s.newCommit(ctx); err != nil {
 		return nil, err
@@ -702,14 +707,6 @@ func (w *contentWriter) land(ctx context.Context, s *Service, writes []write, dr
 	if w.mode != agents.ModeCommit {
 		return nil, apply(ctx, c.Dynamic(), writes, dryRun)
 	}
-	for i := range writes {
-		if writes[i].kind == kindRoleBinding && writes[i].name == FirstAdminsBinding && writes[i].obj != nil {
-			// agent-platform's admission admits the organization's Flux
-			// identity's apply of this binding only with prune disabled.
-			obj := unstructuredOf(writes[i].obj)
-			setAnnotation(obj, PruneAnnotation, PruneDisabled)
-		}
-	}
 	if err := apply(ctx, c.Dynamic(), writes, true); err != nil {
 		return nil, err
 	}
@@ -745,8 +742,8 @@ func (w *contentWriter) land(ctx context.Context, s *Service, writes []write, dr
 			ch.write[p] = manifest(unstructuredOf(wr.obj), false)
 		}
 	}
-	body := fmt.Sprintf("%s in organization %s/%s (namespace %s), in its content path %s.", title, w.org.Parent, w.org.Organization, w.org.Name, w.dir.Path())
-	return w.commit.open(ctx, []fileChange{ch}, branch(verb, w.org.Parent, w.org.Organization), title, body, dryRun)
+	body := fmt.Sprintf("%s in organization %s (namespace %s), in its content path %s.", title, w.org.Organization, w.org.Name, w.dir.Path())
+	return w.commit.open(ctx, []fileChange{ch}, branch(verb, w.org.Organization), title, body, dryRun)
 }
 
 // commitURL is the GitHub page of the commit a Flux GitRepository revision

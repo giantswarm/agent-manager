@@ -7,11 +7,14 @@ require (
 	filippo.io/age v1.3.2
 	github.com/Masterminds/semver/v3 v3.5.0
 	github.com/a2aproject/a2a-go/v2 v2.9.0
-	github.com/giantswarm/agent-platform-operator v0.4.6
+	// Prototype (giantswarm/giantswarm#39492): the head of the open draft giantswarm/agent-platform-operator#69.
+	github.com/giantswarm/agent-platform-operator v0.4.7-0.20261124164036-ccee7e6de68f
 	github.com/giantswarm/gitops-commit v0.12.0-rc.10
 	github.com/giantswarm/mcp-oauth v1.15.1
 	github.com/giantswarm/mcp-toolkit v0.7.0
 	github.com/giantswarm/mcp-toolkit/k8s v0.1.0
+	// Prototype (giantswarm/giantswarm#39492): the head of the open draft giantswarm/organization-operator#673.
+	github.com/giantswarm/organization-operator v1.6.5-0.20261124164900-de1bb4efe375
 	github.com/go-jose/go-jose/v4 v4.1.9
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/uuid v1.6.0

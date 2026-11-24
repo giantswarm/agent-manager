@@ -170,7 +170,7 @@ func (h *REST) getCredential(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	q := r.URL.Query()
-	res, err := h.orgs.CredentialReferences(r.Context(), r.PathValue("parent"), r.PathValue("organization"), r.PathValue("secret"), q.Get("kind"), q.Get("name"))
+	res, err := h.orgs.CredentialReferences(r.Context(), r.PathValue("organization"), r.PathValue("secret"), q.Get("kind"), q.Get("name"))
 	if err != nil {
 		h.writeError(w, err)
 		return
