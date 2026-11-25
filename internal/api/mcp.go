@@ -34,6 +34,9 @@ const (
 	ToolGetAgent           = "get_agent"
 	ToolCreateAgent        = "create_agent"
 	ToolUpdateAgent        = "update_agent"
+	ToolUpdateAgentAccess  = "update_agent_access"
+	ToolSetAgentApproval   = "set_agent_approval"
+	ToolListApprovalGrants = "list_approval_grants"
 	ToolDeleteAgent        = "delete_agent"
 	ToolGetAgentStatus     = "get_agent_status"
 	ToolValidateAgent      = "validate_agent"
@@ -51,7 +54,7 @@ const (
 // ToolNames lists the agent tools.
 func ToolNames() []string {
 	return []string{
-		ToolGetInfo, ToolListAgents, ToolGetAgent, ToolCreateAgent, ToolUpdateAgent,
+		ToolGetInfo, ToolListAgents, ToolGetAgent, ToolCreateAgent, ToolUpdateAgent, ToolUpdateAgentAccess, ToolSetAgentApproval, ToolListApprovalGrants,
 		ToolDeleteAgent, ToolGetAgentStatus, ToolValidateAgent, ToolListModelConfigs, ToolListEgressPolicies, ToolListSkills,
 		ToolListSessions, ToolGetSession, ToolGetSessionTurn, ToolStartSession, ToolDeleteSession, ToolToolchainUsers,
 	}
@@ -83,6 +86,9 @@ const (
 	argGitAuthSecret  = "gitAuthSecretName" // #nosec G101 -- an argument name, not a credential
 	argRefreshSkills  = "refreshSkills"
 	argToolset        = "toolset"
+	argTools          = "tools"
+	argSettings       = "settings"
+	argServer         = "server"
 	argLabels         = "labels"
 	argAnnotations    = "annotations"
 	argForce          = "force"
@@ -187,7 +193,7 @@ func NewMCPServer(svc *agents.Service, version string, opts ...Option) *mcpserve
 		mcpotel.WithServerTracingPropagator(otel.Tracer(tracerName), propagation.NewCompositeTextMapPropagator()),
 		brand.WithGiantSwarmIcon(),
 		mcpserver.WithToolCapabilities(false),
-		mcpserver.WithInstructions("Manage the agents of the Agent Platform. An agent is a Flux HelmRelease of the Generic agent chart, which renders a kagent Agent, its Harness reference and the agent's muster RemoteMCPServer carrying its toolset. Call get_info first, and list_model_configs and list_skills before create_agent. Names are DNS-1123 labels the person chooses and confirms. Every agent needs a toolset. create_agent, update_agent and delete_agent take dryRun and mode: apply writes live as you, commit opens a pull request as you in the repository that owns the namespace. organization and cluster (both or neither) place an agent on a workload cluster and address it in every later call of a tool that takes them. Talk to an agent with start_session and get_session. Organizations: list_organizations lists the organizations you manage or belong to; the *_organization* tools manage organizations, their members, models, connectors and egress policies as you, and never take a secret value."),
+		mcpserver.WithInstructions("Manage the agents of the Agent Platform. An agent is a Flux HelmRelease of the Generic agent chart, which renders a kagent Agent, its Harness reference and the agent's muster RemoteMCPServer carrying its toolset. Call get_info first, and list_model_configs and list_skills before create_agent. Names are DNS-1123 labels the person chooses and confirms. Every agent needs a tool list (tools). update_agent changes what an agent is, update_agent_access what it can reach, set_agent_approval its approval settings. create_agent, update_agent, update_agent_access, set_agent_approval and delete_agent take dryRun and mode: apply writes live as you, commit opens a pull request as you in the repository that owns the namespace. organization and cluster (both or neither) place an agent on a workload cluster and address it in every later call of a tool that takes them. Talk to an agent with start_session and get_session. Organizations: list_organizations lists the organizations you manage or belong to; the *_organization* tools manage organizations, their members, models, connectors and egress policies as you, and never take a secret value."),
 	)
 	t := &tools{svc: svc}
 
@@ -223,9 +229,19 @@ func NewMCPServer(svc *agents.Service, version string, opts ...Option) *mcpserve
 	if maximum := toolsetMaxItems(o.lifecycle, svc); maximum > 0 {
 		toolsetOptions = append(toolsetOptions, mcp.MaxItems(maximum))
 	}
-	toolsetProp := mcp.WithArray(argToolset, toolsetOptions...)
-	toolsetRequiredProp := mcp.WithArray(argToolset, slices.Concat(toolsetOptions, []mcp.PropertyOption{mcp.Required()})...)
-	toolsetReplaceProp := mcp.WithArray(argToolset, slices.Concat(toolsetOptions, []mcp.PropertyOption{mcp.Description("Replaces the whole toolset: " + selectorShape + "; [] is refused: use preset:none.")})...)
+	toolEntry := map[string]any{"oneOf": []any{
+		map[string]any{"type": schemaString, argDescription: "A selector without a setting: the connectors' settings apply"},
+		map[string]any{"type": schemaObject, "minProperties": 1, "maxProperties": 1, argDescription: "{selector: setting}",
+			"additionalProperties": map[string]any{"type": schemaString, "enum": []string{agents.SettingAllow, agents.SettingAsk, agents.SettingBlock}}},
+	}}
+	toolsShape := fmt.Sprintf("at most %d selectors, each once, or {selector: Allow|Ask|Block}", agents.MaxToolEntries)
+	toolsDesc := "Tool list: " + toolsShape + ". Unlisted tools are invisible; strictest setting wins"
+	toolsProp := mcp.WithArray(argTools, mcp.Description(toolsDesc), mcp.Items(toolEntry), mcp.MaxItems(agents.MaxToolEntries))
+	toolsReplaceProp := mcp.WithArray(argTools, mcp.Description("Replaces the tool list: "+toolsShape+"; [] is refused (preset:none)"), mcp.Items(toolEntry), mcp.MaxItems(agents.MaxToolEntries))
+	defaultProp := mcp.WithString(argDefault, mcp.Enum(agents.SettingAsk, agents.SettingBlock), mcp.Description("Setting of every listed tool without its own"))
+	deprecatedToolset := "Deprecated, use tools. "
+	toolsetProp := mcp.WithArray(argToolset, slices.Concat(toolsetOptions, []mcp.PropertyOption{mcp.Description(deprecatedToolset + "Selectors without settings; preset:none: no tools")})...)
+	toolsetReplaceProp := mcp.WithArray(argToolset, slices.Concat(toolsetOptions, []mcp.PropertyOption{mcp.Description(deprecatedToolset + "Replaces the tool list with selectors without settings; [] is refused (preset:none)")})...)
 	labelsProp := mcp.WithObject(argLabels, mcp.Description("Extra labels on the Agent object (string values)."), mcp.AdditionalProperties(stringSchema))
 	annotationsProp := mcp.WithObject(argAnnotations, mcp.Description("Extra annotations on the Agent object (string values)."), mcp.AdditionalProperties(stringSchema))
 	labelsReplaceProp := mcp.WithObject(argLabels, mcp.Description("Replaces all extra labels on the Agent object ({} clears them); pass every label to keep."), mcp.AdditionalProperties(stringSchema))
@@ -323,7 +339,7 @@ func NewMCPServer(svc *agents.Service, version string, opts ...Option) *mcpserve
 	), t.getAgent)
 
 	s.AddTool(mcp.NewTool(ToolCreateAgent,
-		tooldesc.Describe("Create an agent: a HelmRelease of the Generic agent chart. It needs a toolset; confirm its name with the person.",
+		tooldesc.Describe("Create an agent: a HelmRelease of the Generic agent chart. It needs a tool list; confirm its name with the person.",
 			"name is the DNS-1123 name the person chose, never derived from displayName. modelConfig must exist (list_model_configs); omitted, the namespace default is written and reported. Skills and plugins are pinned at write time (list_skills) the values pass the chart schema and the API server's dry-run of the rendered objects; a failure writes nothing. "+presetsSentence+" Poll get_agent_status until ready."),
 		mcp.WithString(argName, mcp.Required(), mcp.Description("DNS-1123 technical name (max 63 chars): the HelmRelease and Agent name")),
 		mcp.WithString(argModelConfig, mcp.Description("Name of an existing kagent ModelConfig in the namespace (list_model_configs); omit for the namespace default")),
@@ -333,7 +349,9 @@ func NewMCPServer(svc *agents.Service, version string, opts ...Option) *mcpserve
 		mcp.WithString(argDescription, mcp.Description("What the agent is for")),
 		mcp.WithString(argSystemMessage, mcp.Description("System prompt; omit for the chart's default prompt. "+systemMessageLimit)),
 		mcp.WithString(argIconURL, mcp.Description("Avatar URL (chart agent.iconUrl, rendered as the ui.giantswarm.io/icon-url annotation); omit unless the installation serves avatars")),
-		toolsetRequiredProp,
+		toolsProp,
+		defaultProp,
+		toolsetProp,
 		skillsProp,
 		pluginsProp,
 		egressProp,
@@ -355,26 +373,15 @@ func NewMCPServer(svc *agents.Service, version string, opts ...Option) *mcpserve
 	), t.createAgent)
 
 	s.AddTool(mcp.NewTool(ToolUpdateAgent,
-		tooldesc.Describe("Change an agent: only the fields passed change; a list, labels or annotations replaces the whole value.",
-			"Lists are skills, plugins, egress and toolset. \"\" clears a text field back to the chart default; gitAuthSecretName \"\" goes back to the installation's. "+presetsSentence+" refreshSkills re-pins every git skill and git plugin. harness re-runs the create-time checks on the new Harness. Returns the values before and after. A suspended release needs force; a GitOps-owned one mode commit; a platform one is refused."),
+		tooldesc.Describe("Change what an agent is: name, description, prompt, model, tags, labels, annotations; only fields passed change.",
+			"\"\" clears a text field to the chart default; tags, labels, annotations replace the whole value. Reach changes with update_agent_access, approval settings with set_agent_approval. Returns values before and after. A suspended release needs force; GitOps-owned mode commit; platform is refused. Saving drops approval grants of connectors you are not connector admin of."),
 		mcp.WithString(argName, mcp.Required(), mcp.Description("Agent name")),
 		mcp.WithString(argDisplayName, mcp.Description("New friendly name; \"\" clears it")),
 		tagsReplaceProp,
 		mcp.WithString(argDescription, mcp.Description("New description; \"\" clears it")),
 		mcp.WithString(argSystemMessage, mcp.Description("New system prompt; \"\" restores the chart default. "+systemMessageLimit)),
 		mcp.WithString(argModelConfig, mcp.Description("Name of an existing ModelConfig in the namespace")),
-		mcp.WithString(argHarness, mcp.Description("Move the agent to another Harness of the namespace; \"\" selects the platform Harness. Existing Sessions keep their runtime")),
 		mcp.WithString(argIconURL, mcp.Description("New avatar URL; \"\" clears it")),
-		skillsReplaceProp,
-		pluginsReplaceProp,
-		egressReplaceProp,
-		policiesReplaceProp,
-		connectorsReplaceProp,
-		gitAuthReplaceProp,
-		refreshSkillsProp,
-		toolsetReplaceProp,
-		defaultWSReplaceProp,
-		defaultTCReplaceProp,
 		labelsReplaceProp,
 		annotationsReplaceProp,
 		mcp.WithBoolean(argForce, mcp.Description("Write even when the HelmRelease is suspended (default false). A GitOps-owned release is never written live: use mode commit")),
@@ -385,8 +392,64 @@ func NewMCPServer(svc *agents.Service, version string, opts ...Option) *mcpserve
 		mcp.WithReadOnlyHintAnnotation(false),
 		mcp.WithDestructiveHintAnnotation(true),
 		mcp.WithIdempotentHintAnnotation(false),
-		mcp.WithOpenWorldHintAnnotation(true),
+		mcp.WithOpenWorldHintAnnotation(false),
 	), t.updateAgent)
+
+	s.AddTool(mcp.NewTool(ToolUpdateAgentAccess,
+		tooldesc.Describe("Change what an agent can reach: tool list, skills, plugins, egress, connectors, Harness, workspace, toolchains.",
+			"Only fields passed change; a list replaces the whole value. "+presetsSentence+" refreshSkills re-pins git skills and plugins. tools keeps carried-over settings; a new Allow over a connector's Ask is refused (set_agent_approval grants it). Saving drops grants of connectors you are not connector admin of. Returns values before and after, grants kept and dropped."),
+		mcp.WithString(argName, mcp.Required(), mcp.Description("Agent name")),
+		toolsReplaceProp,
+		toolsetReplaceProp,
+		mcp.WithString(argHarness, mcp.Description("Move the agent to another Harness of the namespace; \"\" selects the platform Harness. Existing Sessions keep their runtime")),
+		skillsReplaceProp,
+		pluginsReplaceProp,
+		egressReplaceProp,
+		policiesReplaceProp,
+		connectorsReplaceProp,
+		gitAuthReplaceProp,
+		refreshSkillsProp,
+		defaultWSReplaceProp,
+		defaultTCReplaceProp,
+		mcp.WithBoolean(argForce, mcp.Description("Write even when the HelmRelease is suspended (default false). A GitOps-owned release is never written live: use mode commit")),
+		nsProp,
+		orgProp,
+		clusterProp,
+		modeProp, dryRunProp, repositoryProp, branchProp, pathProp,
+		mcp.WithReadOnlyHintAnnotation(false),
+		mcp.WithDestructiveHintAnnotation(true),
+		mcp.WithIdempotentHintAnnotation(false),
+		mcp.WithOpenWorldHintAnnotation(true),
+	), t.updateAgentAccess)
+
+	s.AddTool(mcp.NewTool(ToolSetAgentApproval,
+		tooldesc.Describe("Set an agent's approval settings: Allow, Ask or Block per tool list entry, and the default.",
+			"settings names entries of the agent's tools ({\"tool:x\": \"Allow\"}; \"\" removes a setting); default the list's default. The only way to let an agent skip a connector's Ask: such an Allow needs you to be its connector admin (update mcpservers in its namespace), is recorded as a grant, mode apply only. Saving drops other grants of connectors you are not admin of. An agent calling it is asked first."),
+		mcp.WithString(argName, mcp.Required(), mcp.Description("Agent name")),
+		mcp.WithObject(argSettings, mcp.Description("Setting per entry of the agent's tools: Allow, Ask, Block, or \"\" to remove it"),
+			mcp.AdditionalProperties(map[string]any{"type": schemaString, "enum": []string{agents.SettingAllow, agents.SettingAsk, agents.SettingBlock, ""}})),
+		mcp.WithString(argDefault, mcp.Enum(agents.SettingAllow, agents.SettingAsk, agents.SettingBlock, ""), mcp.Description("The list's default setting; \"\" removes it; omit to keep it")),
+		mcp.WithBoolean(argForce, mcp.Description("Write even when the HelmRelease is suspended (default false)")),
+		nsProp,
+		orgProp,
+		clusterProp,
+		modeProp, dryRunProp, repositoryProp, branchProp, pathProp,
+		mcp.WithReadOnlyHintAnnotation(false),
+		mcp.WithDestructiveHintAnnotation(true),
+		mcp.WithIdempotentHintAnnotation(true),
+		mcp.WithOpenWorldHintAnnotation(false),
+	), t.setAgentApproval)
+
+	s.AddTool(mcp.NewTool(ToolListApprovalGrants,
+		tooldesc.Describe("List approval grants: which agents may run a connector's asking tools without asking, granted by whom.",
+			"Each grant names the agent, the entry of its tool list (or default), the connector (muster server key, namespace, uid), who granted it and when. Read as you: you must be able to list the namespace's HelmReleases. A grant written before the agent's values changed outside agent-manager no longer holds and is not listed."),
+		nsProp,
+		mcp.WithString(argServer, mcp.Description("Only grants on this connector: its muster server key")),
+		mcp.WithReadOnlyHintAnnotation(true),
+		mcp.WithDestructiveHintAnnotation(false),
+		mcp.WithIdempotentHintAnnotation(false),
+		mcp.WithOpenWorldHintAnnotation(false),
+	), t.listApprovalGrants)
 
 	s.AddTool(mcp.NewTool(ToolDeleteAgent,
 		tooldesc.Describe("Delete an agent: its HelmRelease, which removes the Agent and its muster RemoteMCPServer.",
@@ -427,6 +490,8 @@ func NewMCPServer(svc *agents.Service, version string, opts ...Option) *mcpserve
 		mcp.WithString(argDescription, mcp.Description("Description")),
 		mcp.WithString(argSystemMessage, mcp.Description("System prompt. "+systemMessageLimit)),
 		mcp.WithString(argIconURL, mcp.Description("Avatar URL")),
+		toolsProp,
+		defaultProp,
 		toolsetProp,
 		skillsProp,
 		pluginsProp,
@@ -656,21 +721,104 @@ func (t *tools) createAgent(ctx context.Context, req mcp.CallToolRequest) (*mcp.
 	return jsonResult(res)
 }
 
-func (t *tools) updateAgent(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	// Bind the raw arguments so an explicit "" (clear) survives — SpecToUpdate
-	// would read it as "unchanged".
+// The fields each update tool takes: update_agent what the agent is,
+// update_agent_access what it can reach, set_agent_approval its approval
+// settings (giantswarm/giantswarm#38902). muster's floors and governance
+// match the tools by name, so a field belongs to exactly one tool.
+var (
+	describingArgs = []string{argDisplayName, argTags, argDescription, argSystemMessage, argModelConfig, argIconURL, argLabels, argAnnotations}
+	accessArgs     = []string{argTools, argToolset, argHarness, argSkills, argPlugins, argEgress, argEgressPolicies, argConnectors, argGitAuthSecret, argRefreshSkills, argDefaultWS, argDefaultTC}
+	approvalArgs   = []string{argDefault, argSettings}
+)
+
+// refuseOtherToolsArgs refuses the arguments that belong to another of the
+// split update tools, naming it.
+func refuseOtherToolsArgs(tool string, args map[string]any) error {
+	owners := []struct {
+		tool string
+		args []string
+	}{{ToolUpdateAgent, describingArgs}, {ToolUpdateAgentAccess, accessArgs}, {ToolSetAgentApproval, approvalArgs}}
+	var refused []string
+	for _, owner := range owners {
+		if owner.tool == tool {
+			continue
+		}
+		for _, arg := range owner.args {
+			if _, ok := args[arg]; ok {
+				refused = append(refused, fmt.Sprintf("%s does not take %s: use %s", tool, arg, owner.tool))
+			}
+		}
+	}
+	if len(refused) == 0 {
+		return nil
+	}
+	slices.Sort(refused)
+	return fmt.Errorf("%w: %s. Since tool approval, update_agent changes what an agent is, update_agent_access what it can reach and set_agent_approval its approval settings", agents.ErrInvalid, strings.Join(refused, "; "))
+}
+
+// bindUpdate binds an update tool's arguments after refusing the other
+// tools' ones. The raw arguments are bound so an explicit "" (clear)
+// survives.
+func bindUpdate(tool string, req mcp.CallToolRequest) (agents.Update, error) {
 	var upd agents.Update
+	if err := refuseOtherToolsArgs(tool, req.GetArguments()); err != nil {
+		return upd, err
+	}
 	if err := req.BindArguments(&upd); err != nil {
-		return errResult(fmt.Errorf("%w: %v", agents.ErrInvalid, err)), nil
+		return upd, fmt.Errorf("%w: %v", agents.ErrInvalid, err)
 	}
 	if upd.Name == "" {
-		return errResult(fmt.Errorf("%w: name is required", agents.ErrInvalid)), nil
+		return upd, fmt.Errorf("%w: name is required", agents.ErrInvalid)
 	}
-	res, err := t.svc.Update(ctx, upd)
+	return upd, nil
+}
+
+func (t *tools) updateAgent(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	return t.update(ctx, ToolUpdateAgent, req)
+}
+
+func (t *tools) updateAgentAccess(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	return t.update(ctx, ToolUpdateAgentAccess, req)
+}
+
+func (t *tools) update(ctx context.Context, tool string, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	upd, err := bindUpdate(tool, req)
+	if err != nil {
+		return errResult(err), nil
+	}
+	res, err := t.svc.UpdateAs(ctx, tool, upd)
 	if err != nil {
 		return errResult(err), nil
 	}
 	return jsonResult(res)
+}
+
+func (t *tools) setAgentApproval(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	var in agents.SetApproval
+	args := req.GetArguments()
+	for key := range args {
+		if slices.Contains(describingArgs, key) || slices.Contains(accessArgs, key) {
+			if err := refuseOtherToolsArgs(ToolSetAgentApproval, args); err != nil {
+				return errResult(err), nil
+			}
+		}
+	}
+	if err := req.BindArguments(&in); err != nil {
+		return errResult(fmt.Errorf("%w: %v", agents.ErrInvalid, err)), nil
+	}
+	res, err := t.svc.SetApproval(ctx, in)
+	if err != nil {
+		return errResult(err), nil
+	}
+	return jsonResult(res)
+}
+
+func (t *tools) listApprovalGrants(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	grants, err := t.svc.ListApprovalGrants(ctx, req.GetString(argNamespace, ""), req.GetString(argServer, ""))
+	if err != nil {
+		return errResult(err), nil
+	}
+	return jsonResult(map[string]any{"grants": grants})
 }
 
 func (t *tools) deleteAgent(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -711,7 +859,7 @@ func (t *tools) validateAgent(ctx context.Context, req mcp.CallToolRequest) (*mc
 		if err := req.BindArguments(&upd); err != nil {
 			return errResult(fmt.Errorf("%w: %v", agents.ErrInvalid, err)), nil
 		}
-		res, err = t.svc.ValidateUpdate(ctx, upd)
+		res, err = t.svc.ValidateUpdateAs(ctx, ToolUpdateAgentAccess, upd)
 	} else {
 		s, specErr := specFromArgs(req)
 		if specErr != nil {

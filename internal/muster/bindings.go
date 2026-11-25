@@ -17,6 +17,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 )
@@ -49,7 +50,48 @@ type Binding struct {
 	// with its own JWT (a header narrows it, never widens it). nil binds none:
 	// implicit full access.
 	Toolset []string `json:"toolset,omitempty"`
+	// Agent is the agent the Session runs, <namespace>/<name>: muster names
+	// it on the approval page and binds approvals to it. muster takes it
+	// only from a sender it reviewed (SenderHeader).
+	Agent string `json:"agent,omitempty"`
+	// Approval is the agent's approval settings and grant marks; muster
+	// takes them only from a sender it reviewed (SenderHeader).
+	Approval *Approval `json:"approval,omitempty"`
 }
+
+// Approval is an agent's approval settings as a binding carries them.
+type Approval struct {
+	// Entries are the tool list's entries that carry a setting.
+	Entries []ApprovalEntry `json:"entries,omitempty"`
+	// Default is the list's default setting, "" for none.
+	Default string `json:"default,omitempty"`
+	// Grants mark the entries whose Allow holds over a connector's Ask.
+	Grants []Grant `json:"grants,omitempty"`
+}
+
+// ApprovalEntry is one entry's setting.
+type ApprovalEntry struct {
+	Entry   string `json:"entry"`
+	Setting string `json:"setting"`
+}
+
+// Grant marks an entry's Allow over one connector's Ask: the entry (or
+// "default"), the connector's muster server key and its MCPServer UID.
+type Grant struct {
+	Entry  string `json:"entry"`
+	Server string `json:"server"`
+	UID    string `json:"uid"`
+}
+
+// SenderHeader carries agent-manager's own projected ServiceAccount token
+// (audience muster) beside the person's: muster reviews it (TokenReview,
+// SubjectAccessReview for bind on toolapprovals) before it takes approval
+// settings from a bind, and requires it to drop grant marks.
+const SenderHeader = "X-Muster-Approval-Sender"
+
+// GrantsPath is the path, below the bindings endpoint, that drops grant
+// marks from an agent's running Sessions.
+const GrantsPath = "/grants"
 
 // Provider is the reserved provider instance a binding lists when kagent
 // admitted the Session to muster's actor bearer: the sandbox calls muster
@@ -76,7 +118,30 @@ const (
 type Client struct {
 	endpoint *url.URL
 	http     *http.Client
+	// senderToken reads agent-manager's projected ServiceAccount token per
+	// call (it rotates); nil sends none.
+	senderToken func() (string, error)
 }
+
+// WithSenderTokenFile sends the token in path (re-read on every call) as
+// SenderHeader on binds and grant drops.
+func (c *Client) WithSenderTokenFile(path string) *Client {
+	if path == "" {
+		return c
+	}
+	c.senderToken = func() (string, error) {
+		raw, err := os.ReadFile(path) // #nosec G304 -- the operator's configured projected token path
+		if err != nil {
+			return "", fmt.Errorf("read the approval sender token: %w", err)
+		}
+		return strings.TrimSpace(string(raw)), nil
+	}
+	return c
+}
+
+// SendsApproval reports whether binds carry the sender token, so muster
+// takes approval settings from them.
+func (c *Client) SendsApproval() bool { return c.senderToken != nil }
 
 // New is the client of the session bindings endpoint, its full URL
 // (http(s)://host[:port]/session-bindings). A nil httpClient is a default
@@ -105,7 +170,23 @@ func (c *Client) Bind(ctx context.Context, token string, b Binding) error {
 	if len(body) > maxBindBytes {
 		return fmt.Errorf("%w: session binding encodes to %d bytes, more than the %d allowed; reduce the toolset or use a preset", ErrInvalid, len(body), maxBindBytes)
 	}
-	return c.call(ctx, http.MethodPut, c.endpoint.String(), token, body)
+	return c.call(ctx, http.MethodPut, c.endpoint.String(), token, body, false)
+}
+
+// DropGrants removes, from every live binding of agent (<namespace>/<name>),
+// each grant mark not in keep (PATCH <endpoint>/grants), changing nothing
+// else. It needs the sender token: muster refuses it without.
+func (c *Client) DropGrants(ctx context.Context, token, agent string, keep []Grant) error {
+	if keep == nil {
+		keep = []Grant{}
+	}
+	body, err := json.Marshal(map[string]any{"agent": agent, "keep": keep})
+	if err != nil {
+		return fmt.Errorf("muster: encode the grants: %w", err)
+	}
+	u := *c.endpoint
+	u.Path = strings.TrimSuffix(u.Path, "/") + GrantsPath
+	return c.call(ctx, http.MethodPatch, u.String(), token, body, true)
 }
 
 // Unbind removes the caller's binding of actor (DELETE, 204); an actor
@@ -113,10 +194,10 @@ func (c *Client) Bind(ctx context.Context, token string, b Binding) error {
 func (c *Client) Unbind(ctx context.Context, token, actor string) error {
 	u := *c.endpoint
 	u.RawQuery = url.Values{"actor": {actor}}.Encode()
-	return c.call(ctx, http.MethodDelete, u.String(), token, nil)
+	return c.call(ctx, http.MethodDelete, u.String(), token, nil, false)
 }
 
-func (c *Client) call(ctx context.Context, method, target, token string, body []byte) error {
+func (c *Client) call(ctx context.Context, method, target, token string, body []byte, needSender bool) error {
 	if token == "" {
 		return fmt.Errorf("%w: the request carries no identity token", ErrUnauthenticated)
 	}
@@ -129,6 +210,15 @@ func (c *Client) call(ctx context.Context, method, target, token string, body []
 		return fmt.Errorf("muster: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
+	if c.senderToken != nil && method != http.MethodDelete {
+		sender, err := c.senderToken()
+		if err != nil {
+			return fmt.Errorf("muster: %w", err)
+		}
+		req.Header.Set(SenderHeader, sender)
+	} else if needSender {
+		return fmt.Errorf("%w: agent-manager has no approval sender token (--muster-approval-sender-token-file), so muster takes no grant changes from it", ErrInvalid)
+	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}

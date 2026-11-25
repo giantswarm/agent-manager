@@ -910,15 +910,25 @@ func (s *Service) bindSession(ctx context.Context, token string, ref kagent.Ref,
 		s.log.InfoContext(ctx, "session has no providers: nothing to bind in muster", identity.LogAttr(ctx), "session", session.GetId())
 		return nil, nil
 	}
+	var approval *boundApproval
 	if slices.Contains(binding.Providers, muster.Provider) {
 		if binding.Toolset, err = s.sessionToolset(ctx, ref.Namespace, ref.Name); err != nil {
 			return nil, fmt.Errorf("reading agent %s's toolset to bind session %s to it in muster: %w", ref.Tenant(), session.GetId(), err)
+		}
+		if approval, err = s.sessionApproval(ctx, ref, binding.Toolset); err != nil {
+			return nil, fmt.Errorf("reading agent %s's tool approval settings to bind session %s to it in muster: %w", ref.Tenant(), session.GetId(), err)
+		}
+		if approval != nil {
+			binding.Agent, binding.Approval = approval.agent.Key(), approval.binding
 		}
 	}
 	if err := s.cfg.Bindings.Bind(ctx, token, *binding); err != nil {
 		return nil, bindingError(err, session.GetId())
 	}
-	s.log.InfoContext(ctx, "session bound in muster", identity.LogAttr(ctx), "session", session.GetId(), "actor", binding.Actor, "providers", binding.Providers, "toolset", binding.Toolset)
+	s.log.InfoContext(ctx, "session bound in muster", identity.LogAttr(ctx), "session", session.GetId(), "actor", binding.Actor, "providers", binding.Providers, "toolset", binding.Toolset, "agent", binding.Agent, "approval", binding.Approval != nil)
+	if approval != nil {
+		s.recheckBoundGrants(ctx, approval)
+	}
 	return binding.Toolset, nil
 }
 

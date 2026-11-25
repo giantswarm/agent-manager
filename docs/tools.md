@@ -18,6 +18,7 @@ Generated from the registered tools (`make tools-doc`); through muster every too
 | `get_session` | read-only |
 | `get_session_turn` | read-only |
 | `list_agents` | read-only |
+| `list_approval_grants` | read-only |
 | `list_egress_policies` | read-only |
 | `list_model_configs` | read-only |
 | `list_organization_connectors` | read-only |
@@ -27,12 +28,14 @@ Generated from the registered tools (`make tools-doc`); through muster every too
 | `list_skills` | read-only |
 | `remove_organization_member` | write, destructive |
 | `replace_organization_credential` | write, destructive |
+| `set_agent_approval` | write, destructive |
 | `set_organization_connector` | write, destructive |
 | `set_organization_egress_policy` | write, destructive |
 | `set_organization_model` | write, destructive |
 | `start_session` | write |
 | `toolchain_users` | read-only |
 | `update_agent` | write, destructive |
+| `update_agent_access` | write, destructive |
 | `update_organization` | write, destructive |
 | `validate_agent` | read-only |
 
@@ -92,7 +95,7 @@ Writes the RoleBinding organization-<role>s (admins: organization-admins), dry r
 ## `create_agent`
 
 ```text
-Create an agent: a HelmRelease of the Generic agent chart. It needs a toolset; confirm its name with the person.
+Create an agent: a HelmRelease of the Generic agent chart. It needs a tool list; confirm its name with the person.
 
 name is the DNS-1123 name the person chose, never derived from displayName. modelConfig must exist (list_model_configs); omitted, the namespace default is written and reported. Skills and plugins are pinned at write time (list_skills) the values pass the chart schema and the API server's dry-run of the rendered objects; a failure writes nothing. Presets: preset:read-only, preset:none, preset:infrastructure, preset:agent-platform, preset:full. Poll get_agent_status until ready.
 ```
@@ -122,6 +125,14 @@ name is the DNS-1123 name the person chose, never derived from displayName. mode
         "type": "string"
       },
       "type": "array"
+    },
+    "default": {
+      "description": "Setting of every listed tool without its own",
+      "enum": [
+        "Ask",
+        "Block"
+      ],
+      "type": "string"
     },
     "defaultToolchains": {
       "description": "Toolchains, name[@version] (default latest), a start_session naming none mounts; none: github.",
@@ -308,8 +319,35 @@ name is the DNS-1123 name the person chose, never derived from displayName. mode
       },
       "type": "array"
     },
+    "tools": {
+      "description": "Tool list: at most 32 selectors, each once, or {selector: Allow|Ask|Block}. Unlisted tools are invisible; strictest setting wins",
+      "items": {
+        "oneOf": [
+          {
+            "description": "A selector without a setting: the connectors' settings apply",
+            "type": "string"
+          },
+          {
+            "additionalProperties": {
+              "enum": [
+                "Allow",
+                "Ask",
+                "Block"
+              ],
+              "type": "string"
+            },
+            "description": "{selector: setting}",
+            "maxProperties": 1,
+            "minProperties": 1,
+            "type": "object"
+          }
+        ]
+      },
+      "maxItems": 32,
+      "type": "array"
+    },
     "toolset": {
-      "description": "Gateway tools the agent may use: preset:, server:, workflow: or tool:; over the chart's inline limits, use a preset; preset:none means no tools.",
+      "description": "Deprecated, use tools. Selectors without settings; preset:none: no tools",
       "items": {
         "type": "string"
       },
@@ -318,8 +356,7 @@ name is the DNS-1123 name the person chose, never derived from displayName. mode
     }
   },
   "required": [
-    "name",
-    "toolset"
+    "name"
   ],
   "type": "object"
 }
@@ -814,6 +851,31 @@ managed: helmrelease is writable here; gitops needs mode commit; platform is rea
 }
 ```
 
+## `list_approval_grants`
+
+```text
+List approval grants: which agents may run a connector's asking tools without asking, granted by whom.
+
+Each grant names the agent, the entry of its tool list (or default), the connector (muster server key, namespace, uid), who granted it and when. Read as you: you must be able to list the namespace's HelmReleases. A grant written before the agent's values changed outside agent-manager no longer holds and is not listed.
+```
+
+```json
+{
+  "properties": {
+    "namespace": {
+      "description": "Namespace of the agent; default: the installation's kagent namespace (get_info lists the managed ones).",
+      "type": "string"
+    },
+    "server": {
+      "description": "Only grants on this connector: its muster server key",
+      "type": "string"
+    }
+  },
+  "required": [],
+  "type": "object"
+}
+```
+
 ## `list_egress_policies`
 
 ```text
@@ -1107,6 +1169,93 @@ Only the Secret is written. The form (credentials[].next) lists its consumers an
     "namespace",
     "secret",
     "key"
+  ],
+  "type": "object"
+}
+```
+
+## `set_agent_approval`
+
+```text
+Set an agent's approval settings: Allow, Ask or Block per tool list entry, and the default.
+
+settings names entries of the agent's tools ({"tool:x": "Allow"}; "" removes a setting); default the list's default. The only way to let an agent skip a connector's Ask: such an Allow needs you to be its connector admin (update mcpservers in its namespace), is recorded as a grant, mode apply only. Saving drops other grants of connectors you are not admin of. An agent calling it is asked first.
+```
+
+```json
+{
+  "properties": {
+    "branch": {
+      "description": "mode commit with repository: the base branch the pull request goes to.",
+      "type": "string"
+    },
+    "cluster": {
+      "description": "With organization: the workload cluster the agent runs on; its HelmRelease stays on the installation. namespace is on the cluster.",
+      "type": "string"
+    },
+    "default": {
+      "description": "The list's default setting; \"\" removes it; omit to keep it",
+      "enum": [
+        "Allow",
+        "Ask",
+        "Block",
+        ""
+      ],
+      "type": "string"
+    },
+    "dryRun": {
+      "description": "Return what the write would do, the manifests and with mode commit the pull request's files, and write nothing (default false).",
+      "type": "boolean"
+    },
+    "force": {
+      "description": "Write even when the HelmRelease is suspended (default false)",
+      "type": "boolean"
+    },
+    "mode": {
+      "description": "apply (default): write live as you; a release applied from git is refused with gitops_owned. commit: open a pull request as you.",
+      "enum": [
+        "apply",
+        "commit"
+      ],
+      "type": "string"
+    },
+    "name": {
+      "description": "Agent name",
+      "type": "string"
+    },
+    "namespace": {
+      "description": "Namespace of the agent; default: the installation's kagent namespace (get_info lists the managed ones).",
+      "type": "string"
+    },
+    "organization": {
+      "description": "With cluster: the organization owning the workload cluster the agent runs on. Omit both for the installation's own cluster.",
+      "type": "string"
+    },
+    "path": {
+      "description": "mode commit with repository: the directory a Flux Kustomization builds from; files go into its agent-manager/ subdirectory.",
+      "type": "string"
+    },
+    "repository": {
+      "description": "mode commit: the repository (owner/name) to commit to where no Flux Kustomization owns the namespace yet. Needs branch.",
+      "type": "string"
+    },
+    "settings": {
+      "additionalProperties": {
+        "enum": [
+          "Allow",
+          "Ask",
+          "Block",
+          ""
+        ],
+        "type": "string"
+      },
+      "description": "Setting per entry of the agent's tools: Allow, Ask, Block, or \"\" to remove it",
+      "properties": {},
+      "type": "object"
+    }
+  },
+  "required": [
+    "name"
   ],
   "type": "object"
 }
@@ -1457,9 +1606,9 @@ Read as you in every managed namespace, every person's sessions where the contro
 ## `update_agent`
 
 ```text
-Change an agent: only the fields passed change; a list, labels or annotations replaces the whole value.
+Change what an agent is: name, description, prompt, model, tags, labels, annotations; only fields passed change.
 
-Lists are skills, plugins, egress and toolset. "" clears a text field back to the chart default; gitAuthSecretName "" goes back to the installation's. Presets: preset:read-only, preset:none, preset:infrastructure, preset:agent-platform, preset:full. refreshSkills re-pins every git skill and git plugin. harness re-runs the create-time checks on the new Harness. Returns the values before and after. A suspended release needs force; a GitOps-owned one mode commit; a platform one is refused.
+"" clears a text field to the chart default; tags, labels, annotations replace the whole value. Reach changes with update_agent_access, approval settings with set_agent_approval. Returns values before and after. A suspended release needs force; GitOps-owned mode commit; platform is refused. Saving drops approval grants of connectors you are not connector admin of.
 ```
 
 ```json
@@ -1473,6 +1622,104 @@ Lists are skills, plugins, egress and toolset. "" clears a text field back to th
       "properties": {},
       "type": "object"
     },
+    "branch": {
+      "description": "mode commit with repository: the base branch the pull request goes to.",
+      "type": "string"
+    },
+    "cluster": {
+      "description": "With organization: the workload cluster the agent runs on; its HelmRelease stays on the installation. namespace is on the cluster.",
+      "type": "string"
+    },
+    "description": {
+      "description": "New description; \"\" clears it",
+      "type": "string"
+    },
+    "displayName": {
+      "description": "New friendly name; \"\" clears it",
+      "type": "string"
+    },
+    "dryRun": {
+      "description": "Return what the write would do, the manifests and with mode commit the pull request's files, and write nothing (default false).",
+      "type": "boolean"
+    },
+    "force": {
+      "description": "Write even when the HelmRelease is suspended (default false). A GitOps-owned release is never written live: use mode commit",
+      "type": "boolean"
+    },
+    "iconUrl": {
+      "description": "New avatar URL; \"\" clears it",
+      "type": "string"
+    },
+    "labels": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "description": "Replaces all extra labels on the Agent object ({} clears them); pass every label to keep.",
+      "properties": {},
+      "type": "object"
+    },
+    "mode": {
+      "description": "apply (default): write live as you; a release applied from git is refused with gitops_owned. commit: open a pull request as you.",
+      "enum": [
+        "apply",
+        "commit"
+      ],
+      "type": "string"
+    },
+    "modelConfig": {
+      "description": "Name of an existing ModelConfig in the namespace",
+      "type": "string"
+    },
+    "name": {
+      "description": "Agent name",
+      "type": "string"
+    },
+    "namespace": {
+      "description": "Namespace of the agent; default: the installation's kagent namespace (get_info lists the managed ones).",
+      "type": "string"
+    },
+    "organization": {
+      "description": "With cluster: the organization owning the workload cluster the agent runs on. Omit both for the installation's own cluster.",
+      "type": "string"
+    },
+    "path": {
+      "description": "mode commit with repository: the directory a Flux Kustomization builds from; files go into its agent-manager/ subdirectory.",
+      "type": "string"
+    },
+    "repository": {
+      "description": "mode commit: the repository (owner/name) to commit to where no Flux Kustomization owns the namespace yet. Needs branch.",
+      "type": "string"
+    },
+    "systemMessage": {
+      "description": "New system prompt; \"\" restores the chart default. At most 20000 characters; put long reference material in a skill.",
+      "type": "string"
+    },
+    "tags": {
+      "description": "Replaces the whole tag list ([] clears it). Tags as the agent chart takes them (get_info capabilities.tags); lowercased and deduplicated.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "name"
+  ],
+  "type": "object"
+}
+```
+
+## `update_agent_access`
+
+```text
+Change what an agent can reach: tool list, skills, plugins, egress, connectors, Harness, workspace, toolchains.
+
+Only fields passed change; a list replaces the whole value. Presets: preset:read-only, preset:none, preset:infrastructure, preset:agent-platform, preset:full. refreshSkills re-pins git skills and plugins. tools keeps carried-over settings; a new Allow over a connector's Ask is refused (set_agent_approval grants it). Saving drops grants of connectors you are not connector admin of. Returns values before and after, grants kept and dropped.
+```
+
+```json
+{
+  "properties": {
     "branch": {
       "description": "mode commit with repository: the base branch the pull request goes to.",
       "type": "string"
@@ -1497,14 +1744,6 @@ Lists are skills, plugins, egress and toolset. "" clears a text field back to th
     },
     "defaultWorkspace": {
       "description": "Workspace <namespace>/<name> of the agent's namespace that a start_session naming none starts in, authorized as its starter; \"\" removes it.",
-      "type": "string"
-    },
-    "description": {
-      "description": "New description; \"\" clears it",
-      "type": "string"
-    },
-    "displayName": {
-      "description": "New friendly name; \"\" clears it",
       "type": "string"
     },
     "dryRun": {
@@ -1537,28 +1776,12 @@ Lists are skills, plugins, egress and toolset. "" clears a text field back to th
       "description": "Move the agent to another Harness of the namespace; \"\" selects the platform Harness. Existing Sessions keep their runtime",
       "type": "string"
     },
-    "iconUrl": {
-      "description": "New avatar URL; \"\" clears it",
-      "type": "string"
-    },
-    "labels": {
-      "additionalProperties": {
-        "type": "string"
-      },
-      "description": "Replaces all extra labels on the Agent object ({} clears them); pass every label to keep.",
-      "properties": {},
-      "type": "object"
-    },
     "mode": {
       "description": "apply (default): write live as you; a release applied from git is refused with gitops_owned. commit: open a pull request as you.",
       "enum": [
         "apply",
         "commit"
       ],
-      "type": "string"
-    },
-    "modelConfig": {
-      "description": "Name of an existing ModelConfig in the namespace",
       "type": "string"
     },
     "name": {
@@ -1670,19 +1893,35 @@ Lists are skills, plugins, egress and toolset. "" clears a text field back to th
       },
       "type": "array"
     },
-    "systemMessage": {
-      "description": "New system prompt; \"\" restores the chart default. At most 20000 characters; put long reference material in a skill.",
-      "type": "string"
-    },
-    "tags": {
-      "description": "Replaces the whole tag list ([] clears it). Tags as the agent chart takes them (get_info capabilities.tags); lowercased and deduplicated.",
+    "tools": {
+      "description": "Replaces the tool list: at most 32 selectors, each once, or {selector: Allow|Ask|Block}; [] is refused (preset:none)",
       "items": {
-        "type": "string"
+        "oneOf": [
+          {
+            "description": "A selector without a setting: the connectors' settings apply",
+            "type": "string"
+          },
+          {
+            "additionalProperties": {
+              "enum": [
+                "Allow",
+                "Ask",
+                "Block"
+              ],
+              "type": "string"
+            },
+            "description": "{selector: setting}",
+            "maxProperties": 1,
+            "minProperties": 1,
+            "type": "object"
+          }
+        ]
       },
+      "maxItems": 32,
       "type": "array"
     },
     "toolset": {
-      "description": "Replaces the whole toolset: preset:, server:, workflow: or tool:; over the chart's inline limits, use a preset; [] is refused: use preset:none.",
+      "description": "Deprecated, use tools. Replaces the tool list with selectors without settings; [] is refused (preset:none)",
       "items": {
         "type": "string"
       },
@@ -1781,6 +2020,14 @@ Checks the name, modelConfig (omitted: the default), egressPolicyRefs, connector
         "type": "string"
       },
       "type": "array"
+    },
+    "default": {
+      "description": "Setting of every listed tool without its own",
+      "enum": [
+        "Ask",
+        "Block"
+      ],
+      "type": "string"
     },
     "defaultToolchains": {
       "description": "Toolchains, name[@version] (default latest), a start_session naming none mounts; none: github.",
@@ -1963,8 +2210,35 @@ Checks the name, modelConfig (omitted: the default), egressPolicyRefs, connector
       },
       "type": "array"
     },
+    "tools": {
+      "description": "Tool list: at most 32 selectors, each once, or {selector: Allow|Ask|Block}. Unlisted tools are invisible; strictest setting wins",
+      "items": {
+        "oneOf": [
+          {
+            "description": "A selector without a setting: the connectors' settings apply",
+            "type": "string"
+          },
+          {
+            "additionalProperties": {
+              "enum": [
+                "Allow",
+                "Ask",
+                "Block"
+              ],
+              "type": "string"
+            },
+            "description": "{selector: setting}",
+            "maxProperties": 1,
+            "minProperties": 1,
+            "type": "object"
+          }
+        ]
+      },
+      "maxItems": 32,
+      "type": "array"
+    },
     "toolset": {
-      "description": "Gateway tools the agent may use: preset:, server:, workflow: or tool:; over the chart's inline limits, use a preset; preset:none means no tools.",
+      "description": "Deprecated, use tools. Selectors without settings; preset:none: no tools",
       "items": {
         "type": "string"
       },

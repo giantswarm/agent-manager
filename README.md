@@ -54,7 +54,8 @@ MCP-server-writer half.
 | Agents of a namespace (Agent objects + HelmReleases of the chart not rendered yet), one summary each: display name, description, model config, Harness, toolset, readiness, management mode, and a suspended, deleting or failing release; `details` reports each in full; `tags` keeps those with any of them | `GET /api/v1/agents?namespace=[&details=true&tags=]` | `list_agents` | no |
 | One agent with its HelmRelease values, Harness, pinned skills and plugins, toolset and the Agent's status | `GET /api/v1/agents/{ns}/{name}` | `get_agent` | no |
 | Create: OCIRepository (when missing) + HelmRelease, after skill pinning, schema, ModelConfig and Harness validation | `POST /api/v1/agents` | `create_agent` | HelmRelease, OCIRepository |
-| Update: merge into the HelmRelease values (`refreshSkills` re-pins git skills), validate, update | `PATCH /api/v1/agents/{ns}/{name}[?force=true]` | `update_agent` | HelmRelease |
+| Update: merge into the HelmRelease values (`refreshSkills` re-pins git skills), validate, update. Over MCP split in three: what the agent is (`update_agent`), what it can reach (`update_agent_access`), its approval settings (`set_agent_approval`); see [tool approval](docs/tool-approval.md) | `PATCH /api/v1/agents/{ns}/{name}[?force=true]` | `update_agent`, `update_agent_access`, `set_agent_approval` | HelmRelease, approval grants |
+| The approval grants of a namespace's agents (a connector admin's Allow over that connector's Ask), optionally of one connector | — | `list_approval_grants` | no |
 | Delete: the HelmRelease; the OCIRepository only when nothing else references it | `DELETE /api/v1/agents/{ns}/{name}[?force=true&mode=&dryRun=]` | `delete_agent` | HelmRelease, OCIRepository, (bare Agent with force) |
 | Status verdict: the Agent's conditions, HelmRelease conditions/history, Warning events | `GET /api/v1/agents/{ns}/{name}/status` | `get_agent_status` | no |
 | Dry run of create/update: pinned skills, composed manifests + every violation | `POST /api/v1/agents/validate` | `validate_agent` | no |
@@ -375,6 +376,12 @@ public repositories only.
 
 ## The toolset
 
+Since tool approval the toolset is the agent's **tool list** (`tools`, with an
+optional approval setting per entry, and `default`): see
+[docs/tool-approval.md](docs/tool-approval.md). `toolset` stays accepted as a
+tool list without settings, and an agent chart without `tools` keeps getting
+`toolset`.
+
 Muster owns the runtime limits. The resolved chart supplies the declaration's
 count through `values.schema.json` and checks aggregate UTF-8 bytes during render.
 The MCP input schema publishes that count for Backstage's existing `describe_tool`
@@ -401,7 +408,7 @@ so).
   `preset:full` for the deliberate choice of every tool the gateway exposes.
   An empty list is refused too, so "no tools" is never confused with implicit
   full access.
-- `update_agent` replaces the whole list — the edit path, and the way agents
+- `update_agent_access` replaces the whole list — the edit path, and the way agents
   that predate toolsets get one. `get_agent` / `list_agents` report the
   declared `toolset`, or `implicitFullAccess: true` for a release without one
   (a bare Agent's toolset is read from its RemoteMCPServer's header).

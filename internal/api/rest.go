@@ -456,6 +456,7 @@ var errorCodes = []struct {
 	{agents.ErrForbidden, http.StatusForbidden, "forbidden"},
 	{agents.ErrUnauthenticated, http.StatusUnauthorized, "unauthenticated"},
 	{agents.ErrUnsupported, http.StatusNotImplemented, "unsupported"},
+	{agents.ErrApprovalUnavailable, http.StatusServiceUnavailable, "approval_unavailable"},
 }
 
 // statusFor maps domain errors to HTTP status and a stable code clients can
