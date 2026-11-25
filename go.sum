@@ -205,8 +205,8 @@ github.com/giantswarm/mcp-oauth v1.15.1 h1:eDrQyBerH0LcS+jG8QXoBclM7qzC0XQXACay8
 github.com/giantswarm/mcp-oauth v1.15.1/go.mod h1:7A5o9iQ3j5cTbOqG7PludvCVrgSHNd+gbM5Dk5LYFo8=
 github.com/giantswarm/mcp-toolkit v0.7.0 h1:qaToPE0WkBauqNGpY7JoV6KSFT5Z6x3W8w63MXYVnQA=
 github.com/giantswarm/mcp-toolkit v0.7.0/go.mod h1:o6nUYtYy4g8MVVuGyUl0sJH/MZQdnDuVyhM7WICdpwc=
-github.com/giantswarm/mcp-toolkit/k8s v0.1.0 h1:GrKtTrA/KA+wnSTm5JSvm5voVNayHH++09Pt6JrOJ7c=
-github.com/giantswarm/mcp-toolkit/k8s v0.1.0/go.mod h1:SI87E0l2tayA2mJez+TVHkPM16CpfsCiQxJLQtuJzow=
+github.com/giantswarm/mcp-toolkit/k8s v0.1.1 h1:KC381ujW0KnrVGwAiTWVjumTDiKPTzU8KSeHu1LAL24=
+github.com/giantswarm/mcp-toolkit/k8s v0.1.1/go.mod h1:d+zx97K4YZMfRhfUiwxR3490YMPD3LnHGey2xcmodqg=
 github.com/giantswarm/organization-operator v1.6.5-0.20261124164900-de1bb4efe375 h1:0DtLpwW268Mpk5PRLRW4VYQlf1dblKSMjQ6SIA1EoCc=
 github.com/giantswarm/organization-operator v1.6.5-0.20261124164900-de1bb4efe375/go.mod h1:I6TkNCg4Tymy4tUr3zeeOUwfQ4Cy+Oxy6pA2d6caAVg=
 github.com/go-jose/go-jose/v4 v4.1.9 h1:pKfeQkig1NmgK4hJrZYXLEYURXfoJB61Larw0uIW4gY=

@@ -918,8 +918,11 @@ Session and task bodies are kagent's proto3 JSON, passed through: session
 `x-kagent-agent-instance-id` header is the gateway's to the runtime and is
 never sent. The stubs are generated from `giantswarm/kagent-upstream`
 (`hack/kagent-proto/`, `make generate-kagent`); the A2A stubs are the ones
-`github.com/a2aproject/a2a-go/v2` ships, as in kagent. `get_info` reports
-`capabilities.sessions`.
+`github.com/a2aproject/a2a-go/v2` ships, as in kagent. Every `A2AService`
+call carries the `A2A-Version` header with the protocol version of that a2a-go
+(`1.0`): kagent from 1.33.2 refuses an A2A call without it as an A2A 0.3 call
+(`FailedPrecondition`, "this version is not supported"), and an older kagent
+ignores it. `get_info` reports `capabilities.sessions`.
 
 ## Running
 
