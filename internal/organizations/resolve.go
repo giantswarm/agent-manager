@@ -8,6 +8,7 @@ import (
 	authorizationv1 "k8s.io/api/authorization/v1"
 
 	"github.com/giantswarm/agent-manager/internal/agents"
+	"github.com/giantswarm/agent-manager/internal/identity"
 )
 
 // Every tool takes an organization by its name, the name of its
@@ -122,7 +123,10 @@ func (s *Service) OrganizationOfNamespace(ctx context.Context, ns string) (name 
 	}
 	org, exists, err := s.cfg.Namespaces.Organization(ctx, found.Organization)
 	if err != nil {
-		return "", false, fmt.Errorf("%w: %v", agents.ErrUnsupported, err)
+		// The caller's right in the organization is not known yet: the
+		// answer does not name it, the log does.
+		s.log.Warn("the Organization of an organization namespace could not be read", identity.LogAttr(ctx), fieldNamespace, ns, "error", err)
+		return "", false, fmt.Errorf("%w: the organization of namespace %s could not be read; try again shortly", agents.ErrUnsupported, ns)
 	}
 	if !exists {
 		return "", true, nil

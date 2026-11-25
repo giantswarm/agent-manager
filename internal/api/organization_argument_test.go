@@ -1,11 +1,15 @@
 package api
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
+	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/giantswarm/agent-manager/internal/agents"
 	"github.com/giantswarm/agent-manager/internal/tags/tagstest"
@@ -146,6 +150,14 @@ func TestTheAgentToolsTakeTheOrganizationNotItsNamespace(t *testing.T) {
 	text, isErr = f.call(t, ToolGetAgent, map[string]any{"namespace": orgNS, "name": "sre"})
 	require.True(t, isErr, text)
 	assert.Equal(t, "invalid_request: namespace "+orgNS+" is an organization's namespace: pass the organization's name as organization instead of namespace (list_organizations lists yours)", text)
+
+	// Nor when its Organization cannot be read, before its right is known.
+	f.dyn.PrependReactor("get", "organizations", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewInternalError(errors.New("etcd timeout"))
+	})
+	text, isErr = f.call(t, ToolGetAgent, map[string]any{"namespace": orgNS, "name": "sre"})
+	require.True(t, isErr, text)
+	assert.Equal(t, "unsupported: the organization of namespace "+orgNS+" could not be read; try again shortly", text, "the organization's name is not in the answer")
 }
 
 // A call written for the namespace argument the organization tools no
