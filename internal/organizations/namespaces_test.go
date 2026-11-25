@@ -90,10 +90,9 @@ func TestABurstListsTheNamespacesOnce(t *testing.T) {
 			names, err := finder.Names(t.Context())
 			assert.NoError(t, err)
 			assert.Equal(t, []string{"agents-payments-x7k2q"}, names)
-			got, ok, err := finder.Find(t.Context(), "payments")
+			owners, err := finder.Owners(t.Context())
 			assert.NoError(t, err)
-			assert.True(t, ok)
-			assert.Equal(t, "agents-payments-x7k2q", got.Name)
+			assert.Equal(t, map[string]string{"agents-payments-x7k2q": "payments"}, owners)
 		})
 	}
 	wg.Wait()
@@ -105,8 +104,8 @@ func TestABurstListsTheNamespacesOnce(t *testing.T) {
 	assert.Equal(t, int32(2), lists.Load())
 }
 
-// A namespace created after the list was read is found by its name and by
-// its organization at once, and is in the list after listTTL.
+// A namespace created after the list was read is found by its name at once,
+// and is in the list after listTTL.
 func TestANewNamespaceIsFoundAtOnce(t *testing.T) {
 	finder, typed, _, now := cachedFinder(t, orgNamespace("agents-payments-x7k2q", "payments"))
 	_, err := finder.Names(t.Context())
@@ -117,14 +116,6 @@ func TestANewNamespaceIsFoundAtOnce(t *testing.T) {
 	holds, err := finder.Holds(t.Context(), "agents-billing-a1b2c")
 	require.NoError(t, err)
 	assert.True(t, holds)
-	got, ok, err := finder.Find(t.Context(), "billing")
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, Namespace{Name: "agents-billing-a1b2c", Organization: "billing"}, got)
-	// A name that can be no label value selects nothing, and is no error.
-	_, ok, err = finder.Find(t.Context(), "not a label value")
-	require.NoError(t, err)
-	assert.False(t, ok)
 
 	*now = now.Add(listTTL)
 	names, err := finder.Names(t.Context())

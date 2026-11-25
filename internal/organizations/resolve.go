@@ -103,10 +103,13 @@ func (s *Service) visible(ctx context.Context, org *orgv1alpha1.Organization) (b
 	return manage, err
 }
 
-// OrganizationOfNamespace names the organization whose Agent Platform
-// namespace ns is, by the label agent-platform-operator puts on it; ok is
-// false for any other namespace, and when organizations are not served.
-func (s *Service) OrganizationOfNamespace(ctx context.Context, ns string) (string, bool, error) {
+// OrganizationOfNamespace reports whether ns is an organization's Agent
+// Platform namespace, by the label agent-platform-operator puts on it, and
+// names that organization when the caller has a right in it (Resolve's
+// rule): for any other caller the name is empty, so the answer never names
+// an organization the caller may not see. ok is false for any other
+// namespace, and when organizations are not served.
+func (s *Service) OrganizationOfNamespace(ctx context.Context, ns string) (name string, ok bool, err error) {
 	if s == nil || s.cfg.Namespaces == nil || ns == "" {
 		return "", false, nil
 	}
@@ -114,7 +117,21 @@ func (s *Service) OrganizationOfNamespace(ctx context.Context, ns string) (strin
 	if err != nil {
 		return "", false, fmt.Errorf("%w: %v", agents.ErrUnsupported, err)
 	}
-	return found.Organization, ok, nil
+	if !ok {
+		return "", false, nil
+	}
+	org, exists, err := s.cfg.Namespaces.Organization(ctx, found.Organization)
+	if err != nil {
+		return "", false, fmt.Errorf("%w: %v", agents.ErrUnsupported, err)
+	}
+	if !exists {
+		return "", true, nil
+	}
+	visible, err := s.visible(ctx, org)
+	if err != nil || !visible {
+		return "", true, err
+	}
+	return found.Organization, true, nil
 }
 
 // organization resolves an organization argument: Resolve.

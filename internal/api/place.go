@@ -52,8 +52,12 @@ func (t *tools) place(ctx context.Context, req mcp.CallToolRequest, withCluster 
 	if err != nil {
 		return agents.Location{}, "", err
 	}
-	if ok {
+	switch {
+	case ok && owner != "":
 		return agents.Location{}, "", fmt.Errorf("%w: namespace %s is the namespace of organization %s: pass organization %q instead of namespace", agents.ErrInvalid, ns, owner, owner)
+	case ok:
+		// An organization the caller has no right in is not named.
+		return agents.Location{}, "", fmt.Errorf("%w: namespace %s is an organization's namespace: pass the organization's name as organization instead of namespace (list_organizations lists yours)", agents.ErrInvalid, ns)
 	}
 	return agents.Location{Namespace: ns}, "", nil
 }

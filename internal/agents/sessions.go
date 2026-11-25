@@ -88,6 +88,9 @@ type SessionQuery struct {
 // always present. The newest turns that fit the budget are kept;
 // OmittedTurns counts the older ones left out.
 type SessionDetail struct {
+	// Organization names the organization whose agent the session is with;
+	// empty for an agent of the installation's platform namespaces.
+	Organization string            `json:"organization,omitempty"`
 	Session      json.RawMessage   `json:"session"`
 	Detail       string            `json:"detail"`
 	TotalTurns   int               `json:"totalTurns"`
@@ -181,8 +184,11 @@ type SessionStart struct {
 // controller left it (RUNTIME_STATE_DELETED). Warning says what was left
 // undone after the delete: a binding muster did not remove.
 type SessionDelete struct {
-	Session json.RawMessage `json:"session"`
-	Warning string          `json:"warning,omitempty"`
+	// Organization names the organization whose agent the session was with;
+	// empty for an agent of the installation's platform namespaces.
+	Organization string          `json:"organization,omitempty"`
+	Session      json.RawMessage `json:"session"`
+	Warning      string          `json:"warning,omitempty"`
 }
 
 // AgentRef names an Agent.
@@ -297,7 +303,7 @@ func (s *Service) GetSession(ctx context.Context, q SessionQuery) (*SessionDetai
 	if err != nil {
 		return nil, err
 	}
-	out := &SessionDetail{Session: sc.raw, Detail: detail, TotalTurns: len(tasks)}
+	out := &SessionDetail{Organization: s.owners(ctx)[sc.agent.Namespace], Session: sc.raw, Detail: detail, TotalTurns: len(tasks)}
 	budget := maxBytes - jsonSize(out) - max(len(omittedTurnsHint), len(turnBoundHint)) - envelopeSlack
 	first := 0
 	if q.LastTurns > 0 {
@@ -837,7 +843,7 @@ func (s *Service) DeleteSession(ctx context.Context, sessionID string) (*Session
 	s.log.InfoContext(ctx, "session deleted", identity.LogAttr(ctx), "agent", kagent.Ref{
 		Namespace: session.GetAgent().GetNamespace(), Name: session.GetAgent().GetName(),
 	}.Tenant(), "session", session.GetId())
-	out := &SessionDelete{}
+	out := &SessionDelete{Organization: s.owners(ctx)[session.GetAgent().GetNamespace()]}
 	if binding != nil {
 		if err := s.cfg.Bindings.Unbind(ctx, token, binding.Actor); err != nil {
 			s.log.ErrorContext(ctx, "session deleted but not unbound in muster", identity.LogAttr(ctx), "session", session.GetId(), "actor", binding.Actor, "error", err)

@@ -290,7 +290,13 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service, l
 		mcp.WithIdempotentHintAnnotation(false),
 		mcp.WithOpenWorldHintAnnotation(false),
 	), t.run(func(ctx context.Context, req mcp.CallToolRequest) (any, error) {
-		return t.svc.ListMembers(ctx, req.GetString(argOrganization, ""))
+		var in struct {
+			Organization string `json:"organization"`
+		}
+		if err := bindArgs(req, &in); err != nil {
+			return nil, err
+		}
+		return t.svc.ListMembers(ctx, in.Organization)
 	}))
 
 	memberProps := func() []mcp.ToolOption {
@@ -311,7 +317,11 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service, l
 		tooldesc.Describe("Add a group or a person to an organization with a role, as you.",
 			"Writes the RoleBinding organization-<role>s, dry run first; a member already holding the role is left as is. The admin role is refused: the admins are the Organization's spec.admins, changed with update_organization. Needs agent-platform:admin in the organization, or agent-platform:organizations-admin."),
 	}, addOpts...)...), t.run(func(ctx context.Context, req mcp.CallToolRequest) (any, error) {
-		return t.svc.AddMember(ctx, memberRequest(req))
+		in, err := memberRequest(req)
+		if err != nil {
+			return nil, err
+		}
+		return t.svc.AddMember(ctx, in)
 	}))
 
 	removeOpts := append(memberProps(),
@@ -324,7 +334,11 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service, l
 		tooldesc.Describe("Remove a group or a person from an organization's roles, as you.",
 			"From every binding of the role that holds them, dry run first; an emptied binding goes. An admin stays one (note says so): the admins are the Organization's spec.admins, changed with update_organization. Needs agent-platform:admin in the organization."),
 	}, removeOpts...)...), t.run(func(ctx context.Context, req mcp.CallToolRequest) (any, error) {
-		return t.svc.RemoveMember(ctx, memberRequest(req))
+		in, err := memberRequest(req)
+		if err != nil {
+			return nil, err
+		}
+		return t.svc.RemoveMember(ctx, in)
 	}))
 
 	t.addTool(s, mcp.NewTool(ToolSetOrganizationModel,
@@ -390,9 +404,14 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service, l
 		mcp.WithIdempotentHintAnnotation(false),
 		mcp.WithOpenWorldHintAnnotation(false),
 	), t.run(func(ctx context.Context, req mcp.CallToolRequest) (any, error) {
-		organization := req.GetString(argOrganization, "")
-		list, err := t.svc.ListConnectors(ctx, organization)
-		return map[string]any{"organization": organization, "connectors": list}, err
+		var in struct {
+			Organization string `json:"organization"`
+		}
+		if err := bindArgs(req, &in); err != nil {
+			return nil, err
+		}
+		list, err := t.svc.ListConnectors(ctx, in.Organization)
+		return map[string]any{"organization": in.Organization, "connectors": list}, err
 	}))
 
 	t.addTool(s, mcp.NewTool(ToolSetOrganizationConnector,
@@ -509,11 +528,33 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service, l
 		mcp.WithIdempotentHintAnnotation(false),
 		mcp.WithOpenWorldHintAnnotation(false),
 	), t.run(func(ctx context.Context, req mcp.CallToolRequest) (any, error) {
-		return t.svc.DeleteResource(ctx, req.GetString(argOrganization, ""), req.GetString(argKind, ""), req.GetString(argName, ""), req.GetBool(argDryRun, false), req.GetString(argMode, ""))
+		var in struct {
+			Organization string `json:"organization"`
+			Kind         string `json:"kind"`
+			Name         string `json:"name"`
+			DryRun       bool   `json:"dryRun"`
+			Mode         string `json:"mode"`
+		}
+		if err := bindArgs(req, &in); err != nil {
+			return nil, err
+		}
+		return t.svc.DeleteResource(ctx, in.Organization, in.Kind, in.Name, in.DryRun, in.Mode)
 	}))
 }
 
-func memberRequest(req mcp.CallToolRequest) organizations.MemberRequest {
-	return organizations.MemberRequest{Organization: req.GetString(argOrganization, ""), Role: req.GetString(argRole, ""),
-		Group: req.GetString(argGroup, ""), User: req.GetString(argUser, ""), DryRun: req.GetBool(argDryRun, false), Mode: req.GetString(argMode, "")}
+// memberRequest binds the member tools' arguments strictly: an argument the
+// tool does not take, such as the namespace it once took, is refused.
+func memberRequest(req mcp.CallToolRequest) (organizations.MemberRequest, error) {
+	var in struct {
+		Organization string `json:"organization"`
+		Role         string `json:"role"`
+		Group        string `json:"group"`
+		User         string `json:"user"`
+		DryRun       bool   `json:"dryRun"`
+		Mode         string `json:"mode"`
+	}
+	if err := bindArgs(req, &in); err != nil {
+		return organizations.MemberRequest{}, err
+	}
+	return organizations.MemberRequest(in), nil
 }

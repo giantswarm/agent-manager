@@ -31,17 +31,23 @@ type ToolchainUsage struct {
 
 // ToolchainAgent is an agent whose default toolchains name a toolchain.
 type ToolchainAgent struct {
-	Namespace string `json:"namespace"`
-	Name      string `json:"name"`
+	// Organization names the organization whose namespace it is in; empty
+	// in a platform namespace of the installation.
+	Organization string `json:"organization,omitempty"`
+	Namespace    string `json:"namespace"`
+	Name         string `json:"name"`
 	// Toolchain is its default toolchain entry, name[@version].
 	Toolchain string `json:"toolchain"`
 }
 
 // ToolchainSession is a Session that mounts a toolchain.
 type ToolchainSession struct {
-	ID        string `json:"id"`
-	Namespace string `json:"namespace"`
-	Agent     string `json:"agent"`
+	ID string `json:"id"`
+	// Organization names the organization whose namespace it is in; empty
+	// in a platform namespace of the installation.
+	Organization string `json:"organization,omitempty"`
+	Namespace    string `json:"namespace"`
+	Agent        string `json:"agent"`
 	// Image is the digest-pinned image the Session mounts.
 	Image string `json:"image"`
 	State string `json:"state,omitempty"`
@@ -87,6 +93,7 @@ func (s *Service) ToolchainUsers(ctx context.Context, name, version string) (*To
 	// nothing about the caller's access, so it is not named. A refused token
 	// fails the whole answer without a name; any other failure is counted.
 	unnamed := 0
+	owners := s.owners(ctx)
 	for _, ns := range s.Managed(ctx) {
 		organization := !slices.Contains(s.cfg.ManagedNamespaces, ns)
 		st, err := s.site(ctx, In(ns))
@@ -122,7 +129,7 @@ func (s *Service) ToolchainUsers(ctx context.Context, name, version string) (*To
 			for _, entry := range defaults {
 				n, v, _ := strings.Cut(entry, "@")
 				if n == name && (tag == "" || strings.TrimPrefix(v, "v") == tag) {
-					out.Agents = append(out.Agents, ToolchainAgent{Namespace: ns, Name: agent.Name, Toolchain: entry})
+					out.Agents = append(out.Agents, ToolchainAgent{Organization: owners[ns], Namespace: ns, Name: agent.Name, Toolchain: entry})
 				}
 			}
 			page, err := s.sessionsOfAgent(ctx, token, agent)
@@ -136,7 +143,7 @@ func (s *Service) ToolchainUsers(ctx context.Context, name, version string) (*To
 			for _, session := range page.Sessions {
 				if i := slices.IndexFunc(session.GetToolImages(), holds); i >= 0 {
 					out.Sessions = append(out.Sessions, ToolchainSession{
-						ID: session.GetId(), Namespace: ns, Agent: agent.Name,
+						ID: session.GetId(), Organization: owners[ns], Namespace: ns, Agent: agent.Name,
 						Image: session.GetToolImages()[i].GetOci(), State: strings.TrimPrefix(session.GetState().String(), "RUNTIME_STATE_"),
 					})
 				}
@@ -206,4 +213,19 @@ func (s *Service) toolchainDigests(ctx context.Context, token, name, tag string)
 		return nil, errors.Join(listErr, fmt.Errorf("%s is not published", strings.Join(missing, ", ")))
 	}
 	return digests, listErr
+}
+
+// owners names the organization of each organization namespace; none when
+// they cannot be listed, which is logged: the answer then names namespaces
+// alone.
+func (s *Service) owners(ctx context.Context) map[string]string {
+	if s.cfg.Tenants == nil {
+		return nil
+	}
+	owners, err := s.cfg.Tenants.Owners(ctx)
+	if err != nil {
+		s.log.Warn("the organizations of the organization namespaces could not be listed", "error", err)
+		return nil
+	}
+	return owners
 }

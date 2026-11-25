@@ -138,4 +138,32 @@ func TestTheAgentToolsTakeTheOrganizationNotItsNamespace(t *testing.T) {
 		require.True(t, isErr, text)
 		assert.Equal(t, tc.want, text)
 	}
+
+	// A caller with no right in the organization is refused without its name.
+	f.deny = func(ns, _, resource, name string) bool {
+		return ns == orgNS || resource == "organizations" && name == "payments"
+	}
+	text, isErr = f.call(t, ToolGetAgent, map[string]any{"namespace": orgNS, "name": "sre"})
+	require.True(t, isErr, text)
+	assert.Equal(t, "invalid_request: namespace "+orgNS+" is an organization's namespace: pass the organization's name as organization instead of namespace (list_organizations lists yours)", text)
+}
+
+// A call written for the namespace argument the organization tools no
+// longer take is refused, not read as a call without an organization: a
+// delete of an organization's model never deletes the installation's model
+// of that name.
+func TestTheOrganizationToolsRefuseTheNamespaceArgument(t *testing.T) {
+	f := newOrgFixture(t, model("claude", true))
+	for tool, args := range map[string]map[string]any{
+		ToolDeleteOrganizationObject:  {"namespace": orgNS, "kind": "model", "name": "claude"},
+		ToolListOrganizationMembers:   {"namespace": orgNS},
+		ToolAddOrganizationMember:     {"namespace": orgNS, "role": "user", "group": "g"},
+		ToolRemoveOrganizationMember:  {"namespace": orgNS, "group": "g"},
+		ToolListOrganizationConnector: {"namespace": orgNS},
+	} {
+		text, isErr := f.call(t, tool, args)
+		require.True(t, isErr, tool)
+		assert.Equal(t, "invalid_request: arguments do not match the tool schema", text, tool)
+	}
+	assert.NotNil(t, f.get(t, mcGVR, orgNS, "claude"), "nothing is deleted")
 }

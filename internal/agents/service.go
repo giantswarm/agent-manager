@@ -126,6 +126,9 @@ type TenantSet interface {
 	Names(ctx context.Context) ([]string, error)
 	// Holds reports whether ns is one.
 	Holds(ctx context.Context, ns string) (bool, error)
+	// Owners names the organization of each organization namespace, by
+	// namespace.
+	Owners(ctx context.Context) (map[string]string, error)
 }
 
 // Service is the agent lifecycle.
@@ -468,7 +471,7 @@ func (s *Service) Namespace(ctx context.Context, ns string) (string, error) {
 	}
 	// The organization namespaces are not named: the ServiceAccount found
 	// them, and a caller learns only those it belongs to.
-	what := "an organization namespace you belong to (list_organizations)"
+	what := "the namespaces of the organizations you belong to (list_organizations), which the tools address by the organization's name"
 	if s.cfg.Tenants == nil {
 		what = "none other"
 	}

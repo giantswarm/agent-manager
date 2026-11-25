@@ -14,8 +14,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/labels"
-	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 )
@@ -210,42 +208,22 @@ func (n *Namespaces) Names(ctx context.Context) ([]string, error) {
 	return out, nil
 }
 
+// Owners names the organization of each organization namespace, by
+// namespace: what its label says.
+func (n *Namespaces) Owners(ctx context.Context) (map[string]string, error) {
+	list, err := n.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]string, len(list))
+	for _, ns := range list {
+		out[ns.Name] = ns.Organization
+	}
+	return out, nil
+}
+
 // Holds reports whether name is an organization namespace.
 func (n *Namespaces) Holds(ctx context.Context, name string) (bool, error) {
 	_, ok, err := n.Get(ctx, name)
 	return ok, err
-}
-
-// Find is the organization namespace of the Organization organization: ok
-// is false when there is none, or more than one namespace carries its label.
-// The cached list answers when it holds exactly one; otherwise the label is
-// listed from the API server, so a namespace created after the cache filled
-// is found at once.
-func (n *Namespaces) Find(ctx context.Context, organization string) (Namespace, bool, error) {
-	list, err := n.List(ctx)
-	if err != nil {
-		return Namespace{}, false, err
-	}
-	found := withOrganization(list, organization)
-	if len(found) != 1 && len(validation.IsValidLabelValue(organization)) == 0 {
-		fresh, err := n.list(ctx, labels.Set{apov1alpha1.OrganizationLabel: organization}.String())
-		if err != nil {
-			return Namespace{}, false, err
-		}
-		found = withOrganization(fresh, organization)
-	}
-	if len(found) != 1 {
-		return Namespace{}, false, nil
-	}
-	return found[0], true, nil
-}
-
-func withOrganization(list []Namespace, organization string) []Namespace {
-	var found []Namespace
-	for _, ns := range list {
-		if ns.Organization == organization {
-			found = append(found, ns)
-		}
-	}
-	return found
 }

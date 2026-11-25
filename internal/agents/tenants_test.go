@@ -22,7 +22,11 @@ import (
 // fakeTenants is the organization namespace finder as the service sees it.
 type fakeTenants struct {
 	namespaces []string
+	// owners names the organization of a namespace.
+	owners map[string]string
 }
+
+func (f *fakeTenants) Owners(context.Context) (map[string]string, error) { return f.owners, nil }
 
 func (f *fakeTenants) Names(context.Context) ([]string, error) { return f.namespaces, nil }
 func (f *fakeTenants) Holds(_ context.Context, ns string) (bool, error) {
@@ -261,6 +265,27 @@ func TestToolchainUsersNamesNoOrganizationTheCallerIsNotIn(t *testing.T) {
 	for _, line := range users.Unreadable {
 		assert.NotContains(t, line, "agents-other-x7k2q")
 	}
+}
+
+// An agent of an organization's namespace carries the organization's name:
+// a caller never maps a namespace back to its organization.
+func TestToolchainUsersNamesTheOrganizationOfAnAgent(t *testing.T) {
+	svc, _, _ := newToolchainFixture(t, "github")
+	svc.cfg.Tenants = &fakeTenants{namespaces: []string{"agents-pay-x7k2q"}, owners: map[string]string{"agents-pay-x7k2q": "pay"}}
+	ctx := asPerson(t.Context(), "admin@lab.local")
+	c, err := svc.kube.Client(ctx)
+	require.NoError(t, err)
+	agent := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": KagentAPIGroup + "/" + DefaultKagentAPIVersion, "kind": "Agent",
+		"metadata": map[string]any{"name": "reviewer", "namespace": "agents-pay-x7k2q", "annotations": map[string]any{DefaultToolchainsAnnotation: "github"}},
+	}}
+	_, err = c.Dynamic().Resource(agentGVR).Namespace("agents-pay-x7k2q").Create(ctx, agent, metav1.CreateOptions{})
+	require.NoError(t, err)
+
+	users, err := svc.ToolchainUsers(ctx, "github", "")
+	require.NoError(t, err)
+	assert.Contains(t, users.Agents, ToolchainAgent{Organization: "pay", Namespace: "agents-pay-x7k2q", Name: "reviewer", Toolchain: "github"})
+	assert.Contains(t, users.Agents, ToolchainAgent{Namespace: "kagent", Name: "sre", Toolchain: "github"}, "a platform agent names no organization")
 }
 
 // A token the API server refuses fails toolchain_users without naming the
