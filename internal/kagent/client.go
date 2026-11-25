@@ -11,6 +11,10 @@
 // context id (the controller keeps a session's A2A context equal to its id).
 // The x-kagent-agent-instance-id header is the gateway's to the runtime and is
 // never sent from here.
+//
+// Every A2A call also carries the A2A-Version service parameter with the
+// protocol version of the a2a-go this module builds with: from a2a-go 2.7.0
+// a server treats a call without it as A2A 0.3 and refuses it.
 package kagent
 
 import (
@@ -22,6 +26,7 @@ import (
 	"net"
 	"net/url"
 
+	"github.com/a2aproject/a2a-go/v2/a2a"
 	a2apb "github.com/a2aproject/a2a-go/v2/a2apb/v1"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
@@ -136,9 +141,31 @@ func Dial(target string) (*Client, error) {
 func NewClient(conn grpc.ClientConnInterface) *Client {
 	return &Client{
 		sessions:  apiv1alpha1.NewSessionServiceClient(conn),
-		a2a:       a2apb.NewA2AServiceClient(conn),
+		a2a:       a2apb.NewA2AServiceClient(a2aConn{conn}),
 		closeConn: func() error { return nil },
 	}
+}
+
+// a2aConn is the connection the A2A client calls through: it sets the
+// A2A-Version service parameter on every unary and streaming call, so no A2A
+// call can go without it and the session service's calls never carry it.
+type a2aConn struct{ grpc.ClientConnInterface }
+
+func (c a2aConn) Invoke(ctx context.Context, method string, args, reply any, opts ...grpc.CallOption) error {
+	return c.ClientConnInterface.Invoke(withA2AVersion(ctx), method, args, reply, opts...)
+}
+
+func (c a2aConn) NewStream(ctx context.Context, desc *grpc.StreamDesc, method string, opts ...grpc.CallOption) (grpc.ClientStream, error) {
+	return c.ClientConnInterface.NewStream(withA2AVersion(ctx), desc, method, opts...)
+}
+
+// withA2AVersion is ctx with A2A-Version set to the a2a-go protocol version,
+// replacing any value: a server refuses a call that names more than one.
+func withA2AVersion(ctx context.Context) context.Context {
+	md, _ := metadata.FromOutgoingContext(ctx)
+	md = md.Copy()
+	md.Set(a2a.SvcParamVersion, string(a2a.Version))
+	return metadata.NewOutgoingContext(ctx, md)
 }
 
 // Close releases the connection Dial opened.

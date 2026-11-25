@@ -1,7 +1,9 @@
 // Package kagenttest is a fake kagent controller for tests: SessionService and
 // lf.a2a.v1.A2AService on an in-memory gRPC connection, addressed the way the
 // A2A gateway routes (the Agent as tenant, the session as the message's
-// context), recording every call's metadata.
+// context), recording every call's metadata. Its A2A service refuses a call
+// whose A2A-Version is not the a2a-go protocol version, as kagent's a2a-go
+// does from 2.7.0.
 package kagenttest
 
 import (
@@ -14,6 +16,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/a2aproject/a2a-go/v2/a2a"
 	a2apb "github.com/a2aproject/a2a-go/v2/a2apb/v1"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
@@ -185,6 +188,26 @@ func (c *Controller) record(ctx context.Context, method string, req proto.Messag
 	return c.Fail[method]
 }
 
+// checkA2AVersion refuses an A2A call as a2a-go's server does (a2asrv,
+// checkProtocolVersion): more than one A2A-Version is an invalid request, and
+// a call without one asks for A2A 0.3, which a server of another major.minor
+// does not serve.
+func checkA2AVersion(ctx context.Context) error {
+	md, _ := metadata.FromIncomingContext(ctx)
+	versions := md.Get(a2a.SvcParamVersion)
+	if len(versions) > 1 {
+		return status.Errorf(codes.InvalidArgument, "%s: %d protocol versions specified", a2a.ErrInvalidRequest, len(versions))
+	}
+	requested := a2a.ProtocolVersion("0.3")
+	if len(versions) == 1 && versions[0] != "" {
+		requested = a2a.ProtocolVersion(versions[0])
+	}
+	if requested != a2a.Version {
+		return status.Errorf(codes.FailedPrecondition, "%s: requested %q, served %q", a2a.ErrVersionNotSupported, requested, a2a.Version)
+	}
+	return nil
+}
+
 // session is the caller's live session id: a deleted session or another
 // creator's is not found, as on the controller.
 func (c *Controller) session(id string) *apiv1alpha1.Session {
@@ -341,6 +364,9 @@ func (c *Controller) ListTasks(ctx context.Context, req *a2apb.ListTasksRequest)
 	if err := c.record(ctx, "ListTasks", req); err != nil {
 		return nil, err
 	}
+	if err := checkA2AVersion(ctx); err != nil {
+		return nil, err
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if _, err := c.routed(req.GetTenant(), req.GetContextId()); err != nil {
@@ -361,6 +387,9 @@ func (c *Controller) ListTasks(ctx context.Context, req *a2apb.ListTasksRequest)
 // GetTask implements A2AService: one task by id, through its session's Agent.
 func (c *Controller) GetTask(ctx context.Context, req *a2apb.GetTaskRequest) (*a2apb.Task, error) {
 	if err := c.record(ctx, "GetTask", req); err != nil {
+		return nil, err
+	}
+	if err := checkA2AVersion(ctx); err != nil {
 		return nil, err
 	}
 	c.mu.Lock()
@@ -400,6 +429,9 @@ func (c *Controller) SendStreamingMessage(req *a2apb.SendMessageRequest, stream 
 	ctx := stream.Context()
 	defer func() { c.turnEnded <- struct{}{} }()
 	if err := c.record(ctx, "SendStreamingMessage", req); err != nil {
+		return err
+	}
+	if err := checkA2AVersion(ctx); err != nil {
 		return err
 	}
 	msg := req.GetMessage()
