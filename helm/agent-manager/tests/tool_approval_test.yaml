@@ -1,0 +1,98 @@
+# Tool approval per agent (muster.toolApproval): the sender token muster
+# reviews, the flags, the grants Role in the release namespace and, with
+# downstream OAuth, get on HelmReleases in the managed namespaces.
+#
+# Run with: make helm-test (helm unittest helm/agent-manager)
+suite: tool approval per agent
+templates:
+  - templates/deployment.yaml
+  - templates/tool-approval-rbac.yaml
+set:
+  oauth:
+    enabled: true
+    existingSecret: platform-oauth
+  global:
+    domain: example.com
+    identity:
+      issuerUrl: https://dex.example.com
+      clientId: platform-client
+  kagent:
+    controllerTarget: kagent-controller.kagent.svc:8083
+tests:
+  - it: renders nothing by default
+    template: templates/tool-approval-rbac.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: sends the projected token and keeps grants in the release namespace
+    template: templates/deployment.yaml
+    release:
+      namespace: agent-platform
+    set:
+      muster.toolApproval.enabled: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --muster-approval-sender-token-file=/var/run/secrets/agent-manager/muster-approval/token
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --approval-grants-namespace=agent-platform
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --muster-mcp-url=http://muster.agent-platform.svc.cluster.local:8090/mcp
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: muster-approval-sender
+            projected:
+              sources:
+                - serviceAccountToken:
+                    audience: "muster"
+                    expirationSeconds: 3600
+                    path: token
+
+  - it: needs the session tools
+    template: templates/deployment.yaml
+    set:
+      muster.toolApproval.enabled: true
+      kagent.controllerTarget: ""
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --muster-approval-sender-token-file=/var/run/secrets/agent-manager/muster-approval/token
+
+  - it: grants ConfigMaps in the release namespace to the ServiceAccount
+    template: templates/tool-approval-rbac.yaml
+    release:
+      namespace: agent-platform
+    set:
+      muster.toolApproval.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 2
+      - equal:
+          path: rules[0].resources
+          value: ["configmaps"]
+        documentIndex: 0
+      - equal:
+          path: metadata.namespace
+          value: agent-platform
+        documentIndex: 0
+
+  - it: grants get on HelmReleases per managed namespace with downstream OAuth
+    template: templates/tool-approval-rbac.yaml
+    set:
+      muster.toolApproval.enabled: true
+      oauth.downstream.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 4
+      - equal:
+          path: rules[0].verbs
+          value: ["get"]
+        documentIndex: 2
+      - equal:
+          path: rules[0].resources
+          value: ["helmreleases"]
+        documentIndex: 2

@@ -462,6 +462,25 @@
                     "type": "string",
                     "description": "The muster MCP URL composed into an agent placed on a workload cluster (create_agent with organization and cluster): one those clusters reach, the installation's public muster endpoint. Empty refuses target clusters."
                 },
+                "toolApproval": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "audience": {
+                            "type": "string",
+                            "description": "Audience of the projected ServiceAccount token muster reviews."
+                        },
+                        "enabled": {
+                            "type": "boolean",
+                            "description": "Tool approval per agent (giantswarm/giantswarm#38902): every session `start_session` binds carries the agent's tool list settings, its `default` and its approval grants, sent with agent-manager's own projected ServiceAccount token (audience `audience`) beside the person's, which muster reviews before it takes them (muster's `muster-approval-binder` Role, bound to this ServiceAccount by the agent-platform chart). `set_agent_approval` checks an Allow over a connector's Ask against muster's `filter_tools` at `mcpUrl` and keeps the grant in a ConfigMap of the release namespace (the ServiceAccount gets a Role on ConfigMaps there, and `get` on HelmReleases in the managed namespaces to read an agent's settings for a session its starter may not read the release of). Rendered with the session tools (`oauth.enabled`, `kagent.controllerTarget`) and `bindingsUrl`. Needs a muster that takes approval settings (milestone 2 of tool approval)."
+                        },
+                        "expirationSeconds": {
+                            "type": "integer",
+                            "description": "Lifetime of the projected token; the kubelet rotates it.",
+                            "minimum": 600
+                        }
+                    }
+                },
                 "toolchainsToolsPrefix": {
                     "type": "string",
                     "description": "The toolchain-manager's tool prefix in muster (`x_toolchain-manager_`): `start_session` starts a toolchain only at a version its `list_toolchains` lists for the caller, the newest listed when none is named, so a deprecated or unpublished version starts nothing. Set it where the toolchain-manager runs behind muster. Empty: any version `toolchains.repository` carries starts."

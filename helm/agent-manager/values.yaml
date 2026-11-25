@@ -402,6 +402,26 @@ muster:
   # where the toolchain-manager runs behind muster. Empty: any version
   # `toolchains.repository` carries starts.
   toolchainsToolsPrefix: ""
+  toolApproval:
+    # -- Tool approval per agent (giantswarm/giantswarm#38902): every session
+    # `start_session` binds carries the agent's tool list settings, its
+    # `default` and its approval grants, sent with agent-manager's own
+    # projected ServiceAccount token (audience `audience`) beside the
+    # person's, which muster reviews before it takes them (muster's
+    # `muster-approval-binder` Role, bound to this ServiceAccount by the
+    # agent-platform chart). `set_agent_approval` checks an Allow over a
+    # connector's Ask against muster's `filter_tools` at `mcpUrl` and keeps
+    # the grant in a ConfigMap of the release namespace (the ServiceAccount
+    # gets a Role on ConfigMaps there, and `get` on HelmReleases in the
+    # managed namespaces to read an agent's settings for a session its
+    # starter may not read the release of). Rendered with the session tools
+    # (`oauth.enabled`, `kagent.controllerTarget`) and `bindingsUrl`. Needs a
+    # muster that takes approval settings (milestone 2 of tool approval).
+    enabled: false
+    # -- Audience of the projected ServiceAccount token muster reviews.
+    audience: muster
+    # -- Lifetime of the projected token; the kubelet rotates it.
+    expirationSeconds: 3600  # @schema minimum: 600
   mcpServer:
     # -- Register this server with muster by rendering an
     # `mcpservers.muster.giantswarm.io` CR in the release namespace. Tools then
@@ -460,6 +480,9 @@ muster:
         get_agent: Allow
         create_agent: Allow
         update_agent: Allow
+        update_agent_access: Allow
+        set_agent_approval: Allow
+        list_approval_grants: Allow
         delete_agent: Allow
         get_agent_status: Allow
         validate_agent: Allow

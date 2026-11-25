@@ -170,8 +170,13 @@ spec:
             {{- end }}
             {{- $workspaces := and $.Values.muster.bindingsUrl $.Values.muster.mcpUrl $.Values.muster.workspacesToolsPrefix }}
             {{- $toolchainList := and $.Values.toolchains.repository $.Values.muster.mcpUrl $.Values.muster.toolchainsToolsPrefix }}
-            {{- if or $workspaces $toolchainList }}
+            {{- $toolApproval := include "agent-manager.toolApproval" $ }}
+            {{- if or $workspaces $toolchainList $toolApproval }}
             - --muster-mcp-url={{ $.Values.muster.mcpUrl }}
+            {{- end }}
+            {{- if $toolApproval }}
+            - --muster-approval-sender-token-file=/var/run/secrets/agent-manager/muster-approval/token
+            - --approval-grants-namespace={{ $.Release.Namespace }}
             {{- end }}
             {{- if $workspaces }}
             - --workspaces-tools-prefix={{ $.Values.muster.workspacesToolsPrefix }}
@@ -360,6 +365,11 @@ spec:
               mountPath: /etc/agent-manager/toolchain-registry
               readOnly: true
             {{- end }}
+            {{- if include "agent-manager.toolApproval" . }}
+            - name: muster-approval-sender
+              mountPath: /var/run/secrets/agent-manager/muster-approval
+              readOnly: true
+            {{- end }}
             {{- if $githubTokenExchange }}
             - name: github-token-exchange
               mountPath: /etc/agent-manager/github-token-exchange
@@ -397,6 +407,15 @@ spec:
             items:
               - key: .dockerconfigjson
                 path: config.json
+        {{- end }}
+        {{- if include "agent-manager.toolApproval" . }}
+        - name: muster-approval-sender
+          projected:
+            sources:
+              - serviceAccountToken:
+                  audience: {{ .Values.muster.toolApproval.audience | quote }}
+                  expirationSeconds: {{ .Values.muster.toolApproval.expirationSeconds }}
+                  path: token
         {{- end }}
         {{- if $githubTokenExchange }}
         - name: github-token-exchange

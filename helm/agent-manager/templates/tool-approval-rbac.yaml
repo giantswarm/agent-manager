@@ -1,0 +1,70 @@
+{{- /*
+Tool approval per agent (muster.toolApproval). The approval grants are
+agent-manager's own records: ConfigMaps of the release namespace, written and
+read with this ServiceAccount only. With oauth.downstream the ServiceAccount
+otherwise holds no rights; it gets get on HelmReleases in the managed
+namespaces, to read an agent's approval settings for a Session whose starter
+may not read the agent's release (without it such a start is refused rather
+than bound without the agent's Ask and Block).
+*/}}
+{{- if and (include "agent-manager.toolApproval" .) .Values.rbac.create }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "agent-manager.fullname" . }}-approval-grants
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "agent-manager.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "create", "update", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "agent-manager.fullname" . }}-approval-grants
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "agent-manager.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "agent-manager.fullname" . }}-approval-grants
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "agent-manager.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- if not (include "agent-manager.serviceAccountRBAC" .) }}
+{{- range $ns := (include "agent-manager.managedNamespaces" . | fromJsonArray) }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "agent-manager.fullname" $ }}-approval-settings
+  namespace: {{ $ns }}
+  labels:
+    {{- include "agent-manager.labels" $ | nindent 4 }}
+rules:
+  - apiGroups: ["helm.toolkit.fluxcd.io"]
+    resources: ["helmreleases"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "agent-manager.fullname" $ }}-approval-settings
+  namespace: {{ $ns }}
+  labels:
+    {{- include "agent-manager.labels" $ | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "agent-manager.fullname" $ }}-approval-settings
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "agent-manager.serviceAccountName" $ }}
+    namespace: {{ $.Release.Namespace }}
+{{- end }}
+{{- end }}
+{{- end }}
