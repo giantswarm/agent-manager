@@ -202,3 +202,54 @@ tests:
           existingSecret: agent-manager-github-exchange
     asserts:
       - failedTemplate: {}
+
+  - it: renders the connector's tool approval with the Allow rule and every tool named
+    asserts:
+      - equal:
+          path: spec.approval.rule
+          value: Allow
+      - equal:
+          path: spec.approval.tools.get_info
+          value: Allow
+      - equal:
+          path: spec.approval.tools.get_agent
+          value: Allow
+      - equal:
+          path: spec.approval.tools.create_agent
+          value: Allow
+
+  - it: renders an installation's per-tool override next to the defaults
+    set:
+      muster:
+        mcpServer:
+          approval:
+            tools:
+              create_agent: Ask
+    asserts:
+      - equal:
+          path: spec.approval.tools.create_agent
+          value: Ask
+      - equal:
+          path: spec.approval.tools.get_agent
+          value: Allow
+      - equal:
+          path: spec.approval.rule
+          value: Allow
+
+  - it: renders no approval when the installation clears it (null: Helm merges an empty map into the default)
+    set:
+      muster:
+        mcpServer:
+          approval: null
+    asserts:
+      - notExists:
+          path: spec.approval
+
+  - it: refuses a rule the CRD does not allow (Block hides a tool, it is no rule)
+    set:
+      muster:
+        mcpServer:
+          approval:
+            rule: Block
+    asserts:
+      - failedTemplate: {}
