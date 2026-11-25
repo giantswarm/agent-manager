@@ -202,9 +202,9 @@ func (s *Service) credentialOperation(ctx context.Context, id string) (*credenti
 	operation.Namespace.prepared = true
 	var organization Namespace
 	if operation.Namespace.Scope == scopePlatform {
-		organization, err = s.modelNamespace(ctx, operation.Namespace.Name)
+		organization, err = s.platformTarget(ctx)
 	} else {
-		organization, err = s.orgNamespace(ctx, operation.Namespace.Organization)
+		organization, err = s.organization(ctx, operation.Namespace.Organization)
 	}
 	if err != nil {
 		return nil, err

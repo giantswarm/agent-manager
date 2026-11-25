@@ -1057,7 +1057,7 @@ components:
       required: [name, toolset]
       properties:
         namespace: { type: string }
-        organization: { type: string, description: "With cluster: the organization owning the workload cluster the agent runs on (namespace org-<organization> on the installation holds the cluster's kubeconfig Secret and the HelmRelease)" }
+        organization: { type: string, description: "With cluster: the organization owning the workload cluster the agent runs on (the namespace its Organization reports in status.namespace on the installation holds the cluster's kubeconfig Secret and the HelmRelease)" }
         cluster: { type: string, description: "With organization: the workload cluster the agent runs on; absent on the installation's own cluster" }
         name: { type: string, description: DNS-1123 technical name (HelmRelease and Agent name), max 63 chars }
         displayName: { type: string, maxLength: 63 }
@@ -1189,7 +1189,7 @@ components:
       properties:
         name: { type: string }
         namespace: { type: string }
-        organization: { type: string, description: "With cluster: the organization owning the workload cluster the agent runs on (namespace org-<organization> on the installation holds the cluster's kubeconfig Secret and the HelmRelease)" }
+        organization: { type: string, description: "With cluster: the organization owning the workload cluster the agent runs on (the namespace its Organization reports in status.namespace on the installation holds the cluster's kubeconfig Secret and the HelmRelease)" }
         cluster: { type: string, description: "With organization: the workload cluster the agent runs on; absent on the installation's own cluster" }
         exists: { type: boolean, description: The Agent exists (false while the HelmRelease has not rendered it) }
         displayName: { type: string, description: From the ui.giantswarm.io/display-name annotation }
@@ -1268,7 +1268,7 @@ components:
       properties:
         name: { type: string }
         namespace: { type: string }
-        organization: { type: string, description: "With cluster: the organization owning the workload cluster the agent runs on (namespace org-<organization> on the installation holds the cluster's kubeconfig Secret and the HelmRelease)" }
+        organization: { type: string, description: "With cluster: the organization owning the workload cluster the agent runs on (the namespace its Organization reports in status.namespace on the installation holds the cluster's kubeconfig Secret and the HelmRelease)" }
         cluster: { type: string, description: "With organization: the workload cluster the agent runs on; absent on the installation's own cluster" }
         helmReleaseDeleted: { type: boolean }
         agentDeleted: { type: boolean, description: The Agent was deleted directly (force, a bare Agent or a suspended release) }
@@ -1306,7 +1306,7 @@ components:
       properties:
         name: { type: string }
         namespace: { type: string }
-        organization: { type: string, description: "With cluster: the organization owning the workload cluster the agent runs on (namespace org-<organization> on the installation holds the cluster's kubeconfig Secret and the HelmRelease)" }
+        organization: { type: string, description: "With cluster: the organization owning the workload cluster the agent runs on (the namespace its Organization reports in status.namespace on the installation holds the cluster's kubeconfig Secret and the HelmRelease)" }
         cluster: { type: string, description: "With organization: the workload cluster the agent runs on; absent on the installation's own cluster" }
         verdict: { type: string, enum: [ready, progressing, failed, unknown] }
         summary: { type: string }

@@ -57,9 +57,12 @@ var kinds = map[string]kindInfo{
 
 // ResourceResult is the answer of a model, connector or egress policy write.
 type ResourceResult struct {
-	Namespace string `json:"namespace"`
-	Kind      string `json:"kind"`
-	Name      string `json:"name"`
+	// Organization names the organization the object is in; empty for an
+	// installation model. Namespace is its namespace, a detail.
+	Organization string `json:"organization,omitempty"`
+	Namespace    string `json:"namespace"`
+	Kind         string `json:"kind"`
+	Name         string `json:"name"`
 	// Created: the object did not exist.
 	Created bool `json:"created"`
 	// Deleted: the object was deleted.
@@ -115,7 +118,9 @@ func (s *Service) apiVersion() string { return agents.KagentAPIGroup + "/" + s.c
 // ModelRequest is set_organization_model's arguments. On an existing model an
 // empty field keeps its value.
 type ModelRequest struct {
-	Namespace             string
+	// Organization is the organization's name; empty for an installation
+	// model.
+	Organization          string
 	Name                  string
 	Provider              string
 	Model                 string
@@ -158,7 +163,7 @@ func (s *Service) SetModel(ctx context.Context, req ModelRequest) (*ResourceResu
 	if req.Name == "" {
 		return nil, invalidf("name is required")
 	}
-	org, err := s.modelNamespace(ctx, req.Namespace)
+	org, err := s.modelNamespace(ctx, req.Organization)
 	if err != nil {
 		return nil, err
 	}
@@ -166,7 +171,7 @@ func (s *Service) SetModel(ctx context.Context, req ModelRequest) (*ResourceResu
 	if err != nil {
 		return nil, err
 	}
-	ns := req.Namespace
+	ns := org.Name
 	gvr := s.kagentGVR("modelconfigs")
 	items, err := s.existing(ctx, c, ns, gvr, "ModelConfigs")
 	if err != nil {
@@ -185,7 +190,7 @@ func (s *Service) SetModel(ctx context.Context, req ModelRequest) (*ResourceResu
 	if err != nil {
 		return nil, err
 	}
-	res := &ResourceResult{Namespace: ns, Kind: KindModel, Name: req.Name, DryRun: req.DryRun, RequestedBy: identity.Caller(ctx)}
+	res := &ResourceResult{Organization: org.Organization, Namespace: ns, Kind: KindModel, Name: req.Name, DryRun: req.DryRun, RequestedBy: identity.Caller(ctx)}
 	if obj == nil {
 		if req.Provider == "" || req.Model == "" {
 			return nil, invalidf("provider and model are required for a new model (provider as kagent's ModelConfig takes it, e.g. Anthropic or OpenAI)")
@@ -370,7 +375,7 @@ func (s *Service) confirmDefaultMark(ctx context.Context, c kube.Client, gvr sch
 	if !res.Created || req.DryRun || res.Commit != nil || res.Pending || !agents.IsMarkedDefault(obj) {
 		return
 	}
-	if note := s.doubleMarkNote(ctx, c, gvr, req.Namespace, req.Name); note != "" {
+	if note := s.doubleMarkNote(ctx, c, gvr, res.Namespace, req.Name); note != "" {
 		res.DefaultModel, res.Note = "", note
 	}
 }
@@ -404,7 +409,7 @@ func (s *Service) logModelWritten(ctx context.Context, req ModelRequest, res *Re
 	if req.DryRun || res.Commit != nil || res.CredentialOperation != "" {
 		return
 	}
-	s.log.Info("organization model written", identity.LogAttr(ctx), fieldNamespace, req.Namespace, "name", req.Name, "created", res.Created, "default", agents.IsMarkedDefault(obj), "credential", !req.NoCredential)
+	s.log.Info("organization model written", identity.LogAttr(ctx), fieldNamespace, res.Namespace, "name", req.Name, "created", res.Created, "default", agents.IsMarkedDefault(obj), "credential", !req.NoCredential)
 }
 
 // refuseProviderChangeOnSameSecret refuses a change of the provider of the
@@ -427,7 +432,7 @@ func refuseProviderChangeOnSameSecret(obj *unstructured.Unstructured, current st
 		return nil
 	}
 	return fmt.Errorf("%w: ModelConfig %s/%s sends the key in credential Secret %s to %s; a change of its provider to %s that keeps that Secret sends one provider's key to the other for a time, whatever the order of the provider and the key. Give a new credentialSecret that does not exist yet (you enter the %s key, and the save writes the Secret before it changes the provider and the reference), or create a new model",
-		agents.ErrConflict, req.Namespace, req.Name, secret, current, req.Provider, req.Provider)
+		agents.ErrConflict, obj.GetNamespace(), req.Name, secret, current, req.Provider, req.Provider)
 }
 
 // setModelSettings writes the display name, the token limit and the prompt
@@ -598,10 +603,11 @@ func firstOf(values ...string) string {
 // ConnectorRequest is set_organization_connector's arguments. On an existing
 // connector an empty field keeps its value.
 type ConnectorRequest struct {
-	Namespace   string
-	Name        string
-	URL         string
-	Description string
+	// Organization is the organization's name.
+	Organization string
+	Name         string
+	URL          string
+	Description  string
 	// CredentialHeader, CredentialSecret and CredentialKey name the request
 	// header the egress gateway adds and the Secret its whole value comes
 	// from; any of them sets the credential (defaults Authorization,
@@ -739,10 +745,12 @@ func connectorCredentials(u *unstructured.Unstructured) []ConnectorCredential {
 // the caller, each credential by reference with the state of its Secret,
 // each connector's Accepted condition, and the agent whose muster binding a
 // server is.
-func (s *Service) ListConnectors(ctx context.Context, ns string) ([]Connector, error) {
-	if _, err := s.organization(ctx, ns); err != nil {
+func (s *Service) ListConnectors(ctx context.Context, organization string) ([]Connector, error) {
+	org, err := s.organization(ctx, organization)
+	if err != nil {
 		return nil, err
 	}
+	ns := org.Name
 	c, err := s.caller(ctx)
 	if err != nil {
 		return nil, err
@@ -788,7 +796,7 @@ func (s *Service) SetConnector(ctx context.Context, req ConnectorRequest) (*Reso
 	if withCredential && req.NoCredential {
 		return nil, invalidf("noCredential and a credential field: pick one")
 	}
-	org, err := s.organization(ctx, req.Namespace)
+	org, err := s.organization(ctx, req.Organization)
 	if err != nil {
 		return nil, err
 	}
@@ -796,7 +804,7 @@ func (s *Service) SetConnector(ctx context.Context, req ConnectorRequest) (*Reso
 	if err != nil {
 		return nil, err
 	}
-	ns := req.Namespace
+	ns := org.Name
 	gvr := s.kagentGVR("remotemcpservers")
 	items, err := s.existing(ctx, c, ns, gvr, "RemoteMCPServers")
 	if err != nil {
@@ -815,7 +823,7 @@ func (s *Service) SetConnector(ctx context.Context, req ConnectorRequest) (*Reso
 	if err != nil {
 		return nil, err
 	}
-	res := &ResourceResult{Namespace: ns, Kind: KindConnector, Name: req.Name, DryRun: req.DryRun, RequestedBy: identity.Caller(ctx)}
+	res := &ResourceResult{Organization: org.Organization, Namespace: ns, Kind: KindConnector, Name: req.Name, DryRun: req.DryRun, RequestedBy: identity.Caller(ctx)}
 	if obj == nil {
 		if req.URL == "" {
 			return nil, invalidf("url is required for a new connector")
@@ -952,7 +960,8 @@ func egressDestinations(u *unstructured.Unstructured) []EgressDestination {
 // EgressRequest is set_organization_egress_policy's arguments: the whole
 // destination list.
 type EgressRequest struct {
-	Namespace    string
+	// Organization is the organization's name.
+	Organization string
 	Name         string
 	Destinations []EgressDestination
 	// Create only creates: an egress policy of that name, live or in git, is
@@ -1000,7 +1009,7 @@ func (s *Service) SetEgressPolicy(ctx context.Context, req EgressRequest) (*Reso
 	if len(req.Destinations) == 0 {
 		return nil, invalidf("destinations is required: the origins the policy lets an agent reach")
 	}
-	org, err := s.organization(ctx, req.Namespace)
+	org, err := s.organization(ctx, req.Organization)
 	if err != nil {
 		return nil, err
 	}
@@ -1008,7 +1017,7 @@ func (s *Service) SetEgressPolicy(ctx context.Context, req EgressRequest) (*Reso
 	if err != nil {
 		return nil, err
 	}
-	ns := req.Namespace
+	ns := org.Name
 	gvr := s.kagentGVR("egresspolicies")
 	items, err := s.existing(ctx, c, ns, gvr, "EgressPolicies")
 	if err != nil {
@@ -1027,7 +1036,7 @@ func (s *Service) SetEgressPolicy(ctx context.Context, req EgressRequest) (*Reso
 	if err != nil {
 		return nil, err
 	}
-	res := &ResourceResult{Namespace: ns, Kind: KindEgressPolicy, Name: req.Name, DryRun: req.DryRun, RequestedBy: identity.Caller(ctx)}
+	res := &ResourceResult{Organization: org.Organization, Namespace: ns, Kind: KindEgressPolicy, Name: req.Name, DryRun: req.DryRun, RequestedBy: identity.Caller(ctx)}
 	if obj == nil {
 		obj = newObject(s.apiVersion(), "EgressPolicy", ns, req.Name)
 		res.Created = true
@@ -1066,7 +1075,7 @@ func (s *Service) SetEgressPolicy(ctx context.Context, req EgressRequest) (*Reso
 // DeleteResource deletes a model, connector or egress policy of an
 // organization namespace as the caller, dry run first. Its credential
 // Secret stays: another object may name it.
-func (s *Service) DeleteResource(ctx context.Context, ns, kind, name string, dryRun bool, mode string) (*ResourceResult, error) {
+func (s *Service) DeleteResource(ctx context.Context, organization, kind, name string, dryRun bool, mode string) (*ResourceResult, error) {
 	info, ok := kinds[kind]
 	if !ok {
 		return nil, invalidf("kind %q: %s, %s or %s", kind, KindModel, KindConnector, KindEgressPolicy)
@@ -1077,13 +1086,14 @@ func (s *Service) DeleteResource(ctx context.Context, ns, kind, name string, dry
 	var org Namespace
 	var err error
 	if kind == KindModel {
-		org, err = s.modelNamespace(ctx, ns)
+		org, err = s.modelNamespace(ctx, organization)
 	} else {
-		org, err = s.organization(ctx, ns)
+		org, err = s.organization(ctx, organization)
 	}
 	if err != nil {
 		return nil, err
 	}
+	ns := org.Name
 	c, err := s.caller(ctx)
 	if err != nil {
 		return nil, err
@@ -1108,7 +1118,7 @@ func (s *Service) DeleteResource(ctx context.Context, ns, kind, name string, dry
 	if err != nil {
 		return nil, err
 	}
-	res := &ResourceResult{Namespace: ns, Kind: kind, Name: name, Deleted: !dryRun && committed == nil, DryRun: dryRun, RequestedBy: identity.Caller(ctx),
+	res := &ResourceResult{Organization: org.Organization, Namespace: ns, Kind: kind, Name: name, Deleted: !dryRun && committed == nil, DryRun: dryRun, RequestedBy: identity.Caller(ctx),
 		Note: "its credential Secret, if any, stays: another object may name it", Commit: committed}
 	if kind == KindModel && agents.IsMarkedDefault(obj) {
 		res.Note = "it was the organization's default model, so the organization has none now: set_organization_model with default true on another; " + res.Note

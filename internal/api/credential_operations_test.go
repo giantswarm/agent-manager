@@ -147,7 +147,7 @@ func (m contextMaps) Update(ctx context.Context, item *corev1.ConfigMap, options
 
 func prepareModelOperation(t *testing.T, fixture *orgFixture, extra map[string]any) organizations.ResourceResult {
 	t.Helper()
-	arguments := map[string]any{"namespace": orgNS, "name": "claude", "provider": "Anthropic", "model": "claude-sonnet-4-6"}
+	arguments := map[string]any{"organization": "payments", "name": "claude", "provider": "Anthropic", "model": "claude-sonnet-4-6"}
 	for key, value := range extra {
 		arguments[key] = value
 	}
@@ -214,7 +214,7 @@ func TestCredentialOperationSavesEscapedValuesOverHTTP(t *testing.T) {
 	}
 	require.NoError(t, unstructured.SetNestedSlice(consumer.Object, headers, "spec", "headersFrom"))
 	fixture := newOrgFixture(t, consumer)
-	answer, failed := fixture.call(t, ToolSetOrganizationConnector, map[string]any{"namespace": orgNS, "name": "gh"})
+	answer, failed := fixture.call(t, ToolSetOrganizationConnector, map[string]any{"organization": "payments", "name": "gh"})
 	require.False(t, failed, answer)
 	var operation organizations.ResourceResult
 	require.NoError(t, json.Unmarshal([]byte(answer), &operation))
@@ -425,7 +425,7 @@ func TestCredentialPreparationRefusesAnUnappliedGitConsumer(t *testing.T) {
 		paymentsPath + "/kustomization.yaml": []byte("resources:\n  - modelconfig-claude.yaml\n"),
 	})
 	answer, failed := fixture.call(t, ToolSetOrganizationModel, map[string]any{
-		"namespace": orgNS, "name": "claude", "provider": "Anthropic", "model": "replacement-model", "mode": "commit",
+		"organization": "payments", "name": "claude", "provider": "Anthropic", "model": "replacement-model", "mode": "commit",
 	})
 	require.True(t, failed, answer)
 	require.True(t, strings.HasPrefix(answer, "conflict:"), answer)
@@ -476,9 +476,9 @@ func TestConnectorCredentialOperationDeduplicatesSharedHeaderReferences(t *testi
 				if replace {
 					seedSecret(t, fixture, "tenant-credential-gh", "token")
 				}
-				tool, arguments := ToolSetOrganizationConnector, map[string]any{"namespace": orgNS, "name": "gh", "mode": mode}
+				tool, arguments := ToolSetOrganizationConnector, map[string]any{"organization": "payments", "name": "gh", "mode": mode}
 				if replace {
-					tool, arguments = ToolReplaceOrganizationCredential, map[string]any{"namespace": orgNS, "secret": ghSecret, "key": "token", "mode": mode}
+					tool, arguments = ToolReplaceOrganizationCredential, map[string]any{"organization": "payments", "secret": ghSecret, "key": "token", "mode": mode}
 				}
 				answer, failed := fixture.call(t, tool, arguments)
 				require.False(t, failed, answer)
@@ -512,7 +512,7 @@ func TestConnectorCredentialOperationRefusesDifferentKeysInOneSecret(t *testing.
 	headers = append(headers, map[string]any{"name": "X-API-Key", "valueFrom": map[string]any{"type": "Secret", "name": "tenant-credential-gh", "key": "apiKey"}})
 	require.NoError(t, unstructured.SetNestedSlice(consumer.Object, headers, "spec", "headersFrom"))
 	fixture := newOrgFixture(t, consumer)
-	answer, failed := fixture.call(t, ToolSetOrganizationConnector, map[string]any{"namespace": orgNS, "name": "gh"})
+	answer, failed := fixture.call(t, ToolSetOrganizationConnector, map[string]any{"organization": "payments", "name": "gh"})
 	require.True(t, failed, answer)
 	require.Contains(t, answer, "each credential Secret must contain one credential key")
 	require.Nil(t, fixture.get(t, secretGVR, orgNS, "tenant-credential-gh"))
@@ -848,7 +848,7 @@ func TestCredentialReplacementKeepsOrdinaryEditsSeparate(t *testing.T) {
 	fixture := newOrgFixture(t, model("claude", true))
 	seedSecret(t, fixture, "tenant-credential-claude", "apiKey")
 	before := len(fixture.dyn.Actions())
-	text, failed := fixture.call(t, ToolSetOrganizationModel, map[string]any{"namespace": orgNS, "name": "claude", "model": "edited"})
+	text, failed := fixture.call(t, ToolSetOrganizationModel, map[string]any{"organization": "payments", "name": "claude", "model": "edited"})
 	require.False(t, failed, text)
 	require.NotContains(t, text, "credentialOperation")
 	for _, action := range fixture.dyn.Actions()[before:] {
@@ -954,8 +954,8 @@ func TestCredentialSaveRefusesAReplacementOrganizationAtTheWrite(t *testing.T) {
 }
 
 // A save whose Organization was deleted since the preparation, while its
-// namespace still carries the recorded UID, is refused where it writes and
-// writes nothing.
+// namespace still carries the recorded UID, is refused as not found: the
+// organization is gone. Nothing is written.
 func TestCredentialSaveRefusesADeletedOrganizationAtTheWrite(t *testing.T) {
 	fixture := newOrgFixture(t, organization("payments", nil))
 	labelOrganizationUID(t, fixture, "uid-payments")
@@ -964,7 +964,7 @@ func TestCredentialSaveRefusesADeletedOrganizationAtTheWrite(t *testing.T) {
 	require.NoError(t, fixture.dyn.Tracker().Delete(orgGVR, "", "payments"))
 
 	status, answer, _ := operationHTTP(t, fixture, http.MethodPost, result.CredentialOperation, confirmation.Version, valuesBody(t, result, "synthetic-value"), nil)
-	require.Equal(t, http.StatusConflict, status, answer)
+	require.Equal(t, http.StatusNotFound, status, answer)
 	require.Nil(t, fixture.get(t, secretGVR, orgNS, "tenant-credential-claude"))
 	require.Nil(t, fixture.get(t, mcGVR, orgNS, "claude"))
 }
@@ -989,7 +989,7 @@ func TestCredentialKeyMissingFromAnExistingSecret(t *testing.T) {
 			fixture := newOrgFixture(t, live)
 			seedSecret(t, fixture, "tenant-credential-claude", "other")
 
-			text, failed := fixture.call(t, ToolSetOrganizationModel, map[string]any{"namespace": orgNS, "name": "claude", "provider": "Anthropic", "model": "claude-sonnet-4-6"})
+			text, failed := fixture.call(t, ToolSetOrganizationModel, map[string]any{"organization": "payments", "name": "claude", "provider": "Anthropic", "model": "claude-sonnet-4-6"})
 			require.False(t, failed, text)
 			var result organizations.ResourceResult
 			require.NoError(t, json.Unmarshal([]byte(text), &result))
@@ -1024,7 +1024,7 @@ func TestCredentialReplacementAdmissionRefusesBeforeAValueIsEntered(t *testing.T
 		return nil
 	}
 
-	text, failed := fixture.call(t, ToolReplaceOrganizationCredential, map[string]any{"namespace": orgNS, "secret": claudeSecret, "key": "apiKey"})
+	text, failed := fixture.call(t, ToolReplaceOrganizationCredential, map[string]any{"organization": "payments", "secret": claudeSecret, "key": "apiKey"})
 	require.True(t, failed, text)
 	require.Contains(t, text, "changed in git")
 	require.NotContains(t, text, "credentialOperation")

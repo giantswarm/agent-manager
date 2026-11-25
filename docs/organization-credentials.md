@@ -80,8 +80,8 @@ exists already is used as it is: it must hold the new provider's key. Or create
 a new model. A change of the
 model id alone, with the same provider, is not affected.
 
-`replace_organization_credential` takes the organization namespace, the Secret
-and the key, and prepares an operation that writes that Secret and no consumer:
+`replace_organization_credential` takes the organization's name (no
+`organization` for an installation model), the Secret and the key, and prepares an operation that writes that Secret and no consumer:
 a rotation resends no model, connector or egress policy. At least one
 ModelConfig, RemoteMCPServer or EgressPolicy of the namespace must read that key
 of the Secret, else it answers `not_found`. An object reading another key of the

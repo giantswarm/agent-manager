@@ -84,7 +84,7 @@ func TestWritesToAnOrganizationInPendingEraseAreRefused(t *testing.T) {
 		for kind, w := range oneWriteOfEachKind {
 			for _, mode := range []string{"apply", "commit"} {
 				t.Run(state+"/"+kind+"/"+mode, func(t *testing.T) {
-					args := map[string]any{"namespace": orgNS, "mode": mode}
+					args := map[string]any{"organization": "payments", "mode": mode}
 					for k, v := range w.args {
 						args[k] = v
 					}
@@ -136,7 +136,7 @@ func TestACallerWithoutRightsIsNotToldThePendingErase(t *testing.T) {
 					return true, nil, apierrors.NewForbidden(a.GetResource().GroupResource(), "", errors.New("RBAC: access denied"))
 				})
 			}
-			args := map[string]any{"namespace": orgNS}
+			args := map[string]any{"organization": "payments"}
 			for k, v := range w.args {
 				args[k] = v
 			}
@@ -154,7 +154,7 @@ func TestAnOrganizationMissingFromGitIsStillWritten(t *testing.T) {
 	org := organization("payments", nil)
 	orphaned(t, org, "MissingFromGit")
 	f := newOrgFixture(t, org)
-	text, isErr := f.call(t, ToolAddOrganizationMember, map[string]any{"namespace": orgNS, "role": "editor", "group": "payments-team"})
+	text, isErr := f.call(t, ToolAddOrganizationMember, map[string]any{"organization": "payments", "role": "editor", "group": "payments-team"})
 	require.False(t, isErr, text)
 	assert.NotNil(t, f.get(t, rbGVR, orgNS, "organization-editors"))
 }
@@ -173,7 +173,7 @@ func TestPendingEraseKeepsReadsAndEraseNow(t *testing.T) {
 	_, err := f.dyn.Resource(orgGVR).UpdateStatus(t.Context(), live, metav1.UpdateOptions{})
 	require.NoError(t, err)
 
-	text, isErr = f.call(t, ToolSetOrganizationModel, map[string]any{"namespace": orgNS, "name": "haiku", "provider": "Anthropic", "model": "claude-haiku", "mode": "commit"})
+	text, isErr = f.call(t, ToolSetOrganizationModel, map[string]any{"organization": "payments", "name": "haiku", "provider": "Anthropic", "model": "claude-haiku", "mode": "commit"})
 	require.True(t, isErr, text)
 	assert.Contains(t, text, "Pending erase")
 	assert.Len(t, fake.PullRequests(), 1)
@@ -183,8 +183,8 @@ func TestPendingEraseKeepsReadsAndEraseNow(t *testing.T) {
 		args map[string]any
 	}{
 		{ToolGetOrganization, map[string]any{"name": "payments"}},
-		{ToolListOrganizationMembers, map[string]any{"namespace": orgNS}},
-		{ToolListOrganizationConnector, map[string]any{"namespace": orgNS}},
+		{ToolListOrganizationMembers, map[string]any{"organization": "payments"}},
+		{ToolListOrganizationConnector, map[string]any{"organization": "payments"}},
 	} {
 		text, isErr = f.call(t, read.tool, read.args)
 		require.False(t, isErr, "%s: %s", read.tool, text)

@@ -54,7 +54,7 @@ type commitRaceSubject struct {
 func commitRaceSubjects() []commitRaceSubject {
 	subjects := []commitRaceSubject{{ // #nosec G101 -- a Secret's name, no credential
 		tool: ToolSetOrganizationModel, secret: "tenant-credential-claude", key: "apiKey", file: paymentsPath + "/modelconfig-claude.yaml", branch: "agent-manager/model-claude-payments",
-		arguments: map[string]any{"namespace": orgNS, "name": "claude", "provider": "OpenAI", "model": "gpt-5"},
+		arguments: map[string]any{"organization": "payments", "name": "claude", "provider": "OpenAI", "model": "gpt-5"},
 		other:     model("claude", true),
 	}}
 	branches := map[string]string{ToolSetOrganizationConnector: "agent-manager/connector-gh-payments", ToolSetOrganizationEgress: "agent-manager/egress-github-payments"}
@@ -205,6 +205,7 @@ func TestCommitModeCreateOrganizationRefusesAFileAddedBeforeTheBranch(t *testing
 		remote.Fake = fake
 		return remote
 	})
+	fixture.dropOrganization(t, "payments")
 	text, failed := fixture.call(t, ToolCreateOrganization, map[string]any{"name": "payments", "adminGroups": []any{"payments-leads"}, "mode": "commit"})
 	require.True(t, failed, text)
 	require.True(t, strings.HasPrefix(text, "conflict:"), text)

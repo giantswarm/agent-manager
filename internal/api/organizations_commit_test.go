@@ -111,6 +111,7 @@ func fromGitLabels(ks string) map[string]string {
 // RBAC refuses is refused before any pull request.
 func TestCreateOrganizationInCommitModeOpensOnePullRequest(t *testing.T) {
 	f, fake := commitFixture(t, nil)
+	f.dropOrganization(t, "payments")
 	args := map[string]any{"name": "payments", "displayName": "Payments", "adminGroups": []any{"payments-leads"}, "mode": "commit"}
 
 	text, isErr := f.call(t, ToolCreateOrganization, args)
@@ -149,6 +150,7 @@ func TestCreateOrganizationInCommitModeOpensOnePullRequest(t *testing.T) {
 
 	// A caller who may not create Organizations opens nothing.
 	g, gfake := commitFixture(t, nil)
+	g.dropOrganization(t, "payments")
 	g.deny = func(_, verb, resource, _ string) bool { return verb == "create" && resource == "organizations" }
 	text, isErr = g.call(t, ToolCreateOrganization, args)
 	require.True(t, isErr)
@@ -157,6 +159,7 @@ func TestCreateOrganizationInCommitModeOpensOnePullRequest(t *testing.T) {
 
 	// Nor one whose create the API server's dry run refuses.
 	h, hfake := commitFixture(t, nil)
+	h.dropOrganization(t, "payments")
 	h.dryRuns.Refuse = func(u *unstructured.Unstructured) error {
 		return apierrors.NewForbidden(schema.GroupResource{Resource: u.GetKind()}, u.GetName(), errors.New("denied by policy"))
 	}
@@ -939,12 +942,12 @@ func TestACommitDuringTheScanDoesNotHideTheDefinition(t *testing.T) {
 func TestContentToolsCommitIntoTheContentPath(t *testing.T) {
 	f, fake := gitOrganization(t)
 	seedSecret(t, f, "tenant-credential-haiku", "apiKey")
-	text, isErr := f.call(t, ToolSetOrganizationModel, map[string]any{"namespace": orgNS, "name": "haiku", "provider": "Anthropic", "model": "claude-haiku", "default": true})
+	text, isErr := f.call(t, ToolSetOrganizationModel, map[string]any{"organization": "payments", "name": "haiku", "provider": "Anthropic", "model": "claude-haiku", "default": true})
 	require.True(t, isErr)
 	assert.True(t, strings.HasPrefix(text, "gitops_owned:"), text)
 	assert.Contains(t, text, "mode commit")
 
-	text, isErr = f.call(t, ToolSetOrganizationModel, map[string]any{"namespace": orgNS, "name": "haiku", "provider": "Anthropic", "model": "claude-haiku", "default": true, "mode": "commit"})
+	text, isErr = f.call(t, ToolSetOrganizationModel, map[string]any{"organization": "payments", "name": "haiku", "provider": "Anthropic", "model": "claude-haiku", "default": true, "mode": "commit"})
 	require.False(t, isErr, text)
 	require.Len(t, fake.PullRequests(), 1)
 	head := fake.Files(mcRepo, fake.PullRequests()[0].Head)
@@ -958,7 +961,7 @@ func TestContentToolsCommitIntoTheContentPath(t *testing.T) {
 	assert.Nil(t, f.get(t, mcGVR, orgNS, "haiku"), "nothing live")
 
 	// A member's binding is a file of the content path; the admins are not.
-	text, isErr = f.call(t, ToolAddOrganizationMember, map[string]any{"namespace": orgNS, "role": "editor", "group": "payments-oncall", "mode": "commit"})
+	text, isErr = f.call(t, ToolAddOrganizationMember, map[string]any{"organization": "payments", "role": "editor", "group": "payments-oncall", "mode": "commit"})
 	require.False(t, isErr, text)
 	require.Len(t, fake.PullRequests(), 2)
 	editors := parseFile(t, fake.Files(mcRepo, fake.PullRequests()[1].Head)[paymentsPath+"/rolebinding-organization-editors.yaml"])
@@ -1010,7 +1013,7 @@ func TestEveryContentToolCommits(t *testing.T) {
 		t.Run(tc.tool, func(t *testing.T) {
 			f, fake := gitOrganization(t)
 			seedSecret(t, f, "tenant-credential-gh", "token")
-			args := map[string]any{"namespace": orgNS, "mode": "commit", "dryRun": true}
+			args := map[string]any{"organization": "payments", "mode": "commit", "dryRun": true}
 			for k, v := range tc.args {
 				args[k] = v
 			}
@@ -1058,7 +1061,7 @@ func TestRemovingTheLastContentObjectKeepsTheContentPath(t *testing.T) {
 		paymentsPath + "/rolebinding-organization-editors.yaml": file,
 	}, live)
 
-	text, isErr := f.call(t, ToolRemoveOrganizationMember, map[string]any{"namespace": orgNS, "group": "payments-team", "mode": "commit"})
+	text, isErr := f.call(t, ToolRemoveOrganizationMember, map[string]any{"organization": "payments", "group": "payments-team", "mode": "commit"})
 	require.False(t, isErr, text)
 	require.Len(t, fake.PullRequests(), 1)
 	head := fake.Files(mcRepo, fake.PullRequests()[0].Head)
@@ -1070,6 +1073,7 @@ func TestRemovingTheLastContentObjectKeepsTheContentPath(t *testing.T) {
 // gitops-commit would encrypt the file once and never update it.
 func TestAPlainFileTheRepositoryWouldEncryptIsRefused(t *testing.T) {
 	f, fake := commitFixture(t, map[string][]byte{".sops.yaml": sopsCovering(t, `^management-clusters/gazelle/agent-platform-organizations/.*`)})
+	f.dropOrganization(t, "payments")
 	text, isErr := f.call(t, ToolCreateOrganization, map[string]any{"name": "payments", "adminGroups": []any{"g"}, "mode": "commit"})
 	require.True(t, isErr)
 	assert.True(t, strings.HasPrefix(text, "invalid"), text)

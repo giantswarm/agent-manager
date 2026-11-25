@@ -31,7 +31,7 @@ func prepareConnectorStatusOperation(t *testing.T, configure func(*organizations
 	require.NoError(t, unstructured.SetNestedField(consumer.Object, "https://mcp.example.com/mcp", "spec", "url"))
 	fixture := newOrgFixtureWith(t, configure, consumer)
 	answer, failed := fixture.call(t, ToolSetOrganizationConnector, map[string]any{
-		"namespace": orgNS, "name": "gh", "url": "https://updated.example.com/mcp",
+		"organization": "payments", "name": "gh", "url": "https://updated.example.com/mcp",
 	})
 	require.False(t, failed, answer)
 	var result organizations.ResourceResult

@@ -2,7 +2,6 @@ package organizations
 
 import (
 	"context"
-	"fmt"
 	"slices"
 	"strings"
 
@@ -45,32 +44,6 @@ type CredentialUse struct {
 	// Mode is how a write for the object asked about lands, apply or
 	// commit; empty when no object was named.
 	Mode string `json:"mode,omitempty"`
-}
-
-func (s *Service) orgNamespace(ctx context.Context, organization string) (Namespace, error) {
-	if s.cfg.Namespaces == nil {
-		return Namespace{}, fmt.Errorf("%w: organization management is disabled", agents.ErrUnsupported)
-	}
-	if organization == "" {
-		return Namespace{}, invalidf("organization is required")
-	}
-	org, ok, err := s.cfg.Namespaces.Find(ctx, organization)
-	if err != nil {
-		return Namespace{}, fmt.Errorf("%w: %v", agents.ErrUnsupported, err)
-	}
-	if ok {
-		// The list may be up to listTTL old: read the namespace by its name,
-		// so its organization UID is the one it carries now.
-		org, ok, err = s.cfg.Namespaces.Get(ctx, org.Name)
-		if err != nil {
-			return Namespace{}, fmt.Errorf("%w: %v", agents.ErrUnsupported, err)
-		}
-		ok = ok && org.Organization == organization
-	}
-	if !ok {
-		return Namespace{}, fmt.Errorf("%w: organization %s has no organization namespace", agents.ErrNotFound, organization)
-	}
-	return org, nil
 }
 
 // references reads, as the caller, every object of ns that names secret,
@@ -184,7 +157,7 @@ func (s *Service) CredentialReferences(ctx context.Context, organization, secret
 	if err := checkSecretName(secret); err != nil {
 		return nil, err
 	}
-	org, err := s.orgNamespace(ctx, organization)
+	org, err := s.organization(ctx, organization)
 	if err != nil {
 		return nil, err
 	}

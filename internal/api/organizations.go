@@ -96,6 +96,10 @@ const (
 	schemaProperties = "properties"
 )
 
+// organizationArgDescription is the organization argument of every tool:
+// the organization's name, from which agent-manager finds its namespace.
+const organizationArgDescription = "The organization's name (list_organizations); agent-manager finds its namespace"
+
 // Option configures NewMCPServer.
 type Option func(*serverOptions)
 
@@ -167,8 +171,8 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service, l
 	}
 	t := &orgTools{svc: orgs, server: s, lifecycle: lifecycle}
 	orgNameProp := mcp.WithString(argName, mcp.Required(), mcp.Description("The organization's name: the name of its Organization (at most 56 characters, no dot)"))
-	orgNSProp := mcp.WithString(argNamespace, mcp.Required(), mcp.Description("The organization namespace, e.g. agents-payments (list_organizations, get_organization)"))
-	modelNSProp := mcp.WithString(argNamespace, mcp.Required(), mcp.Description("Organization namespace, or the configured installation namespace for cluster admins"))
+	orgProp := mcp.WithString(argOrganization, mcp.Required(), mcp.Description(organizationArgDescription))
+	modelOrgProp := mcp.WithString(argOrganization, mcp.Description(organizationArgDescription+"; omit for the installation's models (cluster admins)"))
 	dryRun := mcp.WithBoolean(argDryRun, mcp.Description("Check every write with the API server as you and write nothing (default false)"))
 	modeProp := mcp.WithString(argMode, mcp.Enum(agents.ModeApply, agents.ModeCommit), mcp.Description("apply (default): write live as you; refused with gitops_owned for what git applies. commit: dry-run as you, then open a pull request as you"))
 	credentialRequestID := mcp.WithString(argRequestID, mcp.Description("Idempotency key, at most 128 characters. Reuse on retries; use a fresh key for another save or a refreshed confirmation."))
@@ -280,18 +284,18 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service, l
 	t.addTool(s, mcp.NewTool(ToolListOrganizationMembers,
 		tooldesc.Describe("List an organization's members: the groups and people bound to agent-platform:admin, editor or user, groups first.",
 			"Read as you; every member role (user, editor or admin) may read them, from agent-platform chart 4.179.0 on. An admin's from says it comes from the Organization's spec.admins, which update_organization changes."),
-		orgNSProp,
+		orgProp,
 		mcp.WithReadOnlyHintAnnotation(true),
 		mcp.WithDestructiveHintAnnotation(false),
 		mcp.WithIdempotentHintAnnotation(false),
 		mcp.WithOpenWorldHintAnnotation(false),
 	), t.run(func(ctx context.Context, req mcp.CallToolRequest) (any, error) {
-		return t.svc.ListMembers(ctx, req.GetString(argNamespace, ""))
+		return t.svc.ListMembers(ctx, req.GetString(argOrganization, ""))
 	}))
 
 	memberProps := func() []mcp.ToolOption {
 		return []mcp.ToolOption{
-			orgNSProp,
+			orgProp,
 			mcp.WithString(argGroup, mcp.Description("Identity provider group, as the API server sees it; offer a group first: membership then changes in the identity provider")),
 			mcp.WithString(argUser, mcp.Description("A person, as the API server sees them; when no group fits")),
 			dryRun, modeProp,
@@ -326,7 +330,7 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service, l
 	t.addTool(s, mcp.NewTool(ToolSetOrganizationModel,
 		tooldesc.Describe("Create or change an organization or installation model as you; credentials are Secret references.",
 			"A new model becomes the default when none is set; default true moves the mark. New Anthropic models cache prompts ("+agents.DefaultCacheTTL+") unless promptCaching is false; omitted settings stay. Never pass a key: missing credentials open the form (credentials[].next); another login: 403 credential_operation_other_login. Vertex AI calls bypass the LLM gateway's metering, rate limits and spend reporting. list_model_configs lists them. Needs agent-platform:admin (organization) or cluster-admin (installation models)."),
-		modelNSProp,
+		modelOrgProp,
 		mcp.WithString(argName, mcp.Required(), mcp.Description("ModelConfig name")),
 		mcp.WithString(argProvider, mcp.Description("Provider as kagent's ModelConfig takes it, e.g. Anthropic, OpenAI; required to create; a change needs a new credentialSecret too")),
 		mcp.WithString(argModel, mcp.Description("Model id, e.g. claude-sonnet-4-6; required to create")),
@@ -351,7 +355,7 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service, l
 		mcp.WithOpenWorldHintAnnotation(false),
 	), t.runWrite(func(ctx context.Context, req mcp.CallToolRequest) (*organizations.ResourceResult, error) {
 		var in struct {
-			Namespace             string  `json:"namespace"`
+			Organization          string  `json:"organization"`
 			Name                  string  `json:"name"`
 			Provider              string  `json:"provider"`
 			Model                 string  `json:"model"`
@@ -380,20 +384,21 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service, l
 	t.addTool(s, mcp.NewTool(ToolListOrganizationConnector,
 		tooldesc.Describe("List an organization's connectors (RemoteMCPServers): URL, description and the credential headers by Secret name.",
 			"Read as you. A credential in a URL written elsewhere shows as REDACTED. curated marks a read-only copy of what the platform curates. A credential's state: present or missing, whether its Secret exists (a dry-run create as you, never a read; unknown if you may not create it), not whether it holds the key. accepted, reason, message: kagent's Accepted condition. musterBindingOf: the agent whose muster binding it is (no connector). create_agent takes the rest as connectors."),
-		orgNSProp,
+		orgProp,
 		mcp.WithReadOnlyHintAnnotation(true),
 		mcp.WithDestructiveHintAnnotation(false),
 		mcp.WithIdempotentHintAnnotation(false),
 		mcp.WithOpenWorldHintAnnotation(false),
 	), t.run(func(ctx context.Context, req mcp.CallToolRequest) (any, error) {
-		list, err := t.svc.ListConnectors(ctx, req.GetString(argNamespace, ""))
-		return map[string]any{"connectors": list}, err
+		organization := req.GetString(argOrganization, "")
+		list, err := t.svc.ListConnectors(ctx, organization)
+		return map[string]any{"organization": organization, "connectors": list}, err
 	}))
 
 	t.addTool(s, mcp.NewTool(ToolSetOrganizationConnector,
 		tooldesc.Describe("Create or change an organization's connector (a RemoteMCPServer) as you; its credential is a Secret named by reference.",
 			"A credential field sets the Secret-backed header it names (default: the only one, else Authorization; Secret tenant-credential-<name>, key token, the whole value); other headers stay; noCredential removes them. A URL with userinfo, a fragment, a credential-like or unparsable query is refused. Never pass a value: a missing one is a URL elicitation of the credential UI (credentials[].next); another login: 403 credential_operation_other_login. Needs agent-platform:admin."),
-		orgNSProp,
+		orgProp,
 		mcp.WithString(argName, mcp.Required(), mcp.Description("RemoteMCPServer name")),
 		mcp.WithString(argURL, mcp.Description("MCP endpoint URL, without a credential in it; required to create")),
 		mcp.WithString(argDescription, mcp.Description("What the server offers")),
@@ -410,7 +415,7 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service, l
 		mcp.WithOpenWorldHintAnnotation(false),
 	), t.runWrite(func(ctx context.Context, req mcp.CallToolRequest) (*organizations.ResourceResult, error) {
 		var in struct {
-			Namespace        string `json:"namespace"`
+			Organization     string `json:"organization"`
 			Name             string `json:"name"`
 			URL              string `json:"url"`
 			Description      string `json:"description"`
@@ -431,7 +436,7 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service, l
 	t.addTool(s, mcp.NewTool(ToolSetOrganizationEgress,
 		tooldesc.Describe("Create or replace an organization's egress policy as you: origins its agents may reach, credentials by Secret name.",
 			"destinations replaces the whole list. A credentialHeader makes the egress gateway add that header from the Secret (default tenant-credential-<policy>, key token). Never pass a value: a missing credential is a URL elicitation of the credential UI (credentials[].next); another login: 403 credential_operation_other_login. list_egress_policies lists them. Needs agent-platform:admin."),
-		orgNSProp,
+		orgProp,
 		mcp.WithString(argName, mcp.Required(), mcp.Description("EgressPolicy name")),
 		mcp.WithArray(argDestinations, mcp.Required(), mcp.Description("Origins, each {origin, credentialHeader, credentialPrefix, credentialSecret, credentialKey}"), mcp.Items(map[string]any{
 			schemaType: schemaObject,
@@ -453,7 +458,7 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service, l
 		mcp.WithOpenWorldHintAnnotation(false),
 	), t.runWrite(func(ctx context.Context, req mcp.CallToolRequest) (*organizations.ResourceResult, error) {
 		var in struct {
-			Namespace    string                            `json:"namespace"`
+			Organization string                            `json:"organization"`
 			Name         string                            `json:"name"`
 			Destinations []organizations.EgressDestination `json:"destinations"`
 			Create       bool                              `json:"create"`
@@ -469,7 +474,7 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service, l
 	t.addTool(s, mcp.NewTool(ToolReplaceOrganizationCredential,
 		tooldesc.Describe("Replace an organization credential or installation model credential by its Secret and key, as you.",
 			"Only the Secret is written. The form (credentials[].next) lists its consumers and destinations; another login: 403 credential_operation_other_login. Refused if unused or another key is referenced: the one-key Secret is replaced whole. Use mode commit for consumers applied from git. Never pass a value. Needs agent-platform:admin in an organization, cluster-admin for installation models."),
-		modelNSProp,
+		modelOrgProp,
 		mcp.WithString(argSecret, mcp.Required(), mcp.Description(credSecretDesc)),
 		mcp.WithString(argKey, mcp.Required(), mcp.Description("Key of that Secret the objects read, e.g. apiKey or token")),
 		credentialRequestID, dryRun, modeProp,
@@ -480,11 +485,11 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service, l
 		mcp.WithOpenWorldHintAnnotation(false),
 	), t.runWrite(func(ctx context.Context, req mcp.CallToolRequest) (*organizations.ResourceResult, error) {
 		var in struct {
-			Namespace string `json:"namespace"`
-			Secret    string `json:"secret"`
-			Key       string `json:"key"`
-			DryRun    bool   `json:"dryRun"`
-			Mode      string `json:"mode"`
+			Organization string `json:"organization"`
+			Secret       string `json:"secret"`
+			Key          string `json:"key"`
+			DryRun       bool   `json:"dryRun"`
+			Mode         string `json:"mode"`
 		}
 		if err := bindArgs(req, &in); err != nil {
 			return nil, err
@@ -495,7 +500,7 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service, l
 	t.addTool(s, mcp.NewTool(ToolDeleteOrganizationObject,
 		tooldesc.Describe("Delete an organization object or installation model as you.",
 			"Dry run first. Its credential Secret stays. Deleting the default model leaves its namespace without one until another is marked. Copies the platform curates are refused. Needs agent-platform:admin in an organization, cluster-admin for installation models."),
-		modelNSProp,
+		modelOrgProp,
 		mcp.WithString(argKind, mcp.Required(), mcp.Enum(organizations.KindModel, organizations.KindConnector, organizations.KindEgressPolicy)),
 		mcp.WithString(argName, mcp.Required(), mcp.Description("Object name")),
 		dryRun, modeProp,
@@ -504,11 +509,11 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service, l
 		mcp.WithIdempotentHintAnnotation(false),
 		mcp.WithOpenWorldHintAnnotation(false),
 	), t.run(func(ctx context.Context, req mcp.CallToolRequest) (any, error) {
-		return t.svc.DeleteResource(ctx, req.GetString(argNamespace, ""), req.GetString(argKind, ""), req.GetString(argName, ""), req.GetBool(argDryRun, false), req.GetString(argMode, ""))
+		return t.svc.DeleteResource(ctx, req.GetString(argOrganization, ""), req.GetString(argKind, ""), req.GetString(argName, ""), req.GetBool(argDryRun, false), req.GetString(argMode, ""))
 	}))
 }
 
 func memberRequest(req mcp.CallToolRequest) organizations.MemberRequest {
-	return organizations.MemberRequest{Namespace: req.GetString(argNamespace, ""), Role: req.GetString(argRole, ""),
+	return organizations.MemberRequest{Organization: req.GetString(argOrganization, ""), Role: req.GetString(argRole, ""),
 		Group: req.GetString(argGroup, ""), User: req.GetString(argUser, ""), DryRun: req.GetBool(argDryRun, false), Mode: req.GetString(argMode, "")}
 }

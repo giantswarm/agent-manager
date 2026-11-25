@@ -23,6 +23,7 @@ import (
 
 	"github.com/giantswarm/agent-manager/internal/agents"
 	"github.com/giantswarm/agent-manager/internal/kagent"
+	"github.com/giantswarm/agent-manager/internal/organizations"
 	"github.com/giantswarm/agent-manager/internal/tags"
 )
 
@@ -187,9 +188,9 @@ func NewMCPServer(svc *agents.Service, version string, opts ...Option) *mcpserve
 		mcpotel.WithServerTracingPropagator(otel.Tracer(tracerName), propagation.NewCompositeTextMapPropagator()),
 		brand.WithGiantSwarmIcon(),
 		mcpserver.WithToolCapabilities(false),
-		mcpserver.WithInstructions("Manage the agents of the Agent Platform. An agent is a Flux HelmRelease of the Generic agent chart, which renders a kagent Agent, its Harness reference and the agent's muster RemoteMCPServer carrying its toolset. Call get_info first, and list_model_configs and list_skills before create_agent. Names are DNS-1123 labels the person chooses and confirms. Every agent needs a toolset. create_agent, update_agent and delete_agent take dryRun and mode: apply writes live as you, commit opens a pull request as you in the repository that owns the namespace. organization and cluster (both or neither) place an agent on a workload cluster and address it in every later call of a tool that takes them. Talk to an agent with start_session and get_session. Organizations: list_organizations lists the organizations you manage or belong to; the *_organization* tools manage organizations, their members, models, connectors and egress policies as you, and never take a secret value."),
+		mcpserver.WithInstructions("Manage the agents of the Agent Platform. An agent is a Flux HelmRelease of the Generic agent chart, which renders a kagent Agent, its Harness reference and the agent's muster RemoteMCPServer carrying its toolset. Call get_info first, and list_model_configs and list_skills before create_agent. Names are DNS-1123 labels the person chooses and confirms. Every agent needs a toolset. create_agent, update_agent and delete_agent take dryRun and mode: apply writes live as you, commit opens a pull request as you in the repository that owns the namespace. No tool takes an organization's namespace: organization, the organization's name, addresses an organization's agents, and with cluster an agent on a workload cluster of the organization, in every later call of a tool that takes them; namespace is only for the installation's own platform namespaces and, with cluster, the namespace on the cluster. Talk to an agent with start_session and get_session. Organizations: list_organizations lists the organizations you manage or belong to; the *_organization* tools manage organizations, their members, models, connectors and egress policies as you, and never take a secret value."),
 	)
-	t := &tools{svc: svc}
+	t := &tools{svc: svc, orgs: o.orgs}
 
 	skillShape := "{name, path, git: {url, ref | commit}} or {name, oci} entries, pinned at write time"
 	skillDesc := "Skills to mount: " + skillShape + "."
@@ -273,9 +274,10 @@ func NewMCPServer(svc *agents.Service, version string, opts ...Option) *mcpserve
 	connectorsReplaceProp := mcp.WithArray(argConnectors, mcp.Description("Replaces the connectors ([] removes them): "+connectorsShape+"."), mcp.Items(stringSchema))
 	harnessDesc := "Harness that runs the agent; omit for the platform Harness. A coding Harness (claude, codex, …) fixes egress, refuses extra bindings."
 	maxBytesProp := mcp.WithNumber(argMaxBytes, mcp.Description(fmt.Sprintf("Max answer size in bytes, %d-%d, default %d", agents.MinSessionMaxBytes, agents.MaxSessionMaxBytes, agents.DefaultSessionMaxBytes)))
-	nsProp := mcp.WithString(argNamespace, mcp.Description("Namespace of the agent; default: the installation's kagent namespace (get_info lists the managed ones)."))
-	orgProp := mcp.WithString(argOrganization, mcp.Description("With cluster: the organization owning the workload cluster the agent runs on. Omit both for the installation's own cluster."))
+	nsProp := mcp.WithString(argNamespace, mcp.Description("Installation platform namespace (default kagent); with cluster, the namespace on the workload cluster. Never an organization's: use organization."))
+	orgProp := mcp.WithString(argOrganization, mcp.Description("The organization's name (list_organizations): its agents, in the namespace agent-manager finds. With cluster: on that workload cluster of it."))
 	clusterProp := mcp.WithString(argCluster, mcp.Description("With organization: the workload cluster the agent runs on; its HelmRelease stays on the installation. namespace is on the cluster."))
+	sessionOrgProp := mcp.WithString(argOrganization, mcp.Description("The organization's name (list_organizations) whose agent it is; omit for the installation's own agents."))
 	modeProp := mcp.WithString(argMode, mcp.Enum(agents.ModeApply, agents.ModeCommit), mcp.Description("apply (default): write live as you; a release applied from git is refused with gitops_owned. commit: open a pull request as you."))
 	dryRunProp := mcp.WithBoolean(argDryRun, mcp.Description("Return what the write would do, the manifests and with mode commit the pull request's files, and write nothing (default false)."))
 	repositoryProp := mcp.WithString(argRepository, mcp.Description("mode commit: the repository (owner/name) to commit to where no Flux Kustomization owns the namespace yet. Needs branch."))
@@ -493,6 +495,7 @@ func NewMCPServer(svc *agents.Service, version string, opts ...Option) *mcpserve
 			fmt.Sprintf("Read through agentgateway as you. allCreators includes every person's sessions, when the controller authorizes you for it. At most %d sessions are answered at a time; nextPageToken says more follow: list again with it as pageToken.", kagent.MaxListedSessions)),
 		mcp.WithString(argName, mcp.Required(), mcp.Description("Agent name")),
 		nsProp,
+		sessionOrgProp,
 		mcp.WithBoolean(argAllCreators, mcp.Description("Include every person's sessions of the agent, when the controller authorizes the caller for it (default false)")),
 		mcp.WithString(argPageToken, mcp.MaxLength(agents.MaxPageTokenLength), mcp.Description("nextPageToken of the previous answer, with the same name, namespace and allCreators; empty lists from the start")),
 		mcp.WithReadOnlyHintAnnotation(true),
@@ -534,6 +537,7 @@ func NewMCPServer(svc *agents.Service, version string, opts ...Option) *mcpserve
 			"Refused with conflict while the agent has no ready revision (get_agent_status). With message it answers once the agent accepted the turn; the agent keeps working. Without it, send the first message yourself over A2A (tenant <namespace>/<name>, the session's contextId). The agent runs its tools as you, within toolset (the answer's: bound to the session; update_agent applies to new sessions). Pass a requestId and reuse it on a retry: it never starts a second turn."),
 		mcp.WithString(argName, mcp.Required(), mcp.Description("Agent name")),
 		nsProp,
+		sessionOrgProp,
 		mcp.WithString(argMessage, mcp.Description(fmt.Sprintf("The first user message, text only, at most %d characters; omit it to send the first message yourself.", agents.MaxSessionMessageLength))),
 		mcp.WithString(argRequestID, mcp.Description("Idempotency key (at most 128 characters): pass one and reuse it on a retry; without it a retry starts a second session.")),
 		mcp.WithString(argSessionName, mcp.Description("Display name of the conversation (at most 200 characters); default: unnamed")),
@@ -586,6 +590,9 @@ func (t *tools) toolchainUsers(ctx context.Context, req mcp.CallToolRequest) (*m
 
 type tools struct {
 	svc *agents.Service
+	// orgs resolves an organization's name to its namespace; nil without
+	// the organization tools.
+	orgs *organizations.Service
 }
 
 // schemaProp is a JSON-schema leaf with a description.
@@ -605,14 +612,18 @@ func (t *tools) listAgents(ctx context.Context, req mcp.CallToolRequest) (*mcp.C
 	if err != nil {
 		return errResult(err), nil
 	}
-	list, err := t.svc.List(ctx, locationFromArgs(req), filter)
+	loc, org, err := t.place(ctx, req, true)
+	if err != nil {
+		return errResult(err), nil
+	}
+	list, err := t.svc.List(ctx, loc, filter)
 	if err != nil {
 		return errResult(err), nil
 	}
 	if req.GetBool(argDetails, false) {
-		return jsonResult(map[string]any{"agents": list})
+		return jsonResultIn(map[string]any{"agents": list}, org)
 	}
-	return jsonResult(map[string]any{"agents": agents.Summaries(list)})
+	return jsonResultIn(map[string]any{"agents": agents.Summaries(list)}, org)
 }
 
 func (t *tools) getAgent(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -620,19 +631,15 @@ func (t *tools) getAgent(ctx context.Context, req mcp.CallToolRequest) (*mcp.Cal
 	if err != nil {
 		return errResult(fmt.Errorf("%w: %v", agents.ErrInvalid, err)), nil
 	}
-	a, err := t.svc.Get(ctx, locationFromArgs(req), name)
+	loc, org, err := t.place(ctx, req, true)
 	if err != nil {
 		return errResult(err), nil
 	}
-	return jsonResult(a)
-}
-
-// locationFromArgs reads namespace, organization and cluster.
-func locationFromArgs(req mcp.CallToolRequest) agents.Location {
-	return agents.Location{
-		Namespace: req.GetString(argNamespace, ""),
-		Target:    agents.Target{Organization: req.GetString(argOrganization, ""), Cluster: req.GetString(argCluster, "")},
+	a, err := t.svc.Get(ctx, loc, name)
+	if err != nil {
+		return errResult(err), nil
 	}
+	return jsonResultIn(a, org)
 }
 
 // specFromArgs binds the flat tool arguments to a Spec.
@@ -649,11 +656,15 @@ func (t *tools) createAgent(ctx context.Context, req mcp.CallToolRequest) (*mcp.
 	if err != nil {
 		return errResult(err), nil
 	}
+	var org string
+	if s.Location, org, err = t.place(ctx, req, true); err != nil {
+		return errResult(err), nil
+	}
 	res, err := t.svc.Create(ctx, s)
 	if err != nil {
 		return errResult(err), nil
 	}
-	return jsonResult(res)
+	return jsonResultIn(res, org)
 }
 
 func (t *tools) updateAgent(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -666,11 +677,16 @@ func (t *tools) updateAgent(ctx context.Context, req mcp.CallToolRequest) (*mcp.
 	if upd.Name == "" {
 		return errResult(fmt.Errorf("%w: name is required", agents.ErrInvalid)), nil
 	}
+	loc, org, err := t.place(ctx, req, true)
+	if err != nil {
+		return errResult(err), nil
+	}
+	upd.Location = loc
 	res, err := t.svc.Update(ctx, upd)
 	if err != nil {
 		return errResult(err), nil
 	}
-	return jsonResult(res)
+	return jsonResultIn(res, org)
 }
 
 func (t *tools) deleteAgent(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -682,11 +698,15 @@ func (t *tools) deleteAgent(ctx context.Context, req mcp.CallToolRequest) (*mcp.
 	if err := req.BindArguments(&w); err != nil {
 		return errResult(fmt.Errorf("%w: %v", agents.ErrInvalid, err)), nil
 	}
-	res, err := t.svc.Delete(ctx, locationFromArgs(req), name, req.GetBool(argForce, false), w)
+	loc, org, err := t.place(ctx, req, true)
 	if err != nil {
 		return errResult(err), nil
 	}
-	return jsonResult(res)
+	res, err := t.svc.Delete(ctx, loc, name, req.GetBool(argForce, false), w)
+	if err != nil {
+		return errResult(err), nil
+	}
+	return jsonResultIn(res, org)
 }
 
 func (t *tools) getAgentStatus(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -694,51 +714,66 @@ func (t *tools) getAgentStatus(ctx context.Context, req mcp.CallToolRequest) (*m
 	if err != nil {
 		return errResult(fmt.Errorf("%w: %v", agents.ErrInvalid, err)), nil
 	}
-	st, err := t.svc.Status(ctx, locationFromArgs(req), name)
+	loc, org, err := t.place(ctx, req, true)
 	if err != nil {
 		return errResult(err), nil
 	}
-	return jsonResult(st)
+	st, err := t.svc.Status(ctx, loc, name)
+	if err != nil {
+		return errResult(err), nil
+	}
+	return jsonResultIn(st, org)
 }
 
 func (t *tools) validateAgent(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	var (
-		res *agents.ValidateResult
-		err error
-	)
+	loc, org, err := t.place(ctx, req, true)
+	if err != nil {
+		return errResult(err), nil
+	}
+	var res *agents.ValidateResult
 	if req.GetBool(argUpdate, false) {
 		var upd agents.Update
 		if err := req.BindArguments(&upd); err != nil {
 			return errResult(fmt.Errorf("%w: %v", agents.ErrInvalid, err)), nil
 		}
+		upd.Location = loc
 		res, err = t.svc.ValidateUpdate(ctx, upd)
 	} else {
 		s, specErr := specFromArgs(req)
 		if specErr != nil {
 			return errResult(specErr), nil
 		}
+		s.Location = loc
 		res, err = t.svc.ValidateCreate(ctx, s)
 	}
 	if err != nil {
 		return errResult(err), nil
 	}
-	return jsonResult(res)
+	return jsonResultIn(res, org)
 }
 
 func (t *tools) listModelConfigs(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	list, err := t.svc.ListModelConfigs(ctx, locationFromArgs(req))
+	loc, org, err := t.place(ctx, req, true)
 	if err != nil {
 		return errResult(err), nil
 	}
-	return jsonResult(map[string]any{"modelConfigs": list})
+	list, err := t.svc.ListModelConfigs(ctx, loc)
+	if err != nil {
+		return errResult(err), nil
+	}
+	return jsonResultIn(map[string]any{"modelConfigs": list}, org)
 }
 
 func (t *tools) listEgressPolicies(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	list, err := t.svc.ListEgressPolicies(ctx, locationFromArgs(req))
+	loc, org, err := t.place(ctx, req, true)
 	if err != nil {
 		return errResult(err), nil
 	}
-	return jsonResult(map[string]any{"egressPolicies": list})
+	list, err := t.svc.ListEgressPolicies(ctx, loc)
+	if err != nil {
+		return errResult(err), nil
+	}
+	return jsonResultIn(map[string]any{"egressPolicies": list}, org)
 }
 
 func (t *tools) listSkills(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -758,11 +793,15 @@ func (t *tools) listSessions(ctx context.Context, req mcp.CallToolRequest) (*mcp
 	if err != nil {
 		return errResult(fmt.Errorf("%w: %v", agents.ErrInvalid, err)), nil
 	}
-	res, err := t.svc.ListSessions(ctx, req.GetString(argNamespace, ""), name, req.GetBool(argAllCreators, false), req.GetString(argPageToken, ""))
+	loc, org, err := t.place(ctx, req, false)
 	if err != nil {
 		return errResult(err), nil
 	}
-	return jsonResult(res)
+	res, err := t.svc.ListSessions(ctx, loc.Namespace, name, req.GetBool(argAllCreators, false), req.GetString(argPageToken, ""))
+	if err != nil {
+		return errResult(err), nil
+	}
+	return jsonResultIn(res, org)
 }
 
 func (t *tools) getSession(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -806,11 +845,16 @@ func (t *tools) startSession(ctx context.Context, req mcp.CallToolRequest) (*mcp
 	if err := req.BindArguments(&in); err != nil {
 		return errResult(fmt.Errorf("%w: %v", agents.ErrInvalid, err)), nil
 	}
+	loc, org, err := t.place(ctx, req, false)
+	if err != nil {
+		return errResult(err), nil
+	}
+	in.Namespace = loc.Namespace
 	res, err := t.svc.StartSession(ctx, in)
 	if err != nil {
 		return errResult(err), nil
 	}
-	return jsonResult(res)
+	return jsonResultIn(res, org)
 }
 
 func jsonResult(v any) (*mcp.CallToolResult, error) {

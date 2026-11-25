@@ -20,7 +20,7 @@ import (
 // extra arguments.
 func createModel(t *testing.T, fixture *orgFixture, extra map[string]any) (string, bool) {
 	t.Helper()
-	arguments := map[string]any{"namespace": orgNS, "name": "claude", "provider": "OpenAI", "model": "gpt-5", "create": true}
+	arguments := map[string]any{"organization": "payments", "name": "claude", "provider": "OpenAI", "model": "gpt-5", "create": true}
 	for key, value := range extra {
 		arguments[key] = value
 	}
@@ -175,7 +175,7 @@ func TestCredentialSaveAnswersAlreadyExists(t *testing.T) {
 	})
 	t.Run("a connector made since the preparation", func(t *testing.T) {
 		fixture := newOrgFixture(t)
-		text, failed := fixture.call(t, ToolSetOrganizationConnector, map[string]any{"namespace": orgNS, "name": "gh", "url": "https://mcp.github.example/mcp", "credentialHeader": "Authorization"})
+		text, failed := fixture.call(t, ToolSetOrganizationConnector, map[string]any{"organization": "payments", "name": "gh", "url": "https://mcp.github.example/mcp", "credentialHeader": "Authorization"})
 		require.False(t, failed, text)
 		var result organizations.ResourceResult
 		require.NoError(t, json.Unmarshal([]byte(text), &result))

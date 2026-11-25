@@ -21,9 +21,18 @@ import (
 	"github.com/giantswarm/agent-manager/internal/agents"
 )
 
-func (s *Service) modelNamespace(ctx context.Context, namespace string) (Namespace, error) {
-	if namespace == "" || namespace != s.cfg.PlatformNamespace {
-		return s.organization(ctx, namespace)
+func (s *Service) modelNamespace(ctx context.Context, organization string) (Namespace, error) {
+	if organization != "" {
+		return s.organization(ctx, organization)
+	}
+	return s.platformTarget(ctx)
+}
+
+// platformTarget is the installation's own namespace for installation
+// models, for a cluster admin only.
+func (s *Service) platformTarget(ctx context.Context) (Namespace, error) {
+	if s.cfg.PlatformNamespace == "" {
+		return Namespace{}, invalidf("organization (the name of its Organization) is required: this installation serves no installation models")
 	}
 	if !CredentialUIURLServesInstallations(s.cfg.CredentialUIURL) {
 		return Namespace{}, fmt.Errorf("%w: installation model management requires a credential UI URL with a {namespace} expression and no {organization}", agents.ErrUnsupported)
@@ -32,10 +41,10 @@ func (s *Service) modelNamespace(ctx context.Context, namespace string) (Namespa
 	if err != nil {
 		return Namespace{}, err
 	}
-	if err := requireAccess(ctx, caller, "installation model management requires cluster-admin authorization", access{verb: "*", group: "*", resource: "*"}); err != nil {
+	if err := requireAccess(ctx, caller, "installation model management requires cluster-admin authorization; for an organization's model, pass organization", access{verb: "*", group: "*", resource: "*"}); err != nil {
 		return Namespace{}, err
 	}
-	return Namespace{Name: namespace, Scope: scopePlatform}, nil
+	return Namespace{Name: s.cfg.PlatformNamespace, Scope: scopePlatform}, nil
 }
 
 func modelCredentialRef(target Namespace, secret, key string) error {

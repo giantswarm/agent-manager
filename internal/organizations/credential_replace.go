@@ -14,10 +14,12 @@ import (
 
 // CredentialRequest is replace_organization_credential's arguments.
 type CredentialRequest struct {
-	Namespace string
-	Secret    string
-	Key       string
-	DryRun    bool
+	// Organization is the organization's name; empty for an installation
+	// model credential.
+	Organization string
+	Secret       string
+	Key          string
+	DryRun       bool
 	// Mode is apply (default) or commit.
 	Mode string
 }
@@ -28,7 +30,7 @@ type CredentialRequest struct {
 // whole and never read, so a Secret another object reads by a different key
 // is refused: that key would be lost.
 func (s *Service) ReplaceCredential(ctx context.Context, req CredentialRequest) (*ResourceResult, error) {
-	org, err := s.modelNamespace(ctx, req.Namespace)
+	org, err := s.modelNamespace(ctx, req.Organization)
 	if err != nil {
 		return nil, err
 	}
@@ -91,7 +93,7 @@ func (s *Service) ReplaceCredential(ctx context.Context, req CredentialRequest) 
 		}
 	}
 	credential.Next = s.next(credential, users...)
-	res := &ResourceResult{Namespace: org.Name, Kind: KindCredential, Name: req.Secret, DryRun: req.DryRun, RequestedBy: identity.Caller(ctx), Credentials: []Credential{credential}}
+	res := &ResourceResult{Organization: org.Organization, Namespace: org.Name, Kind: KindCredential, Name: req.Secret, DryRun: req.DryRun, RequestedBy: identity.Caller(ctx), Credentials: []Credential{credential}}
 	if err := s.landResource(ctx, w, nil, res, "credential-"+req.Secret, "chore(organizations): replace credential "+req.Secret); err != nil {
 		return nil, err
 	}

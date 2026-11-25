@@ -29,13 +29,13 @@ type newConsumerSubject struct {
 func newConsumerSubjects() []newConsumerSubject {
 	return []newConsumerSubject{ // #nosec G101 -- Secret names, no credentials
 		{ToolSetOrganizationModel, "claude", "tenant-credential-claude", mcGVR,
-			map[string]any{"namespace": orgNS, "name": "claude", "provider": "OpenAI", "model": "gpt-5", "create": true},
+			map[string]any{"organization": "payments", "name": "claude", "provider": "OpenAI", "model": "gpt-5", "create": true},
 			func() *unstructured.Unstructured { return model("claude", false) }},
 		{ToolSetOrganizationConnector, "gh", "tenant-credential-gh", serverGVR,
-			map[string]any{"namespace": orgNS, "name": "gh", "url": "https://mcp.example.com/mcp", "credentialHeader": "Authorization", "create": true},
+			map[string]any{"organization": "payments", "name": "gh", "url": "https://mcp.example.com/mcp", "credentialHeader": "Authorization", "create": true},
 			func() *unstructured.Unstructured { return connector("gh", "tenant-credential-gh", "token") }},
 		{ToolSetOrganizationEgress, "github", "tenant-credential-github", egressGVR,
-			map[string]any{"namespace": orgNS, "name": "github", "destinations": []any{map[string]any{"origin": "https://api.github.com", "credentialHeader": "Authorization"}}, "create": true},
+			map[string]any{"organization": "payments", "name": "github", "destinations": []any{map[string]any{"origin": "https://api.github.com", "credentialHeader": "Authorization"}}, "create": true},
 			func() *unstructured.Unstructured {
 				return egressPolicy("github", map[string]any{"origin": "https://api.github.com"})
 			}},

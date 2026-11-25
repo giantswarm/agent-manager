@@ -70,6 +70,13 @@ MCP-server-writer half.
 | Confirm, save or cancel a user-bound credential operation (see [Credential operations](docs/organization-credentials.md)) | `GET`, `POST`, `DELETE /api/v1/credential-operations/{operation}` | — | Secret and consumers, or one pull request in commit mode |
 | Health | `GET /healthz`, `GET /readyz` | — | no |
 
+The MCP tools take an organization by its name, `organization`, and never an
+organization's namespace: agent-manager finds the namespace in the
+`Organization`'s `status.agentPlatform.namespace`, and every answer about an
+organization's object names the organization. An agent tool's `namespace` is a
+platform namespace of the installation, or with `cluster` the namespace on the
+workload cluster. The REST paths above still take a namespace.
+
 The three writes take `dryRun` and `mode` (`apply` | `commit`, see
 [Write modes](#write-modes-apply-and-commit)); in commit mode the "Writes"
 column is files of a pull request, nothing live. `validate_agent` takes
@@ -416,9 +423,13 @@ installation: `create_agent` (and `POST /api/v1/agents`) take `organization`
 and `cluster`, and every read and write tool takes the same pair (REST: the
 query parameters `organization` and `cluster`). `namespace` is then the
 namespace on the workload cluster. `get_info` reports `capabilities.targetCluster`.
+The organization's namespace on the installation is the one its `Organization`
+reports in `status.namespace` (`org-<organization>` today), read as the caller;
+an `Organization` that does not exist or that the caller may not read answers
+`not_found`, one that reports no namespace yet `conflict`.
 
-- **The HelmRelease stays on the installation**, in the organization
-  namespace `org-<organization>`, named `<cluster>-<agent>` and labelled
+- **The HelmRelease stays on the installation**, in the organization's
+  namespace (`org-<organization>`), named `<cluster>-<agent>` and labelled
   `agent-platform.giantswarm.io/cluster: <cluster>`, beside the shared
   OCIRepository of the agent chart there. It carries
   `spec.kubeConfig.secretRef` (`<cluster>-kubeconfig`, key `value`),

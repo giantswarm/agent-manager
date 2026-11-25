@@ -51,35 +51,21 @@ type Member struct {
 
 // Members is list_organization_members's answer.
 type Members struct {
-	Namespace string   `json:"namespace"`
-	Members   []Member `json:"members"`
+	// Organization names the organization; Namespace is its namespace, a
+	// detail.
+	Organization string   `json:"organization"`
+	Namespace    string   `json:"namespace"`
+	Members      []Member `json:"members"`
 }
 
-// organization resolves an organization namespace argument: it must be one
-// agent-platform-operator keeps.
-func (s *Service) organization(ctx context.Context, ns string) (Namespace, error) {
-	if s.cfg.Namespaces == nil {
-		return Namespace{}, fmt.Errorf("%w: organization management is disabled", agents.ErrUnsupported)
-	}
-	if ns == "" {
-		return Namespace{}, invalidf("namespace (the organization namespace) is required; list_organizations lists yours, get_organization names an organization's")
-	}
-	org, ok, err := s.cfg.Namespaces.Get(ctx, ns)
+// ListMembers lists the subjects bound to the roles of the organization
+// named organization, in its namespace, as the caller: groups first.
+func (s *Service) ListMembers(ctx context.Context, organization string) (*Members, error) {
+	org, err := s.organization(ctx, organization)
 	if err != nil {
-		return Namespace{}, fmt.Errorf("%w: %v", agents.ErrUnsupported, err)
-	}
-	if !ok {
-		return Namespace{}, invalidf("namespace %s is not an organization namespace; list_organizations lists yours", ns)
-	}
-	return org, nil
-}
-
-// ListMembers lists the subjects bound to the organization's roles in ns, as
-// the caller: groups first.
-func (s *Service) ListMembers(ctx context.Context, ns string) (*Members, error) {
-	if _, err := s.organization(ctx, ns); err != nil {
 		return nil, err
 	}
+	ns := org.Name
 	c, err := s.caller(ctx)
 	if err != nil {
 		return nil, err
@@ -88,7 +74,7 @@ func (s *Service) ListMembers(ctx context.Context, ns string) (*Members, error) 
 	if err != nil {
 		return nil, err
 	}
-	out := &Members{Namespace: ns, Members: []Member{}}
+	out := &Members{Organization: org.Organization, Namespace: ns, Members: []Member{}}
 	for _, b := range bindings {
 		for _, sub := range bindingSubjects(&b.obj) {
 			m := Member{Kind: sub.Kind, Name: sub.Name, Namespace: sub.Namespace, Role: b.role, Binding: b.obj.GetName()}
@@ -174,7 +160,8 @@ func bindingSubjects(obj *unstructured.Unstructured) []Subject {
 // MemberRequest is add_organization_member's and remove_organization_member's
 // arguments: exactly one of Group and User.
 type MemberRequest struct {
-	Namespace string
+	// Organization is the organization's name.
+	Organization string
 	// Role is editor or user; on a remove empty means both. admin is
 	// refused: the admins are the Organization's spec.admins.
 	Role   string
@@ -212,8 +199,9 @@ func roleOf(short string) (string, error) {
 
 // MemberResult is the answer of a member change.
 type MemberResult struct {
-	Namespace string `json:"namespace"`
-	Member    Member `json:"member"`
+	Organization string `json:"organization"`
+	Namespace    string `json:"namespace"`
+	Member       Member `json:"member"`
 	// Changed: false when the subject already held (or did not hold) the
 	// role.
 	Changed bool `json:"changed"`
@@ -239,7 +227,7 @@ func (s *Service) AddMember(ctx context.Context, req MemberRequest) (*MemberResu
 	if err != nil {
 		return nil, err
 	}
-	org, err := s.organization(ctx, req.Namespace)
+	org, err := s.organization(ctx, req.Organization)
 	if err != nil {
 		return nil, err
 	}
@@ -247,9 +235,9 @@ func (s *Service) AddMember(ctx context.Context, req MemberRequest) (*MemberResu
 	if err != nil {
 		return nil, err
 	}
-	ns := req.Namespace
+	ns := org.Name
 	name := memberBinding(req.Role)
-	res := &MemberResult{Namespace: ns, Member: Member{Kind: sub.Kind, Name: sub.Name, Role: req.Role, Binding: name}, DryRun: req.DryRun, RequestedBy: identity.Caller(ctx)}
+	res := &MemberResult{Organization: org.Organization, Namespace: ns, Member: Member{Kind: sub.Kind, Name: sub.Name, Role: req.Role, Binding: name}, DryRun: req.DryRun, RequestedBy: identity.Caller(ctx)}
 	// The caller reads first: one who may not gets forbidden, not the
 	// organization's state.
 	bindings, err := s.roleBindings(ctx, c, ns, wayOrganizationAdmin(ns))
@@ -319,7 +307,7 @@ func (s *Service) RemoveMember(ctx context.Context, req MemberRequest) (*MemberR
 			return nil, err
 		}
 	}
-	org, err := s.organization(ctx, req.Namespace)
+	org, err := s.organization(ctx, req.Organization)
 	if err != nil {
 		return nil, err
 	}
@@ -327,8 +315,8 @@ func (s *Service) RemoveMember(ctx context.Context, req MemberRequest) (*MemberR
 	if err != nil {
 		return nil, err
 	}
-	ns := req.Namespace
-	res := &MemberResult{Namespace: ns, Member: Member{Kind: sub.Kind, Name: sub.Name, Role: req.Role}, DryRun: req.DryRun, RequestedBy: identity.Caller(ctx)}
+	ns := org.Name
+	res := &MemberResult{Organization: org.Organization, Namespace: ns, Member: Member{Kind: sub.Kind, Name: sub.Name, Role: req.Role}, DryRun: req.DryRun, RequestedBy: identity.Caller(ctx)}
 	// The caller reads first: one who may not gets forbidden, not the
 	// organization's state.
 	bindings, err := s.roleBindings(ctx, c, ns, wayOrganizationAdmin(ns))

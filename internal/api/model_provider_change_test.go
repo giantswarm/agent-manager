@@ -39,7 +39,7 @@ func TestSetModelRefusesAProviderChangeThatKeepsTheSecret(t *testing.T) {
 			if scenario.seeded {
 				seedSecret(t, fixture, "tenant-credential-claude", "apiKey")
 			}
-			arguments := map[string]any{"namespace": orgNS, "name": "claude", "provider": "OpenAI", "model": "gpt-5"}
+			arguments := map[string]any{"organization": "payments", "name": "claude", "provider": "OpenAI", "model": "gpt-5"}
 			for key, value := range scenario.extra {
 				arguments[key] = value
 			}
@@ -78,7 +78,7 @@ func TestSetModelInCommitModeRefusesAProviderChangeThatKeepsTheSecret(t *testing
 			manifest := gitManifest(t, inGit)
 			fixture, forge := commitFixture(t, map[string][]byte{file: manifest}, live)
 			seedSecret(t, fixture, "tenant-credential-claude", "apiKey")
-			text, failed := fixture.call(t, ToolSetOrganizationModel, map[string]any{"namespace": orgNS, "name": "claude", "provider": scenario.asked, "model": "gpt-5", "mode": "commit"})
+			text, failed := fixture.call(t, ToolSetOrganizationModel, map[string]any{"organization": "payments", "name": "claude", "provider": scenario.asked, "model": "gpt-5", "mode": "commit"})
 			require.True(t, failed, text)
 			require.True(t, strings.HasPrefix(text, "conflict:"), text)
 			require.Contains(t, text, "new credentialSecret")
@@ -118,7 +118,7 @@ func TestSetModelProviderChangeWithoutAStoredSecretIsNotRefused(t *testing.T) {
 	unstructured.RemoveNestedField(existing.Object, "spec", "apiKeySecretKey")
 	fixture := newOrgFixture(t, existing)
 	seedSecret(t, fixture, "tenant-credential-claude", "apiKey")
-	text, failed := fixture.call(t, ToolSetOrganizationModel, map[string]any{"namespace": orgNS, "name": "claude", "provider": "OpenAI", "model": "gpt-5"})
+	text, failed := fixture.call(t, ToolSetOrganizationModel, map[string]any{"organization": "payments", "name": "claude", "provider": "OpenAI", "model": "gpt-5"})
 	require.False(t, failed, text)
 	require.Equal(t, "OpenAI", liveModelField(t, fixture, "provider"))
 	require.Equal(t, "tenant-credential-claude", liveModelField(t, fixture, "apiKeySecret"))
@@ -129,7 +129,7 @@ func TestSetModelProviderChangeWithoutAStoredSecretIsNotRefused(t *testing.T) {
 func TestSetModelProviderInAnotherCaseIsNotAProviderChange(t *testing.T) {
 	fixture := newOrgFixture(t, model("claude", true))
 	seedSecret(t, fixture, "tenant-credential-claude", "apiKey")
-	text, _ := fixture.call(t, ToolSetOrganizationModel, map[string]any{"namespace": orgNS, "name": "claude", "provider": "anthropic"})
+	text, _ := fixture.call(t, ToolSetOrganizationModel, map[string]any{"organization": "payments", "name": "claude", "provider": "anthropic"})
 	require.False(t, strings.HasPrefix(text, "conflict:"), text)
 }
 
@@ -143,7 +143,7 @@ func TestSetModelChangesTheModelIDOnTheSameProvider(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			fixture := newOrgFixture(t, model("claude", true))
 			seedSecret(t, fixture, "tenant-credential-claude", "apiKey")
-			arguments := map[string]any{"namespace": orgNS, "name": "claude", "model": "claude-opus-4-1"}
+			arguments := map[string]any{"organization": "payments", "name": "claude", "model": "claude-opus-4-1"}
 			for key, value := range extra {
 				arguments[key] = value
 			}

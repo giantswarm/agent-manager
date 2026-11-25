@@ -24,7 +24,7 @@ func TestMemberReadRefusalNamesEveryMemberRole(t *testing.T) {
 		return true, nil, apierrors.NewForbidden(a.GetResource().GroupResource(), "", errors.New("RBAC: access denied"))
 	})
 
-	text, isErr := f.call(t, ToolListOrganizationMembers, map[string]any{"namespace": orgNS})
+	text, isErr := f.call(t, ToolListOrganizationMembers, map[string]any{"organization": "payments"})
 	require.True(t, isErr, text)
 	assert.Contains(t, text, "forbidden:")
 	assert.Contains(t, text, "right to list RoleBindings")
@@ -35,8 +35,8 @@ func TestMemberReadRefusalNamesEveryMemberRole(t *testing.T) {
 	assert.NotContains(t, text, "this needs "+organizations.RoleAdmin, "reading the members does not need admin")
 
 	for tool, arguments := range map[string]map[string]any{
-		ToolAddOrganizationMember:    {"namespace": orgNS, "role": "user", "group": "payments-team"},
-		ToolRemoveOrganizationMember: {"namespace": orgNS, "group": "payments-team"},
+		ToolAddOrganizationMember:    {"organization": "payments", "role": "user", "group": "payments-team"},
+		ToolRemoveOrganizationMember: {"organization": "payments", "group": "payments-team"},
 	} {
 		text, isErr = f.call(t, tool, arguments)
 		require.True(t, isErr, text)
