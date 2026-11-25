@@ -22,9 +22,10 @@ func errOrganizationNotFound(name string) error {
 	return fmt.Errorf("%w: organization %s not found; list_organizations lists yours", agents.ErrNotFound, name)
 }
 
-// errAgentPlatformNotEnabled answers an Organization with the Agent Platform
-// switched off: agent-platform-operator may still hold its namespace and
-// contents, but no tool writes there.
+// errAgentPlatformNotEnabled answers an Organization whose Agent Platform
+// is not enabled: one that never had the switch on, or one whose switch is
+// off although the agent-platform chart's admission policy refuses a
+// switch-off. No tool writes there.
 func errAgentPlatformNotEnabled(name string) error {
 	return fmt.Errorf("%w: the Agent Platform is not enabled for organization %s (its Organization's spec.agentPlatform.enabled is not true); nothing was written", agents.ErrConflict, name)
 }
