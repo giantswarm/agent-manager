@@ -499,6 +499,24 @@
                         "grantsNamespace": {
                             "type": "string",
                             "description": "Namespace that holds the approval grants and nothing else: whoever may write ConfigMaps there may lift any connector's Ask for any agent. Empty: `<release name>-approval-grants` (fullname)."
+                        },
+                        "platformReleases": {
+                            "type": "array",
+                            "description": "HelmReleases outside the managed namespaces that render an agent into one, `{namespace, name}` each: the agent-platform chart's default agent (`<platform namespace>/default-agent`, targeting the kagent namespace), which the agent-platform chart sets. A session reads an agent's settings from the release its Agent's Flux labels name; the ServiceAccount gets `get` on exactly these releases, so every person who may start a session with such an agent can, not only those who may read the platform's releases.",
+                            "items": {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "properties": {
+                                    "name": {
+                                        "type": "string",
+                                        "minLength": 1
+                                    },
+                                    "namespace": {
+                                        "type": "string",
+                                        "minLength": 1
+                                    }
+                                }
+                            }
                         }
                     }
                 },

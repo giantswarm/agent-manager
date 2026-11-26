@@ -440,6 +440,15 @@ muster:
     # -- Create the grants namespace with the release. Off where the
     # namespace is provisioned beforehand.
     createGrantsNamespace: true
+    # -- HelmReleases outside the managed namespaces that render an agent
+    # into one, `{namespace, name}` each: the agent-platform chart's default
+    # agent (`<platform namespace>/default-agent`, targeting the kagent
+    # namespace), which the agent-platform chart sets. A session reads an
+    # agent's settings from the release its Agent's Flux labels name; the
+    # ServiceAccount gets `get` on exactly these releases, so every person who
+    # may start a session with such an agent can, not only those who may
+    # read the platform's releases.
+    platformReleases: []  # @schema item: object ; itemProperties: {namespace: {type: string, minLength: 1}, name: {type: string, minLength: 1}}
   mcpServer:
     # -- Register this server with muster by rendering an
     # `mcpservers.muster.giantswarm.io` CR in the release namespace. Tools then

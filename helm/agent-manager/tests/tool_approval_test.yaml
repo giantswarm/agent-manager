@@ -140,3 +140,43 @@ tests:
             name: muster-bindings-ca
             configMap:
               name: muster-ca
+
+  - it: grants get on the platform's releases that render agents, by name, in either RBAC mode
+    template: templates/tool-approval-rbac.yaml
+    release:
+      namespace: agent-platform
+    set:
+      oauth.downstream.enabled: false
+      muster.toolApproval.platformReleases:
+        - {namespace: agent-platform, name: default-agent}
+    asserts:
+      - hasDocuments:
+          count: 5
+      - equal:
+          path: rules
+          value:
+            - apiGroups: ["helm.toolkit.fluxcd.io"]
+              resources: ["helmreleases"]
+              resourceNames: ["default-agent"]
+              verbs: ["get"]
+        documentIndex: 3
+      - equal:
+          path: metadata.namespace
+          value: agent-platform
+        documentIndex: 3
+      - equal:
+          path: subjects[0]
+          value:
+            kind: ServiceAccount
+            name: RELEASE-NAME-agent-manager
+            namespace: agent-platform
+        documentIndex: 4
+
+  - it: refuses a platform release without a name
+    template: templates/tool-approval-rbac.yaml
+    set:
+      muster.toolApproval.platformReleases:
+        - {namespace: agent-platform}
+    asserts:
+      - failedTemplate:
+          errorMessage: "muster.toolApproval.platformReleases: every entry needs namespace and name, got map[namespace:agent-platform]"
