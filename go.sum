@@ -201,10 +201,10 @@ github.com/giantswarm/agent-platform-operator v0.5.0-rc.1 h1:5KD9arRqIRM7CqzYelM
 github.com/giantswarm/agent-platform-operator v0.5.0-rc.1/go.mod h1:s9D2amm8NX3DMKWjL62zGmFjI99dkW/xAb1skQWSDkM=
 github.com/giantswarm/gitops-commit v0.12.0-rc.10 h1:TgKpDPVdld/gWAE5iUNm/p41zKAGlhASmElhOVq38cY=
 github.com/giantswarm/gitops-commit v0.12.0-rc.10/go.mod h1:vFt36EZxKq1YNowCWlDVyutRMtY3keoeVu9XxDKBtsw=
-github.com/giantswarm/mcp-oauth v1.15.1 h1:eDrQyBerH0LcS+jG8QXoBclM7qzC0XQXACay8NuM6AA=
-github.com/giantswarm/mcp-oauth v1.15.1/go.mod h1:7A5o9iQ3j5cTbOqG7PludvCVrgSHNd+gbM5Dk5LYFo8=
-github.com/giantswarm/mcp-toolkit v0.11.0 h1:0aKacfBYAvxDgMqa3j1dKXikcqJYzA2jcSBx+vluHSo=
-github.com/giantswarm/mcp-toolkit v0.11.0/go.mod h1:o6nUYtYy4g8MVVuGyUl0sJH/MZQdnDuVyhM7WICdpwc=
+github.com/giantswarm/mcp-oauth v1.24.0 h1:xLP86BZkVkmMj4a2wu+HeBCeHMvntOd+fS4tZSXnMrI=
+github.com/giantswarm/mcp-oauth v1.24.0/go.mod h1:CejmfrIg1cGdqzTb/F0N0zwpa1fXgpvH3cpDcswf5yY=
+github.com/giantswarm/mcp-toolkit v0.12.0 h1:BRbQfLP+/CBfFuzUnxbG6DxKRIgdl+O0qLX3C976M6I=
+github.com/giantswarm/mcp-toolkit v0.12.0/go.mod h1:o6nUYtYy4g8MVVuGyUl0sJH/MZQdnDuVyhM7WICdpwc=
 github.com/giantswarm/mcp-toolkit/k8s v0.1.1 h1:KC381ujW0KnrVGwAiTWVjumTDiKPTzU8KSeHu1LAL24=
 github.com/giantswarm/mcp-toolkit/k8s v0.1.1/go.mod h1:d+zx97K4YZMfRhfUiwxR3490YMPD3LnHGey2xcmodqg=
 github.com/giantswarm/organization-operator v1.6.5-0.20261126222953-a0e2ace225a7 h1:MbU+2Hzdduy46ZKOLDmgcu01KjYUtp8ZA7kS4zaidSU=
@@ -404,8 +404,8 @@ github.com/modern-go/reflect2 v1.0.3-0.20250322232337-35a7c28c31ee/go.mod h1:yWu
 github.com/montanaflynn/stats v0.0.0-20171201202039-1bf9dbcd8cbe/go.mod h1:wL8QJuTMNUDYhXwkmfOly8iTdp5TEcJFWZD2D7SIkUc=
 github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 h1:C3w9PqII01/Oq1c1nUAm88MOHcQC9l5mIlSMApZMrHA=
 github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822/go.mod h1:+n7T8mK8HuQTcFwEeznm/DIxMOiR9yIdICNftLE1DvQ=
-github.com/onsi/ginkgo/v2 v2.34.0 h1:aN3Us823mHHTSWMIi8WIQTdYuSPhl2lWY46E/w3SiAk=
-github.com/onsi/ginkgo/v2 v2.34.0/go.mod h1:+aXOY+vzZ5mu2iI2HpTZUPmM//oQfsNFX6gU9kNcA44=
+github.com/onsi/ginkgo/v2 v2.27.4 h1:fcEcQW/A++6aZAZQNUmNjvA9PSOzefMJBerHJ4t8v8Y=
+github.com/onsi/ginkgo/v2 v2.27.4/go.mod h1:ArE1D/XhNXBXCBkKOLkbsb2c81dQHCRcF5zwn/ykDRo=
 github.com/onsi/gomega v1.44.0 h1:eAiGl3Pw5jz5GQdDff0BcxYpAX1JxW8xD7mFUuwNfZQ=
 github.com/onsi/gomega v1.44.0/go.mod h1:e/C2HwaZ1DhvjzXXuFhcR7hY7Sh9pl7MmoWKEjzwcdA=
 github.com/opencontainers/go-digest v1.0.0 h1:apOUWs51W5PlhuyGyz9FCeeBIOUDA/6nW8Oi/yOhh5U=
