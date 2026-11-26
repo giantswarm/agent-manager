@@ -256,11 +256,14 @@ func (r *Runner) Run(ctx context.Context) (*Result, error) {
 		if r.opts.DryRun {
 			continue
 		}
-		ready := ""
+		var mark *readyMark
 		if st.org && st.expandDone {
-			ready = strconv.FormatUint(r.hop.to, 10)
+			mark = &readyMark{major: strconv.FormatUint(r.hop.to, 10)}
+			for _, rel := range st.releases {
+				mark.releases = append(mark.releases, rel.name)
+			}
 		}
-		if err := writeReport(ctx, r.client.Typed(), r.opts.ReportConfigMap, st.report, ready); err != nil {
+		if err := writeReport(ctx, r.client.Typed(), r.opts.ReportConfigMap, st.report, mark); err != nil {
 			errs = append(errs, err)
 		}
 	}

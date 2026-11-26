@@ -1028,14 +1028,20 @@ agent-platform-operator's. A release agent-manager owns there is rewritten
 repository gets its diff and holds its siblings, as in a managed namespace.
 The run writes its report in every organization namespace, and when every
 release there is on 3.x values it annotates the report
-`agent-platform.giantswarm.io/agent-chart-ready-major: "3"` (a run that finds
-one pending removes the annotation). The operator moves an organization's
+`agent-platform.giantswarm.io/agent-chart-ready-major: "3"`, with
+`agent-platform.giantswarm.io/agent-chart-ready-releases` naming the releases
+it covers (a run that finds one pending removes both). The operator moves an organization's
 source across a major only while that annotation names the new major (or no
 HelmRelease uses the source), so a namespace with a release still on 2.x
 values stays on its 2.x chart, every release there still asking, until the
 release is fixed and migrate runs again. Between the run's write and the
 operator's move (its next reconcile, within a minute) a rewritten release's
-2.x upgrade fails and it keeps its deployed revision, which still asks.
+2.x upgrade fails and it keeps its deployed revision, which still asks; the
+window lasts until the operator runs with the 3.x range (its rollout follows
+the connectivity release whose hook runs migrate). A release created on the
+2.x source after the run read the namespace is not in the mark, so the
+operator holds the source until migrate runs again; so does a namespace whose
+run failed a write. Re-run with `kubectl create job --from=cronjob/<release>-agent-manager-migrate`.
 An agent-chart source there is recognised by
 the chart's name too (the operator's copy keeps the registry URL it was created
 with); a release on a source of another chart is named in the warnings. Each

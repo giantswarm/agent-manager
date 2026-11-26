@@ -399,6 +399,16 @@ func orgNamespace(name string) *corev1.Namespace {
 	return &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: name, Labels: map[string]string{"agent-platform.giantswarm.io/organization": "acme"}}}
 }
 
+// reportReleases is the OrganizationReadyReleasesAnnotation on the report in
+// ns; ok is false when the report does not carry it.
+func (c *cluster) reportReleases(t *testing.T, ns string) (string, bool) {
+	t.Helper()
+	cm, err := c.typed.CoreV1().ConfigMaps(ns).Get(t.Context(), DefaultReportConfigMap, metav1.GetOptions{})
+	require.NoError(t, err)
+	v, ok := cm.Annotations[OrganizationReadyReleasesAnnotation]
+	return v, ok
+}
+
 // reportReady is the OrganizationReadyAnnotation on the report in ns; ok is
 // false when no report exists.
 func (c *cluster) reportReady(t *testing.T, ns string) (string, bool) {
@@ -442,6 +452,8 @@ func TestV3OrganizationReleasesAreRewrittenAndMarkTheNamespaceReady(t *testing.T
 	ready, ok := c.reportReady(t, "org-acme")
 	require.True(t, ok, "the organization's report is written")
 	require.Equal(t, "3", ready, "every release there is on 3.x values: the operator may move the source")
+	names, _ := c.reportReleases(t, "org-acme")
+	require.Equal(t, "composed,hand", names, "the mark names the releases it covers, sorted")
 	require.NotNil(t, c.reportConfigMap(t, "org-acme"))
 	require.NotContains(t, strings.Join(kagent.Pending, "\n"), "organization namespace", "nothing of the organization is pending")
 	require.Equal(t, SourceMoved, bySource(kagent)["kagent/agent"].Action)
@@ -463,7 +475,7 @@ func TestV3OrganizationGitOpsReleaseHoldsTheMark(t *testing.T) {
 		helmRelease("org-acme", "hand", approvalValues(), "2.6.1"),
 	)
 	_, err := c.typed.CoreV1().ConfigMaps("org-acme").Create(ctx, &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{
-		Name: DefaultReportConfigMap, Namespace: "org-acme", Annotations: map[string]string{OrganizationReadyAnnotation: "3"},
+		Name: DefaultReportConfigMap, Namespace: "org-acme", Annotations: map[string]string{OrganizationReadyAnnotation: "3", OrganizationReadyReleasesAnnotation: "hand"},
 	}}, metav1.CreateOptions{})
 	require.NoError(t, err)
 	res, err := c.runnerV3(t, Options{Namespaces: []string{kagentNS}, OrganizationNamespaces: []string{"org-acme"}}, v3Latest).Run(ctx)
@@ -483,6 +495,8 @@ func TestV3OrganizationGitOpsReleaseHoldsTheMark(t *testing.T) {
 	ready, ok := c.reportReady(t, "org-acme")
 	require.True(t, ok)
 	require.Empty(t, ready, "the stale mark is removed")
+	_, ok = c.reportReleases(t, "org-acme")
+	require.False(t, ok, "with its release list")
 	require.Equal(t, PhaseExpand, org.Phase)
 	require.Equal(t, PhaseExpand, kagent.Phase, "a pending organization release holds the run's state")
 	require.Contains(t, strings.Join(kagent.Pending, "\n"), "organization namespace org-acme: release org-acme/git")
@@ -515,10 +529,16 @@ func TestV3OrganizationIsNotMarkedBeforeTheChartIsPublishedNorInADryRun(t *testi
 // An organization without agents is ready at once.
 func TestV3OrganizationWithoutReleasesIsMarkedReady(t *testing.T) {
 	c := newCluster(ociRepository(kagentNS, v3Target), ociRepository("org-acme", v2Range))
-	_, err := c.runnerV3(t, Options{Namespaces: []string{kagentNS}, OrganizationNamespaces: []string{"org-acme"}}, v3Latest).Run(t.Context())
+	// An earlier run's report, unmarked: the mark is added to it.
+	_, err := c.typed.CoreV1().ConfigMaps("org-acme").Create(t.Context(), &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: DefaultReportConfigMap, Namespace: "org-acme"}}, metav1.CreateOptions{})
+	require.NoError(t, err)
+	_, err = c.runnerV3(t, Options{Namespaces: []string{kagentNS}, OrganizationNamespaces: []string{"org-acme"}}, v3Latest).Run(t.Context())
 	require.NoError(t, err)
 	ready, _ := c.reportReady(t, "org-acme")
 	require.Equal(t, "3", ready)
+	names, ok := c.reportReleases(t, "org-acme")
+	require.True(t, ok)
+	require.Empty(t, names)
 }
 
 func TestV3OrganizationNamespacesAreFoundByLabel(t *testing.T) {
