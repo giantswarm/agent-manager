@@ -19,13 +19,21 @@ set:
   kagent:
     controllerTarget: kagent-controller.kagent.svc:8083
 tests:
-  - it: renders nothing by default
+  - it: is on by default (fail closed: settings are refused while nothing binds them)
     template: templates/tool-approval-rbac.yaml
+    asserts:
+      - hasDocuments:
+          count: 3
+
+  - it: renders nothing when turned off
+    template: templates/tool-approval-rbac.yaml
+    set:
+      muster.toolApproval.enabled: false
     asserts:
       - hasDocuments:
           count: 0
 
-  - it: sends the projected token and keeps grants in the release namespace
+  - it: sends the projected token and keeps grants in their own namespace
     template: templates/deployment.yaml
     release:
       namespace: agent-platform
@@ -37,7 +45,7 @@ tests:
           content: --muster-approval-sender-token-file=/var/run/secrets/agent-manager/muster-approval/token
       - contains:
           path: spec.template.spec.containers[0].args
-          content: --approval-grants-namespace=agent-platform
+          content: --approval-grants-namespace=RELEASE-NAME-agent-manager-approval-grants
       - contains:
           path: spec.template.spec.containers[0].args
           content: --muster-mcp-url=http://muster.agent-platform.svc.cluster.local:8090/mcp
@@ -62,7 +70,7 @@ tests:
           path: spec.template.spec.containers[0].args
           content: --muster-approval-sender-token-file=/var/run/secrets/agent-manager/muster-approval/token
 
-  - it: grants ConfigMaps in the release namespace to the ServiceAccount
+  - it: grants ConfigMaps of the grants namespace only, which it creates
     template: templates/tool-approval-rbac.yaml
     release:
       namespace: agent-platform
@@ -70,14 +78,34 @@ tests:
       muster.toolApproval.enabled: true
     asserts:
       - hasDocuments:
-          count: 2
+          count: 3
+      - isKind:
+          of: Namespace
+        documentIndex: 0
+      - equal:
+          path: metadata.name
+          value: RELEASE-NAME-agent-manager-approval-grants
+        documentIndex: 0
       - equal:
           path: rules[0].resources
           value: ["configmaps"]
-        documentIndex: 0
+        documentIndex: 1
       - equal:
           path: metadata.namespace
-          value: agent-platform
+          value: RELEASE-NAME-agent-manager-approval-grants
+        documentIndex: 1
+
+  - it: uses a provisioned grants namespace
+    template: templates/tool-approval-rbac.yaml
+    set:
+      muster.toolApproval.grantsNamespace: approval-grants
+      muster.toolApproval.createGrantsNamespace: false
+    asserts:
+      - hasDocuments:
+          count: 2
+      - equal:
+          path: metadata.namespace
+          value: approval-grants
         documentIndex: 0
 
   - it: grants get on HelmReleases per managed namespace with downstream OAuth
@@ -87,12 +115,12 @@ tests:
       oauth.downstream.enabled: true
     asserts:
       - hasDocuments:
-          count: 4
+          count: 5
       - equal:
           path: rules[0].verbs
           value: ["get"]
-        documentIndex: 2
+        documentIndex: 3
       - equal:
           path: rules[0].resources
           value: ["helmreleases"]
-        documentIndex: 2
+        documentIndex: 3

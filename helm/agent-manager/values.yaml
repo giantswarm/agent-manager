@@ -411,17 +411,29 @@ muster:
     # `muster-approval-binder` Role, bound to this ServiceAccount by the
     # agent-platform chart). `set_agent_approval` checks an Allow over a
     # connector's Ask against muster's `filter_tools` at `mcpUrl` and keeps
-    # the grant in a ConfigMap of the release namespace (the ServiceAccount
-    # gets a Role on ConfigMaps there, and `get` on HelmReleases in the
-    # managed namespaces to read an agent's settings for a session its
-    # starter may not read the release of). Rendered with the session tools
-    # (`oauth.enabled`, `kagent.controllerTarget`) and `bindingsUrl`. Needs a
-    # muster that takes approval settings (milestone 2 of tool approval).
-    enabled: false
+    # the grant in a ConfigMap of the grants namespace (`grantsNamespace`;
+    # the ServiceAccount gets a Role on ConfigMaps there only, and `get` on
+    # HelmReleases in the managed namespaces to read an agent's settings for a
+    # session its starter may not read the release of). Rendered with the
+    # session tools (`oauth.enabled`, `kagent.controllerTarget`) and
+    # `bindingsUrl`. On by default: while it is off agent-manager refuses
+    # Allow, Ask and Block settings and a `default`, and refuses to start a
+    # session of an agent that carries them, since nothing would enforce
+    # them. Needs a muster that takes approval settings (milestone 2 of tool
+    # approval); against an older muster agent-manager binds agents without
+    # settings as before and refuses the sessions of agents with settings.
+    enabled: true
     # -- Audience of the projected ServiceAccount token muster reviews.
     audience: muster
     # -- Lifetime of the projected token; the kubelet rotates it.
     expirationSeconds: 3600  # @schema minimum: 600
+    # -- Namespace that holds the approval grants and nothing else: whoever
+    # may write ConfigMaps there may lift any connector's Ask for any agent.
+    # Empty: `<release name>-approval-grants` (fullname).
+    grantsNamespace: ""
+    # -- Create the grants namespace with the release. Off where the
+    # namespace is provisioned beforehand.
+    createGrantsNamespace: true
   mcpServer:
     # -- Register this server with muster by rendering an
     # `mcpservers.muster.giantswarm.io` CR in the release namespace. Tools then

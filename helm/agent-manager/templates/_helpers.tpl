@@ -364,6 +364,13 @@ Tool approval per agent is on: muster.toolApproval.enabled with the session
 tools (oauth, the kagent controller target) and muster's bindings endpoint,
 where the settings are bound per session.
 */}}
+{{/*
+The namespace that holds the approval grants.
+*/}}
+{{- define "agent-manager.grantsNamespace" -}}
+{{- .Values.muster.toolApproval.grantsNamespace | default (printf "%s-approval-grants" (include "agent-manager.fullname" .)) | trunc 63 | trimSuffix "-" -}}
+{{- end }}
+
 {{- define "agent-manager.toolApproval" -}}
 {{- if and .Values.muster.toolApproval.enabled .Values.oauth.enabled .Values.kagent.controllerTarget .Values.muster.bindingsUrl .Values.muster.mcpUrl }}true{{ end }}
 {{- end }}
