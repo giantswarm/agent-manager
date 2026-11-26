@@ -107,7 +107,7 @@ func TargetMajor(constraint string) (uint64, error) {
 		return 0, fmt.Errorf("target chart range %q admits no release version", constraint)
 	case 1:
 		// A bound like <=3.0.0-rc.1 admits pre-releases of the next major,
-		// which Flux would serve under a range read as this one (M3-S8-R-05).
+		// which Flux would serve under a range read as this one.
 		next := majors[0] + 1
 		for _, pre := range []string{"0", "alpha.0", "rc.1", "rc.999"} {
 			if c.Check(semver.New(next, 0, 0, pre, "")) {

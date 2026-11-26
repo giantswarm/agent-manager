@@ -1889,7 +1889,7 @@ func (s *Service) mergedValues(ctx context.Context, st *site, upd Update, hr *un
 		list, def := toolListFromValues(before)
 		if upd.expectTools != nil && (!slices.Equal(list, *upd.expectTools) || def != upd.expectDefault) {
 			// set_agent_approval read the list before its checks; another
-			// save changed it since (M2-S3-C-08).
+			// save changed it since.
 			return after, before, conflictf("agent %s's tool list changed while set_agent_approval checked it; read it again and repeat the call", st.describe(upd.Name))
 		}
 		if upd.Tools != nil {

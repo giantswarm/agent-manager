@@ -1,9 +1,8 @@
 # Tool approval per agent
 
-Slice 3 of [giantswarm/giantswarm#38902](https://github.com/giantswarm/giantswarm/issues/38902).
-The concept is explained once, in the docs page *Governing tool calls*
-(<https://docs.giantswarm.io/overview/agent-platform/governing-tool-calls/>);
-this page says what agent-manager does.
+This page says what agent-manager does. The concept (modes, floors, connector
+settings) is explained once in the docs page *Governing tool calls*, for
+further reading: <https://docs.giantswarm.io/overview/agent-platform/governing-tool-calls/>.
 
 ## The tool list
 
@@ -135,10 +134,10 @@ written past agent-manager (GitOps, a hand edit) can never carry one.
   silently, and one that could not be read for another reason is only
   counted in `unreadableCount` (never named, as `toolchain_users` does); `server`
   narrows to one connector; each grant carries its `agent` and
-  `agentDisplayName` (empty when the agent has none). A later owner (a connector manager,
-  giantswarm/bumblebee-plans#237) can take the records over by reading the
-  same versioned documents, or by putting its own store behind the
-  interface, without migrating agent values.
+  `agentDisplayName` (empty when the agent has none). A later owner (for example a dedicated
+  connector manager) can take the records over by reading the same versioned
+  documents, or by putting its own store behind the interface, without
+  migrating agent values.
 - **Generation**: a grant holds only for the HelmRelease `metadata.generation`
   the save that recorded it wrote. The generation moves with any change of the
   release's spec, not only its values (a chart version bump by automation,

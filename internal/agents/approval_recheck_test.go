@@ -20,8 +20,7 @@ import (
 	"github.com/giantswarm/agent-manager/internal/muster"
 )
 
-// Regression tests of the slice 3 re-check (reviews/m2, "Fix verification
-// (re-check)": M2-S3-R-01 to R-07).
+// Regression tests of the second review round of the approval grants.
 
 // saReader is agent-manager's ServiceAccount reader whose HelmRelease reads
 // are refused (an organization namespace the chart grants no reader Role in).
@@ -43,7 +42,7 @@ func forbiddenServiceAccountReader(t *testing.T, a *approvalFixture) saReader {
 	return saReader{Client: base, dyn: dyn}
 }
 
-// R-02: where the ServiceAccount may not read the release, it is read as the
+// where the ServiceAccount may not read the release, it is read as the
 // person starting the Session; only when neither may the start is refused.
 func TestStartReadsTheReleaseAsTheCallerWhereTheServiceAccountMayNot(t *testing.T) {
 	a := newApprovalFixture(t, map[string]any{
@@ -63,7 +62,7 @@ func TestStartReadsTheReleaseAsTheCallerWhereTheServiceAccountMayNot(t *testing.
 	assert.Contains(t, err.Error(), "neither by agent-manager's ServiceAccount nor by you")
 }
 
-// R-03: without a namespace the listing covers the organization namespaces
+// without a namespace the listing covers the organization namespaces
 // too; an organization the caller may not read is skipped without its name,
 // one that fails otherwise is counted, a configured one is named.
 func TestListApprovalGrantsCoversTheOrganizations(t *testing.T) {
@@ -96,7 +95,7 @@ func TestListApprovalGrantsCoversTheOrganizations(t *testing.T) {
 	assert.Equal(t, []string{"kagent"}, got.Unreadable, "a configured namespace is named")
 }
 
-// R-03: the startup sweep covers the organization namespaces' records.
+// the startup sweep covers the organization namespaces' records.
 func TestTheSweepCoversTheOrganizations(t *testing.T) {
 	a := newApprovalFixture(t, nil)
 	withTenants(a.fixture, &fakeTenants{namespaces: []string{"org-a"}})
@@ -109,7 +108,7 @@ func TestTheSweepCoversTheOrganizations(t *testing.T) {
 	assert.Equal(t, "org-a/bot", a.bindings.drops[0].Agent)
 }
 
-// R-05 (the re-check PoC): a deleted agent's pending empty record, re-sent
+// a deleted agent's pending empty record, re-sent
 // while an agent of the same name lives under another release UID, tells
 // muster that agent's grants, never "keep none".
 func TestAGoneAgentsRecordKeepsTheRecreatedAgentsMarks(t *testing.T) {
@@ -128,7 +127,7 @@ func TestAGoneAgentsRecordKeepsTheRecreatedAgentsMarks(t *testing.T) {
 	assert.Empty(t, rec.Version, "the gone agent's record is removed once sent")
 }
 
-// R-07: settings that only the rendered header shows (a release with
+// settings that only the rendered header shows (a release with
 // valuesFrom and no inline settings) refuse a start.
 func TestValuesFromWithSettingsOnlyInTheRenderedHeaderRefusesAStart(t *testing.T) {
 	a := newApprovalFixture(t, map[string]any{
@@ -154,7 +153,7 @@ func TestValuesFromWithSettingsOnlyInTheRenderedHeaderRefusesAStart(t *testing.T
 	assert.Contains(t, err.Error(), "valuesFrom")
 }
 
-// R-07: get_agent and list_agents send a pending sync again.
+// get_agent and list_agents send a pending sync again.
 func TestReadsSendAPendingSyncAgain(t *testing.T) {
 	for name, read := range map[string]func(a *approvalFixture) error{
 		"get_agent":   func(a *approvalFixture) error { _, err := a.svc.Get(dana(t), Location{}, "alert-review"); return err },
@@ -172,7 +171,7 @@ func TestReadsSendAPendingSyncAgain(t *testing.T) {
 	}
 }
 
-// R-07: Start runs the sweep (cmd/serve.go calls it).
+// Start runs the sweep (cmd/serve.go calls it).
 func TestStartSweeps(t *testing.T) {
 	a := newApprovalFixture(t, nil)
 	rec := approvalgrants.Record{Agent: approvalgrants.Agent{UID: "gone", Namespace: "kagent", Name: "gone"}, PendingSessionSync: true}
@@ -182,7 +181,7 @@ func TestStartSweeps(t *testing.T) {
 	assert.Equal(t, "kagent/gone", a.bindings.drops[0].Agent)
 }
 
-// R-07: removing a stale grant at a start keeps a newer one.
+// removing a stale grant at a start keeps a newer one.
 func TestRemovingAStaleGrantKeepsANewerOne(t *testing.T) {
 	a := newApprovalFixture(t, nil)
 	a.grants.Put(alertAgent,
@@ -194,7 +193,7 @@ func TestRemovingAStaleGrantKeepsANewerOne(t *testing.T) {
 	assert.Equal(t, int64(8), stored[0].Generation)
 }
 
-// R-07: a regrant that no longer needs a connector reports its drop.
+// a regrant that no longer needs a connector reports its drop.
 func TestARegrantReportsTheConnectorItLeavesOut(t *testing.T) {
 	a := newApprovalFixture(t, nil)
 	a.admins["muster"] = true

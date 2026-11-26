@@ -594,7 +594,7 @@ func forbiddenErr(resource string) error {
 }
 
 // A Session of an agent on muster.requireApproval: true is bound with
-// default: Ask (M3-S8-03): when agent chart 3.0 drops kagent's flag the
+// default: Ask: when agent chart 3.0 drops kagent's flag the
 // Session's binding already asks, and a binding written with empty settings
 // would make muster ignore the agent's X-Muster-Tool-Approval header.
 func TestASessionOfARequireApprovalAgentIsBoundAskingBeforeEveryCall(t *testing.T) {

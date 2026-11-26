@@ -121,7 +121,7 @@ func Caller(ctx context.Context) string {
 
 // VerifiedCaller is the caller's email where the IdP verified it, else its
 // subject: what a record that someone relies on later names (an approval
-// grant's grantedBy, M2-S3-S-13).
+// grant's grantedBy).
 func VerifiedCaller(ctx context.Context) string {
 	id, ok := FromContext(ctx)
 	if !ok || id == nil {

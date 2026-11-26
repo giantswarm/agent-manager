@@ -732,7 +732,7 @@ func (t *tools) createAgent(ctx context.Context, req mcp.CallToolRequest) (*mcp.
 
 // The fields each update tool takes: update_agent what the agent is,
 // update_agent_access what it can reach, set_agent_approval its approval
-// settings (giantswarm/giantswarm#38902). muster's floors and governance
+// settings. muster's floors and governance
 // match the tools by name, so a field belongs to exactly one tool.
 var (
 	describingArgs = []string{argDisplayName, argTags, argDescription, argSystemMessage, argModelConfig, argIconURL, argLabels, argAnnotations}
@@ -740,8 +740,7 @@ var (
 	approvalArgs   = []string{argDefault, argSettings}
 )
 
-// addStrict registers a tool that takes only the arguments it declares
-// (M2-S3-S-02): JSON binding matches field names case-insensitively, so an
+// addStrict registers a tool that takes only the arguments it declares: JSON binding matches field names case-insensitively, so an
 // argument another tool owns, written in another case ("Toolset", "EGRESS"),
 // would otherwise reach the agent through this tool. An argument another
 // split tool owns is refused naming that tool; any other undeclared one is

@@ -15,8 +15,7 @@ import (
 // The value-level half of the 2.x -> 3.x expand phase. Both majors render
 // the same api.kagent.dev Agent; chart 3.0 changes two values:
 //
-//   - muster.requireApproval is removed (giantswarm/giantswarm#38902, slice
-//     8): kagent's flag paused the agent before every tool call through the
+//   - muster.requireApproval is removed: kagent's flag paused the agent before every tool call through the
 //     muster binding; `default: Ask` makes muster ask a person before every
 //     such call instead. `true` becomes `default: Ask` where the binding
 //     rendered (muster on, a tool list other than exactly ["preset:none"]),

@@ -468,8 +468,7 @@ func (r *Runner) discover(ctx context.Context, ns string) (*nsState, error) {
 // discoverIn is discover; org reads an organization namespace, where an
 // agent-chart source is recognised by the chart's name as well as its URL:
 // the agent-platform-operator's copy keeps the URL it was created with
-// (decisions-operator #7), and a release on it must still be reported
-// (M3I-3). A HelmRelease there on an OCIRepository of another chart is named
+// (decisions-operator #7), and a release on it must still be reported. A HelmRelease there on an OCIRepository of another chart is named
 // in the report's warnings.
 func (r *Runner) discoverIn(ctx context.Context, ns string, org bool) (*nsState, error) {
 	dyn := r.client.Dynamic()
@@ -860,7 +859,7 @@ func (r *Runner) holdSiblings(st *nsState) {
 			case a == ActionDiff && r.hop.to == 3:
 				// On 2.x -> 3.x a sibling waiting for its diff keeps the
 				// source on 2.x, where no released chart takes `default`:
-				// its siblings' 3.x values would fail every upgrade (M3I-2).
+				// its siblings' 3.x values would fail every upgrade.
 				blockers = append(blockers, fmt.Sprintf("%s (%s)", rel.id(), a))
 			case rel.platform:
 				blockers = append(blockers, fmt.Sprintf("%s (%s)", rel.id(), OwnershipPlatform))

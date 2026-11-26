@@ -63,7 +63,7 @@ func TestABindCarriesTheApprovalAndTheSenderTokenReadPerCall(t *testing.T) {
 	assert.Equal(t, "sa-token-2", got[1].sender, "the rotated token")
 	assert.Equal(t, map[string]any{"agent": "kagent/alert-review", "keep": []any{}}, got[1].body)
 
-	assert.Equal(t, "sa-token-2", got[2].sender, "an unbind carries the sender too: muster deletes a sender-written binding only with it (M2-S3-R-01)")
+	assert.Equal(t, "sa-token-2", got[2].sender, "an unbind carries the sender too: muster deletes a sender-written binding only with it")
 	assert.Equal(t, http.MethodDelete, got[2].method)
 }
 
@@ -80,7 +80,7 @@ func TestDropGrantsNeedsTheSenderToken(t *testing.T) {
 
 // muster's answer on the agent's settings is read from its response header;
 // a muster that predates them refuses the unknown field, which the client
-// tells apart; a refused replacement is a conflict (M2-S3-C-06, S-01).
+// tells apart; a refused replacement is a conflict.
 func TestBindReadsWhatMusterDidWithTheSettings(t *testing.T) {
 	answer := func(status int, header, body string) *httptest.Server {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -133,7 +133,7 @@ func TestTheClientFollowsNoRedirect(t *testing.T) {
 }
 
 // A binding at muster's 64 KiB limit goes through; past it the refusal names
-// the approval part (M2-S3-C-10).
+// the approval part.
 func TestBindLimitFitsTheApprovalSettings(t *testing.T) {
 	var got []recorded
 	srv := recorder(t, &got)
@@ -178,7 +178,7 @@ func TestDropGrantsWithTheSenderTokenAlone(t *testing.T) {
 	require.ErrorIs(t, err, ErrUnauthenticated)
 }
 
-// A grant drop returns muster's counts (M2I-3).
+// A grant drop returns muster's counts.
 func TestDropGrantsReturnsMustersCounts(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -194,7 +194,7 @@ func TestDropGrantsReturnsMustersCounts(t *testing.T) {
 	assert.Equal(t, DropResult{Bindings: 3, Dropped: 2}, got)
 }
 
-// Plain http to an in-cluster Service is not warned about (M2I-8 b).
+// Plain http to an in-cluster Service is not warned about.
 func TestClusterLocal(t *testing.T) {
 	for host, want := range map[string]bool{
 		"muster": true, "muster.agent-platform": true, "muster.agent-platform.svc": true,
@@ -205,7 +205,7 @@ func TestClusterLocal(t *testing.T) {
 	}
 }
 
-// An https endpoint is trusted through the configured CA file (M2I-8 c): the
+// An https endpoint is trusted through the configured CA file: the
 // client reaches a server whose certificate that CA issued, and does not
 // without it.
 func TestTheBindingsClientTrustsTheConfiguredCA(t *testing.T) {

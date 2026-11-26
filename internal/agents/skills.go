@@ -186,7 +186,7 @@ const (
 var httpURL = regexp.MustCompile(`^https?://\S+$`)
 
 // checkGitURL checks a skill's or plugin's repository URL: http(s), and no
-// credential in it (M2-S3-S-09): a token belongs in gitAuthSecretName, and a
+// credential in it: a token belongs in gitAuthSecretName, and a
 // URL is logged and stored in the release values.
 func checkGitURL(at, raw string) error {
 	if !httpURL.MatchString(raw) {

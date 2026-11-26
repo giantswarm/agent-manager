@@ -89,8 +89,7 @@ func TestMemoryStoreConflict(t *testing.T) {
 func metavOpts() metav1.GetOptions { return metav1.GetOptions{} }
 
 // A record whose object name, labels or agent disagree is skipped, not
-// trusted: someone else's ConfigMap in the grants namespace lifts nothing
-// (M2-S3-S-05, C-18). An undecodable one does not hide the others.
+// trusted: someone else's ConfigMap in the grants namespace lifts nothing. An undecodable one does not hide the others.
 func TestConfigMapStoreSkipsRecordsThatFailTheirChecks(t *testing.T) {
 	ctx := context.Background()
 	client := fake.NewClientset()

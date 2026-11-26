@@ -1,6 +1,6 @@
 // Package approvalgrants keeps the approval grants of agents: a connector
 // admin's Allow over that connector's Ask, for one entry of one agent's tool
-// list (giantswarm/giantswarm#38902, slice 3).
+// list.
 //
 // Grants are their own records behind their own API, never part of an
 // agent's values, labels or annotations: values can be written past
@@ -13,10 +13,9 @@
 // ServiceAccount should. A record is checked on read (its object name, its
 // labels and the agent it names agree) and one that does not is skipped.
 // Store is the only way agent-manager
-// reaches them, so a later owner (a connector manager,
-// giantswarm/bumblebee-plans#237) can take the records over by reading the
-// same objects, or by putting its own Store behind the interface, without a
-// migration of agent values. See docs/approval-grants.md.
+// reaches them, so a later owner (for example a dedicated connector manager)
+// can take the records over by reading the same objects, or by putting its
+// own Store behind the interface, without a migration of agent values. See docs/approval-grants.md.
 package approvalgrants
 
 import (

@@ -17,10 +17,9 @@ import (
 	"github.com/giantswarm/agent-manager/internal/muster"
 )
 
-// Regression tests of the slice 3 review fix round
-// (tool-approval/reviews/m2/slice-3-{code,security}-review.md).
+// Regression tests of the first review round of the approval grants.
 
-// C-05: get_agent keeps `tools` as the kagent MCP bindings; the tool list is
+// get_agent keeps `tools` as the kagent MCP bindings; the tool list is
 // toolSettings.
 func TestGetAgentKeepsToolsAsTheBindings(t *testing.T) {
 	a := newApprovalFixture(t, nil)
@@ -40,7 +39,7 @@ func TestGetAgentKeepsToolsAsTheBindings(t *testing.T) {
 	assert.Contains(t, string(summary), `"toolSettings":`)
 }
 
-// C-02, S-03: without the sender (tool approval off) settings are refused,
+// without the sender (tool approval off) settings are refused,
 // reported as not taken, and a release carrying some refuses a start.
 func TestSettingsAreRefusedWhereNothingBindsThem(t *testing.T) {
 	a := newApprovalFixture(t, map[string]any{
@@ -74,7 +73,7 @@ func (a *approvalFixture) startErr(t *testing.T) error {
 	return err
 }
 
-// C-02: settings that may come from spec.valuesFrom, and a HelmRelease-
+// settings that may come from spec.valuesFrom, and a HelmRelease-
 // managed agent whose release is gone, refuse a start.
 func TestStartRefusesSettingsItCannotBind(t *testing.T) {
 	a := newApprovalFixture(t, nil)
@@ -103,7 +102,7 @@ func TestStartRefusesSettingsItCannotBind(t *testing.T) {
 	assert.Contains(t, err.Error(), "cannot be found")
 }
 
-// C-06: a muster that predates approval settings refuses them as unknown
+// a muster that predates approval settings refuses them as unknown
 // fields: an agent without settings binds without them, one with settings
 // is refused; a muster that took the bind but ignored the settings refuses
 // the start too (and is unbound).
@@ -131,7 +130,7 @@ func TestBindFallsBackOnlyWithoutSettings(t *testing.T) {
 	assert.NotEmpty(t, a3.bindings.Unbound, "the binding without settings is removed")
 }
 
-// C-04, S-04: a drop muster could not take is retried, reported, kept
+// a drop muster could not take is retried, reported, kept
 // pending and sent again by the agent's next start.
 func TestAFailedDropIsRetriedReportedAndSentAgain(t *testing.T) {
 	a := newApprovalFixture(t, nil)
@@ -168,7 +167,7 @@ func TestARetryGetsThrough(t *testing.T) {
 	assert.Empty(t, res.Warnings)
 }
 
-// C-04: delete_agent drops every mark of the agent; a failure keeps an empty
+// delete_agent drops every mark of the agent; a failure keeps an empty
 // pending record that a read of the namespace sends again and then removes.
 func TestDeleteTellsMusterAndKeepsAPendingRecordOnFailure(t *testing.T) {
 	a := newApprovalFixture(t, nil)
@@ -191,7 +190,7 @@ func TestDeleteTellsMusterAndKeepsAPendingRecordOnFailure(t *testing.T) {
 	assert.Empty(t, rec.Version, "the deleted agent's record is removed once muster has it")
 }
 
-// S-06: a grant names the tools it covered, its marks carry them, and the
+// a grant names the tools it covered, its marks carry them, and the
 // toolset bound with settings is the release's own list, not the live
 // RemoteMCPServer's header.
 func TestGrantMarksCarryTheirToolsAndTheReleaseToolset(t *testing.T) {
@@ -208,7 +207,7 @@ func TestGrantMarksCarryTheirToolsAndTheReleaseToolset(t *testing.T) {
 	assert.Equal(t, []string{"merge_pull_request"}, b.Approval.Grants[0].Tools)
 }
 
-// C-08: set_agent_approval writes nothing over a list that moved while it
+// set_agent_approval writes nothing over a list that moved while it
 // checked.
 func TestSetAgentApprovalRefusesAListThatMoved(t *testing.T) {
 	a := newApprovalFixture(t, nil)
@@ -227,7 +226,7 @@ func TestSetAgentApprovalRefusesAListThatMoved(t *testing.T) {
 	assert.Empty(t, a.stored(t))
 }
 
-// C-09, S-11: a start that read the release before a save wrote it never
+// a start that read the release before a save wrote it never
 // drops the save's newer grant; it only leaves it unbound.
 func TestAStartNeverDropsANewerGrant(t *testing.T) {
 	a := newApprovalFixture(t, nil)
@@ -238,7 +237,7 @@ func TestAStartNeverDropsANewerGrant(t *testing.T) {
 	assert.NotContains(t, a.logs.String(), `"msg":"approval grant dropped"`)
 }
 
-// S-12: without the caller's own Kubernetes identity no one is a connector
+// without the caller's own Kubernetes identity no one is a connector
 // admin, whatever the review would answer for the ServiceAccount.
 func TestNoConnectorAdminWithoutTheCallersIdentity(t *testing.T) {
 	a := newApprovalFixture(t, nil)
@@ -249,7 +248,7 @@ func TestNoConnectorAdminWithoutTheCallersIdentity(t *testing.T) {
 	require.ErrorIs(t, err, ErrForbidden)
 }
 
-// C-17: a release still running a chart without `tools` keeps `toolset`, and
+// a release still running a chart without `tools` keeps `toolset`, and
 // settings wait until it runs one that takes them.
 func TestAReleaseOnAnOlderChartKeepsItsToolset(t *testing.T) {
 	a := newApprovalFixture(t, map[string]any{
@@ -273,7 +272,7 @@ func TestAReleaseOnAnOlderChartKeepsItsToolset(t *testing.T) {
 	assert.Contains(t, err.Error(), "0.0.1-old")
 }
 
-// C-18: get_agent reads the one agent's grants record, not the namespace's.
+// get_agent reads the one agent's grants record, not the namespace's.
 func TestGetAgentReadsItsOwnGrantsRecord(t *testing.T) {
 	a := newApprovalFixture(t, nil)
 	a.grantMerge()
@@ -295,7 +294,7 @@ func (l *listCounting) ListByNamespace(ctx context.Context, ns string) ([]approv
 	return l.MemoryStore.ListByNamespace(ctx, ns)
 }
 
-// S-09: a credential in a skill or plugin URL is refused (without echoing
+// a credential in a skill or plugin URL is refused (without echoing
 // it), and one in values written before is redacted in the access log.
 func TestCredentialsInGitURLsAreRefusedAndRedacted(t *testing.T) {
 	withCredential := "https://user:" + "s3cret" + "@example.com/repo.git"
@@ -311,7 +310,7 @@ func TestCredentialsInGitURLsAreRefusedAndRedacted(t *testing.T) {
 	assert.Contains(t, a.logs.String(), "***@example.com")
 }
 
-// S-13: a grant names an unverified email's subject, not the email.
+// a grant names an unverified email's subject, not the email.
 func TestGrantedByIsAVerifiedEmailOrTheSubject(t *testing.T) {
 	a := newApprovalFixture(t, nil)
 	a.admins["muster"] = true
@@ -336,7 +335,7 @@ func TestSetAgentApprovalAnswersToolSettings(t *testing.T) {
 	assert.Contains(t, doc["before"], "toolSettings")
 }
 
-// M2-S5-04: get_agent reports the release generation; the update tools and
+// get_agent reports the release generation; the update tools and
 // set_agent_approval refuse a write when the release moved past the
 // generation the caller read, accept a matching one, and an absent one
 // changes nothing.

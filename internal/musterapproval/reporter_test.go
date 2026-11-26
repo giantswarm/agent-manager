@@ -59,7 +59,7 @@ func TestAMusterThatDoesNotEvaluateAgentListsIsUnavailable(t *testing.T) {
 
 // A muster that drops the agentTools argument answers tools without entries:
 // without its echo every Allow would look plain and no grant would be
-// recorded, so the answer is refused (M2-S3-C-07).
+// recorded, so the answer is refused.
 func TestAnAnswerWithoutTheAgentToolsEchoIsUnavailable(t *testing.T) {
 	m := &fakeMuster{pages: []string{`{"truncated": false, "tools": [{"name": "x_github_merge", "approval": {"setting": "ask", "source": "tool"}}]}`}}
 	_, err := New(m).AgentTools(context.Background(), "tok", agents.AgentToolsQuery{Tools: agents.ToolList{{Selector: "tool:x_github_merge", Setting: "Allow"}}})

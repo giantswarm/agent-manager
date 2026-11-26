@@ -21,7 +21,7 @@ import (
 	"github.com/giantswarm/agent-manager/internal/muster"
 )
 
-// Tool approval per agent (giantswarm/giantswarm#38902, slice 3). An entry's
+// Tool approval per agent. An entry's
 // Allow over a connector's Ask holds only with a grant a connector admin
 // saved through set_agent_approval; agent-manager keeps the grants in their
 // own records (internal/approvalgrants) and marks them in each Session's
@@ -125,10 +125,9 @@ const (
 	EnforcementPending     = "pending"
 )
 
-// enforcement says whether an agent's settings are bound to its sessions
-// (M2I-4): not without the sender, a release, or with spec.valuesFrom, nor on
+// enforcement says whether an agent's settings are bound to its sessions: not without the sender, a release, or with spec.valuesFrom, nor on
 // a release without `tools` that runs another chart than the one judged by
-// (an older chart, M2I-1); pending until the release ran its current
+// (an older chart); pending until the release ran its current
 // generation; enforced otherwise.
 func enforcement(a *Agent, sends bool, schemaVersion string) string {
 	switch {
@@ -241,7 +240,7 @@ func connectorNames(cs []Connector) string {
 // namespace: the connector-admin check. It is answered only where agent-
 // manager talks to Kubernetes as the caller (downstream OAuth): otherwise a
 // review would describe agent-manager's own ServiceAccount, and wherever that
-// is bound widely every caller would count as a connector admin (M2-S3-S-12),
+// is bound widely every caller would count as a connector admin,
 // so no one is one.
 func (s *Service) isConnectorAdmin(ctx context.Context, namespace string) (bool, error) {
 	if s.kube.Identity() != kube.IdentityCaller {
@@ -442,7 +441,7 @@ func (s *Service) approvalLogAttrs(ctx context.Context, tool, agent string) []an
 // release changed past agent-manager (any change of its spec: values, chart
 // version, suspend) and is dropped, from the records and the Sessions. One
 // written at a higher generation belongs to a save that ran after the
-// release was read (M2-S3-C-09, S-11): it is left alone and not bound now,
+// release was read: it is left alone and not bound now,
 // never dropped.
 func (s *Service) liveGrants(ctx context.Context, tool string, agent approvalgrants.Agent, generation int64) ([]approvalgrants.Grant, error) {
 	if s.cfg.Grants == nil || agent.UID == "" {
@@ -618,8 +617,7 @@ func (s *Service) logAccessChanges(ctx context.Context, tool, agent string, befo
 	}
 }
 
-// redactedValue is a logged value with any URL's user:password@ replaced
-// (M2-S3-S-09): values written before credentials in URLs were refused may
+// redactedValue is a logged value with any URL's user:password@ replaced: values written before credentials in URLs were refused may
 // still carry one.
 func redactedValue(v any) any {
 	if v == nil {
@@ -749,7 +747,7 @@ func (s *Service) ListApprovalGrants(ctx context.Context, namespace, server stri
 
 // namespaceGrants lists one namespace's live grants, as the caller: who may
 // not list its HelmReleases (a SelfSubjectAccessReview, before anything else
-// is read, M2I-5) is refused.
+// is read) is refused.
 func (s *Service) namespaceGrants(ctx context.Context, namespace, server string) ([]ListedGrant, error) {
 	st, err := s.site(ctx, Location{Namespace: namespace})
 	if err != nil {

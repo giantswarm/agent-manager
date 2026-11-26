@@ -24,7 +24,7 @@ const ToolApprovalHeader = "X-Muster-Tool-Approval"
 
 // MusterApprovalVersionHint names the muster a binding with approval
 // settings needs.
-const MusterApprovalVersionHint = "a muster with tool approval per agent (giantswarm/giantswarm#38902, milestone 2)"
+const MusterApprovalVersionHint = "a muster with tool approval per agent"
 
 // boundApproval is what a Session's binding carries of its agent's approval
 // settings.
@@ -52,11 +52,11 @@ func (s *Service) sendsApproval() bool {
 
 // sessionApproval reads the agent's approval settings and live grants for a
 // Session binding and returns the toolset to bind with them. Settings that
-// cannot be bound refuse the start (fail closed, M2-S3-C-02/S-03): agent-
+// cannot be bound refuse the start (fail closed): agent-
 // manager sending none (tool approval off), settings that may come from
 // spec.valuesFrom (which agent-manager does not read), or a HelmRelease-
 // managed agent whose release is gone. With settings, the toolset bound is
-// the release's own list, not the live Agent and RemoteMCPServer (S-06): an
+// the release's own list, not the live Agent and RemoteMCPServer: an
 // edit of those objects never widens what a grant covers. An agent without
 // a release (a bare Agent) carries none.
 func (s *Service) sessionApproval(ctx context.Context, ref kagent.Ref, liveToolset []string) ([]string, *boundApproval, error) {
@@ -74,7 +74,7 @@ func (s *Service) sessionApproval(ctx context.Context, ref kagent.Ref, liveTools
 	if apierrors.IsForbidden(err) && s.cfg.ApprovalReader != nil {
 		// agent-manager's ServiceAccount may not read releases in every
 		// namespace (an organization's: the chart grants the reader Role in
-		// the configured namespaces only, M2-S3-R-02); the person starting
+		// the configured namespaces only); the person starting
 		// the Session usually may. Refused only when neither can.
 		if caller, callerErr := s.kube.Client(ctx); callerErr == nil {
 			dyn = caller.Dynamic()
@@ -120,8 +120,7 @@ func (s *Service) sessionApproval(ctx context.Context, ref kagent.Ref, liveTools
 		// kagent's flag (agent chart 2.x) pauses the agent before every call
 		// through muster; the binding asks too, so a Session running when the
 		// 3.0 upgrade drops the flag keeps asking: muster ignores the agent's
-		// X-Muster-Tool-Approval header for a binding with settings
-		// (giantswarm/giantswarm#38902, M3-S8-03).
+		// X-Muster-Tool-Approval header for a binding with settings.
 		def = SettingAsk
 	}
 	out := &boundApproval{agent: agent, binding: &muster.Approval{Default: def}}
@@ -146,8 +145,7 @@ func (s *Service) sessionApproval(ctx context.Context, ref kagent.Ref, liveTools
 // bindWithApproval binds the Session with its agent's approval settings and
 // checks that muster took them (SettingsHeader). A muster that predates
 // approval settings refuses the unknown fields: a binding without settings
-// is sent again without them, one with settings refuses the start
-// (M2-S3-C-06). A muster that took the bind but not the settings refuses it
+// is sent again without them, one with settings refuses the start. A muster that took the bind but not the settings refuses it
 // too; the caller abandons the Session.
 func (s *Service) bindWithApproval(ctx context.Context, token string, binding *muster.Binding, approval *boundApproval) error {
 	res, err := s.cfg.Bindings.Bind(ctx, token, *binding)

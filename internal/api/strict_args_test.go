@@ -9,8 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// The split tools take only the arguments they declare, in their exact case
-// (M2-S3-S-02): JSON binding would otherwise take "Toolset" or "EGRESS" for
+// The split tools take only the arguments they declare, in their exact case: JSON binding would otherwise take "Toolset" or "EGRESS" for
 // fields another tool owns.
 func TestTheSplitToolsRefuseArgumentsInAnotherCase(t *testing.T) {
 	svc, _ := newService(t)

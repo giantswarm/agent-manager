@@ -13,9 +13,9 @@ import (
 	"github.com/giantswarm/agent-manager/internal/approvalgrants"
 )
 
-// Regression tests of the milestone 2 lab integration (lab-tests/m2-integration.md).
+// Regression tests of the lab integration of tool approval.
 
-// M2I-1: a create in an organization namespace whose agent chart source
+// a create in an organization namespace whose agent chart source
 // serves an older chart (the operator's copy) writes `toolset`, and refuses
 // settings naming the source, instead of an install that fails on `tools`.
 func TestACreateFollowsTheNamespacesChartSource(t *testing.T) {
@@ -49,7 +49,7 @@ func TestACreateFollowsTheNamespacesChartSource(t *testing.T) {
 	assert.False(t, *agent.ApprovalEnforced)
 }
 
-// M2I-2: delete_agent's result names the grants it dropped.
+// delete_agent's result names the grants it dropped.
 func TestDeleteReportsTheDroppedGrants(t *testing.T) {
 	a := newApprovalFixture(t, nil)
 	a.grantMerge()
@@ -59,7 +59,7 @@ func TestDeleteReportsTheDroppedGrants(t *testing.T) {
 	assert.Equal(t, DroppedGrant{Entry: "tool:x_github_merge_pull_request", Server: "github", Reason: "agent deleted", connectorUID: "uid-github"}, res.Dropped[0])
 }
 
-// M2I-3: the sync log carries muster's counts.
+// the sync log carries muster's counts.
 func TestTheSyncLogCarriesMustersCounts(t *testing.T) {
 	a := newApprovalFixture(t, nil)
 	a.grantMerge()
@@ -69,7 +69,7 @@ func TestTheSyncLogCarriesMustersCounts(t *testing.T) {
 	assert.Contains(t, a.logs.String(), `"bindings":2,"dropped":1`)
 }
 
-// M2I-4: a release that has not reconciled yet reads `pending`, with
+// a release that has not reconciled yet reads `pending`, with
 // approvalEnforced left out rather than false; once it ran, `enforced`.
 func TestApprovalEnforcementIsPendingUntilTheReleaseRan(t *testing.T) {
 	a := newApprovalFixture(t, nil)
@@ -85,7 +85,7 @@ func TestApprovalEnforcementIsPendingUntilTheReleaseRan(t *testing.T) {
 	assert.True(t, *agent.ApprovalEnforced)
 }
 
-// M2I-5: list_approval_grants for a namespace the caller may not list
+// list_approval_grants for a namespace the caller may not list
 // HelmReleases in answers the list helmreleases refusal, before any chart
 // source is read.
 func TestListApprovalGrantsChecksListHelmReleasesFirst(t *testing.T) {

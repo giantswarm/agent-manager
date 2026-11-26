@@ -15,7 +15,7 @@ import (
 	"github.com/giantswarm/agent-manager/internal/muster"
 )
 
-// Revocation reaching running Sessions (M2-S3-C-04, S-04). A grant leaves an
+// Revocation reaching running Sessions. A grant leaves an
 // agent's running Sessions only when muster is told: PATCH
 // /session-bindings/grants with the grants left (keep). agent-manager records
 // first that muster has to be told (the record's PendingSessionSync), then
@@ -83,7 +83,7 @@ func (s *Service) syncSessions(ctx context.Context, tool string, rec approvalgra
 	if len(rec.Grants) == 0 {
 		// An agent of that name may have been created again under another
 		// release UID: its marks are under the same agent key, so it is told
-		// that agent's grants, never "keep none" (M2-S3-R-05).
+		// that agent's grants, never "keep none".
 		if successor, ok := s.recreatedAgentGrants(ctx, rec.Agent); ok {
 			keep = keepMarks(successor)
 		}

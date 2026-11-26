@@ -237,12 +237,10 @@ func setToolListValues(values map[string]any, l ToolList, def string, chartTakes
 	return nil
 }
 
-// errNoBinding refuses settings an installation would not enforce
-// (M2-S3-C-02, S-03).
+// errNoBinding refuses settings an installation would not enforce.
 var errNoBinding = fmt.Errorf("%w: this installation does not bind tool approval settings to sessions (agent-manager's muster.toolApproval is off, or it has no muster bindings endpoint or sender token), so an Allow, Ask, Block or default would not be enforced; save the tool list without settings, or turn tool approval on", ErrUnsupported)
 
-// releaseTakesTools reports whether the chart the release runs takes `tools`
-// (M2-S3-C-17): the registry's latest chart must, and the release must run
+// releaseTakesTools reports whether the chart the release runs takes `tools`: the registry's latest chart must, and the release must run
 // it, or already carry `tools`. A release still on another chart version
 // keeps the key it has until Flux upgrades it.
 func (s *Service) releaseTakesTools(ctx context.Context, hr *unstructured.Unstructured, before map[string]any) (bool, string) {
@@ -272,7 +270,7 @@ func (s *Service) releaseTakesTools(ctx context.Context, hr *unstructured.Unstru
 }
 
 // sourceTakesTools reports whether the chart a create in this site gets
-// takes `tools` (M2I-1, decision #87): the chart the namespace's agent chart
+// takes `tools`: the chart the namespace's agent chart
 // source (OCIRepository) serves, not agent-manager's own resolved one. A
 // source that serves another chart version than the schema agent-manager
 // judges by (an organization's copy the operator created once), or points

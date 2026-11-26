@@ -42,7 +42,7 @@ func New(c Caller) *Reporter { return &Reporter{muster: c} }
 // page is the part of filter_tools' answer the reporter reads.
 type page struct {
 	// AgentTools is muster's echo of the agentTools argument: a muster
-	// that does not evaluate agent lists leaves it out (M2-S3-C-07).
+	// that does not evaluate agent lists leaves it out.
 	AgentTools *struct {
 		Entries  int `json:"entries"`
 		Settings int `json:"settings"`

@@ -260,24 +260,24 @@ func TestV3SourceWaitsWhileTheChartIsNotPublished(t *testing.T) {
 }
 
 func TestV3GitOpsOwnedReleaseGetsTheDiff(t *testing.T) {
-	hr := gitOpsLabeled(helmRelease("flux-giantswarm", "triage", approvalValues(), "2.6.1"))
+	hr := gitOpsLabeled(helmRelease("flux-system", "triage", approvalValues(), "2.6.1"))
 	require.NoError(t, unstructured.SetNestedField(hr.Object, kagentNS, "spec", "targetNamespace"))
-	c := newCluster(gitOpsLabeled(ociRepository("flux-giantswarm", v2Range)), hr, agentObj(kagentNS, "triage", "triage", "flux-giantswarm", true))
+	c := newCluster(gitOpsLabeled(ociRepository("flux-system", v2Range)), hr, agentObj(kagentNS, "triage", "triage", "flux-system", true))
 
 	res, err := c.runnerV3(t, Options{Namespaces: []string{kagentNS}}, v3Latest).Run(t.Context())
 	require.NoError(t, err)
 	rep := res.Reports[0]
-	rel := byRelease(rep)["flux-giantswarm/triage"]
+	rel := byRelease(rep)["flux-system/triage"]
 	require.Equal(t, ActionDiff, rel.Action)
 	require.Contains(t, rel.Diff, "-      requireApproval: true\n")
 	require.Contains(t, rel.Diff, "+    default: Ask\n")
-	src := bySource(rep)["flux-giantswarm/agent"]
+	src := bySource(rep)["flux-system/agent"]
 	require.Equal(t, ActionDiff, src.Action)
 	require.Contains(t, src.Diff, "+    semver: '"+v3Target+"'\n")
-	require.Equal(t, approvalValues(), c.values(t, "flux-giantswarm", "triage"), "a GitOps-owned release is never written")
-	require.Empty(t, c.writes("flux-giantswarm"))
+	require.Equal(t, approvalValues(), c.values(t, "flux-system", "triage"), "a GitOps-owned release is never written")
+	require.Empty(t, c.writes("flux-system"))
 	require.Equal(t, PhaseExpand, rep.Phase)
-	require.Contains(t, strings.Join(rep.Pending, "\n"), "release flux-giantswarm/triage: its rewrite (the diff in this report) is not applied in the owning repository yet")
+	require.Contains(t, strings.Join(rep.Pending, "\n"), "release flux-system/triage: its rewrite (the diff in this report) is not applied in the owning repository yet")
 }
 
 func TestV3ApprovalWithSettingsFailsAndHoldsItsSiblings(t *testing.T) {
@@ -439,7 +439,7 @@ func TestV3OrganizationNamespacesAreFoundByLabel(t *testing.T) {
 	require.Equal(t, []string{"org-acme"}, names)
 }
 
-// M3-S8-R-01: an organization namespace on target, with Ready Agents, leaves
+// an organization namespace on target, with Ready Agents, leaves
 // the run complete: Flux and the Agents there are not gated on (agent-manager
 // reads status in managed namespaces only).
 func TestV3OrganizationOnTargetDoesNotHoldTheRun(t *testing.T) {
@@ -461,7 +461,7 @@ func TestV3OrganizationOnTargetDoesNotHoldTheRun(t *testing.T) {
 	require.Empty(t, c.writes("org-beta"))
 }
 
-// M3-S8-R-02: a release with valuesFrom already deployed from a 3.x chart is
+// a release with valuesFrom already deployed from a 3.x chart is
 // done: the 3.x chart refuses muster.requireApproval in its merged values.
 func TestV3ValuesFromReleaseOnTargetIsUnchanged(t *testing.T) {
 	hr := valuesFromRelease(kagentNS, "vf", map[string]any{"agent": map[string]any{"name": "a"}})
@@ -475,7 +475,7 @@ func TestV3ValuesFromReleaseOnTargetIsUnchanged(t *testing.T) {
 	require.Equal(t, ActionUnchanged, byRelease(res.Reports[0])["kagent/sibling"].Action)
 }
 
-// M3-S8-R-06: an organization namespace that cannot be read fails the run
+// an organization namespace that cannot be read fails the run
 // before anything is written.
 func TestV3UnreadableOrganizationFailsBeforeAnyWrite(t *testing.T) {
 	c := newCluster(ociRepository(kagentNS, v2Range), helmRelease(kagentNS, "triage", approvalValues(), "2.6.1"))
@@ -506,7 +506,7 @@ func TestV3OrganizationSourceIsNeverMoved(t *testing.T) {
 	require.Empty(t, c.writes("org-acme"))
 }
 
-// M3-S8-R-05: a range whose bound admits a pre-release of the next major is
+// a range whose bound admits a pre-release of the next major is
 // refused: Flux would serve that chart under it.
 func TestTargetMajorRefusesThePreReleasesOfTheNextMajor(t *testing.T) {
 	for _, r := range []string{">=2.6.0 <=3.0.0-rc.1", ">=2.6.0 <3.0.0-rc.1", ">=2.6.0 <3.0.0-alpha.2"} {
@@ -519,7 +519,7 @@ func TestTargetMajorRefusesThePreReleasesOfTheNextMajor(t *testing.T) {
 	}
 }
 
-// M3I-2: a GitOps-owned release waiting for its diff keeps the namespace's
+// a GitOps-owned release waiting for its diff keeps the namespace's
 // source on 2.x, so its writable siblings are held, not given 3.x values
 // that every 2.x upgrade would refuse.
 func TestV3DiffOfAGitOpsSiblingHoldsTheSource(t *testing.T) {
@@ -546,7 +546,7 @@ func ociRepositoryAt(ns, url, semver string) *unstructured.Unstructured {
 	return o
 }
 
-// M3I-3: an organization's chart source the operator created with another
+// an organization's chart source the operator created with another
 // registry URL is still the agent chart's: its releases are reported and
 // hold the run; a source of another chart is named in the warnings.
 func TestV3OrganizationSourceOnAnotherRegistryIsStillReported(t *testing.T) {
@@ -556,7 +556,7 @@ func TestV3OrganizationSourceOnAnotherRegistryIsStillReported(t *testing.T) {
 	dash.SetName("dashboards")
 	c := newCluster(
 		ociRepository(kagentNS, v3Target),
-		ociRepositoryAt("org-acme", "oci://gsoci.example.com/charts/giantswarm/agent", v2Range),
+		ociRepositoryAt("org-acme", "oci://registry.example.com/charts/agent", v2Range),
 		helmRelease("org-acme", "m3-org", approvalValues(), "2.6.1"),
 		dash, other,
 	)
