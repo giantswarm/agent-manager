@@ -150,15 +150,15 @@ func (b *approvalBindings) Bind(ctx context.Context, token string, binding muste
 	return res, nil
 }
 
-func (b *approvalBindings) DropGrants(_ context.Context, _ string, agent string, keep []muster.Grant) error {
+func (b *approvalBindings) DropGrants(_ context.Context, _ string, agent string, keep []muster.Grant) (muster.DropResult, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.dropFails > 0 {
 		b.dropFails--
-		return errors.New("muster unavailable")
+		return muster.DropResult{}, errors.New("muster unavailable")
 	}
 	b.drops = append(b.drops, grantDrop{Agent: agent, Keep: keep})
-	return nil
+	return muster.DropResult{Bindings: 2, Dropped: 1}, nil
 }
 
 // callerIdentity is a kube provider that talks to Kubernetes as the caller
@@ -175,6 +175,9 @@ type approvalFixture struct {
 	logs     *bytes.Buffer
 	// admins are the namespaces whose mcpservers the caller may update.
 	admins map[string]bool
+	// denyListReleases are the namespaces where the caller may not list
+	// HelmReleases (SelfSubjectAccessReview).
+	denyListReleases map[string]bool
 }
 
 const alertUID = "uid-alert"
@@ -208,10 +211,14 @@ func newApprovalFixture(t *testing.T, values map[string]any) *approvalFixture {
 	f.svc.log = slog.New(slog.NewJSONHandler(a.logs, nil))
 	f.typed.PrependReactor("create", "selfsubjectaccessreviews", func(act k8stesting.Action) (bool, runtime.Object, error) {
 		review := act.(k8stesting.CreateAction).GetObject().(*authorizationv1.SelfSubjectAccessReview)
-		if review.Spec.ResourceAttributes.Resource != MCPServersResource {
+		switch review.Spec.ResourceAttributes.Resource {
+		case MCPServersResource:
+			review.Status.Allowed = a.admins[review.Spec.ResourceAttributes.Namespace]
+		case "helmreleases":
+			review.Status.Allowed = !a.denyListReleases[review.Spec.ResourceAttributes.Namespace]
+		default:
 			return false, nil, nil
 		}
-		review.Status.Allowed = a.admins[review.Spec.ResourceAttributes.Namespace]
 		return true, review, nil
 	})
 	return a
@@ -551,8 +558,8 @@ func TestApprovalEnforced(t *testing.T) {
 	a := newApprovalFixture(t, nil)
 	agent, err := a.svc.Get(dana(t), Location{}, "alert-review")
 	require.NoError(t, err)
-	assert.True(t, agent.ApprovalEnforced)
-	assert.True(t, agent.Summary().ApprovalEnforced)
+	assert.Equal(t, new(true), agent.ApprovalEnforced)
+	assert.Equal(t, new(true), agent.Summary().ApprovalEnforced)
 
 	hr, err := a.dyn.Resource(hrGVR).Namespace("kagent").Get(t.Context(), "alert-review", metav1.GetOptions{})
 	require.NoError(t, err)
@@ -561,14 +568,14 @@ func TestApprovalEnforced(t *testing.T) {
 	require.NoError(t, err)
 	agent, err = a.svc.Get(dana(t), Location{}, "alert-review")
 	require.NoError(t, err)
-	assert.False(t, agent.ApprovalEnforced, "valuesFrom")
+	assert.Equal(t, new(false), agent.ApprovalEnforced, "valuesFrom")
 
 	b := newApprovalFixture(t, nil)
 	b.bindings.noSender = true
 	list, err := b.svc.List(dana(t), Location{}, nil)
 	require.NoError(t, err)
 	for _, l := range list {
-		assert.False(t, l.ApprovalEnforced, "%s: this agent-manager binds no settings", l.Name)
+		assert.Equal(t, new(false), l.ApprovalEnforced, "%s: this agent-manager binds no settings", l.Name)
 	}
 	raw, _ := json.Marshal(list[0].Summary())
 	assert.Contains(t, string(raw), `"approvalEnforced":false`, "false is reported, not omitted")

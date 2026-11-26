@@ -11,11 +11,14 @@ package muster
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -103,6 +106,13 @@ const (
 	SettingsNone = "none"
 )
 
+// DropResult is muster's answer to a grant drop: how many live bindings the
+// agent has and how many marks it removed.
+type DropResult struct {
+	Bindings int `json:"bindings"`
+	Dropped  int `json:"dropped"`
+}
+
 // BindResult is muster's answer to a bind.
 type BindResult struct {
 	// Settings is SettingsHeader's value, "" without one.
@@ -166,8 +176,8 @@ func (c *Client) WithSenderTokenFile(path string) *Client {
 	if path == "" {
 		return c
 	}
-	if c.endpoint.Scheme != "https" {
-		slog.Warn("muster session bindings are called over plain http: the approval sender token travels unencrypted; use an https URL", "url", c.endpoint.Redacted())
+	if c.endpoint.Scheme != "https" && !ClusterLocal(c.endpoint.Hostname()) {
+		slog.Warn("muster session bindings are called over plain http outside the cluster: the approval sender token travels unencrypted; use an https URL", "url", c.endpoint.Redacted())
 	}
 	c.senderToken = func() (string, error) {
 		raw, err := os.ReadFile(path) // #nosec G304 -- the operator's configured projected token path
@@ -205,6 +215,48 @@ func New(endpoint string, httpClient *http.Client) (*Client, error) {
 	return &Client{endpoint: u, http: hc}, nil
 }
 
+// ClusterLocal reports whether host names an in-cluster Service: a single
+// label or <service>.<namespace> (resolved through the cluster's search
+// path), or a name ending in .svc or .svc.cluster.local. Plain http to it
+// stays on the cluster network.
+func ClusterLocal(host string) bool {
+	host = strings.TrimSuffix(strings.ToLower(host), ".")
+	if host == "" || net.ParseIP(host) != nil {
+		return false
+	}
+	if strings.HasSuffix(host, ".svc") || strings.HasSuffix(host, ".svc.cluster.local") {
+		return true
+	}
+	return strings.Count(host, ".") <= 1
+}
+
+// WithCAFile trusts the PEM certificates in path (with the system pool) for
+// an https endpoint, e.g. muster's own CA. An empty path changes nothing.
+func (c *Client) WithCAFile(path string) (*Client, error) {
+	if path == "" {
+		return c, nil
+	}
+	pem, err := os.ReadFile(path) // #nosec G304 -- the operator's configured CA path
+	if err != nil {
+		return nil, fmt.Errorf("muster session bindings CA: %w", err)
+	}
+	pool, err := x509.SystemCertPool()
+	if err != nil || pool == nil {
+		pool = x509.NewCertPool()
+	}
+	if !pool.AppendCertsFromPEM(pem) {
+		return nil, fmt.Errorf("muster session bindings CA %s holds no PEM certificate", path)
+	}
+	transport, ok := http.DefaultTransport.(*http.Transport)
+	if !ok {
+		return nil, fmt.Errorf("muster session bindings CA: unexpected default transport")
+	}
+	t := transport.Clone()
+	t.TLSClientConfig = &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}
+	c.http.Transport = t
+	return c, nil
+}
+
 // approvalBytes is the size of the bind's agent and approval part.
 func approvalBytes(b Binding) int {
 	if b.Approval == nil && b.Agent == "" {
@@ -239,18 +291,24 @@ func (c *Client) Bind(ctx context.Context, token string, b Binding) (BindResult,
 // each grant mark not in keep (PATCH <endpoint>/grants), changing nothing
 // else. It needs the sender token: muster refuses it without. token is the
 // person's bearer where there is one; "" sends the sender token alone.
-func (c *Client) DropGrants(ctx context.Context, token, agent string, keep []Grant) error {
+func (c *Client) DropGrants(ctx context.Context, token, agent string, keep []Grant) (DropResult, error) {
 	if keep == nil {
 		keep = []Grant{}
 	}
 	body, err := json.Marshal(map[string]any{"agent": agent, "keep": keep})
 	if err != nil {
-		return fmt.Errorf("muster: encode the grants: %w", err)
+		return DropResult{}, fmt.Errorf("muster: encode the grants: %w", err)
 	}
 	u := *c.endpoint
 	u.Path = strings.TrimSuffix(u.Path, "/") + GrantsPath
-	_, err = c.call(ctx, http.MethodPatch, u.String(), token, body, true)
-	return err
+	var out DropResult
+	_, answer, err := c.do(ctx, http.MethodPatch, u.String(), token, body, true)
+	if err != nil {
+		return DropResult{}, err
+	}
+	// An answer without the counts (an older muster) reads as zeroes.
+	_ = json.Unmarshal(answer, &out)
+	return out, nil
 }
 
 // Unbind removes the caller's binding of actor (DELETE, 204); an actor
@@ -264,11 +322,18 @@ func (c *Client) Unbind(ctx context.Context, token, actor string) error {
 
 // call sends one request and returns muster's response headers on success.
 func (c *Client) call(ctx context.Context, method, target, token string, body []byte, needSender bool) (http.Header, error) {
+	header, _, err := c.do(ctx, method, target, token, body, needSender)
+	return header, err
+}
+
+// do sends one request and returns muster's response headers and body (at
+// most maxErrorBytes) on success.
+func (c *Client) do(ctx context.Context, method, target, token string, body []byte, needSender bool) (http.Header, []byte, error) {
 	// A grant drop may go with the sender token alone (muster takes it
 	// without a person's bearer: a startup sweep has none); every other
 	// call is the person's.
 	if token == "" && (!needSender || c.senderToken == nil) {
-		return nil, fmt.Errorf("%w: the request carries no identity token", ErrUnauthenticated)
+		return nil, nil, fmt.Errorf("%w: the request carries no identity token", ErrUnauthenticated)
 	}
 	var reader io.Reader
 	if body != nil {
@@ -276,7 +341,7 @@ func (c *Client) call(ctx context.Context, method, target, token string, body []
 	}
 	req, err := http.NewRequestWithContext(ctx, method, target, reader)
 	if err != nil {
-		return nil, fmt.Errorf("muster: %w", err)
+		return nil, nil, fmt.Errorf("muster: %w", err)
 	}
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
@@ -287,11 +352,11 @@ func (c *Client) call(ctx context.Context, method, target, token string, body []
 	if c.senderToken != nil {
 		sender, err := c.senderToken()
 		if err != nil {
-			return nil, fmt.Errorf("muster: %w", err)
+			return nil, nil, fmt.Errorf("muster: %w", err)
 		}
 		req.Header.Set(SenderHeader, sender)
 	} else if needSender {
-		return nil, fmt.Errorf("%w: agent-manager has no approval sender token (--muster-approval-sender-token-file), so muster takes no grant changes from it", ErrInvalid)
+		return nil, nil, fmt.Errorf("%w: agent-manager has no approval sender token (--muster-approval-sender-token-file), so muster takes no grant changes from it", ErrInvalid)
 	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
@@ -299,12 +364,12 @@ func (c *Client) call(ctx context.Context, method, target, token string, body []
 	resp, err := c.http.Do(req)
 	if err != nil {
 		// The URL names no secret; the error may carry it and nothing else.
-		return nil, fmt.Errorf("muster session bindings (%s): %w", c.endpoint.Host, err)
+		return nil, nil, fmt.Errorf("muster session bindings (%s): %w", c.endpoint.Host, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode == http.StatusNoContent || resp.StatusCode == http.StatusOK {
-		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxErrorBytes))
-		return resp.Header, nil
+		answer, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBytes))
+		return resp.Header, answer, nil
 	}
 	detail := readDetail(resp.Body)
 	var sentinel error
@@ -316,14 +381,14 @@ func (c *Client) call(ctx context.Context, method, target, token string, body []
 	case http.StatusBadRequest, http.StatusUnprocessableEntity:
 		sentinel = ErrInvalid
 		if strings.Contains(detail, "unknown field") {
-			return nil, fmt.Errorf("%w: %w (%s)%s", ErrInvalid, ErrUnknownField, resp.Status, detail)
+			return nil, nil, fmt.Errorf("%w: %w (%s)%s", ErrInvalid, ErrUnknownField, resp.Status, detail)
 		}
 	case http.StatusUnauthorized:
 		sentinel = ErrUnauthenticated
 	default:
-		return nil, fmt.Errorf("muster session bindings answered %s%s", resp.Status, detail)
+		return nil, nil, fmt.Errorf("muster session bindings answered %s%s", resp.Status, detail)
 	}
-	return nil, fmt.Errorf("%w (%s)%s", sentinel, resp.Status, detail)
+	return nil, nil, fmt.Errorf("%w (%s)%s", sentinel, resp.Status, detail)
 }
 
 // readDetail is muster's own words on a refusal, bounded, as ": <text>".

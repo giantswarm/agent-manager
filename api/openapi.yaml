@@ -1277,7 +1277,8 @@ components:
         grants: { type: array, items: { $ref: "#/components/schemas/Grant" }, description: "The agent's grants that hold (written at the release's current generation)" }
         approvalSettings: { type: boolean, description: "True where the agent chart takes tool approval settings and this installation binds them to sessions" }
         generation: { type: integer, description: "The owning HelmRelease's metadata.generation, which a PATCH (and the MCP tools update_agent, update_agent_access, set_agent_approval) takes as expectedGeneration; absent for a bare Agent" }
-        approvalEnforced: { type: boolean, description: "True when the agent's settings are bound to its sessions: this installation binds settings and the agent's HelmRelease is there and takes no spec.valuesFrom. False: a session of an agent with settings is refused rather than run without them. Always present" }
+        approvalEnforcement: { type: string, enum: [enforced, not-enforced, pending], description: "Whether the agent's settings are bound to its sessions: enforced; not-enforced (no binding, no HelmRelease, spec.valuesFrom, or a release without tools on an older chart: a session of an agent with settings is refused); pending until the release ran its current generation" }
+        approvalEnforced: { type: boolean, description: "approvalEnforcement as a boolean: true when enforced, false when not-enforced, absent while pending" }
         ready: { type: [boolean, "null"], description: The Agent's verdict (Ready and the desired revision is the latest successful one); null while unreported }
         status: { $ref: "#/components/schemas/ObjectStatus" }
         managed: { type: string, enum: [helmrelease, gitops, platform, none, unknown] }
@@ -1348,6 +1349,7 @@ components:
         remoteMcpServerDeleted: { type: boolean, description: The agent's RemoteMCPServer was deleted directly (force, a suspended release) }
         ociRepositoryDeleted: { type: boolean }
         ociRepositoryKept: { type: string, description: Why the shared chart source stays }
+        dropped: { type: array, items: { $ref: "#/components/schemas/DroppedGrant" }, description: The grants the delete removed }
         sessionsUpdated: { type: boolean, description: "false when muster could not be told to drop the agent's grants from its running sessions" }
         warnings: { type: array, items: { type: string } }
         requestedBy: { type: string, description: The authenticated caller the delete ran as }

@@ -1255,7 +1255,8 @@ func (s *Service) ValidateCreate(ctx context.Context, spec Spec) (*ValidateResul
 		spec.Skills, spec.Plugins = sk, pl
 	}
 	values := BuildValues(spec, st.compose)
-	if err := setToolListValues(values, spec.Tools, spec.Default, s.chartTakesTools(ctx), s.chartVersion(ctx), s.sendsApproval()); err != nil {
+	takes, version := s.sourceTakesTools(ctx, st)
+	if err := setToolListValues(values, spec.Tools, spec.Default, takes, version, s.sendsApproval()); err != nil {
 		res.addError(err)
 	}
 	setCreator(values, identity.Caller(ctx), identity.CallerName(ctx))
@@ -1582,7 +1583,8 @@ func (s *Service) Create(ctx context.Context, spec Spec) (*CreateResult, error) 
 		return nil, err
 	}
 	values := BuildValues(spec, st.compose)
-	if err := setToolListValues(values, spec.Tools, spec.Default, s.chartTakesTools(ctx), s.chartVersion(ctx), s.sendsApproval()); err != nil {
+	takes, version := s.sourceTakesTools(ctx, st)
+	if err := setToolListValues(values, spec.Tools, spec.Default, takes, version, s.sendsApproval()); err != nil {
 		return nil, err
 	}
 	setCreator(values, identity.Caller(ctx), identity.CallerName(ctx))
@@ -1654,7 +1656,9 @@ func (s *Service) Create(ctx context.Context, spec Spec) (*CreateResult, error) 
 	res.Created.HelmRelease = true
 	agent := Agent{Name: spec.Name, Namespace: ns, Target: spec.Target, Managed: ManagedHelmRelease}
 	applyHelmRelease(&agent, created, s.cfg.Tags)
-	res.Agent = agent
+	attached := []Agent{agent}
+	s.attachGrants(ctx, ns, attached)
+	res.Agent = attached[0]
 	if status, err := s.status(ctx, st, spec.Name); err == nil {
 		res.Status = status
 	}
@@ -2201,7 +2205,7 @@ func (s *Service) Delete(ctx context.Context, loc Location, name string, force b
 	}
 	res.HelmReleaseDeleted = true
 	if !w.DryRun {
-		res.SessionSync = s.deleteGrants(ctx, approvalgrants.Agent{UID: string(hr.GetUID()), Namespace: ns, Name: name})
+		res.SessionSync, res.Dropped = s.deleteGrants(ctx, approvalgrants.Agent{UID: string(hr.GetUID()), Namespace: ns, Name: name})
 	}
 	if suspended && force && obj != nil {
 		// Flux drops the finalizer of a suspended release without uninstalling:
@@ -2509,6 +2513,20 @@ func headerOf(server *unstructured.Unstructured, name string) string {
 
 // applyHelmRelease folds the owning release into the view and, when the
 // Agent object is absent, reads the identity fields from the values.
+// releaseRan reports whether a release ran its current generation: it has an
+// install in its history and, where Flux reports one, its observed
+// generation caught up with its spec.
+func releaseRan(hr *unstructured.Unstructured) bool {
+	history, _, _ := unstructured.NestedSlice(hr.Object, "status", "history")
+	if len(history) == 0 {
+		return false
+	}
+	if observed, found, _ := unstructured.NestedInt64(hr.Object, "status", "observedGeneration"); found && observed < hr.GetGeneration() {
+		return false
+	}
+	return true
+}
+
 func applyHelmRelease(a *Agent, hr *unstructured.Unstructured, rule *tags.Rule) {
 	ref := &HelmReleaseRef{Name: hr.GetName(), Namespace: hr.GetNamespace()}
 	conds := conditionsOfObject(hr)
@@ -2535,6 +2553,10 @@ func applyHelmRelease(a *Agent, hr *unstructured.Unstructured, rule *tags.Rule) 
 	if from, _, _ := unstructured.NestedSlice(hr.Object, "spec", "valuesFrom"); len(from) > 0 {
 		a.releaseValuesFrom = true
 	}
+	_, a.releaseHasTools, _ = unstructured.NestedFieldNoCopy(hr.Object, "spec", "values", ToolsValuesKey)
+	a.releaseChart = ref.ChartVersion
+	a.releaseFound = true
+	a.releaseRan = releaseRan(hr)
 	if a.CreatedBy == "" {
 		a.CreatedBy = hr.GetAnnotations()[CreatedByAnnotation]
 		a.CreatedByName = hr.GetAnnotations()[CreatedByNameAnnotation]

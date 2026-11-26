@@ -2,6 +2,7 @@ package muster
 
 import (
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
@@ -47,7 +48,8 @@ func TestABindCarriesTheApprovalAndTheSenderTokenReadPerCall(t *testing.T) {
 	_, err = c.Bind(t.Context(), "id-token", b)
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(token, []byte("sa-token-2"), 0o600))
-	require.NoError(t, c.DropGrants(t.Context(), "id-token", "kagent/alert-review", nil))
+	_, err = c.DropGrants(t.Context(), "id-token", "kagent/alert-review", nil)
+	require.NoError(t, err)
 	require.NoError(t, c.Unbind(t.Context(), "id-token", actor))
 
 	require.Len(t, got, 3)
@@ -71,7 +73,7 @@ func TestDropGrantsNeedsTheSenderToken(t *testing.T) {
 	c, err := New(srv.URL+"/session-bindings", nil)
 	require.NoError(t, err)
 	assert.False(t, c.SendsApproval())
-	err = c.DropGrants(t.Context(), "id-token", "kagent/a", nil)
+	_, err = c.DropGrants(t.Context(), "id-token", "kagent/a", nil)
 	require.True(t, errors.Is(err, ErrInvalid))
 	assert.Empty(t, got)
 }
@@ -167,10 +169,69 @@ func TestDropGrantsWithTheSenderTokenAlone(t *testing.T) {
 	c, err := New(srv.URL+"/session-bindings", nil)
 	require.NoError(t, err)
 	c = c.WithSenderTokenFile(token)
-	require.NoError(t, c.DropGrants(t.Context(), "", "kagent/a", nil))
+	_, err = c.DropGrants(t.Context(), "", "kagent/a", nil)
+	require.NoError(t, err)
 	require.Len(t, got, 1)
 	assert.Empty(t, got[0].auth, "no person bearer")
 	assert.Equal(t, "sa-token", got[0].sender)
 	_, err = c.Bind(t.Context(), "", Binding{Actor: actor, Providers: []string{"github"}})
 	require.ErrorIs(t, err, ErrUnauthenticated)
+}
+
+// A grant drop returns muster's counts (M2I-3).
+func TestDropGrantsReturnsMustersCounts(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"bindings": 3, "dropped": 2}`)
+	}))
+	t.Cleanup(srv.Close)
+	token := filepath.Join(t.TempDir(), "token")
+	require.NoError(t, os.WriteFile(token, []byte("sa"), 0o600))
+	c, err := New(srv.URL+"/session-bindings", nil)
+	require.NoError(t, err)
+	got, err := c.WithSenderTokenFile(token).DropGrants(t.Context(), "id-token", "kagent/a", nil)
+	require.NoError(t, err)
+	assert.Equal(t, DropResult{Bindings: 3, Dropped: 2}, got)
+}
+
+// Plain http to an in-cluster Service is not warned about (M2I-8 b).
+func TestClusterLocal(t *testing.T) {
+	for host, want := range map[string]bool{
+		"muster": true, "muster.agent-platform": true, "muster.agent-platform.svc": true,
+		"muster.agent-platform.svc.cluster.local": true, "muster.agent-platform.svc.cluster.local.": true,
+		"muster.example.com": false, "10.0.0.1": false, "": false,
+	} {
+		assert.Equal(t, want, ClusterLocal(host), host)
+	}
+}
+
+// An https endpoint is trusted through the configured CA file (M2I-8 c): the
+// client reaches a server whose certificate that CA issued, and does not
+// without it.
+func TestTheBindingsClientTrustsTheConfiguredCA(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set(SettingsHeader, SettingsNone)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(srv.Close)
+	caFile := filepath.Join(t.TempDir(), "ca.crt")
+	require.NoError(t, os.WriteFile(caFile, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw}), 0o600))
+
+	plain, err := New(srv.URL+"/session-bindings", nil)
+	require.NoError(t, err)
+	_, err = plain.Bind(t.Context(), "id-token", Binding{Actor: actor, Providers: []string{"github"}})
+	require.Error(t, err, "an unknown CA is refused")
+
+	trusting, err := New(srv.URL+"/session-bindings", nil)
+	require.NoError(t, err)
+	trusting, err = trusting.WithCAFile(caFile)
+	require.NoError(t, err)
+	res, err := trusting.Bind(t.Context(), "id-token", Binding{Actor: actor, Providers: []string{"github"}})
+	require.NoError(t, err)
+	assert.Equal(t, SettingsNone, res.Settings)
+
+	bad := filepath.Join(t.TempDir(), "bad.crt")
+	require.NoError(t, os.WriteFile(bad, []byte("not pem"), 0o600))
+	_, err = trusting.WithCAFile(bad)
+	require.Error(t, err)
 }

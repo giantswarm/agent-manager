@@ -24,8 +24,12 @@ default: Ask
 - muster combines the settings with the connectors' own (strictest wins).
   An `Allow` over a connector's `Ask` holds only when a connector admin
   granted it (below); otherwise it changes nothing.
-- agent-manager writes `tools`/`default` only when the resolved agent chart's
-  schema declares `tools` and, on an update, the release already runs that
+- agent-manager writes `tools`/`default` only when the chart the release gets
+  takes them: on a create, the chart the namespace's agent chart source
+  (OCIRepository) serves, as its `status.artifact.revision` says (an
+  organization's source the operator created once may serve an older one:
+  the agent then gets `toolset`, and settings are refused naming the source);
+  otherwise the resolved agent chart's schema declares `tools` and, on an update, the release already runs that
   chart (its `status.history[0].chartVersion`) or already carries `tools`;
   otherwise it writes `toolset` and refuses any setting (`unsupported`, naming
   the chart version the release runs).
@@ -35,10 +39,12 @@ default: Ask
 - `toolset` is still accepted (a tool list without settings). `get_agent` and
   `list_agents` report the list as **`toolSettings`**, with `defaultApproval`,
   `grants`, `approvalSettings` (true only where the chart takes settings and
-  they are bound) and `approvalEnforced` (always present: true when this
-  agent's settings are bound to its sessions, false without the sender, on a
-  release with `spec.valuesFrom` or without a release, where a session of an
-  agent with settings is refused); `set_agent_approval` answers with the same
+  they are bound), `approvalEnforcement` (`enforced`; `not-enforced` without
+  the sender, without a release, with `spec.valuesFrom`, or on a release
+  without `tools` that runs an older chart, where a session of an agent with
+  settings is refused; `pending` until the release ran its current
+  generation) and `approvalEnforced` (the same as a boolean, left out while
+  pending); `set_agent_approval` answers with the same
   names (`toolSettings`, `defaultApproval`, `before.toolSettings`); `tools` is unchanged: the template's kagent MCP
   bindings; `toolset` keeps the selectors for older clients.
 - The agent chart also renders the settings as the static header
@@ -191,7 +197,16 @@ by a HelmRelease (label `helm.toolkit.fluxcd.io/name`) has none; the release
 takes `spec.valuesFrom` and carries settings (agent-manager binds settings
 from the inline values only); this installation does not bind settings; or
 muster did not take them (its `X-Muster-Approval-Settings` answer is not
-`bound`; the binding is removed again). Unbinding a Session (`delete_session`) sends the sender token too: muster
+`bound`; the binding is removed again). The bindings URL defaults to muster's in-cluster Service over plain http on
+the cluster network (no warning; one is logged for plain http to a host
+outside the cluster). An https URL is trusted through the system's CAs and
+`--muster-bindings-ca-file` (chart `muster.bindingsCA.configMapName`/`key`).
+The session-bindings path shares muster's MCP port, which every agent
+runtime must reach, so a NetworkPolicy cannot narrow it to agent-manager:
+muster's sender review (TokenReview and the `bind toolapprovals` check) is
+the boundary there.
+
+Unbinding a Session (`delete_session`) sends the sender token too: muster
 deletes a binding agent-manager wrote with settings only for it. A muster that predates per-agent
 settings refuses the bind's `agent` and `approval` as unknown fields: an agent
 without settings is then bound without them, one with settings is refused.
@@ -207,7 +222,7 @@ Every line carries `agent`, `tool`, `savedBy` and `callerKind`.
 | `agent access changed` | `field`, `before`, `after` |
 | `approval grant recorded` | `entry`, `server`, `connectorUid`, `generation`, `tools`, `kept` |
 | `approval grant dropped` | `entry`, `server`, `connectorUid`, `reason` (also when a regrant leaves a connector out) |
-| `approval grants removed from running sessions` | `kept` (and `attempts`, `error` at warn level) |
+| `approval grants removed from running sessions` | `kept`, `bindings` and `dropped` (muster's answer; `attempts`, `error` at warn level) |
 | `approval grants record skipped` (warn) | `configmap`, `reason` |
 | `pending approval grant syncs swept` | `sent`, `failed` (at start) |
 

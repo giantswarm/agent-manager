@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
@@ -268,6 +269,41 @@ func (s *Service) releaseTakesTools(ctx context.Context, hr *unstructured.Unstru
 		return false, running
 	}
 	return true, latest
+}
+
+// sourceTakesTools reports whether the chart a create in this site gets
+// takes `tools` (M2I-1, decision #87): the chart the namespace's agent chart
+// source (OCIRepository) serves, not agent-manager's own resolved one. A
+// source that serves another chart version than the schema agent-manager
+// judges by (an organization's copy the operator created once), or points
+// at another chart, is taken not to: the release gets `toolset` and settings
+// are refused instead of an install that fails on `tools`. A source not yet
+// reconciled (no artifact) or one agent-manager creates follows the resolved
+// chart. version names the chart judged by, for messages.
+func (s *Service) sourceTakesTools(ctx context.Context, st *site) (takes bool, version string) {
+	schemaVersion := s.chart.Info(ctx).SchemaVersion
+	if schemaVersion == "" {
+		schemaVersion = s.chartVersion(ctx)
+	}
+	if !s.chartTakesTools(ctx) {
+		return false, schemaVersion
+	}
+	name := BuildOCIRepository(st.fluxNS, st.compose).GetName()
+	src, err := st.flux.Resource(s.ociRepositoryGVR()).Namespace(st.fluxNS).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return true, schemaVersion
+	}
+	where := fmt.Sprintf("that OCIRepository %s/%s, the namespace's agent chart source, serves", st.fluxNS, name)
+	if url, _, _ := unstructured.NestedString(src.Object, "spec", "url"); url != "" && url != s.cfg.Compose.ChartOCIURL {
+		return false, url + " " + where
+	}
+	revision, _, _ := unstructured.NestedString(src.Object, "status", "artifact", "revision")
+	served, _, _ := strings.Cut(revision, "@")
+	served = strings.TrimPrefix(served, "v")
+	if served == "" || schemaVersion == "" || served == strings.TrimPrefix(schemaVersion, "v") {
+		return true, schemaVersion
+	}
+	return false, served + " " + where
 }
 
 // chartTakesTools reports whether the resolved agent chart declares `tools`.

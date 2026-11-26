@@ -63,6 +63,8 @@ type serveOptions struct {
 	// token (audience muster), sent with binds so muster takes approval
 	// settings from them.
 	approvalSenderTokenFile string
+	// musterBindingsCAFile trusts this PEM CA for an https bindings URL.
+	musterBindingsCAFile string
 	// approvalGrantsNamespace keeps the approval grants (agent-manager's
 	// own namespace).
 	approvalGrantsNamespace string
@@ -160,6 +162,7 @@ environment variable named next to it; flags win over the environment.`,
 	f.BoolVar(&o.musterActorBearer, "muster-actor-bearer", envBool("AGENT_MANAGER_MUSTER_ACTOR_BEARER", false), "muster trusts the actor JWT of a bound session: get_agent, list_agents and get_info report an agent's toolset as bound to each session at its start, which every session start_session binds carries. Needs --muster-bindings-url (AGENT_MANAGER_MUSTER_ACTOR_BEARER)")
 	f.StringVar(&o.musterBindingsURL, "muster-bindings-url", envOr("AGENT_MANAGER_MUSTER_BINDINGS_URL", ""), "muster's session bindings endpoint (http(s)://host[:port]/session-bindings), which start_session binds the sandbox of every Session with providers to the caller at and delete_session unbinds it from, as the caller. Empty: start_session refuses a workspace grant. Needs --kagent-target (AGENT_MANAGER_MUSTER_BINDINGS_URL)")
 	f.StringVar(&o.musterMCPURL, "muster-mcp-url", envOr("AGENT_MANAGER_MUSTER_MCP_URL", ""), "muster's MCP endpoint (http(s)://host[:port]/mcp), where start_session calls, as the caller, the workspace-manager's authorize_workspace for an agent's default workspace when the start names no workspace, and the toolchain-manager's list_toolchains. Needs --workspaces-tools-prefix or --toolchains-tools-prefix (AGENT_MANAGER_MUSTER_MCP_URL)")
+	f.StringVar(&o.musterBindingsCAFile, "muster-bindings-ca-file", envOr("AGENT_MANAGER_MUSTER_BINDINGS_CA_FILE", ""), "PEM CA certificate(s) trusted, beside the system's, for an https --muster-bindings-url (muster's own CA). Empty: the system's only (AGENT_MANAGER_MUSTER_BINDINGS_CA_FILE)")
 	f.StringVar(&o.approvalSenderTokenFile, "muster-approval-sender-token-file", envOr("AGENT_MANAGER_MUSTER_APPROVAL_SENDER_TOKEN_FILE", ""), "agent-manager's projected ServiceAccount token (audience muster), re-read per call: sent with every bind so muster takes the agent's tool approval settings and grants, and with every grant drop. Empty: sessions are bound without approval settings. Needs --muster-bindings-url, --muster-mcp-url and --approval-grants-namespace (AGENT_MANAGER_MUSTER_APPROVAL_SENDER_TOKEN_FILE)")
 	f.StringVar(&o.approvalGrantsNamespace, "approval-grants-namespace", envOr("AGENT_MANAGER_APPROVAL_GRANTS_NAMESPACE", ""), "agent-manager's own namespace, where it keeps the agents' approval grants (ConfigMaps approval-grants-<agent uid>, written with its ServiceAccount). Empty: no grant is recorded and set_agent_approval refuses one (AGENT_MANAGER_APPROVAL_GRANTS_NAMESPACE)")
 	f.StringVar(&o.workspacesPrefix, "workspaces-tools-prefix", envOr("AGENT_MANAGER_WORKSPACES_TOOLS_PREFIX", ""), "The workspace-manager's tool prefix in muster (x_workspace-manager_). Empty: a start_session on an agent with a default workspace that names no workspace is refused. Needs --muster-mcp-url and --muster-bindings-url (AGENT_MANAGER_WORKSPACES_TOOLS_PREFIX)")
@@ -446,6 +449,9 @@ func runServe(ctx context.Context, o *serveOptions) error {
 		client, err := muster.New(o.musterBindingsURL, nil)
 		if err != nil {
 			return fmt.Errorf("--muster-bindings-url: %w", err)
+		}
+		if client, err = client.WithCAFile(o.musterBindingsCAFile); err != nil {
+			return fmt.Errorf("--muster-bindings-ca-file: %w", err)
 		}
 		bindings = client.WithSenderTokenFile(o.approvalSenderTokenFile)
 	}

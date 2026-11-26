@@ -379,6 +379,13 @@ muster:
   # it: the Service's namespace for an in-cluster host, every address
   # otherwise.
   bindingsUrl: http://muster.agent-platform.svc.cluster.local:8090/session-bindings
+  # -- CA certificate trusted (beside the system's) for an https `bindingsUrl`,
+  # from a ConfigMap of the release namespace (`configMapName`, key `key`),
+  # mounted and passed as `--muster-bindings-ca-file`. The in-cluster default
+  # is plain http to muster's Service, on the cluster network (no warning).
+  bindingsCA:
+    configMapName: ""
+    key: ca.crt
   # -- muster trusts the actor JWT of a bound session (muster's
   # `credentialProvider.actorBearer`): every session `start_session` binds
   # carries the agent's toolset, and `get_agent`, `list_agents` and `get_info`

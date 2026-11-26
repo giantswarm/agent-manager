@@ -164,6 +164,9 @@ spec:
             - --kagent-target={{ . }}
             {{- with $.Values.muster.bindingsUrl }}
             - --muster-bindings-url={{ . }}
+            {{- if $.Values.muster.bindingsCA.configMapName }}
+            - --muster-bindings-ca-file=/etc/agent-manager/muster-bindings-ca/{{ $.Values.muster.bindingsCA.key }}
+            {{- end }}
             {{- if $.Values.muster.actorBearer }}
             - --muster-actor-bearer=true
             {{- end }}
@@ -365,6 +368,11 @@ spec:
               mountPath: /etc/agent-manager/toolchain-registry
               readOnly: true
             {{- end }}
+            {{- if .Values.muster.bindingsCA.configMapName }}
+            - name: muster-bindings-ca
+              mountPath: /etc/agent-manager/muster-bindings-ca
+              readOnly: true
+            {{- end }}
             {{- if include "agent-manager.toolApproval" . }}
             - name: muster-approval-sender
               mountPath: /var/run/secrets/agent-manager/muster-approval
@@ -407,6 +415,11 @@ spec:
             items:
               - key: .dockerconfigjson
                 path: config.json
+        {{- end }}
+        {{- with .Values.muster.bindingsCA.configMapName }}
+        - name: muster-bindings-ca
+          configMap:
+            name: {{ . }}
         {{- end }}
         {{- if include "agent-manager.toolApproval" . }}
         - name: muster-approval-sender

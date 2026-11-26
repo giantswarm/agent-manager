@@ -558,11 +558,17 @@ type Agent struct {
 	// ApprovalSettings is true when the agent chart takes tool approval
 	// settings (tools, default).
 	ApprovalSettings bool `json:"approvalSettings,omitempty"`
-	// ApprovalEnforced is true when the agent's settings are bound to its
-	// sessions: this agent-manager binds approval settings and the agent's
-	// release is there and takes no spec.valuesFrom. False otherwise: a
-	// session start of an agent with settings is then refused.
-	ApprovalEnforced bool `json:"approvalEnforced"`
+	// ApprovalEnforcement says whether the agent's settings are bound to its
+	// sessions: enforced (this agent-manager binds approval settings and the
+	// agent's release takes them and runs a chart that does), not-enforced
+	// (no binding, no release, spec.valuesFrom, or a chart without `tools`: a
+	// session start of an agent with settings is refused), or pending (the
+	// release has not run its current generation yet, so its chart is not
+	// confirmed).
+	ApprovalEnforcement string `json:"approvalEnforcement,omitempty"`
+	// ApprovalEnforced is ApprovalEnforcement as a boolean: true when
+	// enforced, false when not, left out while pending.
+	ApprovalEnforced *bool `json:"approvalEnforced,omitempty"`
 	// Generation is the owning HelmRelease's metadata.generation, which
 	// update_agent, update_agent_access and set_agent_approval take as
 	// expectedGeneration; absent for a bare Agent.
@@ -572,6 +578,12 @@ type Agent struct {
 	releaseUID        string
 	releaseGeneration int64
 	releaseValuesFrom bool
+	// releaseHasTools: the release values carry `tools`; releaseChart is the
+	// chart version it last ran; releaseRan: it ran its current generation.
+	releaseFound    bool
+	releaseHasTools bool
+	releaseChart    string
+	releaseRan      bool
 	// Ready is the Agent object's verdict (Ready and the desired revision is
 	// the latest successful one); nil while the object is absent or its
 	// Harness has not reported.
@@ -614,7 +626,8 @@ type AgentSummary struct {
 	DefaultSetting            string      `json:"defaultApproval,omitempty"`
 	Grants                    []GrantView `json:"grants,omitempty"`
 	ApprovalSettings          bool        `json:"approvalSettings,omitempty"`
-	ApprovalEnforced          bool        `json:"approvalEnforced"`
+	ApprovalEnforcement       string      `json:"approvalEnforcement,omitempty"`
+	ApprovalEnforced          *bool       `json:"approvalEnforced,omitempty"`
 	Generation                int64       `json:"generation,omitempty"`
 	Connectors                []string    `json:"connectors,omitempty"`
 	ImplicitFullAccess        bool        `json:"implicitFullAccess,omitempty"`
@@ -653,6 +666,7 @@ func (a Agent) Summary() AgentSummary {
 		DefaultSetting:            a.DefaultSetting,
 		Grants:                    a.Grants,
 		ApprovalSettings:          a.ApprovalSettings,
+		ApprovalEnforcement:       a.ApprovalEnforcement,
 		ApprovalEnforced:          a.ApprovalEnforced,
 		Generation:                a.Generation,
 		Connectors:                a.Connectors,
@@ -828,6 +842,8 @@ type DeleteResult struct {
 	// OCIRepositoryKept explains why the chart source stays (other agents
 	// reference it, or it could not be checked).
 	OCIRepositoryKept string `json:"ociRepositoryKept,omitempty"`
+	// Dropped are the grants the delete removed.
+	Dropped []DroppedGrant `json:"dropped,omitempty"`
 	// SessionSync says whether the agent's running Sessions were told to drop
 	// its grants.
 	SessionSync

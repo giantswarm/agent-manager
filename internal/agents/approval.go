@@ -78,7 +78,7 @@ type Connector struct {
 // GrantDropper is muster's binding endpoint that removes grant marks from an
 // agent's running Sessions (PATCH /session-bindings/grants).
 type GrantDropper interface {
-	DropGrants(ctx context.Context, token, agent string, keep []muster.Grant) error
+	DropGrants(ctx context.Context, token, agent string, keep []muster.Grant) (muster.DropResult, error)
 }
 
 // ApprovalSender reports whether binds carry agent-manager's sender token,
@@ -116,6 +116,30 @@ func grantView(g approvalgrants.Grant) GrantView {
 		tools = []string{}
 	}
 	return GrantView{Entry: g.Entry, Server: g.Server, ConnectorNamespace: g.ConnectorNamespace, ConnectorUID: g.ConnectorUID, GrantedBy: g.GrantedBy, GrantedAt: g.GrantedAt, Generation: g.Generation, Tools: tools}
+}
+
+// The states of Agent.ApprovalEnforcement.
+const (
+	EnforcementEnforced    = "enforced"
+	EnforcementNotEnforced = "not-enforced"
+	EnforcementPending     = "pending"
+)
+
+// enforcement says whether an agent's settings are bound to its sessions
+// (M2I-4): not without the sender, a release, or with spec.valuesFrom, nor on
+// a release without `tools` that runs another chart than the one judged by
+// (an older chart, M2I-1); pending until the release ran its current
+// generation; enforced otherwise.
+func enforcement(a *Agent, sends bool, schemaVersion string) string {
+	switch {
+	case !sends || !a.releaseFound || a.releaseValuesFrom:
+		return EnforcementNotEnforced
+	case !a.releaseRan:
+		return EnforcementPending
+	case !a.releaseHasTools && schemaVersion != "" && strings.TrimPrefix(a.releaseChart, "v") != strings.TrimPrefix(schemaVersion, "v"):
+		return EnforcementNotEnforced
+	}
+	return EnforcementEnforced
 }
 
 // allowEntries are the entries (and DefaultEntry) whose setting is Allow.
@@ -235,6 +259,26 @@ func (s *Service) isConnectorAdmin(ctx context.Context, namespace string) (bool,
 		return false, fmt.Errorf("review whether you may update mcpservers in namespace %s: %w", namespace, err)
 	}
 	return res.Status.Allowed, nil
+}
+
+// requireListReleases refuses a caller who may not list HelmReleases in ns
+// (a SelfSubjectAccessReview as the caller).
+func (s *Service) requireListReleases(ctx context.Context, ns string) error {
+	client, err := s.kube.Client(ctx)
+	if err != nil {
+		return err
+	}
+	review := &authorizationv1.SelfSubjectAccessReview{Spec: authorizationv1.SelfSubjectAccessReviewSpec{
+		ResourceAttributes: &authorizationv1.ResourceAttributes{Namespace: ns, Verb: "list", Group: s.helmReleaseGVR().Group, Resource: "helmreleases"},
+	}}
+	res, err := client.Typed().AuthorizationV1().SelfSubjectAccessReviews().Create(ctx, review, metav1.CreateOptions{})
+	if err != nil {
+		return fmt.Errorf("review whether you may list helmreleases in namespace %s: %w", ns, err)
+	}
+	if !res.Status.Allowed {
+		return forbiddenf("you may not list helmreleases in namespace %s, so its agents' approval grants are not shown", ns)
+	}
+	return nil
 }
 
 // adminMemo reviews each namespace once per request.
@@ -453,9 +497,14 @@ func (s *Service) attachGrants(ctx context.Context, namespace string, list []Age
 	// this installation binds them to sessions.
 	sends := s.sendsApproval()
 	takes := s.chartTakesTools(ctx) && sends
+	schemaVersion := s.chart.Info(ctx).SchemaVersion
 	for i := range list {
 		list[i].ApprovalSettings = takes
-		list[i].ApprovalEnforced = sends && list[i].releaseUID != "" && !list[i].releaseValuesFrom
+		list[i].ApprovalEnforcement = enforcement(&list[i], sends, schemaVersion)
+		if list[i].ApprovalEnforcement != EnforcementPending {
+			enforced := list[i].ApprovalEnforcement == EnforcementEnforced
+			list[i].ApprovalEnforced = &enforced
+		}
 	}
 	if s.cfg.Grants == nil {
 		return
@@ -606,9 +655,9 @@ func isEmptyValue(v any) bool {
 // marked pending, muster is told to drop every mark of the agent (keep
 // empty), and the record goes once it confirmed; otherwise the empty record
 // stays pending and is sent again on the next read of the namespace.
-func (s *Service) deleteGrants(ctx context.Context, agent approvalgrants.Agent) SessionSync {
+func (s *Service) deleteGrants(ctx context.Context, agent approvalgrants.Agent) (SessionSync, []DroppedGrant) {
 	if s.cfg.Grants == nil || agent.UID == "" {
-		return SessionSync{}
+		return SessionSync{}, nil
 	}
 	var rec approvalgrants.Record
 	var had []approvalgrants.Grant
@@ -617,10 +666,10 @@ func (s *Service) deleteGrants(ctx context.Context, agent approvalgrants.Agent) 
 		rec, err = s.cfg.Grants.Get(ctx, agent)
 		if err != nil {
 			s.log.WarnContext(ctx, "approval grants of a deleted agent left behind", "agent", agent.Key(), "error", err.Error())
-			return SessionSync{}
+			return SessionSync{}, nil
 		}
 		if rec.Version == "" {
-			return SessionSync{}
+			return SessionSync{}, nil
 		}
 		had = rec.Grants
 		rec.Grants, rec.PendingSessionSync = nil, true
@@ -630,15 +679,17 @@ func (s *Service) deleteGrants(ctx context.Context, agent approvalgrants.Agent) 
 		}
 		if err != nil {
 			s.log.WarnContext(ctx, "approval grants of a deleted agent left behind", "agent", agent.Key(), "error", err.Error())
-			return SessionSync{}
+			return SessionSync{}, nil
 		}
 		break
 	}
+	dropped := make([]DroppedGrant, 0, len(had))
 	for _, g := range had {
 		s.log.InfoContext(ctx, "approval grant dropped", append(s.approvalLogAttrs(ctx, "delete_agent", agent.Key()),
 			"entry", g.Entry, "server", g.Server, "connectorUid", g.ConnectorUID, "reason", "agent deleted")...)
+		dropped = append(dropped, DroppedGrant{Entry: g.Entry, Server: g.Server, Reason: "agent deleted", connectorUID: g.ConnectorUID})
 	}
-	return s.syncSessions(ctx, "delete_agent", rec, true)
+	return s.syncSessions(ctx, "delete_agent", rec, true), dropped
 }
 
 // ListedGrant is a grant as list_approval_grants lists it: with its agent
@@ -696,10 +747,15 @@ func (s *Service) ListApprovalGrants(ctx context.Context, namespace, server stri
 	return out, nil
 }
 
-// namespaceGrants lists one namespace's live grants, as the caller.
+// namespaceGrants lists one namespace's live grants, as the caller: who may
+// not list its HelmReleases (a SelfSubjectAccessReview, before anything else
+// is read, M2I-5) is refused.
 func (s *Service) namespaceGrants(ctx context.Context, namespace, server string) ([]ListedGrant, error) {
 	st, err := s.site(ctx, Location{Namespace: namespace})
 	if err != nil {
+		return nil, err
+	}
+	if err := s.requireListReleases(ctx, st.fluxNS); err != nil {
 		return nil, err
 	}
 	releases, err := s.agentHelmReleases(ctx, st)

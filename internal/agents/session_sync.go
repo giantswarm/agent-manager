@@ -89,11 +89,12 @@ func (s *Service) syncSessions(ctx context.Context, tool string, rec approvalgra
 		}
 	}
 	var err error
+	var answer muster.DropResult
 	for attempt := 0; attempt < syncAttempts; attempt++ {
 		if attempt > 0 {
 			syncSleep(ctx, syncBackoff<<(attempt-1))
 		}
-		if err = dropper.DropGrants(ctx, token, rec.Agent.Key(), keep); err == nil {
+		if answer, err = dropper.DropGrants(ctx, token, rec.Agent.Key(), keep); err == nil {
 			break
 		}
 	}
@@ -103,7 +104,7 @@ func (s *Service) syncSessions(ctx context.Context, tool string, rec approvalgra
 		return SessionSync{SessionsUpdated: &updated, Warnings: []string{fmt.Sprintf(
 			"muster was not told which grants agent %s keeps (%v): its running sessions keep the grants they were bound with until agent-manager tells muster on the agent's next start, save or read", rec.Agent.Key(), err)}}
 	}
-	s.log.InfoContext(ctx, "approval grants removed from running sessions", append(attrs, "kept", len(keep))...)
+	s.log.InfoContext(ctx, "approval grants removed from running sessions", append(attrs, "kept", len(keep), "bindings", answer.Bindings, "dropped", answer.Dropped)...)
 	s.clearPending(ctx, rec, agentGone)
 	updated := true
 	return SessionSync{SessionsUpdated: &updated}

@@ -124,3 +124,19 @@ tests:
           path: rules[0].resources
           value: ["helmreleases"]
         documentIndex: 3
+
+  - it: trusts a CA from a ConfigMap for an https bindings URL
+    template: templates/deployment.yaml
+    set:
+      muster.bindingsUrl: https://muster.example.com/session-bindings
+      muster.bindingsCA.configMapName: muster-ca
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --muster-bindings-ca-file=/etc/agent-manager/muster-bindings-ca/ca.crt
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: muster-bindings-ca
+            configMap:
+              name: muster-ca
