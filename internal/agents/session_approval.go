@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -33,6 +34,10 @@ const MusterApprovalVersionHint = "a muster with tool approval per agent"
 type boundApproval struct {
 	agent   approvalgrants.Agent
 	binding *muster.Approval
+	// displayName is the agent's display name annotation, "" when it has none
+	// or no reader could read the Agent (the prompt then names the agent
+	// technically).
+	displayName string
 }
 
 // hasSettings reports whether the binding carries anything muster must
@@ -126,7 +131,7 @@ func (s *Service) sessionApproval(ctx context.Context, ref kagent.Ref, liveTools
 		// X-Muster-Tool-Approval header for a binding with settings.
 		def = SettingAsk
 	}
-	out := &boundApproval{agent: agent, binding: &muster.Approval{Default: def}}
+	out := &boundApproval{agent: agent, binding: &muster.Approval{Default: def}, displayName: s.agentDisplayName(ctx, readers, ref)}
 	for _, e := range list {
 		if e.Setting != "" && slices.Contains(toolset, e.Selector) {
 			out.binding.Entries = append(out.binding.Entries, muster.ApprovalEntry{Entry: e.Selector, Setting: e.Setting})
@@ -143,6 +148,30 @@ func (s *Service) sessionApproval(ctx context.Context, ref kagent.Ref, liveTools
 		}
 	}
 	return toolset, out, nil
+}
+
+// agentDisplayName reads the agent's display name annotation for the binding.
+// Best effort: an Agent no reader may get, or without the annotation, binds
+// none and muster names the agent by namespace/name.
+func (s *Service) agentDisplayName(ctx context.Context, readers []dynamic.Interface, ref kagent.Ref) string {
+	obj, _, err := readFirst(ctx, readers, s.agentGVR(), ref.Namespace, ref.Name, fmt.Sprintf("Agent %s/%s", ref.Namespace, ref.Name), "agents")
+	if err != nil || obj == nil {
+		return ""
+	}
+	return boundDisplayName(obj.GetAnnotations()[DisplayNameAnnotation])
+}
+
+// maxBoundDisplayName caps the display name a binding carries (runes); muster
+// caps it again.
+const maxBoundDisplayName = 80
+
+// boundDisplayName trims a display name and cuts it to maxBoundDisplayName runes.
+func boundDisplayName(name string) string {
+	name = strings.TrimSpace(name)
+	if r := []rune(name); len(r) > maxBoundDisplayName {
+		name = string(r[:maxBoundDisplayName])
+	}
+	return name
 }
 
 // releaseUnreadableError is an object agentRelease needed that none of its
@@ -272,7 +301,7 @@ func (s *Service) bindWithApproval(ctx context.Context, token string, binding *m
 			return approvalUnavailablef("muster does not take an agent's tool approval settings with a session (it refused them as unknown fields), and agent %s carries some; it needs %s", binding.Agent, MusterApprovalVersionHint)
 		}
 		s.log.InfoContext(ctx, "muster takes no agent with a session binding; bound without it", identity.LogAttr(ctx), "agent", binding.Agent)
-		binding.Agent, binding.Approval = "", nil
+		binding.Agent, binding.AgentDisplayName, binding.Approval = "", "", nil
 		res, err = s.cfg.Bindings.Bind(ctx, token, *binding)
 	}
 	if err != nil {

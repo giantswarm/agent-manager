@@ -188,7 +188,7 @@ func (s *Service) platformAgentApproval(ctx context.Context, readers []dynamic.I
 	if def == "" && requireApprovalBinds(p.Values) {
 		def = SettingAsk
 	}
-	out := &boundApproval{agent: approvalgrants.Agent{Namespace: ref.Namespace, Name: ref.Name}, binding: &muster.Approval{Default: def}}
+	out := &boundApproval{agent: approvalgrants.Agent{Namespace: ref.Namespace, Name: ref.Name}, binding: &muster.Approval{Default: def}, displayName: boundDisplayName(obj.GetAnnotations()[DisplayNameAnnotation])}
 	for _, e := range list {
 		if e.Setting != "" && slices.Contains(toolset, e.Selector) {
 			out.binding.Entries = append(out.binding.Entries, muster.ApprovalEntry{Entry: e.Selector, Setting: e.Setting})

@@ -58,6 +58,11 @@ type Binding struct {
 	// it on the approval page and binds approvals to it. muster takes it
 	// only from a sender it reviewed (SenderHeader).
 	Agent string `json:"agent,omitempty"`
+	// AgentDisplayName is the name people know the agent by (the Agent's
+	// ui.giantswarm.io/display-name annotation), "" when it has none. muster
+	// shows it in approval prompts with Agent as the secondary detail; it
+	// takes it only from a sender it reviewed, like Agent.
+	AgentDisplayName string `json:"agentDisplayName,omitempty"`
 	// Approval is the agent's approval settings and grant marks; muster
 	// takes them only from a sender it reviewed (SenderHeader).
 	Approval *Approval `json:"approval,omitempty"`
@@ -263,9 +268,10 @@ func approvalBytes(b Binding) int {
 		return 0
 	}
 	raw, _ := json.Marshal(struct {
-		Agent    string    `json:"agent,omitempty"`
-		Approval *Approval `json:"approval,omitempty"`
-	}{b.Agent, b.Approval})
+		Agent            string    `json:"agent,omitempty"`
+		AgentDisplayName string    `json:"agentDisplayName,omitempty"`
+		Approval         *Approval `json:"approval,omitempty"`
+	}{b.Agent, b.AgentDisplayName, b.Approval})
 	return len(raw)
 }
 

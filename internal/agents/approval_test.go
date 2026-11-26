@@ -619,3 +619,40 @@ func TestASessionOfARequireApprovalAgentIsBoundAskingBeforeEveryCall(t *testing.
 		})
 	}
 }
+
+// setAgentDisplayName annotates alert-review's Agent as the chart does.
+func (a *approvalFixture) setAgentDisplayName(t *testing.T, name string) {
+	t.Helper()
+	obj, err := a.dyn.Resource(agentGVR).Namespace("kagent").Get(t.Context(), "alert-review", metav1.GetOptions{})
+	require.NoError(t, err)
+	obj.SetAnnotations(map[string]string{DisplayNameAnnotation: name})
+	_, err = a.dyn.Resource(agentGVR).Namespace("kagent").Update(t.Context(), obj, metav1.UpdateOptions{})
+	require.NoError(t, err)
+}
+
+func TestASessionIsBoundWithTheAgentsDisplayName(t *testing.T) {
+	values := map[string]any{
+		"agent": map[string]any{"name": "alert-review"}, "modelConfig": map[string]any{"name": "default-model-config"},
+		"tools": []any{map[string]any{"server:github": "Ask"}},
+	}
+	t.Run("the annotation, trimmed", func(t *testing.T) {
+		a := newApprovalFixture(t, values)
+		a.setAgentDisplayName(t, "  Alert Review  ")
+		b := a.start(t)
+		assert.Equal(t, "kagent/alert-review", b.Agent)
+		assert.Equal(t, "Alert Review", b.AgentDisplayName)
+	})
+	t.Run("capped", func(t *testing.T) {
+		a := newApprovalFixture(t, values)
+		a.setAgentDisplayName(t, strings.Repeat("ä", 200))
+		b := a.start(t)
+		assert.Equal(t, strings.Repeat("ä", maxBoundDisplayName), b.AgentDisplayName)
+	})
+	t.Run("none without the annotation", func(t *testing.T) {
+		a := newApprovalFixture(t, values)
+		a.setAgentDisplayName(t, "")
+		b := a.start(t)
+		assert.Equal(t, "kagent/alert-review", b.Agent)
+		assert.Empty(t, b.AgentDisplayName)
+	})
+}

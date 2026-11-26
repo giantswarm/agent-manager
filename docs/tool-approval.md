@@ -245,6 +245,13 @@ settings refuses the bind's `agent` and `approval` as unknown fields: an agent
 without settings is then bound without them, one with settings is refused.
 The bind body may be up to 64 KiB, matching muster.
 
+The bind also carries `agentDisplayName`: the agent's display name (its
+`ui.giantswarm.io/display-name` annotation, trimmed, at most 80 characters),
+omitted when it has none or the Agent cannot be read. muster shows it in
+approval prompts, with `<namespace>/<name>` as the secondary detail, and
+falls back to the technical name without it. Only agent-manager sets it: muster
+takes it from the reviewed sender alone.
+
 ## Logs
 
 Every line carries `agent`, `tool`, `savedBy` and `callerKind`.

@@ -923,7 +923,7 @@ func (s *Service) bindSession(ctx context.Context, token string, ref kagent.Ref,
 			return nil, fmt.Errorf("reading agent %s's tool approval settings to bind session %s to it in muster: %w", ref.Tenant(), session.GetId(), err)
 		}
 		if approval != nil {
-			binding.Agent, binding.Approval = approval.agent.Key(), approval.binding
+			binding.Agent, binding.AgentDisplayName, binding.Approval = approval.agent.Key(), approval.displayName, approval.binding
 		}
 	}
 	if err := s.bindWithApproval(ctx, token, binding, approval); err != nil {
