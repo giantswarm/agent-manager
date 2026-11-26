@@ -181,3 +181,21 @@ func TestPendingRecordIsKeptWithoutGrants(t *testing.T) {
 		}
 	}
 }
+
+// Get of an agent skips a sound record that names another agent under the
+// same UID (another namespace or name): it lifts nothing for this one.
+func TestGetSkipsARecordOfAnotherAgent(t *testing.T) {
+	ctx := context.Background()
+	store := NewConfigMapStore(fake.NewClientset().CoreV1().ConfigMaps("grants"))
+	other := Agent{UID: "u1", Namespace: "org-a", Name: "bot"}
+	if err := store.Replace(ctx, Record{Agent: other, Grants: []Grant{{Entry: "default", Server: "github"}}}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.Get(ctx, Agent{UID: "u1", Namespace: "kagent", Name: "alert-review"})
+	if err != nil || len(got.Grants) != 0 {
+		t.Fatalf("a record of another agent lifts nothing: %+v %v", got, err)
+	}
+	if mine, _ := store.Get(ctx, other); len(mine.Grants) != 1 {
+		t.Fatalf("the record's own agent still reads it: %+v", mine)
+	}
+}

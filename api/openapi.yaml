@@ -289,9 +289,12 @@ paths:
         bind them. Approval settings with grants are the MCP tool
         `set_agent_approval` (its answer names the list `toolSettings` and
         `defaultApproval`, as an Agent does), grants are read with
-        `list_approval_grants` (MCP only: `{grants, unreadable}`; without
-        `namespace` every managed namespace the caller may list
-        HelmReleases in, the others named in `unreadable`). Like every save, a PATCH keeps an agent's grants only
+        `list_approval_grants` (MCP only: `{grants, unreadable,
+        unreadableCount}`; without `namespace` every managed namespace,
+        organizations included, the caller may list HelmReleases in; a
+        configured one it may not is named in `unreadable`, an organization
+        is never named: skipped when the caller is no member, else counted
+        in `unreadableCount`). Like every save, a PATCH keeps an agent's grants only
         where the caller is connector admin of their connector.
       operationId: updateAgent
       x-mcp-tool: update_agent

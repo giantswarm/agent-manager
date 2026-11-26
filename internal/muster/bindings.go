@@ -281,7 +281,10 @@ func (c *Client) call(ctx context.Context, method, target, token string, body []
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
-	if c.senderToken != nil && method != http.MethodDelete {
+	// The sender token goes on every call: muster refuses to delete a
+	// binding agent-manager wrote with approval settings without it
+	// (M2-S3-R-01).
+	if c.senderToken != nil {
 		sender, err := c.senderToken()
 		if err != nil {
 			return nil, fmt.Errorf("muster: %w", err)

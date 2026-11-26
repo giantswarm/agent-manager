@@ -61,7 +61,8 @@ func TestABindCarriesTheApprovalAndTheSenderTokenReadPerCall(t *testing.T) {
 	assert.Equal(t, "sa-token-2", got[1].sender, "the rotated token")
 	assert.Equal(t, map[string]any{"agent": "kagent/alert-review", "keep": []any{}}, got[1].body)
 
-	assert.Empty(t, got[2].sender, "an unbind needs no sender")
+	assert.Equal(t, "sa-token-2", got[2].sender, "an unbind carries the sender too: muster deletes a sender-written binding only with it (M2-S3-R-01)")
+	assert.Equal(t, http.MethodDelete, got[2].method)
 }
 
 func TestDropGrantsNeedsTheSenderToken(t *testing.T) {

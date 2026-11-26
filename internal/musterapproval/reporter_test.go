@@ -66,3 +66,10 @@ func TestAnAnswerWithoutTheAgentToolsEchoIsUnavailable(t *testing.T) {
 	require.ErrorIs(t, err, agents.ErrApprovalUnavailable)
 	assert.Contains(t, err.Error(), "did not evaluate")
 }
+
+// An echo that counts another list than the one sent is refused too.
+func TestAnEchoOfAnotherListIsUnavailable(t *testing.T) {
+	m := &fakeMuster{pages: []string{`{"agentTools": {"entries": 1, "settings": 1}, "truncated": false, "tools": []}`}}
+	_, err := New(m).AgentTools(context.Background(), "tok", agents.AgentToolsQuery{Tools: agents.ToolList{{Selector: "tool:x", Setting: "Allow"}, {Selector: "server:a"}}})
+	require.ErrorIs(t, err, agents.ErrApprovalUnavailable)
+}

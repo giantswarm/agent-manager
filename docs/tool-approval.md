@@ -121,9 +121,13 @@ written past agent-manager (GitOps, a hand edit) can never carry one.
   are the only way agent-manager code reaches grants; the MCP surface is
   `set_agent_approval` (writes), `list_approval_grants` and the `grants` of
   `get_agent`/`list_agents` (reads). `list_approval_grants` answers
-  `{grants, unreadable}`: with `namespace` that namespace (refused when the
-  caller may not list its HelmReleases); without it every managed namespace
-  the caller may list them in, the others named in `unreadable`; `server`
+  `{grants, unreadable, unreadableCount}`: with `namespace` that namespace
+  (refused when the caller may not list its HelmReleases); without it every
+  managed namespace, organization namespaces included, the caller may list
+  them in; a configured namespace the caller may not list is named in
+  `unreadable`, an organization the caller is no member of is skipped
+  silently, and one that could not be read for another reason is only
+  counted in `unreadableCount` (never named, as `toolchain_users` does); `server`
   narrows to one connector; each grant carries its `agent` and
   `agentDisplayName` (empty when the agent has none). A later owner (a connector manager,
   giantswarm/bumblebee-plans#237) can take the records over by reading the
@@ -153,7 +157,10 @@ written past agent-manager (GitOps, a hand edit) can never carry one.
   muster's confirmation clears the mark. A mark left set is sent again on the
   agent's next start, save or read (`get_agent`, `list_agents`,
   `list_approval_grants`) and swept once when agent-manager starts, a deleted
-  agent's empty record included, which is then removed. Where no person's
+  agent's empty record included, which is then removed. The sweep covers the
+  organization namespaces too. A gone agent's record is sent with the grants
+  of an agent recreated under the same name (another release UID), if any,
+  so it never drops that agent's marks. Where no person's
   token is at hand (the sweep) the call goes with agent-manager's sender
   token alone, which muster accepts for grant drops. The result of the save (`update_agent`,
   `update_agent_access`, `set_agent_approval`, `delete_agent`) carries
@@ -171,7 +178,10 @@ entries, `default` and the marks of its live grants, sent with
 agent-manager's projected ServiceAccount token (audience `muster`) in
 `X-Muster-Approval-Sender`. muster takes them only after reviewing that token.
 The release is read with agent-manager's ServiceAccount (the chart grants
-`get` on HelmReleases in the managed namespaces under downstream OAuth). With
+`get` on HelmReleases in the configured namespaces under downstream OAuth);
+where it may not (an organization namespace) the release is read as the
+person starting the Session, and the start is refused only when neither may
+read it. With
 settings, the toolset bound is the release's own list, not the live Agent and
 RemoteMCPServer, so editing those never widens what a grant covers.
 
@@ -181,7 +191,8 @@ by a HelmRelease (label `helm.toolkit.fluxcd.io/name`) has none; the release
 takes `spec.valuesFrom` and carries settings (agent-manager binds settings
 from the inline values only); this installation does not bind settings; or
 muster did not take them (its `X-Muster-Approval-Settings` answer is not
-`bound`; the binding is removed again). A muster that predates per-agent
+`bound`; the binding is removed again). Unbinding a Session (`delete_session`) sends the sender token too: muster
+deletes a binding agent-manager wrote with settings only for it. A muster that predates per-agent
 settings refuses the bind's `agent` and `approval` as unknown fields: an agent
 without settings is then bound without them, one with settings is refused.
 The bind body may be up to 64 KiB, matching muster.

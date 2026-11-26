@@ -71,6 +71,16 @@ func (s *Service) sessionApproval(ctx context.Context, ref kagent.Ref, liveTools
 	}
 	dyn := reader.Dynamic()
 	hr, err := dyn.Resource(s.helmReleaseGVR()).Namespace(ref.Namespace).Get(ctx, ref.Name, metav1.GetOptions{})
+	if apierrors.IsForbidden(err) && s.cfg.ApprovalReader != nil {
+		// agent-manager's ServiceAccount may not read releases in every
+		// namespace (an organization's: the chart grants the reader Role in
+		// the configured namespaces only, M2-S3-R-02); the person starting
+		// the Session usually may. Refused only when neither can.
+		if caller, callerErr := s.kube.Client(ctx); callerErr == nil {
+			dyn = caller.Dynamic()
+			hr, err = dyn.Resource(s.helmReleaseGVR()).Namespace(ref.Namespace).Get(ctx, ref.Name, metav1.GetOptions{})
+		}
+	}
 	switch {
 	case apierrors.IsNotFound(err):
 		obj, objErr := s.getAgentObject(ctx, dyn, ref.Namespace, ref.Name)
@@ -82,7 +92,7 @@ func (s *Service) sessionApproval(ctx context.Context, ref kagent.Ref, liveTools
 		s.log.WarnContext(ctx, "the agent's HelmRelease may not be read; the session starts without checking for tool approval settings", identity.LogAttr(ctx), "agent", ref.Tenant())
 		return liveToolset, nil, nil
 	case apierrors.IsForbidden(err):
-		return nil, nil, forbiddenf("the agent's HelmRelease %s/%s, which holds its tool approval settings, may not be read (get helmreleases); a session without them would drop the agent's Ask and Block", ref.Namespace, ref.Name)
+		return nil, nil, forbiddenf("the agent's HelmRelease %s/%s, which holds its tool approval settings, may be read neither by agent-manager's ServiceAccount nor by you (get helmreleases); a session without them would drop the agent's Ask and Block", ref.Namespace, ref.Name)
 	case err != nil:
 		return nil, nil, wrapKube(err, fmt.Sprintf("get HelmRelease %s/%s", ref.Namespace, ref.Name))
 	}
@@ -171,10 +181,11 @@ func (s *Service) recheckBoundGrants(ctx context.Context, bound *boundApproval) 
 			s.log.WarnContext(ctx, "approval grants unreadable after a bind; the session keeps the grants it was bound with", "agent", bound.agent.Key(), "error", err.Error())
 			return
 		}
+		// Compared as muster compares marks: entry, server, uid and the
+		// sorted tools (a regrant that narrowed the tools changed the mark).
+		kept := keepMarks(rec.Grants)
 		held := func(m muster.Grant) bool {
-			return slices.ContainsFunc(rec.Grants, func(g approvalgrants.Grant) bool {
-				return g.Entry == m.Entry && g.Server == m.Server && g.ConnectorUID == m.UID
-			})
+			return slices.ContainsFunc(kept, func(k muster.Grant) bool { return markKey(k) == markKey(m) })
 		}
 		if !slices.ContainsFunc(bound.binding.Grants, func(m muster.Grant) bool { return !held(m) }) {
 			return

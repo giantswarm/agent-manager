@@ -561,7 +561,7 @@ func runServe(ctx context.Context, o *serveOptions) error {
 
 	// Grant drops an earlier run could not get to muster: sent once at
 	// start, with the sender token alone (session_sync.go).
-	go svc.SweepPendingSessionSyncs(ctx)
+	svc.Start(ctx)
 
 	if bootSecret != nil {
 		go bootSecret.Run(ctx)

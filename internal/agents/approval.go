@@ -648,12 +648,15 @@ type ListedGrant struct {
 	AgentDisplayName string `json:"agentDisplayName"`
 }
 
-// GrantList is list_approval_grants' answer. Unreadable names the managed
-// namespaces a listing across namespaces skipped: the caller may not list
-// their HelmReleases.
+// GrantList is list_approval_grants' answer. Unreadable names the configured
+// namespaces a listing across namespaces skipped (the caller may not list
+// their HelmReleases); UnreadableCount counts the organization namespaces it
+// could not read for another reason, which are not named (an organization the
+// caller is no member of is skipped silently, as toolchain_users does).
 type GrantList struct {
-	Grants     []ListedGrant `json:"grants"`
-	Unreadable []string      `json:"unreadable,omitempty"`
+	Grants          []ListedGrant `json:"grants"`
+	Unreadable      []string      `json:"unreadable,omitempty"`
+	UnreadableCount int           `json:"unreadableCount,omitempty"`
 }
 
 // ListApprovalGrants is list_approval_grants: the live grants of the agents
@@ -672,16 +675,23 @@ func (s *Service) ListApprovalGrants(ctx context.Context, namespace, server stri
 		out.Grants = grants
 		return out, nil
 	}
-	for _, ns := range s.cfg.ManagedNamespaces {
+	for _, ns := range s.Managed(ctx) {
+		organization := !slices.Contains(s.cfg.ManagedNamespaces, ns)
 		grants, err := s.namespaceGrants(ctx, ns, server)
-		if errors.Is(err, ErrForbidden) {
+		switch {
+		case err == nil:
+			out.Grants = append(out.Grants, grants...)
+		case organization && errors.Is(err, ErrUnauthenticated):
+			return nil, err
+		case organization && errors.Is(err, ErrForbidden):
+			// An organization the caller does not belong to.
+		case organization:
+			out.UnreadableCount++
+		case errors.Is(err, ErrForbidden):
 			out.Unreadable = append(out.Unreadable, ns)
-			continue
-		}
-		if err != nil {
+		default:
 			return nil, err
 		}
-		out.Grants = append(out.Grants, grants...)
 	}
 	return out, nil
 }
