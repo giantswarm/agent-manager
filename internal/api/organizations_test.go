@@ -280,7 +280,7 @@ func TestCreateOrganizationWritesTheObjectWithItsAdminsAsTheCaller(t *testing.T)
 	org := f.get(t, orgGVR, "", "payments")
 	require.NotNil(t, org)
 	assert.Equal(t, "Payments", org.GetAnnotations()[apov1alpha1.DisplayNameAnnotation])
-	assert.Equal(t, map[string]any{"enabled": true, "harnesses": []any{"kagent"}}, org.Object["spec"].(map[string]any)["agentPlatform"],
+	assert.Equal(t, map[string]any{"agentPlatform": map[string]any{"enabled": true, "harnesses": []any{"kagent"}}}, org.Object["spec"].(map[string]any)["capabilities"],
 		"an omitted workerReplicas writes no field: the CRD's default of 1 applies")
 	assert.Equal(t, []any{
 		map[string]any{"kind": "Group", "name": "payments-leads"},
@@ -303,7 +303,7 @@ func TestCreateOrganizationWritesTheObjectWithItsAdminsAsTheCaller(t *testing.T)
 }
 
 // A created organization is listed at once, and with its namespace once the
-// operator reports it in status.agentPlatform.namespace.
+// operator reports it in the agentPlatform entry of status.namespaces.
 func TestACreatedOrganizationIsListedWithItsNamespaceOnceReported(t *testing.T) {
 	f := newOrgFixture(t)
 	f.dropOrganization(t, "payments")
@@ -384,8 +384,9 @@ func TestTheDryRunRefusesBeforeAnyWrite(t *testing.T) {
 // whose namespace ns is Ready.
 func readyStatus(ns string) map[string]any {
 	return map[string]any{
-		"agentPlatform": map[string]any{"namespace": ns, "snapshotPrefix": "s3://bucket/uid"},
-		"conditions":    []any{map[string]any{"type": "Ready", "status": "True", "reason": "Reconciled", "lastTransitionTime": "2026-11-04T00:00:00Z"}},
+		"namespaces":   []any{map[string]any{"name": ns, "capability": orgv1alpha1.CapabilityAgentPlatform}},
+		"capabilities": map[string]any{"agentPlatform": map[string]any{"snapshotPrefix": "s3://bucket/uid"}},
+		"conditions":   []any{map[string]any{"type": orgv1alpha1.AgentPlatformReady, "status": "True", "reason": "Reconciled", "lastTransitionTime": "2026-11-04T00:00:00Z"}},
 	}
 }
 
@@ -397,8 +398,8 @@ func organization(name string, labels map[string]string) *unstructured.Unstructu
 		"apiVersion": orgv1alpha1.GroupVersion.String(), "kind": "Organization",
 		"metadata": map[string]any{"name": name, "uid": "uid-" + name},
 		"spec": map[string]any{
-			"admins":        []any{map[string]any{"kind": "Group", "name": "payments-leads"}, map[string]any{"kind": "User", "name": "jane@example.com"}},
-			"agentPlatform": map[string]any{"enabled": true, "harnesses": []any{"kagent"}},
+			"admins":       []any{map[string]any{"kind": "Group", "name": "payments-leads"}, map[string]any{"kind": "User", "name": "jane@example.com"}},
+			"capabilities": map[string]any{"agentPlatform": map[string]any{"enabled": true, "harnesses": []any{"kagent"}}},
 		},
 		"status": readyStatus(orgNS),
 	}}
@@ -432,7 +433,7 @@ func TestUpdateAndDeleteOrganizationInApplyMode(t *testing.T) {
 	text, isErr := f.call(t, ToolUpdateOrganization, map[string]any{"name": "payments", "harnesses": []any{"kagent", "claude"}, "workerReplicas": 2})
 	require.False(t, isErr, text)
 	assert.ElementsMatch(t, []any{"harnesses", "workerReplicas"}, decode(t, text)["changed"])
-	spec := f.get(t, orgGVR, "", "payments").Object["spec"].(map[string]any)["agentPlatform"].(map[string]any)
+	spec, _, _ := unstructured.NestedMap(f.get(t, orgGVR, "", "payments").Object, "spec", "capabilities", "agentPlatform")
 	assert.Equal(t, []any{"kagent", "claude"}, spec["harnesses"])
 	assert.EqualValues(t, 2, spec["workers"].(map[string]any)["replicas"])
 
@@ -485,7 +486,7 @@ func TestDeleteOrganizationNamesOrganizationOperatorsNamespace(t *testing.T) {
 			org := organization("payments", nil)
 			require.NoError(t, unstructured.SetNestedField(org.Object, "org-payments", "status", "namespace"))
 			if !tc.agentsNS {
-				unstructured.RemoveNestedField(org.Object, "status", "agentPlatform", "namespace")
+				unstructured.RemoveNestedField(org.Object, "status", "namespaces")
 			}
 			f := newOrgFixture(t, org, model("claude", true))
 			text, isErr := f.call(t, ToolDeleteOrganization, map[string]any{"name": "payments"})
@@ -715,11 +716,9 @@ func TestCredentialsAreReferencesOnly(t *testing.T) {
 func TestListOrganizationsByTheCallersAccess(t *testing.T) {
 	lost := organization("payments", nil)
 	lost.Object["status"].(map[string]any)["conditions"] = append(lost.Object["status"].(map[string]any)["conditions"].([]any),
-		map[string]any{"type": "Orphaned", "status": "True", "reason": "MissingFromGit", "message": "gone from git", "lastTransitionTime": "2026-11-04T00:00:00Z"})
-	billing := organization("billing", nil)
-	_ = unstructured.SetNestedField(billing.Object, "agents-billing-a1b2c", "status", "agentPlatform", "namespace")
-	other := organization("treasury", nil)
-	_ = unstructured.SetNestedField(other.Object, "agents-treasury-z9y8x", "status", "agentPlatform", "namespace")
+		map[string]any{"type": orgv1alpha1.AgentPlatformOrphaned, "status": "True", "reason": orgv1alpha1.AgentPlatformOrphanedMissingFromGit, "message": "gone from git", "lastTransitionTime": "2026-11-04T00:00:00Z"})
+	billing := organizationIn("billing", "agents-billing-a1b2c")
+	other := organizationIn("treasury", "agents-treasury-z9y8x")
 	f := newOrgFixture(t, lost, billing, other)
 	// A member of payments only, who may create agents there; the manager of
 	// billing only; treasury neither.
@@ -806,7 +805,7 @@ func TestListOrganizationsSaysWhoMayCreateAgents(t *testing.T) {
 
 	t.Run("no namespace yet", func(t *testing.T) {
 		pending := organization("payments", nil)
-		unstructured.RemoveNestedField(pending.Object, "status", "agentPlatform", "namespace")
+		unstructured.RemoveNestedField(pending.Object, "status", "namespaces")
 		f := newOrgFixture(t, pending)
 		reviews := recordAccessReviews(f)
 		text, isErr := f.call(t, ToolListOrganizations, nil)
@@ -1185,7 +1184,7 @@ func TestListOrganizations(t *testing.T) {
 func TestWorkerReplicasDefaultIsOneAndAnExplicitZeroIsWritten(t *testing.T) {
 	f := newOrgFixture(t, organization("payments", nil))
 	replicasOf := func() (any, bool) {
-		v, found, _ := unstructured.NestedFieldNoCopy(f.get(t, orgGVR, "", "payments").Object, "spec", "agentPlatform", "workers", "replicas")
+		v, found, _ := unstructured.NestedFieldNoCopy(f.get(t, orgGVR, "", "payments").Object, "spec", "capabilities", "agentPlatform", "workers", "replicas")
 		return v, found
 	}
 
@@ -1221,7 +1220,7 @@ func TestWorkerReplicasExplicitValuesAreWritten(t *testing.T) {
 	text, isErr := f.call(t, ToolUpdateOrganization, map[string]any{"name": "payments", "workerReplicas": 1})
 	require.False(t, isErr, text)
 	assert.Equal(t, []any{"workerReplicas"}, decode(t, text)["changed"])
-	replicas, found, _ := unstructured.NestedFieldNoCopy(f.get(t, orgGVR, "", "payments").Object, "spec", "agentPlatform", "workers", "replicas")
+	replicas, found, _ := unstructured.NestedFieldNoCopy(f.get(t, orgGVR, "", "payments").Object, "spec", "capabilities", "agentPlatform", "workers", "replicas")
 	require.True(t, found, "an explicit 1 is written")
 	assert.EqualValues(t, 1, replicas)
 
@@ -1229,7 +1228,7 @@ func TestWorkerReplicasExplicitValuesAreWritten(t *testing.T) {
 	f.dropOrganization(t, "payments")
 	text, isErr = f.call(t, ToolCreateOrganization, map[string]any{"name": "payments", "adminGroups": []any{"payments-leads"}, "workerReplicas": 0})
 	require.False(t, isErr, text)
-	replicas, found, _ = unstructured.NestedFieldNoCopy(f.get(t, orgGVR, "", "payments").Object, "spec", "agentPlatform", "workers", "replicas")
+	replicas, found, _ = unstructured.NestedFieldNoCopy(f.get(t, orgGVR, "", "payments").Object, "spec", "capabilities", "agentPlatform", "workers", "replicas")
 	require.True(t, found, "a create writes an explicit 0")
 	assert.EqualValues(t, 0, replicas)
 }
@@ -1254,6 +1253,65 @@ func TestGetOrganizationNamesWhatItCannotRead(t *testing.T) {
 	assert.Contains(t, unreadable[0], "agents:")
 	assert.Contains(t, unreadable[1], "members:")
 	assert.Contains(t, erases["kept"], "session tombstones")
+}
+
+// get_organization answers the Agent Platform's part of an Organization
+// under its own field names, wherever the object keeps it: the namespace in
+// the agentPlatform entry of status.namespaces (not the kaas one), the
+// snapshot prefix and the last applied revision in
+// status.capabilities.agentPlatform, the erasure step in the reason of the
+// condition AgentPlatformErasing, and ready, defaultModelConfigured and
+// orphaned in the conditions of the AgentPlatform types. The Dev Portal reads
+// these names.
+func TestGetOrganizationKeepsItsFieldNamesOverTheCapabilitiesShape(t *testing.T) {
+	const revision = "main@sha1:0123456789abcdef0123456789abcdef01234567"
+	condition := func(typ, status, reason string) any {
+		return map[string]any{"type": typ, "status": status, "reason": reason, "message": typ + " " + reason, "lastTransitionTime": "2026-11-26T00:00:00Z"}
+	}
+	org := organization("payments", nil)
+	now := metav1.Now()
+	org.SetDeletionTimestamp(&now)
+	org.SetFinalizers([]string{apov1alpha1.Finalizer})
+	org.Object["status"] = map[string]any{
+		"namespace": "org-payments",
+		"namespaces": []any{
+			map[string]any{"name": "org-payments", "capability": orgv1alpha1.CapabilityKaaS},
+			map[string]any{"name": orgNS, "capability": orgv1alpha1.CapabilityAgentPlatform},
+		},
+		"capabilities": map[string]any{"agentPlatform": map[string]any{"snapshotPrefix": "s3://bucket/uid", "lastAppliedRevision": revision}},
+		"conditions": []any{
+			// Another controller's condition of the old type name is not
+			// the Agent Platform's.
+			condition("Ready", "False", "Other"),
+			condition(orgv1alpha1.AgentPlatformReady, "True", "Reconciled"),
+			condition(orgv1alpha1.AgentPlatformDefaultModelConfigured, "False", "NoDefault"),
+			condition(orgv1alpha1.AgentPlatformOrphaned, "True", orgv1alpha1.AgentPlatformOrphanedMissingFromGit),
+			condition(orgv1alpha1.AgentPlatformErasing, "True", orgv1alpha1.AgentPlatformErasingSnapshots),
+		},
+	}
+	f := newOrgFixture(t, org)
+
+	text, isErr := f.call(t, ToolGetOrganization, map[string]any{"name": "payments"})
+	require.False(t, isErr, text)
+	got := decode(t, text)
+	for field, want := range map[string]any{
+		"namespace":              orgNS,
+		"snapshotPrefix":         "s3://bucket/uid",
+		"lastAppliedRevision":    revision,
+		"deleting":               true,
+		"erasureStep":            "Snapshots",
+		"harnesses":              []any{"kagent"},
+		"workerReplicas":         float64(1),
+		"ready":                  map[string]any{"status": "True", "reason": "Reconciled", "message": "AgentPlatformReady Reconciled"},
+		"defaultModelConfigured": map[string]any{"status": "False", "reason": "NoDefault", "message": "AgentPlatformDefaultModelConfigured NoDefault"},
+		"orphaned":               map[string]any{"status": "True", "reason": "MissingFromGit", "message": "AgentPlatformOrphaned MissingFromGit"},
+	} {
+		assert.Equal(t, want, got[field], field)
+	}
+	erases := got["erases"].(map[string]any)
+	assert.Equal(t, orgNS, erases["namespace"])
+	assert.Equal(t, "s3://bucket/uid", erases["snapshotPrefix"])
+	assert.Equal(t, "org-payments", erases["organizationNamespace"])
 }
 
 // What a Flux Kustomization applies from git is not changed live: Flux

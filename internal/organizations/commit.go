@@ -49,8 +49,9 @@ import (
 const (
 	// DeletePullRequestAnnotation is set on the live object, as the caller,
 	// when commit mode opens the pull request that removes the object's
-	// file: agent-platform-operator reports the organization Orphaned with
-	// reason DeleteMerged instead of MissingFromGit once it merged.
+	// file: agent-platform-operator reports the organization
+	// AgentPlatformOrphaned with reason DeleteMerged instead of MissingFromGit
+	// once it merged.
 	DeletePullRequestAnnotation = apov1alpha1.DeletePullRequestAnnotation
 	// PruneDisabled is the value of PruneAnnotation on the object's file:
 	// Flux never prunes it.
@@ -596,9 +597,9 @@ type contentWriter struct {
 
 // writable refuses a write into the organization of org while it is being
 // deleted, or is in Pending erase: its delete pull request merged
-// (Orphaned, reason DeleteMerged) and Erase now removes what is in it. Every
-// write tool of an organization's contents builds a contentWriter, so this
-// is their one check; reads and delete_organization build none. It also
+// (AgentPlatformOrphaned, reason DeleteMerged) and Erase now removes what is
+// in it. Every write tool of an organization's contents builds a
+// contentWriter, so this is their one check; reads and delete_organization build none. It also
 // refuses a write for an organization UID (org.OrganizationUID, a credential
 // operation's recorded one) that is not the Organization's now: one deleted
 // and created again under the same name has the same namespace name, and a
@@ -632,18 +633,17 @@ func (s *Service) writable(ctx context.Context, org Namespace) error {
 func (s *Service) erasing(o *orgv1alpha1.Organization, ns string) error {
 	what := "organization " + o.Name
 	if o.DeletionTimestamp != nil {
-		_, status := agentPlatformOf(o)
-		return fmt.Errorf("%w: %s is being erased (%s): nothing is written into namespace %s; get_organization reports its erasure step until it is gone", agents.ErrConflict, what, orDefault(status.ErasureStep, "starting"), ns)
+		return fmt.Errorf("%w: %s is being erased (%s): nothing is written into namespace %s; get_organization reports its erasure step until it is gone", agents.ErrConflict, what, orDefault(erasureStepOf(o), "starting"), ns)
 	}
-	c := meta.FindStatusCondition(o.Status.Conditions, apov1alpha1.ConditionOrphaned)
-	if c == nil || c.Status != metav1.ConditionTrue || c.Reason != apov1alpha1.ReasonDeleteMerged {
+	c := meta.FindStatusCondition(o.Status.Conditions, orgv1alpha1.AgentPlatformOrphaned)
+	if c == nil || c.Status != metav1.ConditionTrue || c.Reason != orgv1alpha1.AgentPlatformOrphanedDeleteMerged {
 		return nil
 	}
 	file := "its file"
 	if s.cfg.Commit != nil {
 		file += " " + s.cfg.Commit.objectFile(o.Name)
 	}
-	return fmt.Errorf("%w: %s is in Pending erase: its delete pull request merged (Orphaned, reason %s), so nothing is written into namespace %s. Erase it with delete_organization, mode commit and confirm %q (Erase now), or restore %s in git to keep it", agents.ErrConflict, what, apov1alpha1.ReasonDeleteMerged, ns, o.Name, file)
+	return fmt.Errorf("%w: %s is in Pending erase: its delete pull request merged (%s, reason %s), so nothing is written into namespace %s. Erase it with delete_organization, mode commit and confirm %q (Erase now), or restore %s in git to keep it", agents.ErrConflict, what, orgv1alpha1.AgentPlatformOrphaned, orgv1alpha1.AgentPlatformOrphanedDeleteMerged, ns, o.Name, file)
 }
 
 func (s *Service) contentWriter(ctx context.Context, org Namespace, mode string) (*contentWriter, error) {

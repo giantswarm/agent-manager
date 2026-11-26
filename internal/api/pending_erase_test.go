@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	apov1alpha1 "github.com/giantswarm/agent-platform-operator/api/v1alpha1"
+	orgv1alpha1 "github.com/giantswarm/organization-operator/api/v1alpha1"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -16,12 +17,13 @@ import (
 	k8stesting "k8s.io/client-go/testing"
 )
 
-// orphaned sets the operator's Orphaned condition on org with reason.
+// orphaned sets the operator's AgentPlatformOrphaned condition on org with
+// reason.
 func orphaned(t *testing.T, org *unstructured.Unstructured, reason string) {
 	t.Helper()
 	conditions, _, err := unstructured.NestedSlice(org.Object, "status", "conditions")
 	require.NoError(t, err)
-	conditions = append(conditions, map[string]any{"type": apov1alpha1.ConditionOrphaned, "status": "True", "reason": reason, "lastTransitionTime": "2026-11-12T00:00:00Z"})
+	conditions = append(conditions, map[string]any{"type": orgv1alpha1.AgentPlatformOrphaned, "status": "True", "reason": reason, "lastTransitionTime": "2026-11-12T00:00:00Z"})
 	require.NoError(t, unstructured.SetNestedSlice(org.Object, conditions, "status", "conditions"))
 }
 
@@ -29,17 +31,20 @@ func orphaned(t *testing.T, org *unstructured.Unstructured, reason string) {
 func pendingErase(t *testing.T, labels map[string]string) *unstructured.Unstructured {
 	t.Helper()
 	org := organization("payments", labels)
-	orphaned(t, org, apov1alpha1.ReasonDeleteMerged)
+	orphaned(t, org, orgv1alpha1.AgentPlatformOrphanedDeleteMerged)
 	return org
 }
 
-// beingErased is payments deleted, its finalizer still on.
+// beingErased is payments deleted, its finalizer still on, the operator on
+// the erasure step Namespace.
 func beingErased() *unstructured.Unstructured {
 	org := organization("payments", nil)
 	now := metav1.Now()
 	org.SetDeletionTimestamp(&now)
 	org.SetFinalizers([]string{apov1alpha1.Finalizer})
-	_ = unstructured.SetNestedField(org.Object, "Namespace", "status", "agentPlatform", "erasureStep")
+	status := org.Object["status"].(map[string]any)
+	status["conditions"] = append(status["conditions"].([]any), map[string]any{"type": orgv1alpha1.AgentPlatformErasing, "status": "True",
+		"reason": orgv1alpha1.AgentPlatformErasingNamespace, "lastTransitionTime": "2026-11-12T00:00:00Z"})
 	return org
 }
 
@@ -152,7 +157,7 @@ func TestACallerWithoutRightsIsNotToldThePendingErase(t *testing.T) {
 // the write goes on.
 func TestAnOrganizationMissingFromGitIsStillWritten(t *testing.T) {
 	org := organization("payments", nil)
-	orphaned(t, org, "MissingFromGit")
+	orphaned(t, org, orgv1alpha1.AgentPlatformOrphanedMissingFromGit)
 	f := newOrgFixture(t, org)
 	text, isErr := f.call(t, ToolAddOrganizationMember, map[string]any{"organization": "payments", "role": "editor", "group": "payments-team"})
 	require.False(t, isErr, text)
@@ -169,7 +174,7 @@ func TestPendingEraseKeepsReadsAndEraseNow(t *testing.T) {
 	require.NoError(t, fake.Merge(context.Background(), fake.PullRequests()[0].PullRequest))
 	// The operator reports the merged delete.
 	live := f.get(t, orgGVR, "", "payments")
-	orphaned(t, live, apov1alpha1.ReasonDeleteMerged)
+	orphaned(t, live, orgv1alpha1.AgentPlatformOrphanedDeleteMerged)
 	_, err := f.dyn.Resource(orgGVR).UpdateStatus(t.Context(), live, metav1.UpdateOptions{})
 	require.NoError(t, err)
 
@@ -255,7 +260,7 @@ func TestUpdateOrganizationWithoutRightsIsNotToldThePendingErase(t *testing.T) {
 // update_organization goes on.
 func TestUpdateOrganizationMissingFromGitIsStillWritten(t *testing.T) {
 	org := organization("payments", nil)
-	orphaned(t, org, "MissingFromGit")
+	orphaned(t, org, orgv1alpha1.AgentPlatformOrphanedMissingFromGit)
 	f := newOrgFixture(t, org)
 	text, isErr := f.call(t, ToolUpdateOrganization, map[string]any{"name": "payments", "displayName": "Payments"})
 	require.False(t, isErr, text)

@@ -370,7 +370,7 @@ func (s *Service) SetModel(ctx context.Context, req ModelRequest) (*ResourceResu
 // confirmDefaultMark reads the namespace's models again after a create that
 // wrote the default mark live (apply mode, no dry run, no pending credential
 // form; the credential save confirms that one). In commit mode the
-// operator's DefaultModelConfigured condition says it.
+// operator's AgentPlatformDefaultModelConfigured condition says it.
 func (s *Service) confirmDefaultMark(ctx context.Context, c kube.Client, gvr schema.GroupVersionResource, req ModelRequest, res *ResourceResult, obj *unstructured.Unstructured) {
 	if !res.Created || req.DryRun || res.Commit != nil || res.Pending || !agents.IsMarkedDefault(obj) {
 		return

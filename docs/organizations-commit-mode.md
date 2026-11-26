@@ -24,7 +24,7 @@ Secret. Commits, over MCP and REST, use the configured RFC 8693 manager App gran
 
 | What | Path | Applied by |
 |---|---|---|
-| The `Organization` (`security.giantswarm.io`, with `spec.agentPlatform` and the admins in `spec.admins`) | `<objectsPath>/<name>.yaml` | the installation's Kustomization (`deletionPolicy: Orphan`) |
+| The `Organization` (`security.giantswarm.io`, with `spec.capabilities.agentPlatform` and the admins in `spec.admins`) | `<objectsPath>/<name>.yaml` | the installation's Kustomization (`deletionPolicy: Orphan`) |
 | A model, connector, egress policy or member binding (`editor`, `user`) | `<contentPrefix>/<name>/<kind>-<object>.yaml` (`modelconfig-claude.yaml`, `rolebinding-organization-editors.yaml`) | the organization's own Kustomization, which agent-platform-operator creates |
 | A credential Secret | `<contentPrefix>/<name>/<secret>-secret.enc.yaml` | the organization's own Kustomization, decrypted with the installation's SOPS key |
 
@@ -111,8 +111,8 @@ giantswarm/agent-platform-operator#15 is the long-term fix.
    its whole content path (every file listed under it, nested `kustomization.yaml`
    files included), and marks the live object with
    `agent-platform.giantswarm.io/delete-pull-request: <url>`. Nothing is erased.
-   agent-platform-operator reports the organization `Orphaned` with reason
-   `DeleteMerged` once the file has left the installation Kustomization's inventory.
+   agent-platform-operator reports the organization `AgentPlatformOrphaned` with
+   reason `DeleteMerged` once the file has left the installation Kustomization's inventory.
 2. After the merge, the organization is pending erase once agent-manager has read the
    merged pull request's files, found the object's file removed by it (a move that
    GitHub reports as a rename does not count), and found that no file under the objects
@@ -121,8 +121,8 @@ giantswarm/agent-platform-operator#15 is the long-term fix.
    `kustomize.toolkit.fluxcd.io/prune: enabled` on the live object and deletes it; the
    operator erases it.
 
-While the operator reports the organization `Orphaned` with reason `DeleteMerged`
-(Pending erase), and while it is being erased, `update_organization` and every write
+While the operator reports the organization `AgentPlatformOrphaned` with reason
+`DeleteMerged` (Pending erase), and while it is being erased, `update_organization` and every write
 tool of its contents (members, models, connectors, egress policies and credentials), in
 both modes, answer `conflict`: Erase now, or restore its file to keep it. A caller who
 may not read the organization gets `forbidden`, not its state. Reads and `delete_organization`
@@ -134,7 +134,8 @@ The erase is refused:
   is merged (a merged pull request that did not remove the file is not the delete);
 - when the file is gone from git without a merged delete pull request (Missing from
   git): restore the file instead. `lastAppliedRevisionUrl` on the organization links the
-  last commit that held it (the operator's `status.lastAppliedRevision`), and
+  last commit that held it (the operator's
+  `status.capabilities.agentPlatform.lastAppliedRevision`), and
   `lastAppliedFileUrl` the file itself at that commit (`lastAppliedFile`, the path mode
   commit keeps it at);
 - when the merged delete pull request did not remove the file itself: it was edited
@@ -225,9 +226,10 @@ erases again. The objects paths that agent-manager writes use no such overlay
 The cluster has a second guard, which follows Flux's own Kustomize build. The
 admission policy `agent-platform-organization-delete-intent`
 (giantswarm/agent-platform, `helm/agent-platform-connectivity/templates/organizations/admission.yaml`)
-permits the delete of an organization that carries an `Orphaned` condition (one that
-agent-platform-operator found applied from git) only when that condition is `True`
-with reason `DeleteMerged`. The operator sets `Orphaned=True` only when the
+permits the delete of an organization that carries an `AgentPlatformOrphaned`
+condition (one that agent-platform-operator found applied from git) only when that
+condition is `True` with reason `DeleteMerged`. The operator sets
+`AgentPlatformOrphaned=True` only when the
 installation's Flux Kustomization is settled (its generation observed, `Ready` true,
 not reconciling) and its `status.inventory` has no entry for the organization; with
 the delete annotation the reason is `DeleteMerged`. That inventory is what Flux applied

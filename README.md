@@ -72,8 +72,8 @@ MCP-server-writer half.
 
 The MCP tools take an organization by its name, `organization`, and never an
 organization's namespace: agent-manager finds the namespace in the
-`Organization`'s `status.agentPlatform.namespace`, and every answer about an
-organization's object names the organization. An agent tool's `namespace` is a
+`agentPlatform` entry of the `Organization`'s `status.namespaces`, and every
+answer about an organization's object names the organization. An agent tool's `namespace` is a
 platform namespace of the installation, or with `cluster` the namespace on the
 workload cluster. The REST paths above still take a namespace.
 
@@ -662,11 +662,11 @@ organization namespaces beside `--kagent-namespace` and
 `--managed-namespaces`, and serves the organization tools. An organization is
 an `Organization` (`security.giantswarm.io/v1alpha1`, cluster-scoped, from
 [organization-operator](https://github.com/giantswarm/organization-operator))
-with the Agent Platform enabled (`spec.agentPlatform.enabled`);
+with the Agent Platform enabled (`spec.capabilities.agentPlatform.enabled`);
 [agent-platform-operator](https://github.com/giantswarm/agent-platform-operator)
 creates its organization namespace, labelled
-`agent-platform.giantswarm.io/organization` and reported in
-`status.agentPlatform.namespace`, binds the organization's admins
+`agent-platform.giantswarm.io/organization` and reported in the
+`agentPlatform` entry of `status.namespaces`, binds the organization's admins
 (`spec.admins`) to `agent-platform:admin` there, and keeps in it what an
 agent needs there (the agent chart's OCIRepository, the Helm ServiceAccount
 bound to `agent-platform-tenant-flux`, the network policies, the curated
@@ -694,7 +694,7 @@ The organization tools (every name holds `organization`):
   with the Agent Platform enabled and the admins it is given in
   `spec.admins` (a group offered before a person); it writes no RoleBinding.
   An `Organization` of that name that exists is refused. An update changes
-  the display name, `spec.agentPlatform` (harnesses, worker replicas) and
+  the display name, `spec.capabilities.agentPlatform` (harnesses, worker replicas) and
   `spec.admins` (`adminGroups` and `adminUsers` each replace their kind). A
   delete answers what it erases (where organization-operator runs, also its
   namespace of the Organization, which it deletes with it) until the caller

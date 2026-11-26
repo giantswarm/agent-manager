@@ -14,7 +14,7 @@ require (
 	github.com/giantswarm/mcp-toolkit v0.7.0
 	github.com/giantswarm/mcp-toolkit/k8s v0.1.1
 	// Prototype (giantswarm/giantswarm#39492): the head of the open draft giantswarm/organization-operator#673.
-	github.com/giantswarm/organization-operator v1.6.5-0.20261124164900-de1bb4efe375
+	github.com/giantswarm/organization-operator v1.6.5-0.20261126132037-fe4507764d20
 	github.com/go-jose/go-jose/v4 v4.1.9
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/uuid v1.6.0
@@ -38,10 +38,10 @@ require (
 	google.golang.org/grpc v1.85.0
 	google.golang.org/protobuf v1.36.12
 	helm.sh/helm/v4 v4.3.0
-	k8s.io/api v0.37.2
+	k8s.io/api v0.37.3
 	k8s.io/apiextensions-apiserver v0.37.2
-	k8s.io/apimachinery v0.37.2
-	k8s.io/client-go v0.37.2
+	k8s.io/apimachinery v0.37.3
+	k8s.io/client-go v0.37.3
 	k8s.io/utils v0.0.0-20261023123148-ca04ba58ecab
 	sigs.k8s.io/controller-runtime v0.25.3
 	sigs.k8s.io/yaml v1.6.0

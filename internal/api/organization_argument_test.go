@@ -43,21 +43,21 @@ func ownModel() *unstructured.Unstructured {
 func TestAnOrganizationIsResolvedFromItsOrganization(t *testing.T) {
 	const (
 		notFound   = "not_found: organization payments not found; list_organizations lists yours"
-		disabled   = "conflict: the Agent Platform is not enabled for organization payments (its Organization's spec.agentPlatform.enabled is not true); nothing was written"
-		notReady   = "conflict: organization payments is not ready yet: agent-platform-operator has not reported its namespace (status.agentPlatform.namespace); nothing was written, try again shortly"
+		disabled   = "conflict: the Agent Platform is not enabled for organization payments (its Organization's spec.capabilities.agentPlatform.enabled is not true); nothing was written"
+		notReady   = "conflict: organization payments is not ready yet: agent-platform-operator has not reported its namespace (the agentPlatform entry of status.namespaces); nothing was written, try again shortly"
 		otherLabel = notReady
 	)
 	reporting := func(ns string) *unstructured.Unstructured {
 		u := organization("payments", nil)
 		if ns == "" {
-			unstructured.RemoveNestedField(u.Object, "status", "agentPlatform", "namespace")
+			unstructured.RemoveNestedField(u.Object, "status", "namespaces")
 		} else {
 			u.Object["status"] = readyStatus(ns)
 		}
 		return u
 	}
 	switchedOff := organization("payments", nil)
-	require.NoError(t, unstructured.SetNestedField(switchedOff.Object, false, "spec", "agentPlatform", "enabled"))
+	require.NoError(t, unstructured.SetNestedField(switchedOff.Object, false, "spec", "capabilities", "agentPlatform", "enabled"))
 
 	for _, tc := range []struct {
 		name string

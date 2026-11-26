@@ -667,7 +667,7 @@ func (s *Service) openDelete(ctx context.Context, c kube.Client, cm *orgCommit, 
 	if err := s.markDelete(ctx, c, req.Name, res.Commit.PullRequest, false); err != nil {
 		return fmt.Errorf("%w (the pull request %s is open; call delete_organization again with mode commit and no confirm to mark the object)", err, res.Commit.PullRequest)
 	}
-	step := fmt.Sprintf("after the merge the organization shows Pending erase (Orphaned, reason DeleteMerged); then call delete_organization with mode commit and confirm %q to erase it (Erase now). Until then nothing is erased", req.Name)
+	step := fmt.Sprintf("after the merge the organization shows Pending erase (AgentPlatformOrphaned, reason DeleteMerged); then call delete_organization with mode commit and confirm %q to erase it (Erase now). Until then nothing is erased", req.Name)
 	res.Commit.LiveSteps = []string{step}
 	res.Next += "the pull request " + res.Commit.PullRequest + " removes the organization from git; " + reviewNote + "; " + step
 	s.log.Info("organization delete committed", identity.LogAttr(ctx), "name", req.Name, "pullRequest", res.Commit.PullRequest)

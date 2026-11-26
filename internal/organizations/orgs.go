@@ -38,7 +38,7 @@ type Organization struct {
 	Name        string `json:"name"`
 	DisplayName string `json:"displayName,omitempty"`
 	// Namespace is the organization namespace, once the operator reported
-	// it (status.agentPlatform.namespace).
+	// it: the agentPlatform entry of status.namespaces.
 	Namespace string `json:"namespace,omitempty"`
 	// Admins are spec.admins: the Users and Groups the organization is
 	// handed over to, which agent-platform-operator binds to
@@ -48,13 +48,14 @@ type Organization struct {
 	WorkerReplicas int32     `json:"workerReplicas"`
 	SnapshotPrefix string    `json:"snapshotPrefix,omitempty"`
 	// Ready, DefaultModelConfigured and Orphaned are the operator's
-	// conditions, absent until it set them.
+	// conditions AgentPlatformReady, AgentPlatformDefaultModelConfigured and
+	// AgentPlatformOrphaned, absent until it set them.
 	Ready                  *Condition `json:"ready,omitempty"`
 	DefaultModelConfigured *Condition `json:"defaultModelConfigured,omitempty"`
 	Orphaned               *Condition `json:"orphaned,omitempty"`
-	// LastAppliedRevision is the operator's status.lastAppliedRevision: the
-	// last source revision Flux applied the organization from, kept while it
-	// is Orphaned.
+	// LastAppliedRevision is the operator's
+	// status.capabilities.agentPlatform.lastAppliedRevision: the last source
+	// revision Flux applied the organization from, kept while it is Orphaned.
 	LastAppliedRevision string `json:"lastAppliedRevision,omitempty"`
 	// LastAppliedRevisionURL is that revision's commit on GitHub, when mode
 	// commit names the installation repository and the revision is a git
@@ -67,7 +68,8 @@ type Organization struct {
 	LastAppliedFile    string `json:"lastAppliedFile,omitempty"`
 	LastAppliedFileURL string `json:"lastAppliedFileUrl,omitempty"`
 	// Deleting: the object is deleted and the operator erases it;
-	// ErasureStep names the step it is on.
+	// ErasureStep names the step it is on, the reason of its condition
+	// AgentPlatformErasing while that is True.
 	Deleting    bool   `json:"deleting,omitempty"`
 	ErasureStep string `json:"erasureStep,omitempty"`
 	// GitOps names the Flux Kustomization that applies the object: it is
@@ -84,38 +86,54 @@ func organizationOf(u *unstructured.Unstructured) (*orgv1alpha1.Organization, er
 }
 
 // agentPlatformEnabled reports whether org has the Agent Platform switched
-// on (spec.agentPlatform.enabled): the Organizations the tools work on.
+// on (spec.capabilities.agentPlatform.enabled): the Organizations the tools
+// work on.
 func agentPlatformEnabled(org *orgv1alpha1.Organization) bool {
-	return org.Spec.AgentPlatform != nil && org.Spec.AgentPlatform.Enabled
+	ap := org.Spec.Capabilities.AgentPlatform
+	return ap != nil && ap.Enabled
 }
 
-// agentPlatformOf is org's spec.agentPlatform and status.agentPlatform,
-// empty where they are not set.
+// agentPlatformOf is org's spec.capabilities.agentPlatform and
+// status.capabilities.agentPlatform, empty where they are not set.
 func agentPlatformOf(org *orgv1alpha1.Organization) (orgv1alpha1.AgentPlatformSpec, orgv1alpha1.AgentPlatformStatus) {
 	var spec orgv1alpha1.AgentPlatformSpec
 	var status orgv1alpha1.AgentPlatformStatus
-	if org.Spec.AgentPlatform != nil {
-		spec = *org.Spec.AgentPlatform
+	if org.Spec.Capabilities.AgentPlatform != nil {
+		spec = *org.Spec.Capabilities.AgentPlatform
 	}
-	if org.Status.AgentPlatform != nil {
-		status = *org.Status.AgentPlatform
+	if org.Status.Capabilities.AgentPlatform != nil {
+		status = *org.Status.Capabilities.AgentPlatform
 	}
 	return spec, status
 }
 
-// namespaceOf is the organization namespace the operator reported, empty
-// until it did.
+// namespaceOf is the organization namespace the operator reported, the
+// agentPlatform entry of status.namespaces, empty until it did.
 func namespaceOf(org *orgv1alpha1.Organization) string {
-	_, status := agentPlatformOf(org)
-	return status.Namespace
+	for _, ns := range org.Status.Namespaces {
+		if ns.Capability == orgv1alpha1.CapabilityAgentPlatform {
+			return ns.Name
+		}
+	}
+	return ""
+}
+
+// erasureStepOf is the erasure step the operator is on, the reason of org's
+// condition AgentPlatformErasing while it is True; empty otherwise.
+func erasureStepOf(org *orgv1alpha1.Organization) string {
+	c := meta.FindStatusCondition(org.Status.Conditions, orgv1alpha1.AgentPlatformErasing)
+	if c == nil || c.Status != metav1.ConditionTrue {
+		return ""
+	}
+	return c.Reason
 }
 
 func (s *Service) summary(org *orgv1alpha1.Organization) Organization {
 	spec, status := agentPlatformOf(org)
 	out := Organization{
 		Name: org.Name, DisplayName: org.Annotations[apov1alpha1.DisplayNameAnnotation],
-		Namespace: status.Namespace, Admins: []Subject{}, Harnesses: slices.Clone(spec.Harnesses), WorkerReplicas: spec.Workers.ReplicasOrDefault(),
-		SnapshotPrefix: status.SnapshotPrefix, Deleting: org.DeletionTimestamp != nil, ErasureStep: status.ErasureStep,
+		Namespace: namespaceOf(org), Admins: []Subject{}, Harnesses: slices.Clone(spec.Harnesses), WorkerReplicas: spec.Workers.ReplicasOrDefault(),
+		SnapshotPrefix: status.SnapshotPrefix, Deleting: org.DeletionTimestamp != nil, ErasureStep: erasureStepOf(org),
 		GitOps: org.Labels[agents.KustomizationNameLabel], LastAppliedRevision: status.LastAppliedRevision,
 	}
 	for _, a := range org.Spec.Admins {
@@ -139,9 +157,9 @@ func (s *Service) summary(org *orgv1alpha1.Organization) Organization {
 		}
 		return &Condition{Status: string(c.Status), Reason: c.Reason, Message: c.Message}
 	}
-	out.Ready = cond(apov1alpha1.ConditionReady)
-	out.DefaultModelConfigured = cond(apov1alpha1.ConditionDefaultModelConfigured)
-	out.Orphaned = cond(apov1alpha1.ConditionOrphaned)
+	out.Ready = cond(orgv1alpha1.AgentPlatformReady)
+	out.DefaultModelConfigured = cond(orgv1alpha1.AgentPlatformDefaultModelConfigured)
+	out.Orphaned = cond(orgv1alpha1.AgentPlatformOrphaned)
 	return out
 }
 
@@ -245,7 +263,7 @@ func (s *Service) get(ctx context.Context, name string) (kube.Client, *unstructu
 		return nil, nil, nil, err
 	}
 	if !agentPlatformEnabled(org) {
-		return nil, nil, nil, fmt.Errorf("%w: Organization %s does not have the Agent Platform enabled (spec.agentPlatform.enabled)", agents.ErrNotFound, name)
+		return nil, nil, nil, fmt.Errorf("%w: Organization %s does not have the Agent Platform enabled (spec.capabilities.agentPlatform.enabled)", agents.ErrNotFound, name)
 	}
 	return c, u, org, nil
 }
@@ -255,7 +273,7 @@ func (s *Service) get(ctx context.Context, name string) (kube.Client, *unstructu
 // it, so what it may not read is named, not failed.
 func (s *Service) erasure(ctx context.Context, dyn dynamic.Interface, org *orgv1alpha1.Organization) *Erasure {
 	_, status := agentPlatformOf(org)
-	ns := status.Namespace
+	ns := namespaceOf(org)
 	out := &Erasure{Namespace: ns, SnapshotPrefix: status.SnapshotPrefix,
 		Kept: "session tombstones stay in the agent runtime; everything else of the organization namespace is erased, worker snapshots and connector sign-ins included"}
 	credentials := map[string]bool{}
@@ -386,8 +404,8 @@ type CreateRequest struct {
 	Name        string
 	DisplayName string
 	Harnesses   []string
-	// WorkerReplicas is spec.agentPlatform.workers.replicas; nil leaves the
-	// CRD's default.
+	// WorkerReplicas is spec.capabilities.agentPlatform.workers.replicas;
+	// nil leaves the CRD's default.
 	WorkerReplicas *int32
 	// AdminGroups and AdminUsers are spec.admins, which agent-platform-operator
 	// binds to agent-platform:admin in the organization namespace. A group
@@ -522,7 +540,7 @@ func (s *Service) organizationObject(req CreateRequest, admins []Subject) map[st
 	if req.WorkerReplicas != nil {
 		agentPlatform["workers"] = map[string]any{"replicas": int64(*req.WorkerReplicas)}
 	}
-	spec := map[string]any{"agentPlatform": agentPlatform}
+	spec := map[string]any{"capabilities": map[string]any{"agentPlatform": agentPlatform}}
 	if len(admins) > 0 {
 		spec["admins"] = adminsObject(admins)
 	}
@@ -639,7 +657,7 @@ func changeOrganization(next *unstructured.Unstructured, req UpdateRequest) ([]s
 	}
 	spec, _ := agentPlatformOf(cur)
 	if req.Harnesses != nil && !slices.Equal(*req.Harnesses, spec.Harnesses) {
-		if err := unstructured.SetNestedStringSlice(next.Object, *req.Harnesses, "spec", "agentPlatform", "harnesses"); err != nil {
+		if err := unstructured.SetNestedStringSlice(next.Object, *req.Harnesses, "spec", "capabilities", "agentPlatform", "harnesses"); err != nil {
 			return nil, err
 		}
 		changed = append(changed, "harnesses")
@@ -649,7 +667,7 @@ func changeOrganization(next *unstructured.Unstructured, req UpdateRequest) ([]s
 	// A request equal to the default is written as well: the value then stays
 	// when the operator's default changes.
 	if req.WorkerReplicas != nil && (spec.Workers.Replicas == nil || *req.WorkerReplicas != *spec.Workers.Replicas) {
-		if err := unstructured.SetNestedField(next.Object, int64(*req.WorkerReplicas), "spec", "agentPlatform", "workers", "replicas"); err != nil {
+		if err := unstructured.SetNestedField(next.Object, int64(*req.WorkerReplicas), "spec", "capabilities", "agentPlatform", "workers", "replicas"); err != nil {
 			return nil, err
 		}
 		changed = append(changed, "workerReplicas")

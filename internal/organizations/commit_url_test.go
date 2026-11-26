@@ -35,8 +35,8 @@ func TestCommitURL(t *testing.T) {
 func TestSummaryLastAppliedRevision(t *testing.T) {
 	org := &orgv1alpha1.Organization{
 		ObjectMeta: metav1.ObjectMeta{Name: "treasury"},
-		Spec:       orgv1alpha1.OrganizationSpec{AgentPlatform: &orgv1alpha1.AgentPlatformSpec{Enabled: true}},
-		Status:     orgv1alpha1.OrganizationStatus{AgentPlatform: &orgv1alpha1.AgentPlatformStatus{LastAppliedRevision: "main@sha1:" + hash}},
+		Spec:       orgv1alpha1.OrganizationSpec{Capabilities: orgv1alpha1.OrganizationCapabilities{AgentPlatform: &orgv1alpha1.AgentPlatformSpec{Enabled: true}}},
+		Status:     orgv1alpha1.OrganizationStatus{Capabilities: orgv1alpha1.OrganizationCapabilitiesStatus{AgentPlatform: &orgv1alpha1.AgentPlatformStatus{LastAppliedRevision: "main@sha1:" + hash}}},
 	}
 
 	got := (&Service{}).summary(org)
@@ -52,7 +52,7 @@ func TestSummaryLastAppliedRevision(t *testing.T) {
 	assert.Equal(t, "management-clusters/gazelle/organizations/treasury.yaml", got.LastAppliedFile)
 	assert.Equal(t, "https://github.com/giantswarm/gazelle-configs/blob/"+hash+"/"+got.LastAppliedFile, got.LastAppliedFileURL)
 
-	org.Status.AgentPlatform.LastAppliedRevision = "latest@sha256:" + hash + hash[:24]
+	org.Status.Capabilities.AgentPlatform.LastAppliedRevision = "latest@sha256:" + hash + hash[:24]
 	got = (&Service{cfg: Config{Commit: commit}}).summary(org)
 	assert.Empty(t, got.LastAppliedFile, "without a commit there is no file to point at")
 	assert.Empty(t, got.LastAppliedFileURL)

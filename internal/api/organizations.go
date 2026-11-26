@@ -81,7 +81,8 @@ const (
 )
 
 // The workerReplicas argument of create_organization and update_organization:
-// the default of spec.agentPlatform.workers.replicas and when the workers run.
+// the default of spec.capabilities.agentPlatform.workers.replicas and when the
+// workers run.
 var (
 	defaultWorkerReplicas           = strconv.Itoa(int(orgv1alpha1.DefaultAgentPlatformWorkerReplicas))
 	workerReplicasRule              = "0 runs none. They run only while the organization has a model and an agent or a session"

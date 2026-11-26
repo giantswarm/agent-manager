@@ -131,7 +131,8 @@ func TestCreateOrganizationInCommitModeOpensOnePullRequest(t *testing.T) {
 	assert.Empty(t, obj.GetNamespace())
 	assert.Equal(t, organizations.PruneDisabled, obj.GetAnnotations()[organizations.PruneAnnotation])
 	assert.Equal(t, []any{map[string]any{"kind": "Group", "name": "payments-leads"}}, obj.Object["spec"].(map[string]any)["admins"])
-	assert.Equal(t, true, obj.Object["spec"].(map[string]any)["agentPlatform"].(map[string]any)["enabled"])
+	enabled, _, _ := unstructured.NestedBool(obj.Object, "spec", "capabilities", "agentPlatform", "enabled")
+	assert.True(t, enabled, "the file switches the Agent Platform on in spec.capabilities.agentPlatform")
 	assert.Contains(t, string(head[objectsPath+"/kustomization.yaml"]), "payments.yaml", "the file is listed")
 	assert.Equal(t, aboveObjectsContent, string(head[aboveObjects]), "the kustomization above the objects path is not changed")
 	// The content path starts as an empty kustomization, which the
@@ -971,7 +972,7 @@ func TestContentToolsCommitIntoTheContentPath(t *testing.T) {
 	require.False(t, isErr, text)
 	require.Len(t, fake.PullRequests(), 3)
 	obj := parseFile(t, fake.Files(mcRepo, fake.PullRequests()[2].Head)[paymentsFile])
-	replicas, _, _ := unstructured.NestedFieldNoCopy(obj.Object, "spec", "agentPlatform", "workers", "replicas")
+	replicas, _, _ := unstructured.NestedFieldNoCopy(obj.Object, "spec", "capabilities", "agentPlatform", "workers", "replicas")
 	assert.EqualValues(t, 3, replicas)
 	assert.Equal(t, organizations.PruneDisabled, obj.GetAnnotations()[organizations.PruneAnnotation])
 	assert.NotContains(t, obj.Object, "status")
@@ -989,7 +990,7 @@ func TestUpdateOrganizationCommitsAnExplicitZeroWorkerReplicas(t *testing.T) {
 	assert.EqualValues(t, 0, res["after"].(map[string]any)["workerReplicas"])
 	require.Len(t, fake.PullRequests(), 1)
 	obj := parseFile(t, fake.Files(mcRepo, fake.PullRequests()[0].Head)[paymentsFile])
-	replicas, found, _ := unstructured.NestedFieldNoCopy(obj.Object, "spec", "agentPlatform", "workers", "replicas")
+	replicas, found, _ := unstructured.NestedFieldNoCopy(obj.Object, "spec", "capabilities", "agentPlatform", "workers", "replicas")
 	require.True(t, found, "an explicit 0 is written into the file")
 	assert.EqualValues(t, 0, replicas)
 }

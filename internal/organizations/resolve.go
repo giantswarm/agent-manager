@@ -13,7 +13,7 @@ import (
 
 // Every tool takes an organization by its name, the name of its
 // Organization, and never its namespace: Resolve finds the namespace in the
-// Organization's status.agentPlatform.namespace.
+// agentPlatform entry of the Organization's status.namespaces.
 
 // errOrganizationNotFound answers an organization that does not exist and
 // one the caller has no right in alike, as get_organization does: the
@@ -27,18 +27,19 @@ func errOrganizationNotFound(name string) error {
 // off although the agent-platform chart's admission policy refuses a
 // switch-off. No tool writes there.
 func errAgentPlatformNotEnabled(name string) error {
-	return fmt.Errorf("%w: the Agent Platform is not enabled for organization %s (its Organization's spec.agentPlatform.enabled is not true); nothing was written", agents.ErrConflict, name)
+	return fmt.Errorf("%w: the Agent Platform is not enabled for organization %s (its Organization's spec.capabilities.agentPlatform.enabled is not true); nothing was written", agents.ErrConflict, name)
 }
 
 // errOrganizationNotReady answers an organization whose namespace
 // agent-platform-operator has not reported yet.
 func errOrganizationNotReady(name string) error {
-	return fmt.Errorf("%w: organization %s is not ready yet: agent-platform-operator has not reported its namespace (status.agentPlatform.namespace); nothing was written, try again shortly", agents.ErrConflict, name)
+	return fmt.Errorf("%w: organization %s is not ready yet: agent-platform-operator has not reported its namespace (the agentPlatform entry of status.namespaces); nothing was written, try again shortly", agents.ErrConflict, name)
 }
 
 // Resolve finds the Agent Platform namespace of the organization name: the
-// namespace its Organization reports in status.agentPlatform.namespace,
-// which agent-platform-operator keeps and labels with the organization. It
+// namespace its Organization reports in the agentPlatform entry of
+// status.namespaces, which agent-platform-operator keeps and labels with the
+// organization. It
 // answers not found for an Organization that does not exist and for one the
 // caller has no right in (Visible), a conflict for one with the Agent
 // Platform switched off, and a conflict for one whose namespace is not

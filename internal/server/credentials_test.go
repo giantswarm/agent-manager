@@ -49,8 +49,8 @@ func TestTheCredentialBodyIsInNoTraceOrLog(t *testing.T) {
 		kagent("modelconfigs"): "ModelConfigList", kagent("remotemcpservers"): "RemoteMCPServerList", kagent("egresspolicies"): "EgressPolicyList",
 	}, &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "security.giantswarm.io/v1alpha1", "kind": "Organization", "metadata": map[string]any{"name": "payments"},
-		"spec":   map[string]any{"agentPlatform": map[string]any{"enabled": true}},
-		"status": map[string]any{"agentPlatform": map[string]any{"namespace": "agents-payments-x7k2q"}},
+		"spec":   map[string]any{"capabilities": map[string]any{"agentPlatform": map[string]any{"enabled": true}}},
+		"status": map[string]any{"namespaces": []any{map[string]any{"name": "agents-payments-x7k2q", "capability": "agentPlatform"}}},
 	}})
 	kubetest.AnswerDryRuns(dyn)
 	typed := kubefake.NewClientset(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "agents-payments-x7k2q",
