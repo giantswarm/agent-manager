@@ -379,10 +379,9 @@ muster:
   # it: the Service's namespace for an in-cluster host, every address
   # otherwise.
   bindingsUrl: http://muster.agent-platform.svc.cluster.local:8090/session-bindings
-  # -- CA certificate trusted (beside the system's) for an https `bindingsUrl`,
-  # from a ConfigMap of the release namespace (`configMapName`, key `key`),
-  # mounted and passed as `--muster-bindings-ca-file`. The in-cluster default
-  # is plain http to muster's Service, on the cluster network (no warning).
+  # -- CA trusted beside the system's for an https `bindingsUrl`: a ConfigMap
+  # of the release namespace (`configMapName`, key `key`), passed as
+  # `--muster-bindings-ca-file`. The default is plain http to muster's Service.
   bindingsCA:
     configMapName: ""
     key: ca.crt
@@ -410,60 +409,40 @@ muster:
   # `toolchains.repository` carries starts.
   toolchainsToolsPrefix: ""
   toolApproval:
-    # -- Tool approval per agent: every session
-    # `start_session` binds carries the agent's tool list settings, its
-    # `default` and its approval grants, sent with agent-manager's own
-    # projected ServiceAccount token (audience `audience`) beside the
-    # person's, which muster reviews before it takes them (muster's
-    # `muster-approval-binder` Role, bound to this ServiceAccount by the
-    # agent-platform chart). `set_agent_approval` checks an Allow over a
-    # connector's Ask against muster's `filter_tools` at `mcpUrl` and keeps
-    # the grant in a ConfigMap of the grants namespace (`grantsNamespace`;
-    # the ServiceAccount gets a Role on ConfigMaps there only, and `get` on
-    # HelmReleases in the managed namespaces to read an agent's settings for a
-    # session its starter may not read the release of). Rendered with the
-    # session tools (`oauth.enabled`, `kagent.controllerTarget`) and
-    # `bindingsUrl`. On by default: while it is off agent-manager refuses
-    # Allow, Ask and Block settings and a `default`, and refuses to start a
-    # session of an agent that carries them, since nothing would enforce
-    # them. Needs a muster that takes approval settings (tool approval per agent); against an older muster agent-manager binds agents without
-    # settings as before and refuses the sessions of agents with settings.
+    # -- Tool approval per agent: every session `start_session` binds carries
+    # the agent's tool settings, `default` and approval grants, sent with the
+    # ServiceAccount token (audience `audience`) that muster reviews.
+    # `set_agent_approval` checks an Allow over a connector's Ask against
+    # muster's `filter_tools` at `mcpUrl` and keeps the grant in the grants
+    # namespace. While off, settings and `default` are refused and sessions of
+    # agents that carry them do not start. Needs a muster with per-agent tool
+    # approval. Needs the session tools (`oauth.enabled`,
+    # `kagent.controllerTarget`) and `bindingsUrl`.
     enabled: true
     # -- Audience of the projected ServiceAccount token muster reviews.
     audience: muster
     # -- Lifetime of the projected token; the kubelet rotates it.
     expirationSeconds: 3600  # @schema minimum: 600
-    # -- Namespace that holds the approval grants and nothing else: whoever
-    # may write ConfigMaps there may lift any connector's Ask for any agent.
-    # Empty: `<release name>-approval-grants` (fullname).
+    # -- Namespace that holds the approval grants and nothing else: whoever may
+    # write ConfigMaps there may lift any connector's Ask for any agent. Empty:
+    # `<release name>-approval-grants`.
     grantsNamespace: ""
-    # -- Create the grants namespace with the release. Off where the
-    # namespace is provisioned beforehand.
+    # -- Create the grants namespace with the release; off where it is
+    # provisioned beforehand.
     createGrantsNamespace: true
-    # -- HelmReleases outside the managed namespaces that render an agent
-    # into one, `{namespace, name, agent: {namespace, name}}` each (the
-    # release, and the Agent it renders): the agent-platform chart's default
-    # agent (`<platform namespace>/default-agent`, rendering
-    # `kagent/default-agent`), which the agent-platform chart sets. A session
-    # reads the settings of such an agent from that release only, and refuses
-    # the start when the Agent's Flux labels name another or none; any agent
-    # not listed is read from the release agent-manager creates for it (its
-    # namespace, its name) only. The ServiceAccount gets `get` on exactly
-    # these releases, so every person who may start a session with such an
-    # agent can, not only those who may read the platform's releases.
+    # -- HelmReleases outside the managed namespaces that render an agent into
+    # one, `{namespace, name, agent: {namespace, name}}` each. The agent-platform
+    # chart sets its default agent. Such an agent's settings are read from that
+    # release only (the start is refused when its Flux labels name another);
+    # any other agent from the release agent-manager created for it. The
+    # ServiceAccount gets `get` on exactly these releases.
     platformReleases: []  # @schema item: object ; itemProperties: {namespace: {type: string, minLength: 1}, name: {type: string, minLength: 1}, agent: {type: object, required: [namespace, name], properties: {namespace: {type: string, minLength: 1}, name: {type: string, minLength: 1}}}}
-    # -- Agents rendered by a HelmRelease agent-manager cannot read because it
-    # is on another cluster, with that release's approval values: the
-    # agent-platform chart's default agent with a remote target
-    # (gitops.target.kubeConfig: agent-manager on the target, the release on
-    # the management cluster), which the agent-platform chart sets from the
-    # values it renders the release with. Each `{namespace, name, release:
-    # {namespace, name}, values}`: the Agent, the release its Flux labels
-    # name, and the release's `tools`, `toolset`, `default` and
-    # `muster.requireApproval`/`muster.enabled`. A session of such an agent
-    # binds these values without reading the release, and is refused when
-    # the Agent's labels name another release or the agent chart's
-    # `X-Muster-Tool-Approval` header, where rendered, carries other settings.
+    # -- Agents whose HelmRelease is on another cluster, with that release's
+    # approval values, `{namespace, name, release: {namespace, name}, values}`
+    # each; the agent-platform chart sets the default agent's for a remote
+    # target. A session binds these values without reading the release and is
+    # refused when the Agent's labels or `X-Muster-Tool-Approval` header
+    # disagree with them.
     platformAgents: []  # @schema item: object ; itemProperties: {namespace: {type: string, minLength: 1}, name: {type: string, minLength: 1}, release: {type: object, properties: {namespace: {type: string, minLength: 1}, name: {type: string, minLength: 1}}}, values: {type: object, properties: {tools: {type: array}, toolset: {type: array, items: {type: string}}, default: {type: string, enum: [Allow, Ask, Block]}, muster: {type: object, properties: {requireApproval: {type: boolean}, enabled: {type: boolean}}}}}}
   mcpServer:
     # -- Register this server with muster by rendering an
@@ -495,26 +474,17 @@ muster:
     auth:
       forwardToken: true
       requiredAudiences: []
-    # -- The connector's tool approval, rendered as the MCPServer's
-    # `spec.approval`. The chart writes out every tool of this release
-    # explicitly (the "Allow all" preset: it is one of the platform's own
-    # management servers, whose tools the Dev Portal's pages call as the
-    # signed-in person and agents use freely on a trusted platform), so the
-    # connector arrives reviewed. `rule` is what a tool without its own entry
-    # gets, new tools included: Allow | Ask | Block (a Block rule hides and
-    # refuses every tool without its own entry, new ones included); a tool's own
-    # value is Allow | Ask | Block (Block hides the tool). An installation
-    # overrides per tool in its values; `null` renders none (`{}` does not: Helm
-    # merges it into this default; the connector then runs every tool, shown as
-    # not reviewed). On a governed platform muster asks an agent caller before
-    # every tool of this server that is not on its safe list (rendered by
-    # agent-platform), whatever these settings say; muster's floors ask agents
-    # in both modes (`set_agent_approval`, `set_organization_connector`,
-    # `add_organization_member`, `set_organization_model`,
-    # `set_organization_egress_policy` and `replace_organization_credential`);
-    # on a trusted platform these settings apply. Needs a muster whose MCPServer
-    # CRD carries `spec.approval` (an older CRD drops the field). Further reading:
-    # https://docs.giantswarm.io/overview/agent-platform/governing-tool-calls/
+    # -- The connector's tool approval (the MCPServer's `spec.approval`):
+    # `rule` for tools without their own entry (Allow | Ask | Block; Block
+    # hides), per-tool values in `tools`. The default allows every tool: this is
+    # a platform management server. `null` renders none (`{}` does not: Helm
+    # merges it into the default). On a governed platform muster asks agent
+    # callers whatever these say; on a trusted one they apply, except muster's
+    # floors, which ask agents in both modes (`set_agent_approval`,
+    # `set_organization_connector`, `add_organization_member`,
+    # `set_organization_model`, `set_organization_egress_policy`,
+    # `replace_organization_credential`). Needs a muster CRD with
+    # `spec.approval`. See https://docs.giantswarm.io/overview/agent-platform/governing-tool-calls/
     approval:
       rule: Allow  # @schema enum: [Allow, Ask, Block]
       tools:  # @schema skipProperties: true; maxProperties: 512; additionalProperties: {type: string, enum: [Allow, Ask, Block]}
