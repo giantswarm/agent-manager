@@ -585,3 +585,14 @@ func TestV3OrganizationWarningSurvivesACompletePhase(t *testing.T) {
 	require.Equal(t, PhaseComplete, res.Reports[1].Phase)
 	require.Contains(t, strings.Join(res.Reports[1].Warnings, "\n"), "other-app")
 }
+
+// An exact pin is read as its major, as the agent-platform chart reads it.
+func TestTargetMajorReadsAnExactPin(t *testing.T) {
+	for pin, want := range map[string]uint64{"2.6.1": 2, "=3.0.0": 3, "v3.0.0": 3} {
+		got, err := TargetMajor(pin)
+		require.NoError(t, err, pin)
+		require.Equal(t, want, got, pin)
+	}
+	_, err := TargetMajor("3.0.0-rc.6")
+	require.ErrorContains(t, err, "admits no release version")
+}

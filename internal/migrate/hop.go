@@ -3,6 +3,8 @@ package migrate
 import (
 	"context"
 	"fmt"
+	"slices"
+	"strings"
 
 	"github.com/Masterminds/semver/v3"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -97,8 +99,12 @@ func TargetMajor(constraint string) (uint64, error) {
 		return 0, fmt.Errorf("target chart range %q: %w", constraint, err)
 	}
 	var majors []uint64
+	// An exact pin (2.6.1, =2.6.1, v2.6.1) is its own major.
+	if v, err := semver.StrictNewVersion(strings.TrimPrefix(strings.TrimPrefix(strings.TrimSpace(constraint), "="), "v")); err == nil && v.Prerelease() == "" {
+		majors = append(majors, v.Major())
+	}
 	for m := range uint64(100) {
-		if admitsMajor(c, m) {
+		if admitsMajor(c, m) && !slices.Contains(majors, m) {
 			majors = append(majors, m)
 		}
 	}
