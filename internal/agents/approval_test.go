@@ -3,6 +3,7 @@ package agents
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"slices"
@@ -518,21 +519,59 @@ func TestASessionStartedDuringASaveLosesTheDroppedMark(t *testing.T) {
 }
 
 func TestListApprovalGrants(t *testing.T) {
-	a := newApprovalFixture(t, nil)
+	a := newApprovalFixture(t, map[string]any{
+		"agent": map[string]any{"name": "alert-review", "displayName": "Alert Review"}, "modelConfig": map[string]any{"name": "default-model-config"},
+		"tools": []any{"server:github", map[string]any{"tool:x_github_merge_pull_request": "Allow"}},
+	})
 	a.grantMerge()
-	grants, err := a.svc.ListApprovalGrants(dana(t), "", "github")
+	got, err := a.svc.ListApprovalGrants(dana(t), "", "github")
 	require.NoError(t, err)
-	require.Len(t, grants, 1)
-	assert.Equal(t, &alertAgent, grants[0].Agent)
-	grants, err = a.svc.ListApprovalGrants(dana(t), "", "pagerduty")
+	require.Len(t, got.Grants, 1, "across every managed namespace")
+	assert.Equal(t, &alertAgent, got.Grants[0].Agent)
+	assert.Equal(t, "Alert Review", got.Grants[0].AgentDisplayName)
+	assert.Empty(t, got.Unreadable)
+	got, err = a.svc.ListApprovalGrants(dana(t), "kagent", "pagerduty")
 	require.NoError(t, err)
-	assert.Empty(t, grants)
+	assert.Empty(t, got.Grants)
 
 	a.dyn.PrependReactor("list", "helmreleases", func(k8stesting.Action) (bool, runtime.Object, error) {
 		return true, nil, forbiddenErr("helmreleases")
 	})
-	_, err = a.svc.ListApprovalGrants(dana(t), "", "")
-	require.ErrorIs(t, err, ErrForbidden)
+	_, err = a.svc.ListApprovalGrants(dana(t), "kagent", "")
+	require.ErrorIs(t, err, ErrForbidden, "a namespace named and unreadable is refused")
+	got, err = a.svc.ListApprovalGrants(dana(t), "", "")
+	require.NoError(t, err, "without a namespace an unreadable one is skipped")
+	assert.Empty(t, got.Grants)
+	assert.Contains(t, got.Unreadable, "kagent")
+}
+
+// approvalEnforced says whether an agent's settings are bound to its
+// sessions: not without the sender, not on a release with valuesFrom.
+func TestApprovalEnforced(t *testing.T) {
+	a := newApprovalFixture(t, nil)
+	agent, err := a.svc.Get(dana(t), Location{}, "alert-review")
+	require.NoError(t, err)
+	assert.True(t, agent.ApprovalEnforced)
+	assert.True(t, agent.Summary().ApprovalEnforced)
+
+	hr, err := a.dyn.Resource(hrGVR).Namespace("kagent").Get(t.Context(), "alert-review", metav1.GetOptions{})
+	require.NoError(t, err)
+	require.NoError(t, unstructured.SetNestedSlice(hr.Object, []any{map[string]any{"kind": "ConfigMap", "name": "more"}}, "spec", "valuesFrom"))
+	_, err = a.dyn.Resource(hrGVR).Namespace("kagent").Update(t.Context(), hr, metav1.UpdateOptions{})
+	require.NoError(t, err)
+	agent, err = a.svc.Get(dana(t), Location{}, "alert-review")
+	require.NoError(t, err)
+	assert.False(t, agent.ApprovalEnforced, "valuesFrom")
+
+	b := newApprovalFixture(t, nil)
+	b.bindings.noSender = true
+	list, err := b.svc.List(dana(t), Location{}, nil)
+	require.NoError(t, err)
+	for _, l := range list {
+		assert.False(t, l.ApprovalEnforced, "%s: this agent-manager binds no settings", l.Name)
+	}
+	raw, _ := json.Marshal(list[0].Summary())
+	assert.Contains(t, string(raw), `"approvalEnforced":false`, "false is reported, not omitted")
 }
 
 // newBoundSessionFixtureWithService gives f's service a kagent controller.

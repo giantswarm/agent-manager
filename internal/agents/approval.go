@@ -451,9 +451,11 @@ func (s *Service) liveGrants(ctx context.Context, tool string, agent approvalgra
 func (s *Service) attachGrants(ctx context.Context, namespace string, list []Agent) {
 	// Settings are reported as taken only where the chart takes them and
 	// this installation binds them to sessions.
-	takes := s.chartTakesTools(ctx) && s.sendsApproval()
+	sends := s.sendsApproval()
+	takes := s.chartTakesTools(ctx) && sends
 	for i := range list {
 		list[i].ApprovalSettings = takes
+		list[i].ApprovalEnforced = sends && list[i].releaseUID != "" && !list[i].releaseValuesFrom
 	}
 	if s.cfg.Grants == nil {
 		return
@@ -639,12 +641,53 @@ func (s *Service) deleteGrants(ctx context.Context, agent approvalgrants.Agent) 
 	return s.syncSessions(ctx, "delete_agent", rec, true)
 }
 
+// ListedGrant is a grant as list_approval_grants lists it: with its agent
+// and the agent's display name ("" when it has none).
+type ListedGrant struct {
+	GrantView
+	AgentDisplayName string `json:"agentDisplayName"`
+}
+
+// GrantList is list_approval_grants' answer. Unreadable names the managed
+// namespaces a listing across namespaces skipped: the caller may not list
+// their HelmReleases.
+type GrantList struct {
+	Grants     []ListedGrant `json:"grants"`
+	Unreadable []string      `json:"unreadable,omitempty"`
+}
+
 // ListApprovalGrants is list_approval_grants: the live grants of the agents
-// of a namespace, optionally on one connector (its muster server key). The
-// caller must be able to list the namespace's HelmReleases (the list is read
-// as the caller, which is the check); a grant whose agent's release moved to
-// another generation does not hold and is not listed.
-func (s *Service) ListApprovalGrants(ctx context.Context, namespace, server string) ([]GrantView, error) {
+// of a namespace, or, without one, of every managed namespace whose
+// HelmReleases the caller may list (the others are named in Unreadable),
+// optionally on one connector (its muster server key). The releases are
+// listed as the caller, which is the check; a grant whose agent's release
+// moved to another generation does not hold and is not listed.
+func (s *Service) ListApprovalGrants(ctx context.Context, namespace, server string) (*GrantList, error) {
+	out := &GrantList{Grants: []ListedGrant{}}
+	if namespace != "" {
+		grants, err := s.namespaceGrants(ctx, namespace, server)
+		if err != nil {
+			return nil, err
+		}
+		out.Grants = grants
+		return out, nil
+	}
+	for _, ns := range s.cfg.ManagedNamespaces {
+		grants, err := s.namespaceGrants(ctx, ns, server)
+		if errors.Is(err, ErrForbidden) {
+			out.Unreadable = append(out.Unreadable, ns)
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		out.Grants = append(out.Grants, grants...)
+	}
+	return out, nil
+}
+
+// namespaceGrants lists one namespace's live grants, as the caller.
+func (s *Service) namespaceGrants(ctx context.Context, namespace, server string) ([]ListedGrant, error) {
 	st, err := s.site(ctx, Location{Namespace: namespace})
 	if err != nil {
 		return nil, err
@@ -653,7 +696,7 @@ func (s *Service) ListApprovalGrants(ctx context.Context, namespace, server stri
 	if err != nil {
 		return nil, err
 	}
-	out := []GrantView{}
+	out := []ListedGrant{}
 	if s.cfg.Grants == nil {
 		return out, nil
 	}
@@ -671,6 +714,7 @@ func (s *Service) ListApprovalGrants(ctx context.Context, namespace, server stri
 		if hr == nil || string(hr.GetUID()) != r.Agent.UID {
 			continue
 		}
+		display, _, _ := unstructured.NestedString(hr.Object, "spec", "values", "agent", "displayName")
 		for _, g := range r.Grants {
 			if g.Generation != hr.GetGeneration() || (server != "" && g.Server != server) {
 				continue
@@ -678,7 +722,7 @@ func (s *Service) ListApprovalGrants(ctx context.Context, namespace, server stri
 			view := grantView(g)
 			agent := r.Agent
 			view.Agent = &agent
-			out = append(out, view)
+			out = append(out, ListedGrant{GrantView: view, AgentDisplayName: display})
 		}
 	}
 	return out, nil

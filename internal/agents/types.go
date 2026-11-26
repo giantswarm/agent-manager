@@ -553,10 +553,16 @@ type Agent struct {
 	// ApprovalSettings is true when the agent chart takes tool approval
 	// settings (tools, default).
 	ApprovalSettings bool `json:"approvalSettings,omitempty"`
+	// ApprovalEnforced is true when the agent's settings are bound to its
+	// sessions: this agent-manager binds approval settings and the agent's
+	// release is there and takes no spec.valuesFrom. False otherwise: a
+	// session start of an agent with settings is then refused.
+	ApprovalEnforced bool `json:"approvalEnforced"`
 	// release is the owning HelmRelease's uid and generation, which the
-	// grants are keyed and checked by.
+	// grants are keyed and checked by, and whether it takes valuesFrom.
 	releaseUID        string
 	releaseGeneration int64
+	releaseValuesFrom bool
 	// Ready is the Agent object's verdict (Ready and the desired revision is
 	// the latest successful one); nil while the object is absent or its
 	// Harness has not reported.
@@ -599,6 +605,7 @@ type AgentSummary struct {
 	DefaultSetting            string      `json:"defaultApproval,omitempty"`
 	Grants                    []GrantView `json:"grants,omitempty"`
 	ApprovalSettings          bool        `json:"approvalSettings,omitempty"`
+	ApprovalEnforced          bool        `json:"approvalEnforced"`
 	Connectors                []string    `json:"connectors,omitempty"`
 	ImplicitFullAccess        bool        `json:"implicitFullAccess,omitempty"`
 	ToolsetBound              bool        `json:"toolsetBound,omitempty"`
@@ -636,6 +643,7 @@ func (a Agent) Summary() AgentSummary {
 		DefaultSetting:            a.DefaultSetting,
 		Grants:                    a.Grants,
 		ApprovalSettings:          a.ApprovalSettings,
+		ApprovalEnforced:          a.ApprovalEnforced,
 		Connectors:                a.Connectors,
 		ImplicitFullAccess:        a.ImplicitFullAccess,
 		ToolsetBound:              a.ToolsetBound,

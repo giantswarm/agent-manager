@@ -28,18 +28,20 @@ type SetApproval struct {
 
 // SetApprovalBefore is the list before the save.
 type SetApprovalBefore struct {
-	Tools   ToolList `json:"tools"`
-	Default string   `json:"default,omitempty"`
+	Tools   ToolList `json:"toolSettings"`
+	Default string   `json:"defaultApproval,omitempty"`
 }
 
 // SetApprovalResult is set_agent_approval's answer.
 type SetApprovalResult struct {
-	Agent   approvalgrants.Agent `json:"agent"`
-	Tools   ToolList             `json:"tools"`
-	Default string               `json:"default,omitempty"`
-	Before  SetApprovalBefore    `json:"before"`
-	Grants  []GrantView          `json:"grants"`
-	Dropped []DroppedGrant       `json:"dropped,omitempty"`
+	Agent approvalgrants.Agent `json:"agent"`
+	// Tools and Default are the list and its default after the save, named
+	// as get_agent names them.
+	Tools   ToolList          `json:"toolSettings"`
+	Default string            `json:"defaultApproval,omitempty"`
+	Before  SetApprovalBefore `json:"before"`
+	Grants  []GrantView       `json:"grants"`
+	Dropped []DroppedGrant    `json:"dropped,omitempty"`
 	SessionSync
 	// RequestedBy is the authenticated caller the write ran as.
 	RequestedBy string `json:"requestedBy,omitempty"`

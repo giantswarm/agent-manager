@@ -2528,6 +2528,9 @@ func applyHelmRelease(a *Agent, hr *unstructured.Unstructured, rule *tags.Rule) 
 	}
 	a.HelmRelease = ref
 	a.releaseUID, a.releaseGeneration = string(hr.GetUID()), hr.GetGeneration()
+	if from, _, _ := unstructured.NestedSlice(hr.Object, "spec", "valuesFrom"); len(from) > 0 {
+		a.releaseValuesFrom = true
+	}
 	if a.CreatedBy == "" {
 		a.CreatedBy = hr.GetAnnotations()[CreatedByAnnotation]
 		a.CreatedByName = hr.GetAnnotations()[CreatedByNameAnnotation]

@@ -287,8 +287,11 @@ paths:
         whose connector asks, new or changed, and `default: Allow` are `400`,
         and settings are `501 unsupported` where the installation does not
         bind them. Approval settings with grants are the MCP tool
-        `set_agent_approval`, grants are read with `list_approval_grants`
-        (MCP only). Like every save, a PATCH keeps an agent's grants only
+        `set_agent_approval` (its answer names the list `toolSettings` and
+        `defaultApproval`, as an Agent does), grants are read with
+        `list_approval_grants` (MCP only: `{grants, unreadable}`; without
+        `namespace` every managed namespace the caller may list
+        HelmReleases in, the others named in `unreadable`). Like every save, a PATCH keeps an agent's grants only
         where the caller is connector admin of their connector.
       operationId: updateAgent
       x-mcp-tool: update_agent
@@ -1097,6 +1100,7 @@ components:
         grantedAt: { type: string, format: date-time }
         generation: { type: integer, description: "The HelmRelease metadata.generation the recording save wrote" }
         tools: { type: array, items: { type: string }, description: "The server's own names of the tools the grant covers" }
+        agentDisplayName: { type: string, description: "list_approval_grants: the agent's display name, empty when it has none" }
     DroppedGrant:
       type: object
       properties:
@@ -1268,6 +1272,7 @@ components:
         defaultApproval: { type: string, enum: [Allow, Ask, Block], description: "The tool list's default (chart value default)" }
         grants: { type: array, items: { $ref: "#/components/schemas/Grant" }, description: "The agent's grants that hold (written at the release's current generation)" }
         approvalSettings: { type: boolean, description: "True where the agent chart takes tool approval settings and this installation binds them to sessions" }
+        approvalEnforced: { type: boolean, description: "True when the agent's settings are bound to its sessions: this installation binds settings and the agent's HelmRelease is there and takes no spec.valuesFrom. False: a session of an agent with settings is refused rather than run without them. Always present" }
         ready: { type: [boolean, "null"], description: The Agent's verdict (Ready and the desired revision is the latest successful one); null while unreported }
         status: { $ref: "#/components/schemas/ObjectStatus" }
         managed: { type: string, enum: [helmrelease, gitops, platform, none, unknown] }

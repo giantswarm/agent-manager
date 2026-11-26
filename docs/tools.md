@@ -856,14 +856,14 @@ managed: helmrelease is writable here; gitops needs mode commit; platform is rea
 ```text
 List approval grants: which agents may run a connector's asking tools without asking, granted by whom.
 
-Each grant names the agent, the entry of its tool list (or default), the connector (muster server key, namespace, uid), who granted it and when. Read as you: you must be able to list the namespace's HelmReleases. A grant written before the agent's values changed outside agent-manager no longer holds and is not listed.
+Each grant names the agent and its display name, the entry of its tool list (or default), the connector (muster server key, namespace, uid), the tools it covers, who granted it and when. Read as you: without namespace, every managed namespace whose HelmReleases you may list (unreadable names the others); with it, that namespace, refused when you may not list them. A grant written before the agent's values changed outside agent-manager no longer holds and is not listed.
 ```
 
 ```json
 {
   "properties": {
     "namespace": {
-      "description": "Namespace of the agent; default: the installation's kagent namespace (get_info lists the managed ones).",
+      "description": "Only this namespace of agents; omit for every managed namespace you may read",
       "type": "string"
     },
     "server": {

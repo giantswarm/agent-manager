@@ -34,8 +34,12 @@ default: Ask
   sender token): nothing would enforce them. The chart turns it on by default.
 - `toolset` is still accepted (a tool list without settings). `get_agent` and
   `list_agents` report the list as **`toolSettings`**, with `defaultApproval`,
-  `grants` and `approvalSettings` (true only where the chart takes settings
-  and they are bound); `tools` is unchanged: the template's kagent MCP
+  `grants`, `approvalSettings` (true only where the chart takes settings and
+  they are bound) and `approvalEnforced` (always present: true when this
+  agent's settings are bound to its sessions, false without the sender, on a
+  release with `spec.valuesFrom` or without a release, where a session of an
+  agent with settings is refused); `set_agent_approval` answers with the same
+  names (`toolSettings`, `defaultApproval`, `before.toolSettings`); `tools` is unchanged: the template's kagent MCP
   bindings; `toolset` keeps the selectors for older clients.
 - The agent chart also renders the settings as the static header
   `X-Muster-Tool-Approval` on the agent's RemoteMCPServer, which muster applies
@@ -110,7 +114,12 @@ written past agent-manager (GitOps, a hand edit) can never carry one.
 - **Boundary**: package `internal/approvalgrants` and its `Store` interface
   are the only way agent-manager code reaches grants; the MCP surface is
   `set_agent_approval` (writes), `list_approval_grants` and the `grants` of
-  `get_agent`/`list_agents` (reads). A later owner (a connector manager,
+  `get_agent`/`list_agents` (reads). `list_approval_grants` answers
+  `{grants, unreadable}`: with `namespace` that namespace (refused when the
+  caller may not list its HelmReleases); without it every managed namespace
+  the caller may list them in, the others named in `unreadable`; `server`
+  narrows to one connector; each grant carries its `agent` and
+  `agentDisplayName` (empty when the agent has none). A later owner (a connector manager,
   giantswarm/bumblebee-plans#237) can take the records over by reading the
   same versioned documents, or by putting its own store behind the
   interface, without migrating agent values.

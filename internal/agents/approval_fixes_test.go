@@ -321,3 +321,17 @@ func TestGrantedByIsAVerifiedEmailOrTheSubject(t *testing.T) {
 	require.Len(t, res.Grants, 1)
 	assert.Equal(t, "dex-mallory", res.Grants[0].GrantedBy)
 }
+
+// set_agent_approval answers with the list named as get_agent names it.
+func TestSetAgentApprovalAnswersToolSettings(t *testing.T) {
+	a := newApprovalFixture(t, nil)
+	res, err := a.svc.SetApproval(dana(t), SetApproval{Name: "alert-review", Settings: map[string]string{"server:github": "Ask"}})
+	require.NoError(t, err)
+	raw, err := json.Marshal(res)
+	require.NoError(t, err)
+	var doc map[string]any
+	require.NoError(t, json.Unmarshal(raw, &doc))
+	assert.Equal(t, []any{map[string]any{"server:github": "Ask"}, map[string]any{"tool:x_github_merge_pull_request": "Allow"}}, doc["toolSettings"])
+	assert.NotContains(t, doc, "tools")
+	assert.Contains(t, doc["before"], "toolSettings")
+}
