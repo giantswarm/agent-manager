@@ -125,6 +125,8 @@ tests:
     template: templates/deployment.yaml
     set:
       muster.workspacesToolsPrefix: ""
+      # tool approval also needs muster's MCP endpoint and is on by default
+      muster.toolApproval.enabled: false
     asserts:
       - notExists:
           path: spec.template.spec.containers[0].args[?(@ =~ /^--muster-mcp-url=/)]
