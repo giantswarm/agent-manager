@@ -60,7 +60,7 @@ func (m *MemoryStore) Replace(_ context.Context, r Record) error {
 	if (ok && current.Version != r.Version) || (!ok && r.Version != "") {
 		return ErrConflict
 	}
-	if len(r.Grants) == 0 {
+	if len(r.Grants) == 0 && !r.PendingSessionSync {
 		delete(m.records, r.Agent.UID)
 		return nil
 	}
