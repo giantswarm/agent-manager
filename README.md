@@ -1013,7 +1013,9 @@ The values are written only once a 3.x chart exists in the registry and only
 where this run then moves the namespace's source: no released 2.x chart takes
 `default`, so a release whose source is pinned by tag or digest, owned by git,
 the platform's or an organization's is held `pending` with the diff instead.
-A release with `spec.valuesFrom` is never written: migrate reads `spec.values`
+A release whose source is held by a sibling (a GitOps-owned release waiting
+for its diff, a failure) is held too, with the diff: 3.x values under that
+source would fail every 2.x upgrade. A release with `spec.valuesFrom` is never written: migrate reads `spec.values`
 only, so it would spell out a model `valuesFrom` sets and miss a
 `requireApproval` there, and agent-manager binds settings only from
 `spec.values`; it is reported `failed` with what to change, holding its source.
@@ -1021,7 +1023,10 @@ only, so it would spell out a model `valuesFrom` sets and miss a
 Organization namespaces (`--organization-namespaces`, default `auto`: every
 namespace labelled `agent-platform.giantswarm.io/organization` on this path)
 are read, never written: the agent-platform-operator moves their chart sources
-with the platform's range at once. Each release there that needs 3.x values is
+with the platform's range at once. An agent-chart source there is recognised by
+the chart's name too (the operator's copy keeps the registry URL it was created
+with); a release on a source of another chart is named in the warnings. Each
+release there that needs 3.x values is
 reported (ownership `organization`) with its diff, and each keeps the first
 managed namespace's report in the expand phase until it is fixed; Flux and the
 Agents there are not waited for (their readiness is the organization's). A run
