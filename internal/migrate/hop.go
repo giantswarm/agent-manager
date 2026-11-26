@@ -25,7 +25,8 @@ type hop struct {
 	rendered     schema.GroupVersionResource
 	renderedKind string
 	// leftover is the old line's agent object a release on chart from.x
-	// renders; Helm removes it when the release upgrades.
+	// renders; Helm removes it when the release upgrades. Empty when both
+	// lines render the same object.
 	leftover     schema.GroupVersionResource
 	leftoverKind string
 	// templates, when set, is where a sub-agent binding's templateRef
@@ -68,15 +69,27 @@ func hopFor(to uint64, kagentAPIVersion string) (*hop, error) {
 			// only the empty ones, as other components may still use them.
 			crds: LegacyCRDs, emptyCRDsOnly: true,
 		}, nil
+	case 3:
+		// 2.x and 3.x render the same Agent: no object of the old line is
+		// left behind and no CRD goes; only the values move (values_v3.go).
+		return &hop{
+			from: 2, to: 3, rewrite: rewriteValuesV3,
+			rendered:     schema.GroupVersionResource{Group: agents.KagentAPIGroup, Version: kagentAPIVersion, Resource: "agents"},
+			renderedKind: "api.kagent.dev Agent",
+		}, nil
 	}
-	return nil, fmt.Errorf("no migration path to Generic chart %d.x: migrate moves releases from 0.x to 1.x and from 1.x to 2.x", to)
+	return nil, fmt.Errorf("no migration path to Generic chart %d.x: migrate moves releases from 0.x to 1.x, from 1.x to 2.x and from 2.x to 3.x", to)
 }
+
+// hasLeftover is true when the source line renders an object the target
+// line does not.
+func (h *hop) hasLeftover() bool { return h.leftover.Resource != "" }
 
 // String names the hop, as the report and the logs carry it.
 func (h *hop) String() string { return fmt.Sprintf("%d.x -> %d.x", h.from, h.to) }
 
 // TargetMajor is the one chart major the range admits; the migration path
-// follows from it (1: 0.x to 1.x, 2: 1.x to 2.x). A range that admits no
+// follows from it (1: 0.x to 1.x, 2: 1.x to 2.x, 3: 2.x to 3.x). A range that admits no
 // version or versions of two majors is refused.
 func TargetMajor(constraint string) (uint64, error) {
 	c, err := semver.NewConstraint(constraint)

@@ -1,6 +1,6 @@
 // Package migrate is the `agent-manager migrate` command: the expand–contract
 // migration of an installation's agents from one Generic chart major to the
-// next. Two hops exist, and the target range (Options.TargetSemver) picks
+// next. Three hops exist, and the target range (Options.TargetSemver) picks
 // one, because a cluster serves one kagent line at a time and a namespace's
 // releases share one chart source:
 //
@@ -14,6 +14,9 @@
 //     agent.harness. The 0.x kagent.dev CRDs an installation that jumped
 //     from the 0.x line straight to 2.x still has are deleted last, each
 //     only while it holds no object.
+//   - 2.x -> 3.x: the same api.kagent.dev Agent; muster.requireApproval
+//     (removed in 3.0) becomes `default: Ask`, an unset modelConfig.name is
+//     written as the 2.x default. Nothing of the old line is left to delete.
 //
 // A release deployed from a chart older than the hop's source major is
 // reported, never rewritten. The command runs once per installation as a Job
@@ -387,12 +390,14 @@ func (r *Runner) discover(ctx context.Context, ns string) (*nsState, error) {
 		st.addRelease(hr, src, false)
 	}
 
-	leftovers, _, err := listServed(ctx, dyn, r.hop.leftover, ns)
-	if err != nil {
-		return nil, err
-	}
-	for _, obj := range leftovers {
-		st.leftovers = append(st.leftovers, &leftover{obj: obj})
+	if r.hop.hasLeftover() {
+		leftovers, _, err := listServed(ctx, dyn, r.hop.leftover, ns)
+		if err != nil {
+			return nil, err
+		}
+		for _, obj := range leftovers {
+			st.leftovers = append(st.leftovers, &leftover{obj: obj})
+		}
 	}
 	st.rendered, st.renderedServed, err = listServed(ctx, dyn, r.hop.rendered, ns)
 	if err != nil {
@@ -1229,7 +1234,10 @@ func (st *nsState) phase(h *hop) (string, string) {
 	if len(st.leftovers) == 0 && !contracted && !st.crdsPresent && !crdsDeletedThisRun(st.report.Contract) && st.renderedServed {
 		// Nothing of the old line is left: readiness gates nothing any more,
 		// what the wait phase found is informational.
-		summary := fmt.Sprintf("nothing left to migrate (%s): %d Generic-chart release(s) on %d.x values, no %s objects", h, len(st.releases), h.to, h.leftoverKind)
+		summary := fmt.Sprintf("nothing left to migrate (%s): %d Generic-chart release(s) on %d.x values", h, len(st.releases), h.to)
+		if h.hasLeftover() {
+			summary += fmt.Sprintf(", no %s objects", h.leftoverKind)
+		}
 		switch {
 		case crdsUnchecked(st.report.Contract):
 			summary += ", the removed CRDs not checked (not permitted)"

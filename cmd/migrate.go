@@ -58,7 +58,7 @@ func newMigrateCmd() *cobra.Command {
 	o := &migrateOptions{}
 	cmd := &cobra.Command{
 		Use:   "migrate",
-		Short: "Migrate the managed namespaces' agents to the next Generic chart major: 1.x to 2.x (api.kagent.dev Agent), or 0.x to 1.x (kagent.dev AgentTemplate)",
+		Short: "Migrate the managed namespaces' agents to the next Generic chart major: 2.x to 3.x (muster.requireApproval to default: Ask), 1.x to 2.x (api.kagent.dev Agent), or 0.x to 1.x (kagent.dev AgentTemplate)",
 		Long: `Expand–contract migration of an installation's agents, run once per
 installation as a Job of the connectivity chart or by hand with a kubeconfig.
 Every phase is idempotent and gated on the previous one; re-running is safe.
@@ -67,6 +67,14 @@ The target range (--agent-chart-semver) picks the path by its major, because a
 cluster serves one kagent line at a time and a namespace's releases share one
 chart source:
 
+  3.x       2.x to 3.x: the same api.kagent.dev Agent; only values move.
+            muster.requireApproval: true becomes default: Ask (muster asks a
+            person before every tool call, where kagent's flag paused the
+            agent; only where the muster binding renders), the key is
+            dropped, and an unset modelConfig.name is written as
+            default-model-config, the 2.x default. requireApproval: true
+            beside tool approval settings never rendered and is refused.
+            Nothing is deleted: the old line leaves no object behind.
   2.x       1.x to 2.x: kagent.dev/v1alpha3 AgentTemplate to api.kagent.dev
             Agent. Sub-agent bindings in extraTools[] and extraAgentSpec.tools[]
             move from agent to subAgent (a Shared isolation is dropped, a
@@ -133,7 +141,7 @@ variable named next to it; flags win.`,
 	f.StringVar(&o.helmReleaseAPI, "flux-helmrelease-api-version", envOr("FLUX_HELMRELEASE_API_VERSION", "auto"), "helm.toolkit.fluxcd.io API version composed into HelmReleases; auto discovers it (FLUX_HELMRELEASE_API_VERSION)")
 	f.StringVar(&o.ociRepositoryAPI, "flux-ocirepository-api-version", envOr("FLUX_OCIREPOSITORY_API_VERSION", "auto"), "source.toolkit.fluxcd.io API version composed into OCIRepositories; auto discovers it (FLUX_OCIREPOSITORY_API_VERSION)")
 	f.StringVar(&o.chartOCIURL, "agent-chart-oci-url", envOr("AGENT_CHART_OCI_URL", agents.DefaultChartOCIURL), "OCI URL of the agent chart every agent renders from (AGENT_CHART_OCI_URL)")
-	f.StringVar(&o.chartSemver, "agent-chart-semver", envOr("AGENT_CHART_SEMVER", agents.DefaultChartSemver), "Semver range the agent-chart OCIRepositories move to; its major picks the path: 2.x migrates 1.x releases (kagent.dev AgentTemplate) to 2.x (api.kagent.dev Agent), 1.x migrates 0.x releases to 1.x. 2.x follows every 2.x release of the Generic chart and never a pre-release (AGENT_CHART_SEMVER)")
+	f.StringVar(&o.chartSemver, "agent-chart-semver", envOr("AGENT_CHART_SEMVER", agents.DefaultChartSemver), "Semver range the agent-chart OCIRepositories move to; its major picks the path: 3.x migrates 2.x releases (muster.requireApproval to default: Ask), 2.x migrates 1.x releases (kagent.dev AgentTemplate) to 2.x (api.kagent.dev Agent), 1.x migrates 0.x releases to 1.x. 2.x follows every 2.x release of the Generic chart and never a pre-release (AGENT_CHART_SEMVER)")
 	f.StringVar(&o.chartSemverFilter, "agent-chart-semver-filter", envOr("AGENT_CHART_SEMVER_FILTER", ""), "Regular expression the agent chart's tags must match before the range is evaluated, as the OCIRepository's ref.semverFilter; empty filters nothing; unset, each source keeps its own, set empty removes it (AGENT_CHART_SEMVER_FILTER)")
 	f.StringVar(&o.skillsGitHubAPI, "skills-github-api", envOr("AGENT_MANAGER_SKILLS_GITHUB_API", "https://api.github.com"), "GitHub API base URL for skill discovery and for resolving a skill's branch or tag to its head commit (AGENT_MANAGER_SKILLS_GITHUB_API)")
 	f.StringVar(&o.skillsToken, "skills-github-token", envOr("GITHUB_TOKEN", ""), "GitHub token for private skill repositories and a higher rate limit; prefer the environment (GITHUB_TOKEN)")
@@ -243,7 +251,7 @@ func runMigrate(ctx context.Context, out io.Writer, o *migrateOptions) error {
 // diffs, and its wait phase says the Agent resource is not served yet.
 func migrateKagentVersion(clients kube.Client, o *migrateOptions, major uint64, log *slog.Logger) (string, error) {
 	group, resource := "kagent.dev", "agenttemplates"
-	if major == 2 {
+	if major >= 2 {
 		group, resource = agents.KagentAPIGroup, "agents"
 	}
 	version := strings.TrimPrefix(o.kagentAPIVersion, group+"/")
@@ -254,7 +262,7 @@ func migrateKagentVersion(clients kube.Client, o *migrateOptions, major uint64, 
 	if err == nil {
 		return version, nil
 	}
-	if major == 2 && o.dryRun {
+	if major >= 2 && o.dryRun {
 		log.Warn("api.kagent.dev agents not served; the dry run validates and diffs only", "error", err, "assumedVersion", agents.DefaultKagentAPIVersion)
 		return agents.DefaultKagentAPIVersion, nil
 	}
