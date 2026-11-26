@@ -20,8 +20,8 @@ import (
 //     muster binding; `default: Ask` makes muster ask a person before every
 //     such call instead. `true` becomes `default: Ask` where the binding
 //     rendered (muster on, a tool list other than exactly ["preset:none"]),
-//     `false` is dropped. `true` beside tool approval settings never
-//     rendered (2.x refused the combination) and is refused here too.
+//     `false` (and null) is dropped. `true` beside tool approval settings
+//     never rendered (no released chart takes both) and is refused.
 //   - modelConfig.name has no default any more (2.x rendered
 //     default-model-config): an unset name is written as that, so the
 //     Agent renders the model it rendered on 2.x.
@@ -32,26 +32,42 @@ const chart2DefaultModelConfig = "default-model-config"
 // rewriteValuesV3 turns 2.x values into 3.x values and says what changed.
 // The returned map is a copy; values is never modified.
 func rewriteValuesV3(_ context.Context, values map[string]any, _ string, _ agents.SkillPinner) (map[string]any, *ValueChanges, error) {
+	return rewriteV3(values, true)
+}
+
+// rewriteV3 is the 2.x -> 3.x rewrite; spellModel false leaves an unset
+// modelConfig.name alone (a release whose valuesFrom may set it).
+func rewriteV3(values map[string]any, spellModel bool) (map[string]any, *ValueChanges, error) {
 	out := runtime.DeepCopyJSON(values)
 	if out == nil {
 		out = map[string]any{}
 	}
 	ch := &ValueChanges{}
-	if _, set := getPath(out, "modelConfig.name"); !set {
-		setPath(out, "modelConfig.name", chart2DefaultModelConfig)
-		ch.Set = append(ch.Set, "modelConfig.name="+chart2DefaultModelConfig)
+	if spellModel {
+		mc, present := out["modelConfig"]
+		block, isMap := mc.(map[string]any)
+		if !present || mc == nil || isMap {
+			if _, set := block["name"]; !set {
+				setPath(out, "modelConfig.name", chart2DefaultModelConfig)
+				ch.Set = append(ch.Set, "modelConfig.name="+chart2DefaultModelConfig)
+			}
+		}
 	}
 	v, present := getPath(out, "muster.requireApproval")
 	if !present {
 		return out, ch, nil
 	}
-	on, ok := v.(bool)
-	if !ok {
-		return nil, nil, fmt.Errorf("%w: muster.requireApproval is %v, not a boolean; the 2.x chart never rendered it", agents.ErrInvalid, v)
+	on := false
+	if v != nil { // null is Helm's unset: 2.x rendered it as false
+		b, ok := v.(bool)
+		if !ok {
+			return nil, nil, fmt.Errorf("%w: muster.requireApproval is %v, not a boolean; the 2.x chart never rendered it", agents.ErrInvalid, v)
+		}
+		on = b
 	}
 	if on {
 		if settings := approvalSettings(out); len(settings) > 0 {
-			return nil, nil, fmt.Errorf("%w: muster.requireApproval: true together with tool approval settings (%s), which no chart renders (2.x refused the combination); remove muster.requireApproval and choose the settings, e.g. default: Ask", agents.ErrInvalid, strings.Join(settings, ", "))
+			return nil, nil, fmt.Errorf("%w: muster.requireApproval: true together with tool approval settings (%s), which no released chart renders; remove muster.requireApproval and choose the settings, e.g. default: Ask", agents.ErrInvalid, strings.Join(settings, ", "))
 		}
 	}
 	deletePath(out, "muster.requireApproval")
@@ -88,7 +104,9 @@ func approvalSettings(values map[string]any) []string {
 // tool list (`tools`, else `toolset`) other than exactly ["preset:none"].
 func musterBindingRenders(values map[string]any) bool {
 	if enabled, set := getPath(values, "muster.enabled"); set {
-		if on, ok := enabled.(bool); ok && !on {
+		// The chart's `if .Values.muster.enabled`: false and null render no
+		// binding.
+		if on, _ := enabled.(bool); !on {
 			return false
 		}
 	}

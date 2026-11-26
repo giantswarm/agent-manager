@@ -3,10 +3,15 @@ package migrate
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/giantswarm/agent-manager/internal/agents"
@@ -25,14 +30,14 @@ const (
 	v3Latest = "3.0.0"
 )
 
-// fakeChart3 is the agent chart 3.x as the registry reports it: the embedded
-// 2.x schema without muster.requireApproval and with `default`, which is all
-// of 3.0's values contract the hop touches.
+// fakeChart3 is the agent chart 3.x as the registry reports it: the values
+// schema of the 3.0 chart itself (testdata/agent-3.0-values.schema.json,
+// copied from giantswarm/agent's helm/agent at the commit that removed
+// muster.requireApproval).
 type fakeChart3 struct{ latest string }
 
-func (fakeChart3) Schema(context.Context) chart.Schema {
-	s := chart.EmbeddedSchema()
-	raw, err := json.Marshal(s.Document)
+var chart3Schema = sync.OnceValue(func() map[string]any {
+	raw, err := os.ReadFile(filepath.Join("testdata", "agent-3.0-values.schema.json"))
 	if err != nil {
 		panic(err)
 	}
@@ -40,10 +45,11 @@ func (fakeChart3) Schema(context.Context) chart.Schema {
 	if err := json.Unmarshal(raw, &doc); err != nil {
 		panic(err)
 	}
-	props := doc["properties"].(map[string]any)
-	delete(props["muster"].(map[string]any)["properties"].(map[string]any), "requireApproval")
-	props["default"] = map[string]any{"type": []any{"string", "null"}, "enum": []any{"Allow", "Ask", "Block", nil}}
-	return chart.Schema{Document: doc, Version: v3Latest, Source: chart.SourceRegistry}
+	return doc
+})
+
+func (fakeChart3) Schema(context.Context) chart.Schema {
+	return chart.Schema{Document: chart3Schema(), Version: v3Latest, Source: chart.SourceRegistry}
 }
 
 func (c fakeChart3) Info(context.Context) chart.Info {
@@ -149,11 +155,24 @@ func TestRewriteValuesV3(t *testing.T) {
 		},
 		"requireApproval true with a default never rendered": {
 			in:          map[string]any{"modelConfig": map[string]any{"name": "m"}, "muster": map[string]any{"requireApproval": true}, "default": "Allow"},
-			errContains: "muster.requireApproval: true together with tool approval settings (default), which no chart renders",
+			errContains: "muster.requireApproval: true together with tool approval settings (default), which no released chart renders",
 		},
 		"requireApproval true with an entry setting never rendered": {
 			in:          map[string]any{"modelConfig": map[string]any{"name": "m"}, "muster": map[string]any{"requireApproval": true}, "tools": []any{map[string]any{"server:github": "Allow"}}},
-			errContains: "muster.requireApproval: true together with tool approval settings (tools entry server:github), which no chart renders",
+			errContains: "muster.requireApproval: true together with tool approval settings (tools entry server:github), which no released chart renders",
+		},
+		"requireApproval null is Helm's unset, as 2.x rendered it: dropped": {
+			in:      map[string]any{"modelConfig": map[string]any{"name": "m"}, "muster": map[string]any{"requireApproval": nil}},
+			want:    map[string]any{"modelConfig": map[string]any{"name": "m"}},
+			removed: []string{"muster.requireApproval"},
+		},
+		"requireApproval true with muster.enabled null rendered no binding: dropped": {
+			in:      map[string]any{"modelConfig": map[string]any{"name": "m"}, "muster": map[string]any{"requireApproval": true, "enabled": nil}},
+			want:    map[string]any{"modelConfig": map[string]any{"name": "m"}, "muster": map[string]any{"enabled": nil}},
+			removed: []string{"muster.requireApproval"},
+		},
+		"a modelConfig that is not an object is left to the schema, not reported as set": {
+			in: map[string]any{"modelConfig": "m"}, want: map[string]any{"modelConfig": "m"}, unchanged: true,
 		},
 		"a requireApproval that is not a boolean": {
 			in:          map[string]any{"modelConfig": map[string]any{"name": "m"}, "muster": map[string]any{"requireApproval": "yes"}},
@@ -189,8 +208,8 @@ func TestV3RewritesRequireApprovalBeforeMovingTheSource(t *testing.T) {
 	ctx := t.Context()
 	c := newCluster(
 		ociRepository(kagentNS, v2Range),
-		helmRelease(kagentNS, "triage", approvalValues(), "2.7.0"), agentObj(kagentNS, "triage", "triage", kagentNS, true),
-		helmRelease(kagentNS, "plain", narrowRewritten(), "2.7.0"), agentObj(kagentNS, "narrow", "plain", kagentNS, true),
+		helmRelease(kagentNS, "triage", approvalValues(), "2.6.1"), agentObj(kagentNS, "triage", "triage", kagentNS, true),
+		helmRelease(kagentNS, "plain", narrowRewritten(), "2.6.1"), agentObj(kagentNS, "narrow", "plain", kagentNS, true),
 	)
 
 	res, err := c.runnerV3(t, Options{Namespaces: []string{kagentNS}}, v3Latest).Run(ctx)
@@ -223,7 +242,7 @@ func TestV3RewritesRequireApprovalBeforeMovingTheSource(t *testing.T) {
 }
 
 func TestV3SourceWaitsWhileTheChartIsNotPublished(t *testing.T) {
-	c := newCluster(ociRepository(kagentNS, v2Range), helmRelease(kagentNS, "triage", approvalValues(), "2.7.0"))
+	c := newCluster(ociRepository(kagentNS, v2Range), helmRelease(kagentNS, "triage", approvalValues(), "2.6.1"))
 
 	res, err := c.runnerV3(t, Options{Namespaces: []string{kagentNS}}, "").Run(t.Context())
 	require.NoError(t, err)
@@ -236,7 +255,7 @@ func TestV3SourceWaitsWhileTheChartIsNotPublished(t *testing.T) {
 }
 
 func TestV3GitOpsOwnedReleaseGetsTheDiff(t *testing.T) {
-	hr := gitOpsLabeled(helmRelease("flux-giantswarm", "triage", approvalValues(), "2.7.0"))
+	hr := gitOpsLabeled(helmRelease("flux-giantswarm", "triage", approvalValues(), "2.6.1"))
 	require.NoError(t, unstructured.SetNestedField(hr.Object, kagentNS, "spec", "targetNamespace"))
 	c := newCluster(gitOpsLabeled(ociRepository("flux-giantswarm", v2Range)), hr, agentObj(kagentNS, "triage", "triage", "flux-giantswarm", true))
 
@@ -261,15 +280,15 @@ func TestV3ApprovalWithSettingsFailsAndHoldsItsSiblings(t *testing.T) {
 	broken["default"] = "Ask"
 	c := newCluster(
 		ociRepository(kagentNS, v2Range),
-		helmRelease(kagentNS, "broken", broken, "2.7.0"),
-		helmRelease(kagentNS, "triage", approvalValues(), "2.7.0"),
+		helmRelease(kagentNS, "broken", broken, "2.6.1"),
+		helmRelease(kagentNS, "triage", approvalValues(), "2.6.1"),
 	)
 
 	res, err := c.runnerV3(t, Options{Namespaces: []string{kagentNS}}, v3Latest).Run(t.Context())
 	require.NoError(t, err)
 	rep := res.Reports[0]
 	require.Equal(t, ActionFailed, byRelease(rep)["kagent/broken"].Action)
-	require.Contains(t, byRelease(rep)["kagent/broken"].Reason, "which no chart renders")
+	require.Contains(t, byRelease(rep)["kagent/broken"].Reason, "which no released chart renders")
 	require.Equal(t, ActionPending, byRelease(rep)["kagent/triage"].Action)
 	require.Contains(t, byRelease(rep)["kagent/triage"].Reason, "held: chart source kagent/agent also serves kagent/broken (failed)")
 	require.Equal(t, approvalValues(), c.values(t, kagentNS, "triage"))
@@ -296,4 +315,121 @@ func TestTargetMajorPicksTheV3Hop(t *testing.T) {
 	require.Equal(t, "2.x -> 3.x", h.String())
 	_, err = hopFor(4, "v1alpha3")
 	require.ErrorContains(t, err, "no migration path to Generic chart 4.x")
+}
+
+// valuesFromRelease is a release whose values also come from a ConfigMap.
+func valuesFromRelease(ns, name string, values map[string]any) *unstructured.Unstructured {
+	hr := helmRelease(ns, name, values, "2.6.1")
+	_ = unstructured.SetNestedSlice(hr.Object, []any{map[string]any{"kind": "ConfigMap", "name": name + "-values"}}, "spec", "valuesFrom")
+	return hr
+}
+
+func TestV3ReleaseWithValuesFromIsReportedNeverWritten(t *testing.T) {
+	for name, tc := range map[string]struct {
+		values   map[string]any
+		reason   string
+		diff     []string
+		noDiffOf string
+	}{
+		"model only in valuesFrom: never spelled out over it": {
+			values:   map[string]any{"agent": map[string]any{"name": "a"}},
+			reason:   "takes values from spec.valuesFrom",
+			noDiffOf: "default-model-config",
+		},
+		"requireApproval in valuesFrom: named in the reason": {
+			values: map[string]any{"agent": map[string]any{"name": "a"}, "modelConfig": map[string]any{"name": "m"}},
+			reason: "replace muster.requireApproval: true there with default: Ask",
+		},
+		"requireApproval inline: the diff, not a write agent-manager would refuse to bind": {
+			values: approvalValues(),
+			reason: "agent-manager binds tool approval settings only from spec.values",
+			diff:   []string{"-      requireApproval: true\n", "+    default: Ask\n"},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			c := newCluster(ociRepository(kagentNS, v2Range), valuesFromRelease(kagentNS, "vf", tc.values), helmRelease(kagentNS, "sibling", approvalValues(), "2.6.1"))
+			res, err := c.runnerV3(t, Options{Namespaces: []string{kagentNS}}, v3Latest).Run(t.Context())
+			require.NoError(t, err)
+			rep := res.Reports[0]
+			rel := byRelease(rep)["kagent/vf"]
+			require.Equal(t, ActionFailed, rel.Action)
+			require.Contains(t, rel.Reason, tc.reason)
+			for _, d := range tc.diff {
+				require.Contains(t, rel.Diff, d)
+			}
+			if tc.noDiffOf != "" {
+				require.NotContains(t, rel.Diff, tc.noDiffOf)
+			}
+			require.Equal(t, tc.values, c.values(t, kagentNS, "vf"), "never written")
+			require.Equal(t, ActionPending, byRelease(rep)["kagent/sibling"].Action, "its siblings are held")
+			require.Equal(t, approvalValues(), c.values(t, kagentNS, "sibling"))
+			require.Equal(t, v2Range, c.semver(t, kagentNS, "agent"))
+		})
+	}
+}
+
+func TestV3ReleaseOfASourceMigrateCannotMoveIsHeld(t *testing.T) {
+	for name, src := range map[string]*unstructured.Unstructured{
+		"pinned by tag": func() *unstructured.Unstructured {
+			o := ociRepository(kagentNS, "")
+			_ = unstructured.SetNestedField(o.Object, map[string]any{"tag": "2.6.1"}, "spec", "ref")
+			return o
+		}(),
+		"GitOps-owned": gitOpsLabeled(ociRepository(kagentNS, v2Range)),
+	} {
+		t.Run(name, func(t *testing.T) {
+			c := newCluster(src, helmRelease(kagentNS, "triage", approvalValues(), "2.6.1"))
+			res, err := c.runnerV3(t, Options{Namespaces: []string{kagentNS}}, v3Latest).Run(t.Context())
+			require.NoError(t, err)
+			rel := byRelease(res.Reports[0])["kagent/triage"]
+			require.Equal(t, ActionPending, rel.Action)
+			require.Contains(t, rel.Reason, "this run cannot move its chart source")
+			require.Contains(t, rel.Diff, "+    default: Ask\n")
+			require.Equal(t, approvalValues(), c.values(t, kagentNS, "triage"), "3.x values are never written under a source left on 2.x")
+		})
+	}
+}
+
+func orgNamespace(name string) *corev1.Namespace {
+	return &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: name, Labels: map[string]string{"agent-platform.giantswarm.io/organization": "acme"}}}
+}
+
+func TestV3OrganizationNamespacesAreReportedAndHoldTheRun(t *testing.T) {
+	ctx := t.Context()
+	c := newCluster(
+		ociRepository(kagentNS, v2Range), helmRelease(kagentNS, "plain", narrowRewritten(), "2.6.1"),
+		ociRepository("org-acme", v2Range),
+		helmRelease("org-acme", "hand", approvalValues(), "2.6.1"),
+		helmRelease("org-acme", "composed", narrowRewritten(), "2.6.1"),
+	)
+	res, err := c.runnerV3(t, Options{Namespaces: []string{kagentNS}, OrganizationNamespaces: []string{"org-acme"}}, v3Latest).Run(ctx)
+	require.NoError(t, err)
+	require.Len(t, res.Reports, 2)
+	kagent, org := res.Reports[0], res.Reports[1]
+	require.Equal(t, "org-acme", org.Namespace)
+	hand := byRelease(org)["org-acme/hand"]
+	require.Equal(t, ActionDiff, hand.Action)
+	require.Equal(t, OwnershipOrganization, hand.Ownership)
+	require.Contains(t, hand.Reason, "the agent-platform-operator moves its chart source")
+	require.Contains(t, hand.Diff, "+    default: Ask\n")
+	require.Equal(t, ActionUnchanged, byRelease(org)["org-acme/composed"].Action)
+	require.Equal(t, approvalValues(), c.values(t, "org-acme", "hand"), "never written")
+	require.Equal(t, v2Range, c.semver(t, "org-acme", "agent"), "the operator's source is never moved")
+	require.Empty(t, c.writes("org-acme"))
+	require.Nil(t, c.reportConfigMap(t, "org-acme"), "no report is written where migrate writes nothing")
+
+	require.Equal(t, PhaseExpand, kagent.Phase, "a pending organization release holds the run's state")
+	require.Contains(t, strings.Join(kagent.Pending, "\n"), "organization namespace org-acme: release org-acme/hand")
+	require.Equal(t, SourceMoved, bySource(kagent)["kagent/agent"].Action, "the managed namespace still moves")
+}
+
+func TestV3OrganizationNamespacesAreFoundByLabel(t *testing.T) {
+	c := newCluster()
+	_, err := c.typed.CoreV1().Namespaces().Create(t.Context(), orgNamespace("org-acme"), metav1.CreateOptions{})
+	require.NoError(t, err)
+	_, err = c.typed.CoreV1().Namespaces().Create(t.Context(), &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "other"}}, metav1.CreateOptions{})
+	require.NoError(t, err)
+	names, err := OrganizationNamespaces(t.Context(), c.typed, []string{kagentNS})
+	require.NoError(t, err)
+	require.Equal(t, []string{"org-acme"}, names)
 }

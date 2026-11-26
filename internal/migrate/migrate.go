@@ -55,12 +55,14 @@ import (
 	"time"
 
 	"github.com/Masterminds/semver/v3"
+	apov1alpha1 "github.com/giantswarm/agent-platform-operator/api/v1alpha1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/util/retry"
 
 	"github.com/giantswarm/agent-manager/internal/agents"
@@ -93,6 +95,12 @@ type Options struct {
 	// GitOpsNamespaces are searched for Generic-chart HelmReleases with a
 	// targetNamespace in Namespaces, next to what the provenance labels name.
 	GitOpsNamespaces []string
+	// OrganizationNamespaces are read, never written: the
+	// agent-platform-operator owns their chart sources and moves them with
+	// the platform's range, so their releases that need the target major's
+	// values are reported with the diff, and every one of them is pending in
+	// the first managed namespace's report until it is on target values.
+	OrganizationNamespaces []string
 	// HarnessName is the platform Harness every agent runs on; composed as
 	// agent.harness when it is not the chart default.
 	HarnessName string
@@ -216,14 +224,26 @@ func (r *Runner) Run(ctx context.Context) (*Result, error) {
 		r.wait(ctx, st)
 		states = append(states, st)
 	}
+	orgs, orgPending, err := r.organizations(ctx, run, chartAvailable)
+	if err != nil {
+		return nil, err
+	}
+	if len(orgPending) > 0 && len(states) > 0 {
+		// The operator moves the organizations' sources with the platform's
+		// range: until their releases are on target values the run is not
+		// done, whatever the managed namespaces say.
+		first := states[0]
+		first.expandDone, first.gatePassed = false, false
+		first.report.Pending = append(first.report.Pending, orgPending...)
+	}
 	r.contract(ctx, states)
 
 	res := &Result{}
-	for _, st := range states {
+	for _, st := range append(states, orgs...) {
 		st.finish(r.hop)
 		res.Reports = append(res.Reports, st.report)
 		errs = append(errs, st.errs...)
-		if r.opts.DryRun {
+		if r.opts.DryRun || st.org {
 			continue
 		}
 		if err := writeReport(ctx, r.client.Typed(), r.opts.ReportConfigMap, st.report); err != nil {
@@ -233,10 +253,65 @@ func (r *Runner) Run(ctx context.Context) (*Result, error) {
 	return res, errors.Join(errs...)
 }
 
+// organizations reads every organization namespace the way the managed ones
+// are read and plans their releases without writing anything: each release
+// that needs the target major's values is reported with its diff, and named
+// in the pending lines returned for the run's first report.
+func (r *Runner) organizations(ctx context.Context, run RunInfo, chartAvailable bool) ([]*nsState, []string, error) {
+	var (
+		states  []*nsState
+		pending []string
+	)
+	for _, ns := range r.opts.OrganizationNamespaces {
+		if r.managed(ns) {
+			continue
+		}
+		st, err := r.discover(ctx, ns)
+		if err != nil {
+			return nil, nil, err
+		}
+		st.org = true
+		st.report.Run = run
+		for _, rel := range st.releases {
+			rel.org = true
+		}
+		for _, src := range st.sources {
+			src.org = true
+		}
+		r.expand(ctx, st, chartAvailable)
+		r.wait(ctx, st)
+		for _, line := range st.report.Pending {
+			pending = append(pending, fmt.Sprintf("organization namespace %s: %s", ns, line))
+		}
+		states = append(states, st)
+	}
+	return states, pending, nil
+}
+
+// OrganizationNamespaces lists the namespaces the agent-platform-operator
+// labels as an organization's (agent-platform.giantswarm.io/organization),
+// managed ones left out, sorted.
+func OrganizationNamespaces(ctx context.Context, typed kubernetes.Interface, managed []string) ([]string, error) {
+	list, err := typed.CoreV1().Namespaces().List(ctx, metav1.ListOptions{LabelSelector: apov1alpha1.OrganizationLabel})
+	if err != nil {
+		return nil, fmt.Errorf("list the organization namespaces (label %s): %w", apov1alpha1.OrganizationLabel, err)
+	}
+	var out []string
+	for _, ns := range list.Items {
+		if !slices.Contains(managed, ns.Name) {
+			out = append(out, ns.Name)
+		}
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
 // ---- state --------------------------------------------------------------------
 
 type nsState struct {
-	ns        string
+	ns string
+	// org: an organization namespace, read only (Options.OrganizationNamespaces).
+	org       bool
 	report    *Report
 	sources   []*source
 	releases  []*release
@@ -266,6 +341,8 @@ type source struct {
 	// platform: the source, or a release it serves, ships with the Agent
 	// Platform.
 	platform bool
+	// org: the agent-platform-operator's source of an organization namespace.
+	org      bool
 	report   *SourceReport
 	releases []*release
 }
@@ -277,7 +354,9 @@ type release struct {
 	gitops, external bool
 	// platform: the release ships with the Agent Platform.
 	platform bool
-	report   *ReleaseReport
+	// org: the release lives in an organization namespace.
+	org    bool
+	report *ReleaseReport
 	// values are spec.values as read, rewritten what they become; write is
 	// true while the rewrite is planned for a write this run.
 	values, rewritten map[string]any
@@ -313,6 +392,8 @@ func (rel *release) renderedName() string {
 
 func (rel *release) ownership() string {
 	switch {
+	case rel.org:
+		return OwnershipOrganization
 	case rel.platform:
 		return OwnershipPlatform
 	case rel.external:
@@ -577,6 +658,7 @@ func (r *Runner) expand(ctx context.Context, st *nsState, chartAvailable bool) {
 	for _, rel := range st.releases {
 		rel.report = r.planRelease(ctx, st, rel, chartAvailable)
 	}
+	r.holdUnmovable(st)
 	holdSiblings(st)
 	for _, rel := range st.releases {
 		if rel.write {
@@ -603,6 +685,9 @@ func (r *Runner) planRelease(ctx context.Context, st *nsState, rel *release, cha
 	}
 	values, _, _ := unstructured.NestedMap(rel.obj.Object, "spec", "values")
 	values = orEmpty(values)
+	if from, _, _ := unstructured.NestedSlice(rel.obj.Object, "spec", "valuesFrom"); len(from) > 0 && r.hop.to == 3 {
+		return r.planValuesFrom(rel, rep, values)
+	}
 	rewritten, changes, err := r.hop.rewrite(ctx, values, r.opts.HarnessName, r.pinner)
 	if err != nil {
 		rep.Action, rep.Reason = ActionFailed, err.Error()
@@ -634,11 +719,13 @@ func (r *Runner) planRelease(ctx context.Context, st *nsState, rel *release, cha
 		return rep
 	}
 	rep.Changes = changes
-	if rel.gitops || rel.external || rel.platform {
+	if rel.gitops || rel.external || rel.platform || rel.org {
 		rep.Action = ActionDiff
 		rep.Diff = manifestDiff(rel.obj, rewrittenHR)
 		rep.Reason = "never written by this command: its desired state lives in git — apply the diff in the owning repository"
-		if rel.platform {
+		if rel.org {
+			rep.Reason = "in an organization namespace, never written by this command: the agent-platform-operator moves its chart source with the platform's range, at once; apply the diff before that (the release's owner: agent-manager's update tools, or the repository it is committed to). Replace muster.requireApproval: true with default: Ask, never just delete it"
+		} else if rel.platform {
 			rep.Reason = "ships with the Agent Platform, never written by this command: it moves with the platform release"
 		} else if rel.gitops && !rel.external {
 			rep.Reason = fmt.Sprintf("applied by Flux Kustomization %q, never written by this command: apply the diff in the owning repository", rel.obj.GetLabels()[agents.KustomizationNameLabel])
@@ -651,6 +738,29 @@ func (r *Runner) planRelease(ctx context.Context, st *nsState, rel *release, cha
 	}
 	rep.Action = ActionRewritten
 	rel.onTarget, rel.write = true, true
+	return rep
+}
+
+// planValuesFrom reports a release whose values also come from
+// spec.valuesFrom on the 2.x -> 3.x path, never writing it: migrate reads
+// spec.values only, so a model set in valuesFrom would be overwritten by the
+// spelled-out 2.x default, a muster.requireApproval there is not seen, and a
+// default: Ask written into spec.values would make agent-manager refuse every
+// Session of the agent (it binds settings only from spec.values). The diff
+// shows what spec.values needs; the release fails, holding its source.
+func (r *Runner) planValuesFrom(rel *release, rep *ReleaseReport, values map[string]any) *ReleaseReport {
+	rep.Action = ActionFailed
+	rep.Reason = "takes values from spec.valuesFrom, which this command does not read: replace muster.requireApproval: true there with default: Ask (never just delete it), set modelConfig.name where 2.x rendered its default (default-model-config), and move the release's settings into spec.values: agent-manager binds tool approval settings only from spec.values. The release and its chart source stay on 2.x until it is fixed"
+	rewritten, changes, err := rewriteV3(values, false)
+	if err != nil {
+		rep.Reason += "; spec.values: " + err.Error()
+		return rep
+	}
+	if !changes.Empty() {
+		after := &unstructured.Unstructured{Object: runtime.DeepCopyJSON(rel.obj.Object)}
+		_ = unstructured.SetNestedMap(after.Object, rewritten, "spec", "values")
+		rep.Changes, rep.Diff = changes, manifestDiff(rel.obj, after)
+	}
 	return rep
 }
 
@@ -696,14 +806,58 @@ func holdSiblings(st *nsState) {
 		if len(blockers) == 0 {
 			continue
 		}
+		holdReleases(src, fmt.Sprintf("held: chart source %s/%s also serves %s, and its releases move together; nothing of it is written until every one of them can", src.ns, src.name, join(blockers)))
+	}
+}
+
+// holdUnmovable keeps, on the 2.x -> 3.x path, the releases of a source this
+// run cannot move (pinned by tag or digest, GitOps-owned, external, the
+// platform's or an organization's) on their values: no released 2.x chart
+// takes `default`, so 3.x values under a source left on 2.x would fail every
+// render until someone moved it. They are reported pending with the diff.
+func (r *Runner) holdUnmovable(st *nsState) {
+	if r.hop.to != 3 {
+		return
+	}
+	for _, src := range st.sources {
+		why := ""
+		switch {
+		case src.org:
+			why = "the agent-platform-operator's"
+		case src.platform:
+			why = "the Agent Platform's"
+		case src.gitops || src.external:
+			why = "owned by git"
+		case src.semver == "":
+			why = "pinned by tag or digest"
+		}
+		if why == "" {
+			continue
+		}
 		for _, rel := range src.releases {
 			if !rel.write {
 				continue
 			}
 			rel.write, rel.onTarget = false, false
 			rel.report.Action = ActionPending
-			rel.report.Reason = fmt.Sprintf("held: chart source %s/%s also serves %s, and its releases move together; nothing of it is written until every one of them can", src.ns, src.name, join(blockers))
+			rel.report.Reason = fmt.Sprintf("held: this run cannot move its chart source %s/%s (%s), and no released 2.x chart takes default: apply the diff together with the move of the source to %s", src.ns, src.name, why, r.opts.TargetSemver)
+			after := &unstructured.Unstructured{Object: runtime.DeepCopyJSON(rel.obj.Object)}
+			_ = unstructured.SetNestedMap(after.Object, rel.rewritten, "spec", "values")
+			rel.report.Diff = manifestDiff(rel.obj, after)
 		}
+	}
+}
+
+// holdReleases turns the planned writes of a source's releases into pending
+// ones with reason.
+func holdReleases(src *source, reason string) {
+	for _, rel := range src.releases {
+		if !rel.write {
+			continue
+		}
+		rel.write, rel.onTarget = false, false
+		rel.report.Action = ActionPending
+		rel.report.Reason = reason
 	}
 }
 
@@ -747,6 +901,8 @@ func (r *Runner) moveSource(ctx context.Context, st *nsState, dyn dynamic.Interf
 	rep := &SourceReport{Name: src.name, Namespace: src.ns, From: src.semver, To: r.opts.TargetSemver,
 		FromSemverFilter: src.semverFilter, ToSemverFilter: r.targetFilter(src)}
 	switch {
+	case src.org:
+		rep.Ownership = OwnershipOrganization
 	case src.platform:
 		rep.Ownership = OwnershipPlatform
 	case src.external:
@@ -758,6 +914,10 @@ func (r *Runner) moveSource(ctx context.Context, st *nsState, dyn dynamic.Interf
 	}
 	if src.semver == r.opts.TargetSemver && src.semverFilter == rep.ToSemverFilter {
 		rep.Action, rep.Reason = ActionUnchanged, "already on the target range"
+		return rep
+	}
+	if src.org {
+		rep.Action, rep.Reason = ActionUnchanged, "the agent-platform-operator's: it moves the source with the platform's range, never this command"
 		return rep
 	}
 	moved := &unstructured.Unstructured{Object: runtime.DeepCopyJSON(src.obj.Object)}

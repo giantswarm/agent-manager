@@ -87,6 +87,10 @@ const (
 	// OwnershipPlatform: the Agent Platform ships the object (or, for a
 	// source, a release it serves); read-only for this command.
 	OwnershipPlatform = agents.ManagedPlatform
+	// OwnershipOrganization: the object lives in an organization namespace,
+	// whose chart source the agent-platform-operator owns and moves with the
+	// platform's range; read-only for this command.
+	OwnershipOrganization = "organization"
 )
 
 // Actions on a CRD in the contract phase.
