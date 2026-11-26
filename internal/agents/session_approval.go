@@ -116,6 +116,14 @@ func (s *Service) sessionApproval(ctx context.Context, ref kagent.Ref, liveTools
 		toolset = list.Selectors()
 	}
 	agent := approvalgrants.Agent{UID: string(hr.GetUID()), Namespace: ref.Namespace, Name: ref.Name}
+	if def == "" && requireApprovalBinds(values) {
+		// kagent's flag (agent chart 2.x) pauses the agent before every call
+		// through muster; the binding asks too, so a Session running when the
+		// 3.0 upgrade drops the flag keeps asking: muster ignores the agent's
+		// X-Muster-Tool-Approval header for a binding with settings
+		// (giantswarm/giantswarm#38902, M3-S8-03).
+		def = SettingAsk
+	}
 	out := &boundApproval{agent: agent, binding: &muster.Approval{Default: def}}
 	for _, e := range list {
 		if e.Setting != "" && slices.Contains(toolset, e.Selector) {
@@ -199,4 +207,24 @@ func (s *Service) recheckBoundGrants(ctx context.Context, bound *boundApproval) 
 		s.syncSessions(ctx, "start_session", rec, false)
 		return
 	}
+}
+
+// requireApprovalBinds reports whether release values carry
+// muster.requireApproval: true on a muster binding the 2.x chart renders
+// (muster on, a tool list other than exactly ["preset:none"]).
+func requireApprovalBinds(values map[string]any) bool {
+	if on, _, _ := unstructured.NestedBool(values, "muster", "requireApproval"); !on {
+		return false
+	}
+	if enabled, found, _ := unstructured.NestedFieldNoCopy(values, "muster", "enabled"); found {
+		if b, _ := enabled.(bool); !b {
+			return false
+		}
+	}
+	list := values[ToolsValuesKey]
+	if list == nil {
+		list = values[ToolsetValuesKey]
+	}
+	items, _ := list.([]any)
+	return len(items) != 1 || items[0] != "preset:none"
 }

@@ -592,3 +592,26 @@ func newBoundSessionFixtureWithService(t *testing.T, f *fixture) (*Service, *kag
 func forbiddenErr(resource string) error {
 	return apierrors.NewForbidden(schema.GroupResource{Resource: resource}, "", errors.New("denied"))
 }
+
+// A Session of an agent on muster.requireApproval: true is bound with
+// default: Ask (M3-S8-03): when agent chart 3.0 drops kagent's flag the
+// Session's binding already asks, and a binding written with empty settings
+// would make muster ignore the agent's X-Muster-Tool-Approval header.
+func TestASessionOfARequireApprovalAgentIsBoundAskingBeforeEveryCall(t *testing.T) {
+	for name, tc := range map[string]struct {
+		values map[string]any
+		want   string
+	}{
+		"the binding renders": {map[string]any{"agent": map[string]any{"name": "alert-review"}, "modelConfig": map[string]any{"name": "m"},
+			"muster": map[string]any{"requireApproval": true}, "toolset": []any{"server:github"}}, "Ask"},
+		"requireApproval false": {map[string]any{"agent": map[string]any{"name": "alert-review"}, "modelConfig": map[string]any{"name": "m"},
+			"muster": map[string]any{"requireApproval": false}, "toolset": []any{"server:github"}}, ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			a := newApprovalFixture(t, tc.values)
+			b := a.start(t)
+			require.NotNil(t, b.Approval)
+			assert.Equal(t, tc.want, b.Approval.Default)
+		})
+	}
+}
