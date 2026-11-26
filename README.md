@@ -988,8 +988,32 @@ rewritten. A range that admits two majors (`>=1.0.0`) is refused.
 
 | Target | Path | Old line → new line | Precondition |
 |---|---|---|---|
+| `>=3.0.0 <4.0.0` | 2.x → 3.x | the same `api.kagent.dev/v1alpha3` `Agent`; values only (below) | `agents.api.kagent.dev` served |
 | `2.x` | 1.x → 2.x | `kagent.dev/v1alpha3` `AgentTemplate` → `api.kagent.dev/v1alpha3` `Agent` | `agents.api.kagent.dev` served (kagent 1.3 line); `--dry-run` runs before it |
 | `1.x` | 0.x → 1.x | `kagent.dev/v1alpha2` `Agent` → `kagent.dev/v1alpha3` `AgentTemplate` | `agenttemplates.kagent.dev` served (kagent 1.0 to 1.2 line) |
+
+On the 2.x → 3.x path nothing of the old line is left to delete; the expand
+phase rewrites what chart 3.0 changed and reports every change per release
+(`changes.removed`, `changes.set`), visible in the report and the log line
+`release rewritten`:
+
+- `muster.requireApproval: true` (removed in chart 3.0) becomes `default: Ask`:
+  muster asks a person before every tool call through the agent's muster
+  binding, where kagent's flag paused the agent. Only where the binding
+  renders: with `muster.enabled: false` or a tool list of exactly
+  `["preset:none"]` the key is just dropped, as is `requireApproval: false`.
+  `true` beside tool approval settings (`default`, a `tools` entry with a
+  setting) never rendered, since 2.x refused the combination, and fails the
+  release, holding the other releases of its chart source.
+- an unset `modelConfig.name` is written as `default-model-config`, what 2.x
+  rendered (3.0 has no default and renders no model without it).
+
+A GitOps-owned release gets the same change as a diff for its repository.
+The values are written only once a 3.x chart exists in the registry and
+before the namespace's source moves, so no release renders 3.x values under a
+2.x chart or 2.x values under a 3.x one. An organization's chart source is the
+agent-platform-operator's: it follows the platform's range, and its releases,
+written by agent-manager, carry no `muster.requireApproval`.
 
 ```sh
 agent-manager migrate --dry-run \
