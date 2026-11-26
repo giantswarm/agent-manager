@@ -399,7 +399,22 @@ func orgNamespace(name string) *corev1.Namespace {
 	return &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: name, Labels: map[string]string{"agent-platform.giantswarm.io/organization": "acme"}}}
 }
 
-func TestV3OrganizationNamespacesAreReportedAndHoldTheRun(t *testing.T) {
+// reportReady is the OrganizationReadyAnnotation on the report in ns; ok is
+// false when no report exists.
+func (c *cluster) reportReady(t *testing.T, ns string) (string, bool) {
+	t.Helper()
+	cm, err := c.typed.CoreV1().ConfigMaps(ns).Get(t.Context(), DefaultReportConfigMap, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return "", false
+	}
+	require.NoError(t, err)
+	return cm.Annotations[OrganizationReadyAnnotation], true
+}
+
+// An organization's releases are migrated like a managed namespace's: the
+// ones agent-manager owns are rewritten, the operator's source stays where it
+// is, and the namespace's report marks it ready for the operator.
+func TestV3OrganizationReleasesAreRewrittenAndMarkTheNamespaceReady(t *testing.T) {
 	ctx := t.Context()
 	c := newCluster(
 		ociRepository(kagentNS, v2Range), helmRelease(kagentNS, "plain", narrowRewritten(), "2.6.1"),
@@ -413,19 +428,97 @@ func TestV3OrganizationNamespacesAreReportedAndHoldTheRun(t *testing.T) {
 	kagent, org := res.Reports[0], res.Reports[1]
 	require.Equal(t, "org-acme", org.Namespace)
 	hand := byRelease(org)["org-acme/hand"]
-	require.Equal(t, ActionDiff, hand.Action)
+	require.Equal(t, ActionRewritten, hand.Action, hand.Reason)
 	require.Equal(t, OwnershipOrganization, hand.Ownership)
-	require.Contains(t, hand.Reason, "the agent-platform-operator moves its chart source")
-	require.Contains(t, hand.Diff, "+    default: Ask\n")
+	require.Equal(t, []string{"default=Ask"}, hand.Changes.Set)
+	require.Equal(t, approvalRewritten(), c.values(t, "org-acme", "hand"), "requireApproval: true becomes default: Ask, never just dropped")
 	require.Equal(t, ActionUnchanged, byRelease(org)["org-acme/composed"].Action)
-	require.Equal(t, approvalValues(), c.values(t, "org-acme", "hand"), "never written")
-	require.Equal(t, v2Range, c.semver(t, "org-acme", "agent"), "the operator's source is never moved")
-	require.Empty(t, c.writes("org-acme"))
-	require.Nil(t, c.reportConfigMap(t, "org-acme"), "no report is written where migrate writes nothing")
+	require.Equal(t, v2Range, c.semver(t, "org-acme", "agent"), "the operator's source is never moved here")
+	require.Equal(t, []string{"update helmreleases"}, c.writes("org-acme"))
+	src := bySource(org)["org-acme/agent"]
+	require.Equal(t, ActionUnchanged, src.Action)
+	require.Contains(t, src.Reason, OrganizationReadyAnnotation)
 
+	ready, ok := c.reportReady(t, "org-acme")
+	require.True(t, ok, "the organization's report is written")
+	require.Equal(t, "3", ready, "every release there is on 3.x values: the operator may move the source")
+	require.NotNil(t, c.reportConfigMap(t, "org-acme"))
+	require.NotContains(t, strings.Join(kagent.Pending, "\n"), "organization namespace", "nothing of the organization is pending")
+	require.Equal(t, SourceMoved, bySource(kagent)["kagent/agent"].Action)
+	_, ok = c.reportReady(t, kagentNS)
+	require.True(t, ok)
+	ready, _ = c.reportReady(t, kagentNS)
+	require.Empty(t, ready, "a managed namespace's report carries no mark: its source is the run's own")
+}
+
+// A GitOps-owned release in an organization gets the diff and holds its
+// writable siblings; the namespace's report is not marked (a stale mark of an
+// earlier run is removed), so the operator keeps the source on 2.x.
+func TestV3OrganizationGitOpsReleaseHoldsTheMark(t *testing.T) {
+	ctx := t.Context()
+	c := newCluster(
+		ociRepository(kagentNS, v3Target),
+		ociRepository("org-acme", v2Range),
+		gitOpsLabeled(helmRelease("org-acme", "git", approvalValues(), "2.6.1")),
+		helmRelease("org-acme", "hand", approvalValues(), "2.6.1"),
+	)
+	_, err := c.typed.CoreV1().ConfigMaps("org-acme").Create(ctx, &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{
+		Name: DefaultReportConfigMap, Namespace: "org-acme", Annotations: map[string]string{OrganizationReadyAnnotation: "3"},
+	}}, metav1.CreateOptions{})
+	require.NoError(t, err)
+	res, err := c.runnerV3(t, Options{Namespaces: []string{kagentNS}, OrganizationNamespaces: []string{"org-acme"}}, v3Latest).Run(ctx)
+	require.NoError(t, err)
+	kagent, org := res.Reports[0], res.Reports[1]
+	git := byRelease(org)["org-acme/git"]
+	require.Equal(t, ActionDiff, git.Action)
+	require.Equal(t, OwnershipOrganization, git.Ownership)
+	require.Contains(t, git.Reason, "apply the diff in the organization's repository")
+	require.Contains(t, git.Diff, "+    default: Ask\n")
+	hand := byRelease(org)["org-acme/hand"]
+	require.Equal(t, ActionPending, hand.Action)
+	require.Contains(t, hand.Reason, "also serves org-acme/git (diff)")
+	require.Contains(t, hand.Diff, "+    default: Ask\n")
+	require.Equal(t, approvalValues(), c.values(t, "org-acme", "hand"), "no 3.x values while a sibling keeps the source on 2.x")
+	require.Empty(t, c.writes("org-acme"))
+	ready, ok := c.reportReady(t, "org-acme")
+	require.True(t, ok)
+	require.Empty(t, ready, "the stale mark is removed")
+	require.Equal(t, PhaseExpand, org.Phase)
 	require.Equal(t, PhaseExpand, kagent.Phase, "a pending organization release holds the run's state")
-	require.Contains(t, strings.Join(kagent.Pending, "\n"), "organization namespace org-acme: release org-acme/hand")
-	require.Equal(t, SourceMoved, bySource(kagent)["kagent/agent"].Action, "the managed namespace still moves")
+	require.Contains(t, strings.Join(kagent.Pending, "\n"), "organization namespace org-acme: release org-acme/git")
+}
+
+// Without a published 3.x chart nothing of an organization is written and
+// its report carries no mark; a dry run writes no report at all.
+func TestV3OrganizationIsNotMarkedBeforeTheChartIsPublishedNorInADryRun(t *testing.T) {
+	objs := func() *cluster {
+		return newCluster(ociRepository(kagentNS, v3Target), ociRepository("org-acme", v2Range), helmRelease("org-acme", "hand", approvalValues(), "2.6.1"))
+	}
+	c := objs()
+	res, err := c.runnerV3(t, Options{Namespaces: []string{kagentNS}, OrganizationNamespaces: []string{"org-acme"}}, "").Run(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, ActionPending, byRelease(res.Reports[1])["org-acme/hand"].Action)
+	require.Equal(t, approvalValues(), c.values(t, "org-acme", "hand"))
+	ready, ok := c.reportReady(t, "org-acme")
+	require.True(t, ok)
+	require.Empty(t, ready)
+
+	c = objs()
+	res, err = c.runnerV3(t, Options{Namespaces: []string{kagentNS}, OrganizationNamespaces: []string{"org-acme"}, DryRun: true}, v3Latest).Run(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, ActionRewritten, byRelease(res.Reports[1])["org-acme/hand"].Action)
+	require.Equal(t, approvalValues(), c.values(t, "org-acme", "hand"))
+	_, ok = c.reportReady(t, "org-acme")
+	require.False(t, ok, "a dry run writes no report, so it marks nothing")
+}
+
+// An organization without agents is ready at once.
+func TestV3OrganizationWithoutReleasesIsMarkedReady(t *testing.T) {
+	c := newCluster(ociRepository(kagentNS, v3Target), ociRepository("org-acme", v2Range))
+	_, err := c.runnerV3(t, Options{Namespaces: []string{kagentNS}, OrganizationNamespaces: []string{"org-acme"}}, v3Latest).Run(t.Context())
+	require.NoError(t, err)
+	ready, _ := c.reportReady(t, "org-acme")
+	require.Equal(t, "3", ready)
 }
 
 func TestV3OrganizationNamespacesAreFoundByLabel(t *testing.T) {
@@ -547,8 +640,8 @@ func ociRepositoryAt(ns, url, semver string) *unstructured.Unstructured {
 }
 
 // an organization's chart source the operator created with another
-// registry URL is still the agent chart's: its releases are reported and
-// hold the run; a source of another chart is named in the warnings.
+// registry URL is still the agent chart's: its releases are migrated; a
+// source of another chart is named in the warnings.
 func TestV3OrganizationSourceOnAnotherRegistryIsStillReported(t *testing.T) {
 	other := helmRelease("org-acme", "other-app", map[string]any{}, "1.0.0")
 	_ = unstructured.SetNestedField(other.Object, "dashboards", "spec", "chartRef", "name")
@@ -564,13 +657,12 @@ func TestV3OrganizationSourceOnAnotherRegistryIsStillReported(t *testing.T) {
 	require.NoError(t, err)
 	org := res.Reports[1]
 	rel := byRelease(org)["org-acme/m3-org"]
-	require.Equal(t, ActionDiff, rel.Action)
+	require.Equal(t, ActionRewritten, rel.Action, rel.Reason)
 	require.Equal(t, OwnershipOrganization, rel.Ownership)
-	require.Equal(t, PhaseExpand, res.Reports[0].Phase)
-	require.Contains(t, strings.Join(res.Reports[0].Pending, "\n"), "organization namespace org-acme: release org-acme/m3-org")
+	require.Equal(t, approvalRewritten(), c.values(t, "org-acme", "m3-org"))
 	require.NotContains(t, byRelease(org), "org-acme/other-app")
 	require.Contains(t, strings.Join(org.Warnings, "\n"), "release org-acme/other-app renders from OCIRepository dashboards")
-	require.Empty(t, c.writes("org-acme"))
+	require.Equal(t, []string{"update helmreleases"}, c.writes("org-acme"), "the other chart's release and both sources are left alone")
 }
 
 // A warning about an unrecognised release survives a complete phase.
@@ -594,5 +686,29 @@ func TestTargetMajorReadsAnExactPin(t *testing.T) {
 		require.Equal(t, want, got, pin)
 	}
 	_, err := TargetMajor("3.0.0-rc.6")
+	require.ErrorContains(t, err, "admits no release version")
+}
+
+// Every alternative of a `||` range and every version a range names counts,
+// as the agent-platform chart's guard reads it (D-GO-08).
+func TestTargetMajorReadsEveryAlternativeAndNamedVersion(t *testing.T) {
+	for r, want := range map[string]uint64{
+		">=2.6.1 <2.6.9":  2,
+		"2.6.1 - 2.6.5":   2,
+		"= 2.6.1":         2,
+		"~2.250":          2,
+		">2.6.1 <2.6.3":   2,
+		"3.0.1 || 3.2.0":  3,
+		"^3.0.0 || 3.0.1": 3,
+	} {
+		got, err := TargetMajor(r)
+		require.NoError(t, err, r)
+		require.Equal(t, want, got, r)
+	}
+	for _, r := range []string{"3.0.1 || 2.6.0", "2.6.0 || >=3.0.1 <3.0.5", "~2.250 || 3.0.7"} {
+		_, err := TargetMajor(r)
+		require.ErrorContains(t, err, "spans majors [2 3]", r)
+	}
+	_, err := TargetMajor(">2.6.1 <2.6.2")
 	require.ErrorContains(t, err, "admits no release version")
 }

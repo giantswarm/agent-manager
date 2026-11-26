@@ -52,6 +52,7 @@ import (
 	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -96,11 +97,14 @@ type Options struct {
 	// GitOpsNamespaces are searched for Generic-chart HelmReleases with a
 	// targetNamespace in Namespaces, next to what the provenance labels name.
 	GitOpsNamespaces []string
-	// OrganizationNamespaces are read, never written: the
-	// agent-platform-operator owns their chart sources and moves them with
-	// the platform's range, so their releases that need the target major's
-	// values are reported with the diff, and every one of them is pending in
-	// the first managed namespace's report until it is on target values.
+	// OrganizationNamespaces are migrated by the same rules as the managed
+	// ones, but for their chart sources: the agent-platform-operator owns
+	// those and moves an organization's across a major only once this run's
+	// report in the namespace carries OrganizationReadyAnnotation (every
+	// release there on target values). The releases agent-manager owns are
+	// written; a GitOps-owned one gets the diff. Every release not on target
+	// values is pending in the namespace's report and in the first managed
+	// namespace's.
 	OrganizationNamespaces []string
 	// HarnessName is the platform Harness every agent runs on; composed as
 	// agent.harness when it is not the chart default.
@@ -249,10 +253,14 @@ func (r *Runner) Run(ctx context.Context) (*Result, error) {
 		st.finish(r.hop)
 		res.Reports = append(res.Reports, st.report)
 		errs = append(errs, st.errs...)
-		if r.opts.DryRun || st.org {
+		if r.opts.DryRun {
 			continue
 		}
-		if err := writeReport(ctx, r.client.Typed(), r.opts.ReportConfigMap, st.report); err != nil {
+		ready := ""
+		if st.org && st.expandDone {
+			ready = strconv.FormatUint(r.hop.to, 10)
+		}
+		if err := writeReport(ctx, r.client.Typed(), r.opts.ReportConfigMap, st.report, ready); err != nil {
 			errs = append(errs, err)
 		}
 	}
@@ -284,11 +292,14 @@ func (r *Runner) discoverOrganizations(ctx context.Context, run RunInfo) ([]*nsS
 	return states, nil
 }
 
-// planOrganizations plans the organizations' releases without writing
-// anything and returns, for the run's first report, a pending line per
-// release that needs a change (diff, failed, pending). Flux and the Agents
-// there are not gated on: the operator moves the sources and agent-manager's
-// status reads cover the managed namespaces only, so readiness there is the
+// planOrganizations runs the expand phase in the organization namespaces
+// (their writable releases are rewritten, their sources never moved) and
+// returns, for the run's first report, a pending line per release not on
+// target values (diff, failed, pending). An organization whose releases are
+// all on target values is expandDone: its report then carries
+// OrganizationReadyAnnotation, on which the agent-platform-operator moves its
+// source. Flux and the Agents there are not gated on: agent-manager's status
+// reads cover the managed namespaces only, so readiness there is the
 // organization's, not this run's.
 func (r *Runner) planOrganizations(ctx context.Context, states []*nsState, chartAvailable bool) []string {
 	var pending []string
@@ -332,7 +343,7 @@ func OrganizationNamespaces(ctx context.Context, typed kubernetes.Interface, man
 
 type nsState struct {
 	ns string
-	// org: an organization namespace, read only (Options.OrganizationNamespaces).
+	// org: an organization namespace (Options.OrganizationNamespaces).
 	org       bool
 	report    *Report
 	sources   []*source
@@ -768,12 +779,12 @@ func (r *Runner) planRelease(ctx context.Context, st *nsState, rel *release, cha
 		return rep
 	}
 	rep.Changes = changes
-	if rel.gitops || rel.external || rel.platform || rel.org {
+	if rel.gitops || rel.external || rel.platform {
 		rep.Action = ActionDiff
 		rep.Diff = manifestDiff(rel.obj, rewrittenHR)
 		rep.Reason = "never written by this command: its desired state lives in git — apply the diff in the owning repository"
 		if rel.org {
-			rep.Reason = "in an organization namespace, never written by this command: the agent-platform-operator moves its chart source with the platform's range, at once; apply the diff before that (the release's owner: agent-manager's update tools, or the repository it is committed to). Replace muster.requireApproval: true with default: Ask, never just delete it"
+			rep.Reason = fmt.Sprintf("in an organization namespace and applied from git (Flux Kustomization %q), never written by this command: apply the diff in the organization's repository (replace muster.requireApproval: true with default: Ask, never just delete it), then run migrate again; the agent-platform-operator keeps the namespace's chart source on its major until a run finds every release there on %d.x values", rel.obj.GetLabels()[agents.KustomizationNameLabel], to)
 		} else if rel.platform {
 			rep.Reason = "ships with the Agent Platform, never written by this command: it moves with the platform release"
 		} else if rel.gitops && !rel.external {
@@ -802,7 +813,7 @@ func (r *Runner) planValuesFrom(rel *release, rep *ReleaseReport, values map[str
 	rep.Reason = "takes values from spec.valuesFrom, which this command does not read: replace muster.requireApproval: true there with default: Ask (never just delete it), set modelConfig.name where 2.x rendered its default (default-model-config), and move the release's settings into spec.values: agent-manager binds tool approval settings only from spec.values"
 	switch {
 	case rel.org:
-		rep.Reason += ". The agent-platform-operator moves its chart source with the platform's range; fix it before, or its 3.x render fails and it keeps its 2.x revision"
+		rep.Reason += ". The agent-platform-operator keeps the namespace's chart source on 2.x until it is fixed and a run finds every release there on 3.x values"
 	case rel.gitops || rel.external || rel.platform:
 		rep.Reason += ". Apply it in the owning repository together with the move of its chart source"
 	default:
@@ -892,10 +903,14 @@ func heldWrites(src *source) []*release {
 }
 
 // holdUnmovable keeps, on the 2.x -> 3.x path, the releases of a source this
-// run cannot move (pinned by tag or digest, GitOps-owned, external, the
-// platform's or an organization's) on their values: no released 2.x chart
-// takes `default`, so 3.x values under a source left on 2.x would fail every
-// render until someone moved it. They are reported pending with the diff.
+// run cannot move (pinned by tag or digest, GitOps-owned, external or the
+// platform's) on their values: no released 2.x chart takes `default`, so 3.x
+// values under a source left on 2.x would fail every render until someone
+// moved it. They are reported pending with the diff. An organization's
+// source is not held: the agent-platform-operator moves it once the report
+// marks the namespace ready (OrganizationReadyAnnotation), so its releases
+// are written first. Until the operator follows, their upgrade on the 2.x
+// chart fails and each keeps its deployed revision, which still asks.
 func (r *Runner) holdUnmovable(st *nsState) {
 	if r.hop.to != 3 {
 		return
@@ -904,7 +919,7 @@ func (r *Runner) holdUnmovable(st *nsState) {
 		why := ""
 		switch {
 		case src.org:
-			why = "the agent-platform-operator's"
+			continue
 		case src.platform:
 			why = "the Agent Platform's"
 		case src.gitops || src.external:
@@ -998,7 +1013,7 @@ func (r *Runner) moveSource(ctx context.Context, st *nsState, dyn dynamic.Interf
 		return rep
 	}
 	if src.org {
-		rep.Action, rep.Reason = ActionUnchanged, "the agent-platform-operator's: it moves the source with the platform's range, never this command"
+		rep.Action, rep.Reason = ActionUnchanged, fmt.Sprintf("the agent-platform-operator's, never moved by this command: the operator moves it to the platform's range once the namespace's report carries %s (every release there on %d.x values)", OrganizationReadyAnnotation, r.hop.to)
 		return rep
 	}
 	moved := &unstructured.Unstructured{Object: runtime.DeepCopyJSON(src.obj.Object)}

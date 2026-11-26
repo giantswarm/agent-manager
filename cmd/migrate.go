@@ -154,7 +154,7 @@ variable named next to it; flags win.`,
 	f.StringVar(&o.skillsGitAuthPrev, "skills-git-auth-previous-secret-names", envOr("AGENT_MANAGER_SKILLS_GIT_AUTH_PREVIOUS_SECRET_NAMES", ""), "Comma-separated earlier names of the installation's skills credential Secret; empty moves no release (AGENT_MANAGER_SKILLS_GIT_AUTH_PREVIOUS_SECRET_NAMES)")
 	f.DurationVar(&o.skillsGitAuthWait, "skills-git-auth-wait", envDuration("AGENT_MANAGER_SKILLS_GIT_AUTH_WAIT", 10*time.Minute), "How long the run waits, all in all, for the --skills-git-auth-secret-name Secret to appear where a release still names a previous name (agent-manager's rollout may trail the run); then such a release keeps the previous name until a later run (AGENT_MANAGER_SKILLS_GIT_AUTH_WAIT)")
 	f.StringVar(&o.reportConfigMap, "report-configmap", envOr("AGENT_MANAGER_MIGRATE_REPORT_CONFIGMAP", migrate.DefaultReportConfigMap), "Name of the report ConfigMap written in every managed namespace (AGENT_MANAGER_MIGRATE_REPORT_CONFIGMAP)")
-	f.StringVar(&o.organizations, "organization-namespaces", envOr("AGENT_MANAGER_MIGRATE_ORGANIZATION_NAMESPACES", "auto"), "Organization namespaces read (never written) and reported: their chart sources are the agent-platform-operator's, which moves them with the platform's range at once, so a release there that needs the target major's values is listed with its diff and keeps the run pending. auto: on the 2.x -> 3.x path every namespace labelled agent-platform.giantswarm.io/organization (an unreadable list fails the run), none on the others; none: skip; or a comma-separated list (AGENT_MANAGER_MIGRATE_ORGANIZATION_NAMESPACES)")
+	f.StringVar(&o.organizations, "organization-namespaces", envOr("AGENT_MANAGER_MIGRATE_ORGANIZATION_NAMESPACES", "auto"), "Organization namespaces migrated like the managed ones, their chart sources excepted: those are the agent-platform-operator's, which moves one across a major only once the namespace's report carries agent-platform.giantswarm.io/agent-chart-ready-major (every release there on the target major's values). Releases agent-manager owns are rewritten, GitOps-owned ones get their diff; one not on target values keeps the run pending. auto: on the 2.x -> 3.x path every namespace labelled agent-platform.giantswarm.io/organization (an unreadable list fails the run), none on the others; none: skip; or a comma-separated list (AGENT_MANAGER_MIGRATE_ORGANIZATION_NAMESPACES)")
 	f.BoolVar(&o.dryRun, "dry-run", envBool("AGENT_MANAGER_MIGRATE_DRY_RUN", false), "Print the report and the diffs; write nothing, not even the report (AGENT_MANAGER_MIGRATE_DRY_RUN)")
 	return cmd
 }
@@ -254,8 +254,8 @@ func runMigrate(ctx context.Context, out io.Writer, o *migrateOptions) error {
 
 // migrateOrganizations are the organization namespaces the run reads (see
 // --organization-namespaces). On the 2.x -> 3.x path an unreadable list is
-// an error: the operator moves those namespaces' sources at once, and a run
-// that cannot see them must not report the installation migrated.
+// an error: a run that cannot see them must not report the installation
+// migrated, and their sources stay on the old major until a run marks them.
 func migrateOrganizations(ctx context.Context, clients kube.Client, flag string, major uint64, managed []string) ([]string, error) {
 	switch strings.TrimSpace(flag) {
 	case "none", "":
@@ -266,7 +266,7 @@ func migrateOrganizations(ctx context.Context, clients kube.Client, flag string,
 		}
 		orgs, err := migrate.OrganizationNamespaces(ctx, clients.Typed(), managed)
 		if err != nil {
-			return nil, fmt.Errorf("%w; the run needs list on namespaces and read access to helmreleases and ocirepositories there (or --organization-namespaces none, which leaves the organizations' releases unchecked) — nothing was changed", err)
+			return nil, fmt.Errorf("%w; the run needs list on namespaces, read and update on helmreleases, read on ocirepositories and the report ConfigMap there (or --organization-namespaces none, which leaves the organizations' releases unchecked) — nothing was changed", err)
 		}
 		return orgs, nil
 	}

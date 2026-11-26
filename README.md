@@ -1010,9 +1010,9 @@ phase rewrites what chart 3.0 changed and reports every change per release
 
 A GitOps-owned release gets the same change as a diff for its repository.
 The values are written only once a 3.x chart exists in the registry and only
-where this run then moves the namespace's source: no released 2.x chart takes
-`default`, so a release whose source is pinned by tag or digest, owned by git,
-the platform's or an organization's is held `pending` with the diff instead.
+where the namespace's source then moves: no released 2.x chart takes
+`default`, so a release whose source is pinned by tag or digest, owned by git
+or the platform's is held `pending` with the diff instead.
 A release whose source is held by a sibling (a GitOps-owned release waiting
 for its diff, a failure) is held too, with the diff: 3.x values under that
 source would fail every 2.x upgrade. A release with `spec.valuesFrom` is never written: migrate reads `spec.values`
@@ -1022,20 +1022,35 @@ only, so it would spell out a model `valuesFrom` sets and miss a
 
 Organization namespaces (`--organization-namespaces`, default `auto`: every
 namespace labelled `agent-platform.giantswarm.io/organization` on this path)
-are read, never written: the agent-platform-operator moves their chart sources
-with the platform's range at once. An agent-chart source there is recognised by
+are migrated by the same rules, their chart sources excepted: those are the
+agent-platform-operator's. A release agent-manager owns there is rewritten
+(ownership `organization`); one applied from the organization's git
+repository gets its diff and holds its siblings, as in a managed namespace.
+The run writes its report in every organization namespace, and when every
+release there is on 3.x values it annotates the report
+`agent-platform.giantswarm.io/agent-chart-ready-major: "3"` (a run that finds
+one pending removes the annotation). The operator moves an organization's
+source across a major only while that annotation names the new major (or no
+HelmRelease uses the source), so a namespace with a release still on 2.x
+values stays on its 2.x chart, every release there still asking, until the
+release is fixed and migrate runs again. Between the run's write and the
+operator's move (its next reconcile, within a minute) a rewritten release's
+2.x upgrade fails and it keeps its deployed revision, which still asks.
+An agent-chart source there is recognised by
 the chart's name too (the operator's copy keeps the registry URL it was created
 with); a release on a source of another chart is named in the warnings. Each
-release there that needs 3.x values is
-reported (ownership `organization`) with its diff, and each keeps the first
-managed namespace's report in the expand phase until it is fixed; Flux and the
-Agents there are not waited for (their readiness is the organization's). A run
-that may not list or read them fails before it writes anything. A release with
+release there not on 3.x values keeps the first managed namespace's report in
+the expand phase too; Flux and the Agents there are not waited for (their
+readiness is the organization's). A run that may not list, read or write them
+fails before it writes anything. A release with
 `valuesFrom` already deployed from a 3.x chart is done: the 3.x chart refuses
 `requireApproval` in its merged values. A range whose bound admits a
-pre-release of the next major (`<=3.0.0-rc.1`) is refused: Flux would serve it. Repair: apply the diff through the
-release's owner (agent-manager's update tools, or its repository), replacing
-`muster.requireApproval: true` with `default: Ask`, never just deleting it.
+pre-release of the next major (`<=3.0.0-rc.1`) is refused: Flux would serve it,
+and every version a range names and every alternative of a `||` range counts
+(`3.0.1 || 2.6.0` spans two majors and is refused). Repair of a held
+organization release: apply the diff through its owner (its repository),
+replacing `muster.requireApproval: true` with `default: Ask`, never just
+deleting it, then run migrate again.
 
 Sessions: agent-manager binds a Session of an agent on
 `muster.requireApproval: true` with `default: Ask` already on 2.x, so a Session
