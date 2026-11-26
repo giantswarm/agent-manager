@@ -1255,7 +1255,7 @@ func (s *Service) ValidateCreate(ctx context.Context, spec Spec) (*ValidateResul
 		spec.Skills, spec.Plugins = sk, pl
 	}
 	values := BuildValues(spec, st.compose)
-	if err := setToolListValues(values, spec.Tools, spec.Default, s.chartTakesTools(ctx), s.chartVersion(ctx)); err != nil {
+	if err := setToolListValues(values, spec.Tools, spec.Default, s.chartTakesTools(ctx), s.chartVersion(ctx), s.sendsApproval()); err != nil {
 		res.addError(err)
 	}
 	setCreator(values, identity.Caller(ctx), identity.CallerName(ctx))
@@ -1582,7 +1582,7 @@ func (s *Service) Create(ctx context.Context, spec Spec) (*CreateResult, error) 
 		return nil, err
 	}
 	values := BuildValues(spec, st.compose)
-	if err := setToolListValues(values, spec.Tools, spec.Default, s.chartTakesTools(ctx), s.chartVersion(ctx)); err != nil {
+	if err := setToolListValues(values, spec.Tools, spec.Default, s.chartTakesTools(ctx), s.chartVersion(ctx), s.sendsApproval()); err != nil {
 		return nil, err
 	}
 	setCreator(values, identity.Caller(ctx), identity.CallerName(ctx))
@@ -1880,6 +1880,11 @@ func (s *Service) mergedValues(ctx context.Context, st *site, upd Update, hr *un
 		// is the way to say "no tools"), so a tool list can never be cleared
 		// back to implicit full access.
 		list, def := toolListFromValues(before)
+		if upd.expectTools != nil && (!slices.Equal(list, *upd.expectTools) || def != upd.expectDefault) {
+			// set_agent_approval read the list before its checks; another
+			// save changed it since (M2-S3-C-08).
+			return after, before, conflictf("agent %s's tool list changed while set_agent_approval checked it; read it again and repeat the call", st.describe(upd.Name))
+		}
 		if upd.Tools != nil {
 			list = *upd.Tools
 			if err := ValidateToolList(list, false); err != nil {
@@ -1892,7 +1897,8 @@ func (s *Service) mergedValues(ctx context.Context, st *site, upd Update, hr *un
 				return after, before, err
 			}
 		}
-		if err := setToolListValues(after, list, def, s.chartTakesTools(ctx), s.chartVersion(ctx)); err != nil {
+		takes, version := s.releaseTakesTools(ctx, hr, before)
+		if err := setToolListValues(after, list, def, takes, version, s.sendsApproval()); err != nil {
 			return after, before, err
 		}
 	}
@@ -2192,7 +2198,7 @@ func (s *Service) Delete(ctx context.Context, loc Location, name string, force b
 	}
 	res.HelmReleaseDeleted = true
 	if !w.DryRun {
-		s.deleteGrants(ctx, approvalgrants.Agent{UID: string(hr.GetUID()), Namespace: ns, Name: name})
+		res.SessionSync = s.deleteGrants(ctx, approvalgrants.Agent{UID: string(hr.GetUID()), Namespace: ns, Name: name})
 	}
 	if suspended && force && obj != nil {
 		// Flux drops the finalizer of a suspended release without uninstalling:
@@ -2435,7 +2441,7 @@ func agentFromObject(obj, server *unstructured.Unstructured, rule *tags.Rule) Ag
 	a.Plugins = pluginsFromObject(obj)
 	a.Egress = egressFromObject(obj)
 	a.EgressPolicyRefs = egressPolicyRefsFromObject(obj)
-	a.ToolBindings = toolBindingsOf(obj)
+	a.Tools = toolBindingsOf(obj)
 	a.Toolset, a.ImplicitFullAccess = toolsetOf(obj, server)
 	a.Status = objectStatusOf(obj)
 	a.Ready = objectReady(a.Status)
@@ -2545,9 +2551,9 @@ func applyHelmRelease(a *Agent, hr *unstructured.Unstructured, rule *tags.Rule) 
 	// reported as such, a release without one is implicit full access — even
 	// while the Agent has not been rendered yet.
 	if values != nil {
-		a.Tools, a.DefaultSetting = toolListFromValues(values)
-		if a.Tools != nil {
-			a.Toolset, a.ImplicitFullAccess = a.Tools.Selectors(), false
+		a.ToolSettings, a.DefaultSetting = toolListFromValues(values)
+		if a.ToolSettings != nil {
+			a.Toolset, a.ImplicitFullAccess = a.ToolSettings.Selectors(), false
 		} else {
 			a.Toolset, a.ImplicitFullAccess = nil, true
 		}

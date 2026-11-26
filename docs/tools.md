@@ -1184,6 +1184,7 @@ settings names entries of the agent's tools ({"tool:x": "Allow"}; "" removes a s
 
 ```json
 {
+  "additionalProperties": false,
   "properties": {
     "branch": {
       "description": "mode commit with repository: the base branch the pull request goes to.",
@@ -1613,6 +1614,7 @@ Change what an agent is: name, description, prompt, model, tags, labels, annotat
 
 ```json
 {
+  "additionalProperties": false,
   "properties": {
     "annotations": {
       "additionalProperties": {
@@ -1719,6 +1721,7 @@ Only fields passed change; a list replaces the whole value. Presets: preset:read
 
 ```json
 {
+  "additionalProperties": false,
   "properties": {
     "branch": {
       "description": "mode commit with repository: the base branch the pull request goes to.",
@@ -2001,6 +2004,7 @@ Checks the name, modelConfig (omitted: the default), egressPolicyRefs, connector
 
 ```json
 {
+  "additionalProperties": false,
   "properties": {
     "annotations": {
       "additionalProperties": {

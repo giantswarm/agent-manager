@@ -36,7 +36,8 @@ func TestBindPutsTheBindingAsTheCaller(t *testing.T) {
 	require.NoError(t, err)
 
 	b := Binding{Actor: actor, Session: "kagent/0199", Providers: []string{"github"}}
-	require.NoError(t, c.Bind(t.Context(), "id-token", b))
+	_, err = c.Bind(t.Context(), "id-token", b)
+	require.NoError(t, err)
 	assert.Equal(t, http.MethodPut, got.method)
 	assert.Equal(t, "/session-bindings", got.path)
 	assert.Equal(t, "Bearer id-token", got.auth)
@@ -72,7 +73,7 @@ func TestRefusalsAreSentinelsInMustersWords(t *testing.T) {
 		}))
 		c, err := New(srv.URL+"/session-bindings", nil)
 		require.NoError(t, err)
-		err = c.Bind(t.Context(), "id-token", Binding{Actor: actor, Providers: []string{"github"}})
+		_, err = c.Bind(t.Context(), "id-token", Binding{Actor: actor, Providers: []string{"github"}})
 		require.ErrorIs(t, err, sentinel, code)
 		assert.Contains(t, err.Error(), "muster")
 		assert.Contains(t, err.Error(), "the reason")
@@ -94,7 +95,8 @@ func TestRefusalsAreSentinelsInMustersWords(t *testing.T) {
 func TestNoCallWithoutAToken(t *testing.T) {
 	c, err := New("http://muster.example/session-bindings", nil)
 	require.NoError(t, err)
-	require.ErrorIs(t, c.Bind(t.Context(), "", Binding{}), ErrUnauthenticated)
+	_, bindErr := c.Bind(t.Context(), "", Binding{})
+	require.ErrorIs(t, bindErr, ErrUnauthenticated)
 }
 
 func TestBindEncodedBodyLimit(t *testing.T) {
@@ -102,8 +104,8 @@ func TestBindEncodedBodyLimit(t *testing.T) {
 		name string
 		tool string
 	}{
-		{"ASCII", strings.Repeat("x", 20000)},
-		{"JSON escaping", "tool:" + strings.Repeat("\"", 8187)},
+		{"ASCII", strings.Repeat("x", 70000)},
+		{"JSON escaping", "tool:" + strings.Repeat("\"", 33000)},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			var called atomic.Bool
@@ -114,16 +116,16 @@ func TestBindEncodedBodyLimit(t *testing.T) {
 			t.Cleanup(server.Close)
 			client, err := New(server.URL+"/session-bindings", nil)
 			require.NoError(t, err)
-			err = client.Bind(t.Context(), "id-token", Binding{Actor: actor, Session: "kagent/0199", Providers: []string{"muster"}, Toolset: []string{testCase.tool}})
+			_, err = client.Bind(t.Context(), "id-token", Binding{Actor: actor, Session: "kagent/0199", Providers: []string{"muster"}, Toolset: []string{testCase.tool}})
 			require.ErrorIs(t, err, ErrInvalid)
-			require.ErrorContains(t, err, "16384 allowed")
+			require.ErrorContains(t, err, "65536 allowed")
 			require.False(t, called.Load())
 		})
 	}
 }
 
 func TestBindSerializedBodyBoundary(t *testing.T) {
-	for _, size := range []int{16384, 16385} {
+	for _, size := range []int{65536, 65537} {
 		t.Run(fmt.Sprint(size), func(t *testing.T) {
 			var called atomic.Bool
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -140,8 +142,8 @@ func TestBindSerializedBodyBoundary(t *testing.T) {
 			encoded, err = json.Marshal(binding)
 			require.NoError(t, err)
 			require.Len(t, encoded, size)
-			err = client.Bind(t.Context(), "id-token", binding)
-			if size == 16384 {
+			_, err = client.Bind(t.Context(), "id-token", binding)
+			if size == 65536 {
 				require.NoError(t, err)
 				require.True(t, called.Load())
 			} else {

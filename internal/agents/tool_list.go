@@ -211,7 +211,7 @@ func toolListFromValues(values map[string]any) (ToolList, string) {
 // setToolListValues writes a tool list and default into values: as `tools`
 // and `default` when the chart takes them (dropping a `toolset` the release
 // had), else as `toolset`, refusing settings the chart cannot carry.
-func setToolListValues(values map[string]any, l ToolList, def string, chartTakesTools bool, chartVersion string) error {
+func setToolListValues(values map[string]any, l ToolList, def string, chartTakesTools bool, chartVersion string, binds bool) error {
 	if !chartTakesTools {
 		if l.HasSettings() || def != "" {
 			return fmt.Errorf("%w: the agent chart %s has no tool approval settings (tools, default); use a chart that has them", ErrUnsupported, orDefault(chartVersion, "in use"))
@@ -220,6 +220,9 @@ func setToolListValues(values map[string]any, l ToolList, def string, chartTakes
 			values[ToolsetValuesKey] = toAnySlice(l.Selectors())
 		}
 		return nil
+	}
+	if (l.HasSettings() || def != "") && !binds {
+		return errNoBinding
 	}
 	if l != nil {
 		values[ToolsValuesKey] = l.values()
@@ -231,6 +234,40 @@ func setToolListValues(values map[string]any, l ToolList, def string, chartTakes
 		values[DefaultValuesKey] = def
 	}
 	return nil
+}
+
+// errNoBinding refuses settings an installation would not enforce
+// (M2-S3-C-02, S-03).
+var errNoBinding = fmt.Errorf("%w: this installation does not bind tool approval settings to sessions (agent-manager's muster.toolApproval is off, or it has no muster bindings endpoint or sender token), so an Allow, Ask, Block or default would not be enforced; save the tool list without settings, or turn tool approval on", ErrUnsupported)
+
+// releaseTakesTools reports whether the chart the release runs takes `tools`
+// (M2-S3-C-17): the registry's latest chart must, and the release must run
+// it, or already carry `tools`. A release still on another chart version
+// keeps the key it has until Flux upgrades it.
+func (s *Service) releaseTakesTools(ctx context.Context, hr *unstructured.Unstructured, before map[string]any) (bool, string) {
+	// The schema judged by is the one of SchemaVersion (the resolved chart).
+	latest := s.chart.Info(ctx).SchemaVersion
+	if latest == "" {
+		latest = s.chartVersion(ctx)
+	}
+	if !s.chartTakesTools(ctx) {
+		return false, latest
+	}
+	if _, has := before[ToolsValuesKey]; has {
+		return true, latest
+	}
+	running := ""
+	if hr != nil {
+		if history, found, _ := unstructured.NestedSlice(hr.Object, "status", "history"); found && len(history) > 0 {
+			if entry, ok := history[0].(map[string]any); ok {
+				running, _ = entry["chartVersion"].(string)
+			}
+		}
+	}
+	if running != "" && latest != "" && running != latest {
+		return false, running
+	}
+	return true, latest
 }
 
 // chartTakesTools reports whether the resolved agent chart declares `tools`.

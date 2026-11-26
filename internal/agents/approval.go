@@ -2,6 +2,7 @@ package agents
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/giantswarm/agent-manager/internal/approvalgrants"
 	"github.com/giantswarm/agent-manager/internal/identity"
+	"github.com/giantswarm/agent-manager/internal/kube"
 	"github.com/giantswarm/agent-manager/internal/muster"
 )
 
@@ -61,12 +63,16 @@ type ReportedTool struct {
 	Connectors []Connector
 }
 
-// Connector is an MCPServer as muster reports it.
+// Connector is an MCPServer as muster reports it. Tool is the server's own
+// name of the reported tool on it; Tools collects, for a grant, the server's
+// own names of every tool the grant covers there.
 type Connector struct {
-	Server    string `json:"server"`
-	Namespace string `json:"namespace"`
-	Name      string `json:"name"`
-	UID       string `json:"uid"`
+	Server    string   `json:"server"`
+	Namespace string   `json:"namespace"`
+	Name      string   `json:"name"`
+	UID       string   `json:"uid"`
+	Tool      string   `json:"tool,omitempty"`
+	Tools     []string `json:"-"`
 }
 
 // GrantDropper is muster's binding endpoint that removes grant marks from an
@@ -91,6 +97,8 @@ type GrantView struct {
 	GrantedBy          string                `json:"grantedBy"`
 	GrantedAt          time.Time             `json:"grantedAt"`
 	Generation         int64                 `json:"generation"`
+	// Tools are the server's own names of the tools the grant covers.
+	Tools []string `json:"tools"`
 }
 
 // DroppedGrant is a grant a save removed.
@@ -103,7 +111,11 @@ type DroppedGrant struct {
 }
 
 func grantView(g approvalgrants.Grant) GrantView {
-	return GrantView{Entry: g.Entry, Server: g.Server, ConnectorNamespace: g.ConnectorNamespace, ConnectorUID: g.ConnectorUID, GrantedBy: g.GrantedBy, GrantedAt: g.GrantedAt, Generation: g.Generation}
+	tools := g.Tools
+	if tools == nil {
+		tools = []string{}
+	}
+	return GrantView{Entry: g.Entry, Server: g.Server, ConnectorNamespace: g.ConnectorNamespace, ConnectorUID: g.ConnectorUID, GrantedBy: g.GrantedBy, GrantedAt: g.GrantedAt, Generation: g.Generation, Tools: tools}
 }
 
 // allowEntries are the entries (and DefaultEntry) whose setting is Allow.
@@ -148,13 +160,22 @@ func (s *Service) grantNeeds(ctx context.Context, l ToolList, def string, entrie
 			continue
 		}
 		for _, c := range t.Connectors {
-			if !slices.ContainsFunc(needs[t.Entry], func(have Connector) bool { return have.Server == c.Server }) {
+			i := slices.IndexFunc(needs[t.Entry], func(have Connector) bool { return have.Server == c.Server })
+			if i < 0 {
+				c.Tools = nil
 				needs[t.Entry] = append(needs[t.Entry], c)
+				i = len(needs[t.Entry]) - 1
+			}
+			if c.Tool != "" && !slices.Contains(needs[t.Entry][i].Tools, c.Tool) {
+				needs[t.Entry][i].Tools = append(needs[t.Entry][i].Tools, c.Tool)
 			}
 		}
 	}
 	for entry := range needs {
 		sort.Slice(needs[entry], func(i, j int) bool { return needs[entry][i].Server < needs[entry][j].Server })
+		for i := range needs[entry] {
+			slices.Sort(needs[entry][i].Tools)
+		}
 	}
 	return needs, nil
 }
@@ -193,10 +214,15 @@ func connectorNames(cs []Connector) string {
 }
 
 // isConnectorAdmin asks, as the caller, whether they may update MCPServers in
-// namespace: the connector-admin check. Without downstream OAuth the review
-// asks for agent-manager's ServiceAccount, which holds no such right, so no
-// one is a connector admin.
+// namespace: the connector-admin check. It is answered only where agent-
+// manager talks to Kubernetes as the caller (downstream OAuth): otherwise a
+// review would describe agent-manager's own ServiceAccount, and wherever that
+// is bound widely every caller would count as a connector admin (M2-S3-S-12),
+// so no one is one.
 func (s *Service) isConnectorAdmin(ctx context.Context, namespace string) (bool, error) {
+	if s.kube.Identity() != kube.IdentityCaller {
+		return false, nil
+	}
 	client, err := s.kube.Client(ctx)
 	if err != nil {
 		return false, err
@@ -250,49 +276,58 @@ type grantSave struct {
 // no longer an Allow, of a save to git, or of an agent's save is dropped; one
 // whose connector the saver is no admin of is dropped; the rest are kept,
 // re-recorded with the saver and the save's generation; the save's own
-// grants are written. Dropped grants leave the agent's running Sessions.
-func (s *Service) settleGrants(ctx context.Context, save grantSave) ([]GrantView, []DroppedGrant, error) {
+// grants are written. Every live save of an agent that has or had grants
+// tells muster the grants left (idempotent), so a drop an earlier save could
+// not send is sent again; the record carries PendingSessionSync until muster
+// confirmed it (session_sync.go).
+func (s *Service) settleGrants(ctx context.Context, save grantSave) ([]GrantView, []DroppedGrant, SessionSync, error) {
 	if s.cfg.Grants == nil {
 		if len(save.granted) > 0 {
-			return nil, nil, fmt.Errorf("%w: this agent-manager keeps no approval grants (no grants store)", ErrUnsupported)
+			return nil, nil, SessionSync{}, fmt.Errorf("%w: this agent-manager keeps no approval grants (no grants store)", ErrUnsupported)
 		}
-		return nil, nil, nil
+		return nil, nil, SessionSync{}, nil
 	}
 	var kept []GrantView
 	var dropped []DroppedGrant
-	var removed bool
+	var written approvalgrants.Record
+	var notify bool
 	for attempt := 0; ; attempt++ {
 		rec, err := s.cfg.Grants.Get(ctx, save.agent)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, SessionSync{}, err
 		}
 		next, k, d, err := s.nextGrants(ctx, save, rec.Grants)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, SessionSync{}, err
 		}
+		// Muster is told after every save of an agent with a grant history
+		// (a record exists): the record is marked until it confirms.
+		notify = rec.Version != "" || len(d) > 0
 		rec.Grants = next
+		rec.PendingSessionSync = notify
 		err = s.cfg.Grants.Replace(ctx, rec)
 		if errors.Is(err, approvalgrants.ErrConflict) && attempt < 3 {
 			continue
 		}
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, SessionSync{}, err
 		}
-		kept, dropped, removed = k, d, len(d) > 0
+		kept, dropped, written = k, d, rec
 		break
 	}
 	for _, g := range kept {
 		s.log.InfoContext(ctx, "approval grant recorded", append(s.approvalLogAttrs(ctx, save.tool, save.agent.Key()),
-			"entry", g.Entry, "server", g.Server, "connectorUid", g.ConnectorUID, "generation", g.Generation, "kept", !isNew(save, g))...)
+			"entry", g.Entry, "server", g.Server, "connectorUid", g.ConnectorUID, "generation", g.Generation, "tools", g.Tools, "kept", !isNew(save, g))...)
 	}
 	for _, d := range dropped {
 		s.log.InfoContext(ctx, "approval grant dropped", append(s.approvalLogAttrs(ctx, save.tool, save.agent.Key()),
 			"entry", d.Entry, "server", d.Server, "connectorUid", d.connectorUID, "reason", d.Reason)...)
 	}
-	if removed {
-		s.dropFromSessions(ctx, save.tool, save.agent.Key(), kept)
+	var sync SessionSync
+	if notify {
+		sync = s.syncSessions(ctx, save.tool, written, false)
 	}
-	return kept, dropped, nil
+	return kept, dropped, sync, nil
 }
 
 // isNew reports whether g is one of the save's own grants.
@@ -302,15 +337,20 @@ func isNew(save grantSave, g GrantView) bool {
 
 // nextGrants is settleGrants' decision over the stored grants.
 func (s *Service) nextGrants(ctx context.Context, save grantSave, current []approvalgrants.Grant) ([]approvalgrants.Grant, []GrantView, []DroppedGrant, error) {
-	saver := identity.Caller(ctx)
+	saver := identity.VerifiedCaller(ctx)
 	now := time.Now().UTC().Truncate(time.Second)
 	allow := allowEntries(save.tools, save.def)
 	memo := &adminMemo{s: s}
 	var next []approvalgrants.Grant
 	var dropped []DroppedGrant
 	for _, g := range current {
-		if _, regranted := save.granted[g.Entry]; regranted {
-			continue // replaced by this save's own grants below
+		if regrant, regranted := save.granted[g.Entry]; regranted {
+			// Replaced by this save's own grants below; a connector the
+			// entry no longer needs a grant on goes, said so.
+			if !slices.ContainsFunc(regrant, func(c Connector) bool { return c.Server == g.Server }) {
+				dropped = append(dropped, DroppedGrant{Entry: g.Entry, Server: g.Server, Reason: "regranted without this connector: the entry selects no asking tool of it any more", connectorUID: g.ConnectorUID})
+			}
+			continue
 		}
 		reason := ""
 		switch {
@@ -326,7 +366,7 @@ func (s *Service) nextGrants(ctx context.Context, save grantSave, current []appr
 				return nil, nil, nil, err
 			}
 			if !admin {
-				reason = fmt.Sprintf("saved by %s, not a connector admin of %s", orDefault(saver, "an unknown caller"), g.Server)
+				reason = fmt.Sprintf("saved by %s, not a connector admin of %s", orDefault(identity.Caller(ctx), "an unknown caller"), g.Server)
 			}
 		}
 		if reason != "" {
@@ -338,7 +378,7 @@ func (s *Service) nextGrants(ctx context.Context, save grantSave, current []appr
 	}
 	for _, entry := range sortedKeys(save.granted) {
 		for _, c := range save.granted[entry] {
-			next = append(next, approvalgrants.Grant{Entry: entry, Server: c.Server, ConnectorNamespace: c.Namespace, ConnectorUID: c.UID, GrantedBy: saver, GrantedAt: now, Generation: save.generation})
+			next = append(next, approvalgrants.Grant{Entry: entry, Server: c.Server, ConnectorNamespace: c.Namespace, ConnectorUID: c.UID, GrantedBy: saver, GrantedAt: now, Generation: save.generation, Tools: slices.Clone(c.Tools)})
 		}
 	}
 	views := make([]GrantView, 0, len(next))
@@ -348,35 +388,18 @@ func (s *Service) nextGrants(ctx context.Context, save grantSave, current []appr
 	return next, views, dropped, nil
 }
 
-// dropFromSessions removes the dropped grants' marks from the agent's running
-// Sessions: muster keeps only the grants left. A failure is logged; the
-// records are gone regardless, and the marks end with the Sessions.
-func (s *Service) dropFromSessions(ctx context.Context, tool, agent string, left []GrantView) {
-	dropper, ok := s.cfg.Bindings.(GrantDropper)
-	if !ok || s.cfg.Bindings == nil {
-		return
-	}
-	token, _ := identity.TokenFromContext(ctx)
-	keep := make([]muster.Grant, 0, len(left))
-	for _, g := range left {
-		keep = append(keep, muster.Grant{Entry: g.Entry, Server: g.Server, UID: g.ConnectorUID})
-	}
-	attrs := s.approvalLogAttrs(ctx, tool, agent)
-	if err := dropper.DropGrants(ctx, token, agent, keep); err != nil {
-		s.log.WarnContext(ctx, "approval grants removed from running sessions", append(attrs, "kept", len(keep), "error", err.Error())...)
-		return
-	}
-	s.log.InfoContext(ctx, "approval grants removed from running sessions", append(attrs, "kept", len(keep))...)
-}
-
 // approvalLogAttrs are the fields every approval log line carries.
 func (s *Service) approvalLogAttrs(ctx context.Context, tool, agent string) []any {
 	return []any{"agent", agent, "tool", tool, "savedBy", identity.Caller(ctx), "callerKind", identity.CallerKind(ctx)}
 }
 
-// liveGrants are the agent's grants that hold for generation: a grant
-// written at another generation was written before values changed past
-// agent-manager and is dropped (from the records and the Sessions).
+// liveGrants are the agent's grants that hold for generation, the release's
+// current one. A grant written at a lower generation was written before the
+// release changed past agent-manager (any change of its spec: values, chart
+// version, suspend) and is dropped, from the records and the Sessions. One
+// written at a higher generation belongs to a save that ran after the
+// release was read (M2-S3-C-09, S-11): it is left alone and not bound now,
+// never dropped.
 func (s *Service) liveGrants(ctx context.Context, tool string, agent approvalgrants.Agent, generation int64) ([]approvalgrants.Grant, error) {
 	if s.cfg.Grants == nil || agent.UID == "" {
 		return nil, nil
@@ -386,35 +409,37 @@ func (s *Service) liveGrants(ctx context.Context, tool string, agent approvalgra
 		if err != nil {
 			return nil, err
 		}
-		var live []approvalgrants.Grant
-		var stale []approvalgrants.Grant
+		var live, stale, newer []approvalgrants.Grant
 		for _, g := range rec.Grants {
-			if g.Generation == generation {
+			switch {
+			case g.Generation == generation:
 				live = append(live, g)
-			} else {
+			case g.Generation < generation:
 				stale = append(stale, g)
+			default:
+				newer = append(newer, g)
 			}
 		}
 		if len(stale) == 0 {
+			if rec.PendingSessionSync {
+				s.syncSessions(ctx, tool, rec, false)
+			}
 			return live, nil
 		}
-		rec.Grants = live
+		rec.Grants = append(slices.Clone(live), newer...)
+		rec.PendingSessionSync = true
 		if err := s.cfg.Grants.Replace(ctx, rec); err != nil {
 			if errors.Is(err, approvalgrants.ErrConflict) && attempt < 3 {
 				continue
 			}
 			return nil, err
 		}
-		views := make([]GrantView, 0, len(live))
-		for _, g := range live {
-			views = append(views, grantView(g))
-		}
 		for _, g := range stale {
 			s.log.InfoContext(ctx, "approval grant dropped", append(s.approvalLogAttrs(ctx, tool, agent.Key()),
 				"entry", g.Entry, "server", g.Server, "connectorUid", g.ConnectorUID,
 				"reason", fmt.Sprintf("values changed outside agent-manager (release generation %d, grant written at %d)", generation, g.Generation))...)
 		}
-		s.dropFromSessions(ctx, tool, agent.Key(), views)
+		s.syncSessions(ctx, tool, rec, false)
 		return live, nil
 	}
 }
@@ -424,22 +449,48 @@ func (s *Service) liveGrants(ctx context.Context, tool string, agent approvalgra
 // settings. A store that cannot be read leaves the grants out, logged: the
 // listing is not refused for it.
 func (s *Service) attachGrants(ctx context.Context, namespace string, list []Agent) {
-	takes := s.chartTakesTools(ctx)
+	// Settings are reported as taken only where the chart takes them and
+	// this installation binds them to sessions.
+	takes := s.chartTakesTools(ctx) && s.sendsApproval()
 	for i := range list {
 		list[i].ApprovalSettings = takes
 	}
 	if s.cfg.Grants == nil {
 		return
 	}
-	records, err := s.cfg.Grants.ListByNamespace(ctx, namespace)
-	if err != nil {
-		s.log.WarnContext(ctx, "approval grants unreadable; agents listed without them", "namespace", namespace, "error", err.Error())
-		return
+	var records []approvalgrants.Record
+	if len(list) == 1 && list[0].releaseUID != "" {
+		// One agent (get_agent): its record by name, not the namespace's.
+		rec, err := s.cfg.Grants.Get(ctx, approvalgrants.Agent{UID: list[0].releaseUID, Namespace: namespace, Name: list[0].Name})
+		if err != nil {
+			s.log.WarnContext(ctx, "approval grants unreadable; the agent is reported without them", "agent", namespace+"/"+list[0].Name, "error", err.Error())
+			return
+		}
+		records = []approvalgrants.Record{rec}
+	} else {
+		var err error
+		if records, err = s.cfg.Grants.ListByNamespace(ctx, namespace); err != nil {
+			s.log.WarnContext(ctx, "approval grants unreadable; agents listed without them", "namespace", namespace, "error", err.Error())
+			return
+		}
 	}
 	byUID := map[string][]approvalgrants.Grant{}
+	live := map[string]bool{}
 	for _, r := range records {
 		byUID[r.Agent.UID] = r.Grants
 	}
+	for i := range list {
+		if list[i].releaseUID != "" {
+			live[list[i].releaseUID] = true
+		}
+	}
+	// A read carries a person's token: a sync an earlier write could not
+	// send goes now. A record of an agent not in a namespace listing was
+	// deleted; for get_agent only the agent's own record is read.
+	if len(list) == 1 {
+		live = map[string]bool{list[0].releaseUID: true}
+	}
+	s.resendPendingIn(ctx, "read", records, live)
 	for i := range list {
 		a := &list[i]
 		if a.releaseUID == "" {
@@ -458,7 +509,7 @@ func (s *Service) attachGrants(ctx context.Context, namespace string, list []Age
 // keeps none. The result carries the grants left and the ones dropped.
 func (s *Service) settleSave(ctx context.Context, st *site, upd Update, hr *unstructured.Unstructured, after map[string]any, res *UpdateResult, commit bool) error {
 	list, def := toolListFromValues(after)
-	kept, dropped, err := s.settleGrants(ctx, grantSave{
+	kept, dropped, sync, err := s.settleGrants(ctx, grantSave{
 		tool:       upd.tool,
 		agent:      approvalgrants.Agent{UID: string(hr.GetUID()), Namespace: st.ns(), Name: upd.Name},
 		generation: hr.GetGeneration(),
@@ -470,7 +521,7 @@ func (s *Service) settleSave(ctx context.Context, st *site, upd Update, hr *unst
 	if err != nil {
 		return fmt.Errorf("the agent was saved, but its approval grants could not be settled: %w", err)
 	}
-	res.Grants, res.Dropped = kept, dropped
+	res.Grants, res.Dropped, res.SessionSync = kept, dropped, sync
 	return nil
 }
 
@@ -512,8 +563,26 @@ func (s *Service) logAccessChanges(ctx context.Context, tool, agent string, befo
 		if reflect.DeepEqual(old[field], next[field]) {
 			continue
 		}
-		s.log.InfoContext(ctx, "agent access changed", append(slices.Clone(attrs), "field", field, "before", old[field], "after", next[field])...)
+		s.log.InfoContext(ctx, "agent access changed", append(slices.Clone(attrs), "field", field, "before", redactedValue(old[field]), "after", redactedValue(next[field]))...)
 	}
+}
+
+// redactedValue is a logged value with any URL's user:password@ replaced
+// (M2-S3-S-09): values written before credentials in URLs were refused may
+// still carry one.
+func redactedValue(v any) any {
+	if v == nil {
+		return nil
+	}
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return v
+	}
+	redacted := redactUserinfo(string(raw))
+	if redacted == string(raw) {
+		return v
+	}
+	return json.RawMessage(redacted)
 }
 
 // isEmptyValue reports a value that says nothing: nil, "", or an empty list.
@@ -531,24 +600,43 @@ func isEmptyValue(v any) bool {
 	return false
 }
 
-// deleteGrants removes a deleted agent's grants. A failure is logged: a
-// recreated agent has a new UID, so the record holds for nothing.
-func (s *Service) deleteGrants(ctx context.Context, agent approvalgrants.Agent) {
+// deleteGrants removes a deleted agent's grants: the record is emptied and
+// marked pending, muster is told to drop every mark of the agent (keep
+// empty), and the record goes once it confirmed; otherwise the empty record
+// stays pending and is sent again on the next read of the namespace.
+func (s *Service) deleteGrants(ctx context.Context, agent approvalgrants.Agent) SessionSync {
 	if s.cfg.Grants == nil || agent.UID == "" {
-		return
+		return SessionSync{}
 	}
-	rec, err := s.cfg.Grants.Get(ctx, agent)
-	if err == nil {
-		err = s.cfg.Grants.Delete(ctx, agent.UID)
+	var rec approvalgrants.Record
+	var had []approvalgrants.Grant
+	for attempt := 0; ; attempt++ {
+		var err error
+		rec, err = s.cfg.Grants.Get(ctx, agent)
+		if err != nil {
+			s.log.WarnContext(ctx, "approval grants of a deleted agent left behind", "agent", agent.Key(), "error", err.Error())
+			return SessionSync{}
+		}
+		if rec.Version == "" {
+			return SessionSync{}
+		}
+		had = rec.Grants
+		rec.Grants, rec.PendingSessionSync = nil, true
+		err = s.cfg.Grants.Replace(ctx, rec)
+		if errors.Is(err, approvalgrants.ErrConflict) && attempt < 3 {
+			continue
+		}
+		if err != nil {
+			s.log.WarnContext(ctx, "approval grants of a deleted agent left behind", "agent", agent.Key(), "error", err.Error())
+			return SessionSync{}
+		}
+		break
 	}
-	if err != nil {
-		s.log.WarnContext(ctx, "approval grants of a deleted agent left behind", "agent", agent.Key(), "error", err.Error())
-		return
-	}
-	for _, g := range rec.Grants {
+	for _, g := range had {
 		s.log.InfoContext(ctx, "approval grant dropped", append(s.approvalLogAttrs(ctx, "delete_agent", agent.Key()),
 			"entry", g.Entry, "server", g.Server, "connectorUid", g.ConnectorUID, "reason", "agent deleted")...)
 	}
+	return s.syncSessions(ctx, "delete_agent", rec, true)
 }
 
 // ListApprovalGrants is list_approval_grants: the live grants of the agents
@@ -573,6 +661,11 @@ func (s *Service) ListApprovalGrants(ctx context.Context, namespace, server stri
 	if err != nil {
 		return nil, err
 	}
+	live := map[string]bool{}
+	for _, hr := range releases {
+		live[string(hr.GetUID())] = true
+	}
+	s.resendPendingIn(ctx, "list_approval_grants", records, live)
 	for _, r := range records {
 		hr := releases[r.Agent.Name]
 		if hr == nil || string(hr.GetUID()) != r.Agent.UID {

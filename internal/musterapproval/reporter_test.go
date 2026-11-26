@@ -33,13 +33,13 @@ func (f *fakeMuster) MetaCall(_ context.Context, bearer, tool string, args map[s
 
 func TestAgentToolsPagesAndReadsTheDecidingEntry(t *testing.T) {
 	m := &fakeMuster{pages: []string{
-		`{"truncated": true, "tools": [{"name": "x_github_merge", "approval": {"setting": "ask", "source": "tool", "entry": "tool:x_github_merge", "admin": {"setting": "ask", "source": "tool"}}, "connectors": [{"server": "github", "namespace": "muster", "name": "github", "uid": "u1"}]}]}`,
-		`{"truncated": false, "tools": [{"name": "x_github_get", "approval": {"setting": "allow", "source": "tool"}}]}`,
+		`{"agentTools": {"entries": 2, "settings": 1}, "truncated": true, "tools": [{"name": "x_github_merge", "approval": {"setting": "ask", "source": "tool", "entry": "tool:x_github_merge", "admin": {"setting": "ask", "source": "tool"}}, "connectors": [{"server": "github", "namespace": "muster", "name": "github", "uid": "u1", "tool": "merge"}]}]}`,
+		`{"agentTools": {"entries": 2, "settings": 1}, "truncated": false, "tools": [{"name": "x_github_get", "approval": {"setting": "allow", "source": "tool"}}]}`,
 	}}
 	got, err := New(m).AgentTools(context.Background(), "tok", agents.AgentToolsQuery{Tools: agents.ToolList{{Selector: "tool:x_github_merge", Setting: "Allow"}, {Selector: "server:github"}}, Default: "Ask"})
 	require.NoError(t, err)
 	assert.Equal(t, []agents.ReportedTool{
-		{Name: "x_github_merge", Entry: "tool:x_github_merge", Admin: "ask", Connectors: []agents.Connector{{Server: "github", Namespace: "muster", Name: "github", UID: "u1"}}},
+		{Name: "x_github_merge", Entry: "tool:x_github_merge", Admin: "ask", Connectors: []agents.Connector{{Server: "github", Namespace: "muster", Name: "github", UID: "u1", Tool: "merge"}}},
 		{Name: "x_github_get"},
 	}, got)
 	require.Len(t, m.args, 2)
@@ -55,4 +55,14 @@ func TestAMusterThatDoesNotEvaluateAgentListsIsUnavailable(t *testing.T) {
 	m = &fakeMuster{err: &mustermcp.ToolError{Tool: FilterTool, Message: "unknown argument agentTools"}}
 	_, err = New(m).AgentTools(context.Background(), "tok", agents.AgentToolsQuery{})
 	require.ErrorIs(t, err, agents.ErrApprovalUnavailable)
+}
+
+// A muster that drops the agentTools argument answers tools without entries:
+// without its echo every Allow would look plain and no grant would be
+// recorded, so the answer is refused (M2-S3-C-07).
+func TestAnAnswerWithoutTheAgentToolsEchoIsUnavailable(t *testing.T) {
+	m := &fakeMuster{pages: []string{`{"truncated": false, "tools": [{"name": "x_github_merge", "approval": {"setting": "ask", "source": "tool"}}]}`}}
+	_, err := New(m).AgentTools(context.Background(), "tok", agents.AgentToolsQuery{Tools: agents.ToolList{{Selector: "tool:x_github_merge", Setting: "Allow"}}})
+	require.ErrorIs(t, err, agents.ErrApprovalUnavailable)
+	assert.Contains(t, err.Error(), "did not evaluate")
 }

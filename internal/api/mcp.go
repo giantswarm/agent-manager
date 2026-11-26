@@ -372,7 +372,7 @@ func NewMCPServer(svc *agents.Service, version string, opts ...Option) *mcpserve
 		mcp.WithOpenWorldHintAnnotation(true),
 	), t.createAgent)
 
-	s.AddTool(mcp.NewTool(ToolUpdateAgent,
+	addStrict(s, mcp.NewTool(ToolUpdateAgent,
 		tooldesc.Describe("Change what an agent is: name, description, prompt, model, tags, labels, annotations; only fields passed change.",
 			"\"\" clears a text field to the chart default; tags, labels, annotations replace the whole value. Reach changes with update_agent_access, approval settings with set_agent_approval. Returns values before and after. A suspended release needs force; GitOps-owned mode commit; platform is refused. Saving drops approval grants of connectors you are not connector admin of."),
 		mcp.WithString(argName, mcp.Required(), mcp.Description("Agent name")),
@@ -393,9 +393,10 @@ func NewMCPServer(svc *agents.Service, version string, opts ...Option) *mcpserve
 		mcp.WithDestructiveHintAnnotation(true),
 		mcp.WithIdempotentHintAnnotation(false),
 		mcp.WithOpenWorldHintAnnotation(false),
+		mcp.WithSchemaAdditionalProperties(false),
 	), t.updateAgent)
 
-	s.AddTool(mcp.NewTool(ToolUpdateAgentAccess,
+	addStrict(s, mcp.NewTool(ToolUpdateAgentAccess,
 		tooldesc.Describe("Change what an agent can reach: tool list, skills, plugins, egress, connectors, Harness, workspace, toolchains.",
 			"Only fields passed change; a list replaces the whole value. "+presetsSentence+" refreshSkills re-pins git skills and plugins. tools keeps carried-over settings; a new Allow over a connector's Ask is refused (set_agent_approval grants it). Saving drops grants of connectors you are not connector admin of. Returns values before and after, grants kept and dropped."),
 		mcp.WithString(argName, mcp.Required(), mcp.Description("Agent name")),
@@ -420,9 +421,10 @@ func NewMCPServer(svc *agents.Service, version string, opts ...Option) *mcpserve
 		mcp.WithDestructiveHintAnnotation(true),
 		mcp.WithIdempotentHintAnnotation(false),
 		mcp.WithOpenWorldHintAnnotation(true),
+		mcp.WithSchemaAdditionalProperties(false),
 	), t.updateAgentAccess)
 
-	s.AddTool(mcp.NewTool(ToolSetAgentApproval,
+	addStrict(s, mcp.NewTool(ToolSetAgentApproval,
 		tooldesc.Describe("Set an agent's approval settings: Allow, Ask or Block per tool list entry, and the default.",
 			"settings names entries of the agent's tools ({\"tool:x\": \"Allow\"}; \"\" removes a setting); default the list's default. The only way to let an agent skip a connector's Ask: such an Allow needs you to be its connector admin (update mcpservers in its namespace), is recorded as a grant, mode apply only. Saving drops other grants of connectors you are not admin of. An agent calling it is asked first."),
 		mcp.WithString(argName, mcp.Required(), mcp.Description("Agent name")),
@@ -438,6 +440,7 @@ func NewMCPServer(svc *agents.Service, version string, opts ...Option) *mcpserve
 		mcp.WithDestructiveHintAnnotation(true),
 		mcp.WithIdempotentHintAnnotation(true),
 		mcp.WithOpenWorldHintAnnotation(false),
+		mcp.WithSchemaAdditionalProperties(false),
 	), t.setAgentApproval)
 
 	s.AddTool(mcp.NewTool(ToolListApprovalGrants,
@@ -479,7 +482,7 @@ func NewMCPServer(svc *agents.Service, version string, opts ...Option) *mcpserve
 		mcp.WithOpenWorldHintAnnotation(false),
 	), t.getAgentStatus)
 
-	s.AddTool(mcp.NewTool(ToolValidateAgent,
+	addStrict(s, mcp.NewTool(ToolValidateAgent,
 		tooldesc.Describe("Dry run of create_agent, or of update_agent with update: true: the manifests and every violation. Writes nothing.",
 			"Checks the name, modelConfig (omitted: the default), egressPolicyRefs, connectors, harness and toolset (required for a create), pins the skills and plugins, validates the values against the chart schema and has the API server dry-run the rendered Agent and RemoteMCPServer (its field errors are the errors; an object the caller may not write is a note). mode answers as the write would. With update: true, lists, labels and annotations replace the whole value, as in update_agent."),
 		mcp.WithString(argName, mcp.Required(), mcp.Description("Agent name")),
@@ -514,6 +517,7 @@ func NewMCPServer(svc *agents.Service, version string, opts ...Option) *mcpserve
 		mcp.WithDestructiveHintAnnotation(false),
 		mcp.WithIdempotentHintAnnotation(false),
 		mcp.WithOpenWorldHintAnnotation(true),
+		mcp.WithSchemaAdditionalProperties(false),
 	), t.validateAgent)
 
 	s.AddTool(mcp.NewTool(ToolListModelConfigs,
@@ -730,6 +734,36 @@ var (
 	accessArgs     = []string{argTools, argToolset, argHarness, argSkills, argPlugins, argEgress, argEgressPolicies, argConnectors, argGitAuthSecret, argRefreshSkills, argDefaultWS, argDefaultTC}
 	approvalArgs   = []string{argDefault, argSettings}
 )
+
+// addStrict registers a tool that takes only the arguments it declares
+// (M2-S3-S-02): JSON binding matches field names case-insensitively, so an
+// argument another tool owns, written in another case ("Toolset", "EGRESS"),
+// would otherwise reach the agent through this tool. An argument another
+// split tool owns is refused naming that tool; any other undeclared one is
+// refused as unknown.
+func addStrict(s *mcpserver.MCPServer, tool mcp.Tool, handler mcpserver.ToolHandlerFunc) {
+	declared := tool.InputSchema.Properties
+	s.AddTool(tool, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		args := req.GetArguments()
+		if slices.Contains([]string{ToolUpdateAgent, ToolUpdateAgentAccess, ToolSetAgentApproval}, tool.Name) {
+			if err := refuseOtherToolsArgs(tool.Name, args); err != nil {
+				return errResult(err), nil
+			}
+		}
+		var unknown []string
+		for key := range args {
+			// Removed arguments are refused with their own message later.
+			if _, ok := declared[key]; !ok && key != "toolNames" && key != "runtime" {
+				unknown = append(unknown, key)
+			}
+		}
+		if len(unknown) > 0 {
+			slices.Sort(unknown)
+			return errResult(fmt.Errorf("%w: %s does not take %s: argument names are exact and case-sensitive (describe the tool for its arguments)", agents.ErrInvalid, tool.Name, strings.Join(unknown, ", "))), nil
+		}
+		return handler(ctx, req)
+	})
+}
 
 // refuseOtherToolsArgs refuses the arguments that belong to another of the
 // split update tools, naming it.

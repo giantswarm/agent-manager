@@ -274,7 +274,7 @@ func TestReadModelFromTheRenderedObjects(t *testing.T) {
 	}, a.Plugins, "plugins are reported as {source, skills}")
 	assert.Equal(t, []string{"preset:read-only", "workflow:incident-triage"}, a.Toolset, "the toolset is the header of the agent's own RemoteMCPServer")
 	assert.False(t, a.ImplicitFullAccess)
-	assert.Equal(t, []ToolBinding{{Server: "sre"}, {Server: "github", Tools: []string{"get_issue", "list_issues"}}}, a.ToolBindings)
+	assert.Equal(t, []ToolBinding{{Server: "sre"}, {Server: "github", Tools: []string{"get_issue", "list_issues"}}}, a.Tools)
 	require.NotNil(t, a.Ready)
 	assert.True(t, *a.Ready)
 	require.NotNil(t, a.Status)

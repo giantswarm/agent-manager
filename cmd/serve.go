@@ -463,7 +463,7 @@ func runServe(ctx context.Context, o *serveOptions) error {
 	}
 	var grants approvalgrants.Store
 	if o.approvalGrantsNamespace != "" {
-		grants = approvalgrants.NewConfigMapStore(clients.Typed().CoreV1().ConfigMaps(o.approvalGrantsNamespace))
+		grants = approvalgrants.NewConfigMapStore(clients.Typed().CoreV1().ConfigMaps(o.approvalGrantsNamespace)).WithLogger(log)
 	}
 	var approvalReader kube.Client
 	if o.approvalSenderTokenFile != "" {

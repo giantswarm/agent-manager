@@ -55,7 +55,7 @@ type SessionClient interface {
 // workspace Session's sandbox actor bound to the person who started it is
 // what muster releases that person's provider tokens to (muster.Client).
 type SessionBinder interface {
-	Bind(ctx context.Context, token string, b muster.Binding) error
+	Bind(ctx context.Context, token string, b muster.Binding) (muster.BindResult, error)
 	Unbind(ctx context.Context, token, actor string) error
 }
 
@@ -912,17 +912,21 @@ func (s *Service) bindSession(ctx context.Context, token string, ref kagent.Ref,
 	}
 	var approval *boundApproval
 	if slices.Contains(binding.Providers, muster.Provider) {
-		if binding.Toolset, err = s.sessionToolset(ctx, ref.Namespace, ref.Name); err != nil {
+		live, err := s.sessionToolset(ctx, ref.Namespace, ref.Name)
+		if err != nil {
 			return nil, fmt.Errorf("reading agent %s's toolset to bind session %s to it in muster: %w", ref.Tenant(), session.GetId(), err)
 		}
-		if approval, err = s.sessionApproval(ctx, ref, binding.Toolset); err != nil {
+		if binding.Toolset, approval, err = s.sessionApproval(ctx, ref, live); err != nil {
 			return nil, fmt.Errorf("reading agent %s's tool approval settings to bind session %s to it in muster: %w", ref.Tenant(), session.GetId(), err)
 		}
 		if approval != nil {
 			binding.Agent, binding.Approval = approval.agent.Key(), approval.binding
 		}
 	}
-	if err := s.cfg.Bindings.Bind(ctx, token, *binding); err != nil {
+	if err := s.bindWithApproval(ctx, token, binding, approval); err != nil {
+		if errors.Is(err, ErrApprovalUnavailable) {
+			return nil, err
+		}
 		return nil, bindingError(err, session.GetId())
 	}
 	s.log.InfoContext(ctx, "session bound in muster", identity.LogAttr(ctx), "session", session.GetId(), "actor", binding.Actor, "providers", binding.Providers, "toolset", binding.Toolset, "agent", binding.Agent, "approval", binding.Approval != nil)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"regexp"
 	"strings"
 
@@ -184,6 +185,25 @@ const (
 
 var httpURL = regexp.MustCompile(`^https?://\S+$`)
 
+// checkGitURL checks a skill's or plugin's repository URL: http(s), and no
+// credential in it (M2-S3-S-09): a token belongs in gitAuthSecretName, and a
+// URL is logged and stored in the release values.
+func checkGitURL(at, raw string) error {
+	if !httpURL.MatchString(raw) {
+		return invalidf("%s.git.url %q must be an http(s) URL", at, redactUserinfo(raw))
+	}
+	if u, err := url.Parse(raw); err != nil || u.User != nil {
+		return invalidf("%s.git.url %q carries a credential (user:password@): put the token in a Secret named by gitAuthSecretName instead", at, redactUserinfo(raw))
+	}
+	return nil
+}
+
+// userinfoPattern finds the user:password@ of a URL.
+var userinfoPattern = regexp.MustCompile(`(://)[^/@\s"]+@`)
+
+// redactUserinfo replaces a URL's user:password@ by ***@.
+func redactUserinfo(s string) string { return userinfoPattern.ReplaceAllString(s, "${1}***@") }
+
 // ValidateSkills checks what can be checked before any lookup: exactly one
 // source per entry, an http(s) repository URL, ref or commit but not both, a
 // well-formed commit, a parseable OCI reference, a relative path without
@@ -198,8 +218,8 @@ func ValidateSkills(list Skills) error {
 		case s.Git == nil && s.OCI == "":
 			return invalidf("%s has no source: give git: {url, ref | commit} or oci: <reference>", at)
 		case s.Git != nil:
-			if !httpURL.MatchString(s.Git.URL) {
-				return invalidf("%s.git.url %q must be an http(s) URL", at, s.Git.URL)
+			if err := checkGitURL(at, s.Git.URL); err != nil {
+				return err
 			}
 			if s.Git.Commit != "" && !skills.CommitPattern.MatchString(s.Git.Commit) {
 				return invalidf("%s.git.commit %q is not a full commit id (40 or 64 hex characters); give a branch or tag as ref to have it resolved", at, s.Git.Commit)

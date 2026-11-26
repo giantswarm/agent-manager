@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -26,6 +27,7 @@ import (
 	"github.com/giantswarm/agent-manager/internal/kagent"
 	apiv1alpha1 "github.com/giantswarm/agent-manager/internal/kagent/gen/kagent/api/v1alpha1"
 	"github.com/giantswarm/agent-manager/internal/kagent/kagenttest"
+	"github.com/giantswarm/agent-manager/internal/kube"
 	"github.com/giantswarm/agent-manager/internal/muster"
 )
 
@@ -56,13 +58,17 @@ type fakeTool struct {
 // each listed tool (tool: before server:, as muster does; the default for a
 // tool no setting entry selects).
 type fakeReporter struct {
-	tools []fakeTool
-	err   error
-	calls int
+	tools  []fakeTool
+	err    error
+	calls  int
+	onCall func()
 }
 
 func (r *fakeReporter) AgentTools(_ context.Context, token string, q AgentToolsQuery) ([]ReportedTool, error) {
 	r.calls++
+	if r.onCall != nil {
+		r.onCall()
+	}
 	if r.err != nil {
 		return nil, r.err
 	}
@@ -86,7 +92,9 @@ func (r *fakeReporter) AgentTools(_ context.Context, token string, q AgentToolsQ
 		if entry == "" && q.Default != "" {
 			entry = DefaultEntry
 		}
-		rt := ReportedTool{Name: t.name, Entry: entry, Connectors: []Connector{t.connector}}
+		c := t.connector
+		c.Tool = strings.TrimPrefix(t.name, "x_"+c.Server+"_")
+		rt := ReportedTool{Name: t.name, Entry: entry, Connectors: []Connector{c}}
 		if entry != "" {
 			rt.Admin = t.admin
 		}
@@ -117,6 +125,10 @@ type approvalBindings struct {
 	mu     sync.Mutex
 	drops  []grantDrop
 	onBind func()
+	// dropFails fails that many grant drops before one goes through.
+	dropFails int
+	// noSender: binds carry no sender token (tool approval off).
+	noSender bool
 }
 
 type grantDrop struct {
@@ -124,24 +136,35 @@ type grantDrop struct {
 	Keep  []muster.Grant
 }
 
-func (b *approvalBindings) SendsApproval() bool { return true }
+func (b *approvalBindings) SendsApproval() bool { return !b.noSender }
 
-func (b *approvalBindings) Bind(ctx context.Context, token string, binding muster.Binding) error {
-	if err := b.fakeBindings.Bind(ctx, token, binding); err != nil {
-		return err
+func (b *approvalBindings) Bind(ctx context.Context, token string, binding muster.Binding) (muster.BindResult, error) {
+	res, err := b.fakeBindings.Bind(ctx, token, binding)
+	if err != nil {
+		return res, err
 	}
 	if b.onBind != nil {
 		b.onBind()
 	}
-	return nil
+	return res, nil
 }
 
 func (b *approvalBindings) DropGrants(_ context.Context, _ string, agent string, keep []muster.Grant) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	if b.dropFails > 0 {
+		b.dropFails--
+		return errors.New("muster unavailable")
+	}
 	b.drops = append(b.drops, grantDrop{Agent: agent, Keep: keep})
 	return nil
 }
+
+// callerIdentity is a kube provider that talks to Kubernetes as the caller
+// (downstream OAuth), where the connector-admin check is answered.
+type callerIdentity struct{ kube.Provider }
+
+func (callerIdentity) Identity() string { return kube.IdentityCaller }
 
 type approvalFixture struct {
 	*fixture
@@ -176,6 +199,8 @@ func newApprovalFixture(t *testing.T, values map[string]any) *approvalFixture {
 	mustCreate(t, f, agentGVR, agentObject("kagent", "alert-review", "alert-review", "kagent", true, true))
 	mustCreate(t, f, serverGVR, remoteMCPServer("kagent", "alert-review", "server:github", "tool:x_github_merge_pull_request"))
 	a := &approvalFixture{fixture: f, reporter: githubTools(), grants: approvalgrants.NewMemoryStore(), bindings: &approvalBindings{}, logs: &bytes.Buffer{}, admins: map[string]bool{}}
+	f.svc.kube = callerIdentity{f.svc.kube}
+	syncSleep = func(context.Context, time.Duration) {}
 	f.svc.cfg.Approvals = a.reporter
 	f.svc.cfg.Grants = a.grants
 	f.svc.cfg.Bindings = a.bindings
@@ -220,7 +245,7 @@ func TestCreateWritesToolsAndDefaultWhereTheChartTakesThem(t *testing.T) {
 	assert.Equal(t, []any{map[string]any{"server:github": "Ask"}, map[string]any{"tool:x_github_delete_repository": "Block"}}, values[ToolsValuesKey])
 	assert.Equal(t, "Ask", values[DefaultValuesKey])
 	assert.NotContains(t, values, ToolsetValuesKey, "tools replaces toolset")
-	assert.Equal(t, ToolList{{Selector: "server:github", Setting: "Ask"}, {Selector: "tool:x_github_delete_repository", Setting: "Block"}}, res.Agent.Tools)
+	assert.Equal(t, ToolList{{Selector: "server:github", Setting: "Ask"}, {Selector: "tool:x_github_delete_repository", Setting: "Block"}}, res.Agent.ToolSettings)
 	assert.Contains(t, a.logs.String(), `"msg":"agent tools changed"`)
 	assert.Contains(t, a.logs.String(), `"savedBy":"dana@example.com"`)
 }
@@ -305,7 +330,8 @@ func TestSetAgentApprovalGrantsForAConnectorAdmin(t *testing.T) {
 	assert.Equal(t, "uid-github", g.ConnectorUID)
 	assert.Equal(t, "dana@example.com", g.GrantedBy)
 	assert.Equal(t, int64(7), g.Generation, "the generation of the release the save left (unchanged values: no write)")
-	assert.Equal(t, []approvalgrants.Grant{{Entry: g.Entry, Server: "github", ConnectorNamespace: "muster", ConnectorUID: "uid-github", GrantedBy: "dana@example.com", GrantedAt: g.GrantedAt, Generation: 7}}, a.stored(t))
+	assert.Equal(t, []approvalgrants.Grant{{Entry: g.Entry, Server: "github", ConnectorNamespace: "muster", ConnectorUID: "uid-github", GrantedBy: "dana@example.com", GrantedAt: g.GrantedAt, Generation: 7, Tools: []string{"merge_pull_request"}}}, a.stored(t))
+	assert.Equal(t, []string{"merge_pull_request"}, g.Tools, "the grant names the tools it covers")
 	assert.Contains(t, a.logs.String(), `"msg":"approval grant recorded"`)
 
 	// get_agent and list_agents report it.
@@ -384,7 +410,13 @@ func TestSavingKeepsTheGrantsOfAConnectorAdmin(t *testing.T) {
 	stored := a.stored(t)
 	require.Len(t, stored, 1)
 	assert.Equal(t, "erin@example.com", stored[0].GrantedBy, "re-recorded with the saver")
-	assert.Empty(t, a.bindings.drops)
+	// Every save of an agent with grants tells muster what is left
+	// (idempotent): the grant stays marked.
+	require.Len(t, a.bindings.drops, 1)
+	require.Len(t, a.bindings.drops[0].Keep, 1)
+	assert.Equal(t, "tool:x_github_merge_pull_request", a.bindings.drops[0].Keep[0].Entry)
+	require.NotNil(t, res.SessionsUpdated)
+	assert.True(t, *res.SessionsUpdated)
 }
 
 func TestAnAgentsSaveKeepsNoGrant(t *testing.T) {
@@ -421,7 +453,7 @@ func TestACommitDropsEveryGrant(t *testing.T) {
 	a.grantMerge()
 	a.admins["muster"] = true
 	upd := Update{Name: "alert-review", Description: new("x"), tool: "update_agent"}
-	_, _, err := a.svc.settleGrants(dana(t), grantSave{tool: upd.tool, agent: alertAgent, generation: 8, tools: ToolList{{Selector: "tool:x_github_merge_pull_request", Setting: "Allow"}}, commit: true})
+	_, _, _, err := a.svc.settleGrants(dana(t), grantSave{tool: upd.tool, agent: alertAgent, generation: 8, tools: ToolList{{Selector: "tool:x_github_merge_pull_request", Setting: "Allow"}}, commit: true})
 	require.NoError(t, err)
 	assert.Empty(t, a.stored(t))
 }

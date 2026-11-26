@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -78,6 +79,12 @@ type fakeBindings struct {
 	UnbindErr error
 	Bound     []fakeBind
 	Unbound   []fakeBind
+	// Settings overrides muster's answer on the agent and approval
+	// settings ("-" for no header); default: bound when sent, else none.
+	Settings string
+	// Legacy answers like a muster that predates approval settings: a
+	// bind carrying them is refused as an unknown field.
+	Legacy bool
 }
 
 type fakeBind struct {
@@ -85,14 +92,26 @@ type fakeBind struct {
 	Binding muster.Binding
 }
 
-func (f *fakeBindings) Bind(_ context.Context, token string, b muster.Binding) error {
+func (f *fakeBindings) Bind(_ context.Context, token string, b muster.Binding) (muster.BindResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.BindErr != nil {
-		return f.BindErr
+		return muster.BindResult{}, f.BindErr
+	}
+	sent := b.Agent != "" || b.Approval != nil
+	if f.Legacy && sent {
+		return muster.BindResult{}, fmt.Errorf("%w: %w (400 Bad Request): bad request: json: unknown field \"agent\"", muster.ErrInvalid, muster.ErrUnknownField)
 	}
 	f.Bound = append(f.Bound, fakeBind{Token: token, Binding: b})
-	return nil
+	switch {
+	case f.Legacy || f.Settings == "-":
+		return muster.BindResult{}, nil
+	case f.Settings != "":
+		return muster.BindResult{Settings: f.Settings}, nil
+	case sent:
+		return muster.BindResult{Settings: muster.SettingsBound}, nil
+	}
+	return muster.BindResult{Settings: muster.SettingsNone}, nil
 }
 
 func (f *fakeBindings) Unbind(_ context.Context, token, actor string) error {

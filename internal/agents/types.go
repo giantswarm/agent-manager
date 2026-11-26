@@ -394,6 +394,11 @@ type Update struct {
 	granted map[string][]Connector
 	// approval marks set_agent_approval's save.
 	approval bool
+	// expectTools and expectDefault are the list and default
+	// set_agent_approval checked: the save is refused as a conflict when the
+	// release holds another list by the time it is written.
+	expectTools   *ToolList
+	expectDefault string
 }
 
 // Condition is a Kubernetes-style status condition, flattened.
@@ -533,11 +538,13 @@ type Agent struct {
 	// sandbox within it, header or not, and a change applies to new
 	// sessions. False: the toolset is declared by the agent's runtime.
 	ToolsetBound bool `json:"toolsetBound,omitempty"`
-	// ToolBindings are the template's MCP bindings.
-	ToolBindings []ToolBinding `json:"toolBindings,omitempty"`
-	// Tools is the agent's tool list as its release stores it (`tools`, else
-	// `toolset` without settings); absent without a release.
-	Tools ToolList `json:"tools,omitempty"`
+	// Tools are the template's MCP bindings (unchanged since before tool
+	// approval: the field keeps its meaning for existing clients).
+	Tools []ToolBinding `json:"tools,omitempty"`
+	// ToolSettings is the agent's tool list as its release stores it
+	// (`tools`, else `toolset` without settings), each entry optionally with
+	// its approval setting; absent without a release.
+	ToolSettings ToolList `json:"toolSettings,omitempty"`
 	// DefaultSetting is the list's default approval setting.
 	DefaultSetting string `json:"defaultApproval,omitempty"`
 	// Grants are the agent's approval grants that hold: a connector admin's
@@ -588,7 +595,7 @@ type AgentSummary struct {
 	ModelConfig               string      `json:"modelConfig,omitempty"`
 	Harness                   string      `json:"harness,omitempty"`
 	Toolset                   []string    `json:"toolset,omitempty"`
-	Tools                     ToolList    `json:"tools,omitempty"`
+	ToolSettings              ToolList    `json:"toolSettings,omitempty"`
 	DefaultSetting            string      `json:"defaultApproval,omitempty"`
 	Grants                    []GrantView `json:"grants,omitempty"`
 	ApprovalSettings          bool        `json:"approvalSettings,omitempty"`
@@ -625,7 +632,7 @@ func (a Agent) Summary() AgentSummary {
 		ModelConfig:               a.ModelConfig,
 		Harness:                   a.Harness,
 		Toolset:                   a.Toolset,
-		Tools:                     a.Tools,
+		ToolSettings:              a.ToolSettings,
 		DefaultSetting:            a.DefaultSetting,
 		Grants:                    a.Grants,
 		ApprovalSettings:          a.ApprovalSettings,
@@ -780,6 +787,9 @@ type UpdateResult struct {
 	// save removed.
 	Grants  []GrantView    `json:"grants,omitempty"`
 	Dropped []DroppedGrant `json:"dropped,omitempty"`
+	// SessionSync says whether the agent's running Sessions were told the
+	// grants left (sessionsUpdated, warnings).
+	SessionSync
 	// RequestedBy is the authenticated caller the write ran as.
 	RequestedBy string `json:"requestedBy,omitempty"`
 	WriteOutcome
@@ -799,6 +809,9 @@ type DeleteResult struct {
 	// OCIRepositoryKept explains why the chart source stays (other agents
 	// reference it, or it could not be checked).
 	OCIRepositoryKept string `json:"ociRepositoryKept,omitempty"`
+	// SessionSync says whether the agent's running Sessions were told to drop
+	// its grants.
+	SessionSync
 	// RequestedBy is the authenticated caller the delete ran as.
 	RequestedBy string `json:"requestedBy,omitempty"`
 	WriteOutcome

@@ -41,6 +41,12 @@ func New(c Caller) *Reporter { return &Reporter{muster: c} }
 
 // page is the part of filter_tools' answer the reporter reads.
 type page struct {
+	// AgentTools is muster's echo of the agentTools argument: a muster
+	// that does not evaluate agent lists leaves it out (M2-S3-C-07).
+	AgentTools *struct {
+		Entries  int `json:"entries"`
+		Settings int `json:"settings"`
+	} `json:"agentTools"`
 	Truncated bool `json:"truncated"`
 	Tools     []struct {
 		Name     string `json:"name"`
@@ -91,6 +97,9 @@ func (r *Reporter) AgentTools(ctx context.Context, token string, q agents.AgentT
 		var got page
 		if err := json.Unmarshal(body, &got); err != nil {
 			return nil, fmt.Errorf("%w: muster's filter_tools answer is malformed: %v", agents.ErrApprovalUnavailable, err)
+		}
+		if got.AgentTools == nil || got.AgentTools.Entries != len(q.Tools) {
+			return nil, fmt.Errorf("%w: muster's filter_tools did not evaluate the agent's tool list (no agentTools in its answer): it needs %s", agents.ErrApprovalUnavailable, agents.MusterApprovalVersionHint)
 		}
 		for _, t := range got.Tools {
 			rt := agents.ReportedTool{Name: t.Name, Connectors: t.Connectors}

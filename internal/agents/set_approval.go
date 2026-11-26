@@ -40,6 +40,7 @@ type SetApprovalResult struct {
 	Before  SetApprovalBefore    `json:"before"`
 	Grants  []GrantView          `json:"grants"`
 	Dropped []DroppedGrant       `json:"dropped,omitempty"`
+	SessionSync
 	// RequestedBy is the authenticated caller the write ran as.
 	RequestedBy string `json:"requestedBy,omitempty"`
 	WriteOutcome
@@ -78,6 +79,9 @@ func (s *Service) SetApproval(ctx context.Context, in SetApproval) (*SetApproval
 	}
 	if !s.chartTakesTools(ctx) {
 		return nil, fmt.Errorf("%w: the agent chart %s has no tool approval settings (tools, default); use a chart that has them", ErrUnsupported, orDefault(s.chartVersion(ctx), "in use"))
+	}
+	if !s.sendsApproval() {
+		return nil, errNoBinding
 	}
 	hr, _, err := s.writableHelmRelease(ctx, st, in.Name, in.Force, mode == ModeCommit)
 	if err != nil {
@@ -121,7 +125,7 @@ func (s *Service) SetApproval(ctx context.Context, in SetApproval) (*SetApproval
 		}
 	}
 	upd := Update{Location: in.Location, Name: in.Name, Tools: &list, Default: &def, Force: in.Force, WriteOptions: in.WriteOptions,
-		tool: "set_agent_approval", approval: true, granted: needs}
+		tool: "set_agent_approval", approval: true, granted: needs, expectTools: &before, expectDefault: beforeDef}
 	res, err := s.Update(ctx, upd)
 	if err != nil {
 		return nil, err
@@ -133,6 +137,8 @@ func (s *Service) SetApproval(ctx context.Context, in SetApproval) (*SetApproval
 		Before:  SetApprovalBefore{Tools: before, Default: beforeDef},
 		Grants:  res.Grants,
 		Dropped: res.Dropped,
+
+		SessionSync: res.SessionSync,
 
 		RequestedBy:  identity.Caller(ctx),
 		WriteOutcome: res.WriteOutcome,
