@@ -55,6 +55,17 @@ func New(endpoint, prefix, version, what string) (*Client, error) {
 	return &Client{endpoint: endpoint, prefix: prefix, version: version}, nil
 }
 
+// NewMeta is a client of muster's own meta-tools alone (MetaCall), with no
+// server prefix.
+func NewMeta(endpoint, version string) (*Client, error) {
+	c, err := New(endpoint, "x_muster_", version, "muster")
+	if err != nil {
+		return nil, err
+	}
+	c.prefix = ""
+	return c, nil
+}
+
 // Tool is the server's tool name as muster aggregates it.
 func (c *Client) Tool(name string) string { return c.prefix + name }
 
@@ -143,6 +154,42 @@ func (c *Client) Call(ctx context.Context, bearer, tool string, args map[string]
 	if bearer == "" {
 		return nil, errors.New("muster: the request carries no identity token")
 	}
+	outer, err := c.meta(ctx, bearer, MetaCallTool, map[string]any{"name": tool, "arguments": args})
+	if err != nil {
+		return nil, err
+	}
+	inner, dispatched := unwrap(outer)
+	if !inner.IsError {
+		return &Result{Text: textOf(inner), Structured: structuredOf(inner)}, nil
+	}
+	if challenge := authChallenge(inner); challenge != nil {
+		if challenge.Server == "" {
+			challenge.Server = strings.TrimSuffix(strings.TrimPrefix(c.prefix, "x_"), "_")
+		}
+		return nil, challenge
+	}
+	return nil, &ToolError{Tool: tool, Message: textOf(inner), Dispatched: dispatched}
+}
+
+// MetaCall runs one of muster's own meta-tools (filter_tools, describe_tool)
+// as the caller and returns its result: an error result is a ToolError, not
+// dispatched.
+func (c *Client) MetaCall(ctx context.Context, bearer, tool string, args map[string]any) (*Result, error) {
+	if bearer == "" {
+		return nil, errors.New("muster: the request carries no identity token")
+	}
+	res, err := c.meta(ctx, bearer, tool, args)
+	if err != nil {
+		return nil, err
+	}
+	if res.IsError {
+		return nil, &ToolError{Tool: tool, Message: textOf(res)}
+	}
+	return &Result{Text: textOf(res), Structured: structuredOf(res)}, nil
+}
+
+// meta opens one MCP session as the caller and calls a meta-tool.
+func (c *Client) meta(ctx context.Context, bearer, tool string, args map[string]any) (*mcp.CallToolResult, error) {
 	ctx, cancel := context.WithTimeout(ctx, callTimeout)
 	defer cancel()
 	client, err := mcpclient.NewStreamableHttpClient(c.endpoint,
@@ -162,23 +209,13 @@ func (c *Client) Call(ctx context.Context, bearer, tool string, args map[string]
 		return nil, fmt.Errorf("muster (%s): initialize: %w", host, err)
 	}
 	req := mcp.CallToolRequest{}
-	req.Params.Name = MetaCallTool
-	req.Params.Arguments = map[string]any{"name": tool, "arguments": args}
-	outer, err := client.CallTool(ctx, req)
+	req.Params.Name = tool
+	req.Params.Arguments = args
+	res, err := client.CallTool(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("muster (%s): call %s: %w", host, tool, err)
 	}
-	inner, dispatched := unwrap(outer)
-	if !inner.IsError {
-		return &Result{Text: textOf(inner), Structured: structuredOf(inner)}, nil
-	}
-	if challenge := authChallenge(inner); challenge != nil {
-		if challenge.Server == "" {
-			challenge.Server = strings.TrimSuffix(strings.TrimPrefix(c.prefix, "x_"), "_")
-		}
-		return nil, challenge
-	}
-	return nil, &ToolError{Tool: tool, Message: textOf(inner), Dispatched: dispatched}
+	return res, nil
 }
 
 func (c *Client) host() string {

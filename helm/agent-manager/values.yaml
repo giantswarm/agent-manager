@@ -379,6 +379,12 @@ muster:
   # it: the Service's namespace for an in-cluster host, every address
   # otherwise.
   bindingsUrl: http://muster.agent-platform.svc.cluster.local:8090/session-bindings
+  # -- CA trusted beside the system's for an https `bindingsUrl`: a ConfigMap
+  # of the release namespace (`configMapName`, key `key`), passed as
+  # `--muster-bindings-ca-file`. The default is plain http to muster's Service.
+  bindingsCA:
+    configMapName: ""
+    key: ca.crt
   # -- muster trusts the actor JWT of a bound session (muster's
   # `credentialProvider.actorBearer`): every session `start_session` binds
   # carries the agent's toolset, and `get_agent`, `list_agents` and `get_info`
@@ -402,6 +408,42 @@ muster:
   # where the toolchain-manager runs behind muster. Empty: any version
   # `toolchains.repository` carries starts.
   toolchainsToolsPrefix: ""
+  toolApproval:
+    # -- Tool approval per agent: every session `start_session` binds carries
+    # the agent's tool settings, `default` and approval grants, sent with the
+    # ServiceAccount token (audience `audience`) that muster reviews.
+    # `set_agent_approval` checks an Allow over a connector's Ask against
+    # muster's `filter_tools` at `mcpUrl` and keeps the grant in the grants
+    # namespace. While off, settings and `default` are refused and sessions of
+    # agents that carry them do not start. Needs a muster with per-agent tool
+    # approval. Needs the session tools (`oauth.enabled`,
+    # `kagent.controllerTarget`) and `bindingsUrl`.
+    enabled: true
+    # -- Audience of the projected ServiceAccount token muster reviews.
+    audience: muster
+    # -- Lifetime of the projected token; the kubelet rotates it.
+    expirationSeconds: 3600  # @schema minimum: 600
+    # -- Namespace that holds the approval grants and nothing else: whoever may
+    # write ConfigMaps there may lift any connector's Ask for any agent. Empty:
+    # `<release name>-approval-grants`.
+    grantsNamespace: ""
+    # -- Create the grants namespace with the release; off where it is
+    # provisioned beforehand.
+    createGrantsNamespace: true
+    # -- HelmReleases outside the managed namespaces that render an agent into
+    # one, `{namespace, name, agent: {namespace, name}}` each. The agent-platform
+    # chart sets its default agent. Such an agent's settings are read from that
+    # release only (the start is refused when its Flux labels name another);
+    # any other agent from the release agent-manager created for it. The
+    # ServiceAccount gets `get` on exactly these releases.
+    platformReleases: []  # @schema item: object ; itemProperties: {namespace: {type: string, minLength: 1}, name: {type: string, minLength: 1}, agent: {type: object, required: [namespace, name], properties: {namespace: {type: string, minLength: 1}, name: {type: string, minLength: 1}}}}
+    # -- Agents whose HelmRelease is on another cluster, with that release's
+    # approval values, `{namespace, name, release: {namespace, name}, values}`
+    # each; the agent-platform chart sets the default agent's for a remote
+    # target. A session binds these values without reading the release and is
+    # refused when the Agent's labels or `X-Muster-Tool-Approval` header
+    # disagree with them.
+    platformAgents: []  # @schema item: object ; itemProperties: {namespace: {type: string, minLength: 1}, name: {type: string, minLength: 1}, release: {type: object, properties: {namespace: {type: string, minLength: 1}, name: {type: string, minLength: 1}}}, values: {type: object, properties: {tools: {type: array}, toolset: {type: array, items: {type: string}}, default: {type: string, enum: [Allow, Ask, Block]}, muster: {type: object, properties: {requireApproval: {type: boolean}, enabled: {type: boolean}}}}}}
   mcpServer:
     # -- Register this server with muster by rendering an
     # `mcpservers.muster.giantswarm.io` CR in the release namespace. Tools then
@@ -432,6 +474,54 @@ muster:
     auth:
       forwardToken: true
       requiredAudiences: []
+    # -- The connector's tool approval (the MCPServer's `spec.approval`):
+    # `rule` for tools without their own entry (Allow | Ask | Block; Block
+    # hides), per-tool values in `tools`. The default allows every tool: this is
+    # a platform management server. `null` renders none (`{}` does not: Helm
+    # merges it into the default). On a governed platform muster asks agent
+    # callers whatever these say; on a trusted one they apply, except muster's
+    # floors, which ask agents in both modes (`set_agent_approval`,
+    # `set_organization_connector`, `add_organization_member`,
+    # `set_organization_model`, `set_organization_egress_policy`,
+    # `replace_organization_credential`). Needs a muster CRD with
+    # `spec.approval`. See https://docs.giantswarm.io/overview/agent-platform/governing-tool-calls/
+    approval:
+      rule: Allow  # @schema enum: [Allow, Ask, Block]
+      tools:  # @schema skipProperties: true; maxProperties: 512; additionalProperties: {type: string, enum: [Allow, Ask, Block]}
+        get_info: Allow
+        list_agents: Allow
+        get_agent: Allow
+        create_agent: Allow
+        update_agent: Allow
+        update_agent_access: Allow
+        set_agent_approval: Allow
+        list_approval_grants: Allow
+        delete_agent: Allow
+        get_agent_status: Allow
+        validate_agent: Allow
+        list_model_configs: Allow
+        list_egress_policies: Allow
+        list_skills: Allow
+        list_sessions: Allow
+        get_session: Allow
+        get_session_turn: Allow
+        start_session: Allow
+        delete_session: Allow
+        toolchain_users: Allow
+        list_organizations: Allow
+        get_organization: Allow
+        create_organization: Allow
+        update_organization: Allow
+        delete_organization: Allow
+        list_organization_members: Allow
+        add_organization_member: Allow
+        remove_organization_member: Allow
+        set_organization_model: Allow
+        list_organization_connectors: Allow
+        set_organization_connector: Allow
+        set_organization_egress_policy: Allow
+        replace_organization_credential: Allow
+        delete_organization_object: Allow
 
 httpRoute:
   # -- Expose the service through a Gateway API HTTPRoute.

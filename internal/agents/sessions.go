@@ -55,7 +55,7 @@ type SessionClient interface {
 // workspace Session's sandbox actor bound to the person who started it is
 // what muster releases that person's provider tokens to (muster.Client).
 type SessionBinder interface {
-	Bind(ctx context.Context, token string, b muster.Binding) error
+	Bind(ctx context.Context, token string, b muster.Binding) (muster.BindResult, error)
 	Unbind(ctx context.Context, token, actor string) error
 }
 
@@ -687,6 +687,9 @@ func (s *Service) StartSession(ctx context.Context, in StartSession) (*SessionSt
 		create.VolumeSource, create.AdmissionToken = workspace.Volume, grant
 	}
 	session, err := s.createSession(ctx, token, create)
+	if requestIDOfDeletedSession(err) {
+		return nil, conflictf("requestId %q belongs to a session that no longer exists: the start that used it was refused and its session deleted again, or the session was deleted since; a start with that requestId cannot create another, so start again with a new requestId (or none)", requestID)
+	}
 	if err != nil {
 		return nil, kagentError(err, fmt.Sprintf("a session of agent %s", ref.Tenant()))
 	}
@@ -910,16 +913,39 @@ func (s *Service) bindSession(ctx context.Context, token string, ref kagent.Ref,
 		s.log.InfoContext(ctx, "session has no providers: nothing to bind in muster", identity.LogAttr(ctx), "session", session.GetId())
 		return nil, nil
 	}
+	var approval *boundApproval
 	if slices.Contains(binding.Providers, muster.Provider) {
-		if binding.Toolset, err = s.sessionToolset(ctx, ref.Namespace, ref.Name); err != nil {
+		live, err := s.sessionToolset(ctx, ref.Namespace, ref.Name)
+		if err != nil {
 			return nil, fmt.Errorf("reading agent %s's toolset to bind session %s to it in muster: %w", ref.Tenant(), session.GetId(), err)
 		}
+		if binding.Toolset, approval, err = s.sessionApproval(ctx, ref, live); err != nil {
+			return nil, fmt.Errorf("reading agent %s's tool approval settings to bind session %s to it in muster: %w", ref.Tenant(), session.GetId(), err)
+		}
+		if approval != nil {
+			binding.Agent, binding.AgentDisplayName, binding.Approval = approval.agent.Key(), approval.displayName, approval.binding
+		}
 	}
-	if err := s.cfg.Bindings.Bind(ctx, token, *binding); err != nil {
+	if err := s.bindWithApproval(ctx, token, binding, approval); err != nil {
+		if errors.Is(err, ErrApprovalUnavailable) {
+			return nil, err
+		}
 		return nil, bindingError(err, session.GetId())
 	}
-	s.log.InfoContext(ctx, "session bound in muster", identity.LogAttr(ctx), "session", session.GetId(), "actor", binding.Actor, "providers", binding.Providers, "toolset", binding.Toolset)
+	s.log.InfoContext(ctx, "session bound in muster", identity.LogAttr(ctx), "session", session.GetId(), "actor", binding.Actor, "providers", binding.Providers, "toolset", binding.Toolset, "agent", binding.Agent, "approval", binding.Approval != nil)
+	if approval != nil {
+		s.recheckBoundGrants(ctx, approval)
+	}
 	return binding.Toolset, nil
+}
+
+// requestIDOfDeletedSession reports kagent's refusal of a CreateSession whose
+// request id belongs to a deleted Session (FailedPrecondition): a start
+// refused after kagent created its Session (a failed bind) deletes it, which
+// spends the id, so the retry of that start needs a new one.
+func requestIDOfDeletedSession(err error) bool {
+	st, ok := status.FromError(err)
+	return ok && st.Code() == codes.FailedPrecondition && strings.Contains(st.Message(), "request_id belongs to a deleted Session")
 }
 
 // abandonSession deletes a Session that cannot be handed out (its bind

@@ -310,7 +310,12 @@ func (c *Controller) CreateSession(ctx context.Context, req *apiv1alpha1.CreateS
 		return nil, status.Errorf(codes.FailedPrecondition, "agent %s has no ready revision", tenant)
 	}
 	if id, ok := c.requests[req.GetRequestId()]; ok {
-		return &apiv1alpha1.CreateSessionResponse{Session: c.session(id)}, nil
+		s := c.session(id)
+		if s == nil || s.GetState() == apiv1alpha1.RuntimeState_RUNTIME_STATE_DELETED {
+			// kagent's own answer: a request id names its Session for good.
+			return nil, status.Error(codes.FailedPrecondition, "request_id belongs to a deleted Session")
+		}
+		return &apiv1alpha1.CreateSessionResponse{Session: s}, nil
 	}
 	if (req.GetVolumeSource() != nil || req.GetAdmissionToken() != "") && c.Admission != nil {
 		if err := c.Admission(req); err != nil {

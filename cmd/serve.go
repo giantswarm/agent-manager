@@ -22,12 +22,15 @@ import (
 
 	"github.com/giantswarm/agent-manager/internal/agents"
 	"github.com/giantswarm/agent-manager/internal/api"
+	"github.com/giantswarm/agent-manager/internal/approvalgrants"
 	"github.com/giantswarm/agent-manager/internal/chart"
 	"github.com/giantswarm/agent-manager/internal/identity"
 	"github.com/giantswarm/agent-manager/internal/kagent"
 	"github.com/giantswarm/agent-manager/internal/kube"
 	"github.com/giantswarm/agent-manager/internal/migrate"
 	"github.com/giantswarm/agent-manager/internal/muster"
+	"github.com/giantswarm/agent-manager/internal/musterapproval"
+	"github.com/giantswarm/agent-manager/internal/mustermcp"
 	"github.com/giantswarm/agent-manager/internal/oci"
 	"github.com/giantswarm/agent-manager/internal/organizations"
 	"github.com/giantswarm/agent-manager/internal/server"
@@ -56,10 +59,26 @@ type serveOptions struct {
 	musterBindingsURL string
 	musterActorBearer bool
 	musterMCPURL      string
-	workspacesPrefix  string
-	toolchainsPrefix  string
-	helmReleaseAPI    string
-	ociRepositoryAPI  string
+	// approvalSenderTokenFile is agent-manager's projected ServiceAccount
+	// token (audience muster), sent with binds so muster takes approval
+	// settings from them.
+	approvalSenderTokenFile string
+	// musterBindingsCAFile trusts this PEM CA for an https bindings URL.
+	musterBindingsCAFile string
+	// approvalGrantsNamespace keeps the approval grants (agent-manager's
+	// own namespace).
+	approvalGrantsNamespace string
+	// approvalPlatformAgents are the agents rendered by a release on
+	// another cluster, with that release's approval values (JSON,
+	// agents.PlatformAgent).
+	approvalPlatformAgents string
+	// approvalPlatformReleases are the releases the platform renders agents
+	// with on this cluster (JSON, agents.PlatformRelease).
+	approvalPlatformReleases string
+	workspacesPrefix         string
+	toolchainsPrefix         string
+	helmReleaseAPI           string
+	ociRepositoryAPI         string
 
 	chartOCIURL           string
 	chartSemver           string
@@ -150,6 +169,11 @@ environment variable named next to it; flags win over the environment.`,
 	f.BoolVar(&o.musterActorBearer, "muster-actor-bearer", envBool("AGENT_MANAGER_MUSTER_ACTOR_BEARER", false), "muster trusts the actor JWT of a bound session: get_agent, list_agents and get_info report an agent's toolset as bound to each session at its start, which every session start_session binds carries. Needs --muster-bindings-url (AGENT_MANAGER_MUSTER_ACTOR_BEARER)")
 	f.StringVar(&o.musterBindingsURL, "muster-bindings-url", envOr("AGENT_MANAGER_MUSTER_BINDINGS_URL", ""), "muster's session bindings endpoint (http(s)://host[:port]/session-bindings), which start_session binds the sandbox of every Session with providers to the caller at and delete_session unbinds it from, as the caller. Empty: start_session refuses a workspace grant. Needs --kagent-target (AGENT_MANAGER_MUSTER_BINDINGS_URL)")
 	f.StringVar(&o.musterMCPURL, "muster-mcp-url", envOr("AGENT_MANAGER_MUSTER_MCP_URL", ""), "muster's MCP endpoint (http(s)://host[:port]/mcp), where start_session calls, as the caller, the workspace-manager's authorize_workspace for an agent's default workspace when the start names no workspace, and the toolchain-manager's list_toolchains. Needs --workspaces-tools-prefix or --toolchains-tools-prefix (AGENT_MANAGER_MUSTER_MCP_URL)")
+	f.StringVar(&o.musterBindingsCAFile, "muster-bindings-ca-file", envOr("AGENT_MANAGER_MUSTER_BINDINGS_CA_FILE", ""), "PEM CA certificate(s) trusted, beside the system's, for an https --muster-bindings-url (muster's own CA). Empty: the system's only (AGENT_MANAGER_MUSTER_BINDINGS_CA_FILE)")
+	f.StringVar(&o.approvalSenderTokenFile, "muster-approval-sender-token-file", envOr("AGENT_MANAGER_MUSTER_APPROVAL_SENDER_TOKEN_FILE", ""), "agent-manager's projected ServiceAccount token (audience muster), re-read per call: sent with every bind so muster takes the agent's tool approval settings and grants, and with every grant drop. Empty: sessions are bound without approval settings. Needs --muster-bindings-url, --muster-mcp-url and --approval-grants-namespace (AGENT_MANAGER_MUSTER_APPROVAL_SENDER_TOKEN_FILE)")
+	f.StringVar(&o.approvalPlatformAgents, "approval-platform-agents", envOr("AGENT_MANAGER_APPROVAL_PLATFORM_AGENTS", ""), "JSON list of agents rendered by a HelmRelease agent-manager cannot read (on another cluster), each {namespace, name, release: {namespace, name}, values: {tools, toolset, default, muster}} with that release's approval values: a session of one binds these values, refused unless the Agent's Flux labels name the release and its X-Muster-Tool-Approval header, where rendered, matches (AGENT_MANAGER_APPROVAL_PLATFORM_AGENTS)")
+	f.StringVar(&o.approvalPlatformReleases, "approval-platform-releases", envOr("AGENT_MANAGER_APPROVAL_PLATFORM_RELEASES", ""), "JSON list of the HelmReleases the platform renders agents with on this cluster, each {namespace, name, agent: {namespace, name}}: the only release other than the one agent-manager creates for an agent (in its namespace, named after it) whose settings a session binds, and an agent listed here is refused unless its Flux labels name that release (AGENT_MANAGER_APPROVAL_PLATFORM_RELEASES)")
+	f.StringVar(&o.approvalGrantsNamespace, "approval-grants-namespace", envOr("AGENT_MANAGER_APPROVAL_GRANTS_NAMESPACE", ""), "agent-manager's own namespace, where it keeps the agents' approval grants (ConfigMaps approval-grants-<agent uid>, written with its ServiceAccount). Empty: no grant is recorded and set_agent_approval refuses one (AGENT_MANAGER_APPROVAL_GRANTS_NAMESPACE)")
 	f.StringVar(&o.workspacesPrefix, "workspaces-tools-prefix", envOr("AGENT_MANAGER_WORKSPACES_TOOLS_PREFIX", ""), "The workspace-manager's tool prefix in muster (x_workspace-manager_). Empty: a start_session on an agent with a default workspace that names no workspace is refused. Needs --muster-mcp-url and --muster-bindings-url (AGENT_MANAGER_WORKSPACES_TOOLS_PREFIX)")
 	f.StringVar(&o.toolchainsPrefix, "toolchains-tools-prefix", envOr("AGENT_MANAGER_TOOLCHAINS_TOOLS_PREFIX", ""), "The toolchain-manager's tool prefix in muster (x_toolchain-manager_): start_session asks its list_toolchains, as the caller, and starts a toolchain only at a version it lists, the newest listed when none is named. Empty: any version the registry carries starts. Needs --muster-mcp-url and --toolchain-repository (AGENT_MANAGER_TOOLCHAINS_TOOLS_PREFIX)")
 	f.StringVar(&o.targetMusterURL, "target-muster-url", envOr("AGENT_TARGET_MUSTER_URL", ""), "The muster MCP URL composed into an agent on a workload cluster: one those clusters reach (the installation's public muster endpoint); empty refuses target clusters (AGENT_TARGET_MUSTER_URL)")
@@ -249,8 +273,8 @@ func runServe(ctx context.Context, o *serveOptions) error {
 	if (o.workspacesPrefix != "" || o.toolchainsPrefix != "") && o.musterMCPURL == "" {
 		return fmt.Errorf("--workspaces-tools-prefix and --toolchains-tools-prefix need --muster-mcp-url: the workspace-manager and the toolchain-manager are called through muster under their prefixes")
 	}
-	if o.musterMCPURL != "" && o.workspacesPrefix == "" && o.toolchainsPrefix == "" {
-		return fmt.Errorf("--muster-mcp-url needs --workspaces-tools-prefix or --toolchains-tools-prefix: it names no server to call")
+	if o.approvalSenderTokenFile != "" && (o.musterBindingsURL == "" || o.musterMCPURL == "" || o.approvalGrantsNamespace == "") {
+		return fmt.Errorf("--muster-approval-sender-token-file needs --muster-bindings-url, --muster-mcp-url and --approval-grants-namespace: approval settings are bound per session, checked against muster's filter_tools and their grants kept in agent-manager's namespace")
 	}
 	if o.workspacesPrefix != "" && o.musterBindingsURL == "" {
 		return fmt.Errorf("--workspaces-tools-prefix needs --muster-bindings-url: a Session in a default workspace is bound in muster as any workspace Session")
@@ -435,7 +459,38 @@ func runServe(ctx context.Context, o *serveOptions) error {
 		if err != nil {
 			return fmt.Errorf("--muster-bindings-url: %w", err)
 		}
-		bindings = client
+		if client, err = client.WithCAFile(o.musterBindingsCAFile); err != nil {
+			return fmt.Errorf("--muster-bindings-ca-file: %w", err)
+		}
+		bindings = client.WithSenderTokenFile(o.approvalSenderTokenFile)
+	}
+	// Tool approval per agent: muster's filter_tools says whether an Allow
+	// is over a connector's Ask; grants are kept with the ServiceAccount in
+	// agent-manager's own namespace, which also reads an agent's release for
+	// its Session binding where the starter may not.
+	var approvals agents.ApprovalReporter
+	if o.musterMCPURL != "" {
+		client, err := mustermcp.NewMeta(o.musterMCPURL, build.Version)
+		if err != nil {
+			return fmt.Errorf("--muster-mcp-url: %w", err)
+		}
+		approvals = musterapproval.New(client)
+	}
+	var grants approvalgrants.Store
+	if o.approvalGrantsNamespace != "" {
+		grants = approvalgrants.NewConfigMapStore(clients.Typed().CoreV1().ConfigMaps(o.approvalGrantsNamespace)).WithLogger(log)
+	}
+	platformAgents, err := agents.ParsePlatformAgents(o.approvalPlatformAgents)
+	if err != nil {
+		return fmt.Errorf("--approval-platform-agents: %w", err)
+	}
+	platformReleases, err := agents.ParsePlatformReleases(o.approvalPlatformReleases)
+	if err != nil {
+		return fmt.Errorf("--approval-platform-releases: %w", err)
+	}
+	var approvalReader kube.Client
+	if o.approvalSenderTokenFile != "" {
+		approvalReader = clients
 	}
 	var workspaceManager agents.WorkspaceAuthorizer
 	if o.workspacesPrefix != "" {
@@ -489,6 +544,11 @@ func runServe(ctx context.Context, o *serveOptions) error {
 		Tenants:          tenantSetOrNil(orgNamespaces),
 		SkillManager:     skillManager,
 		Installation:     o.installation,
+		Approvals:        approvals,
+		Grants:           grants,
+		ApprovalReader:   approvalReader,
+		PlatformAgents:   platformAgents,
+		PlatformReleases: platformReleases,
 		// Every listing reports the default agent: read it once per
 		// caller and quarter minute, not per call.
 		DefaultAgentTTL: 15 * time.Second,
@@ -523,6 +583,10 @@ func runServe(ctx context.Context, o *serveOptions) error {
 		"oauth", o.oauthEnabled, "downstreamOAuth", o.downstreamOAuth, "commit", info.Capabilities["commit"], "identity", info.Identity,
 		"namespaces", svc.Managed(ctx), "multiTenant", o.multiTenant, "chart", o.chartOCIURL, "chartSemver", o.chartSemver, "chartVersion", info.Chart.LatestVersion, "schemaSource", info.Chart.SchemaSource,
 		"kagentAPI", kagentVersion, "harness", info.Harness.Name, "musterURL", info.Muster.URL, "helmReleaseAPI", helmReleaseAPI, "ociRepositoryAPI", ociRepositoryAPI, "skillsRepositories", info.SkillsRepositories, "skillManager", info.SkillManager, "skillsGitHubApp", o.skillsAppID, "skillsGitAuthSecretName", o.skillsGitAuth, "kagentTarget", o.kagentTarget, "defaultModelAgent", o.defaultModelAgent)
+
+	// Grant drops an earlier run could not get to muster: sent once at
+	// start, with the sender token alone (session_sync.go).
+	svc.Start(ctx)
 
 	if bootSecret != nil {
 		go bootSecret.Run(ctx)

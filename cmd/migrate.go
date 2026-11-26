@@ -52,13 +52,16 @@ type migrateOptions struct {
 
 	reportConfigMap string
 	dryRun          bool
+	// organizations is "auto" (on the 2.x -> 3.x path, every namespace
+	// labelled as an organization's), "none", or a comma-separated list.
+	organizations string
 }
 
 func newMigrateCmd() *cobra.Command {
 	o := &migrateOptions{}
 	cmd := &cobra.Command{
 		Use:   "migrate",
-		Short: "Migrate the managed namespaces' agents to the next Generic chart major: 1.x to 2.x (api.kagent.dev Agent), or 0.x to 1.x (kagent.dev AgentTemplate)",
+		Short: "Migrate the managed namespaces' agents to the next Generic chart major: 2.x to 3.x (muster.requireApproval to default: Ask), 1.x to 2.x (api.kagent.dev Agent), or 0.x to 1.x (kagent.dev AgentTemplate)",
 		Long: `Expand–contract migration of an installation's agents, run once per
 installation as a Job of the connectivity chart or by hand with a kubeconfig.
 Every phase is idempotent and gated on the previous one; re-running is safe.
@@ -67,6 +70,14 @@ The target range (--agent-chart-semver) picks the path by its major, because a
 cluster serves one kagent line at a time and a namespace's releases share one
 chart source:
 
+  3.x       2.x to 3.x: the same api.kagent.dev Agent; only values move.
+            muster.requireApproval: true becomes default: Ask (muster asks a
+            person before every tool call, where kagent's flag paused the
+            agent; only where the muster binding renders), the key is
+            dropped, and an unset modelConfig.name is written as
+            default-model-config, the 2.x default. requireApproval: true
+            beside tool approval settings never rendered and is refused.
+            Nothing is deleted: the old line leaves no object behind.
   2.x       1.x to 2.x: kagent.dev/v1alpha3 AgentTemplate to api.kagent.dev
             Agent. Sub-agent bindings in extraTools[] and extraAgentSpec.tools[]
             move from agent to subAgent (a Shared isolation is dropped, a
@@ -133,7 +144,7 @@ variable named next to it; flags win.`,
 	f.StringVar(&o.helmReleaseAPI, "flux-helmrelease-api-version", envOr("FLUX_HELMRELEASE_API_VERSION", "auto"), "helm.toolkit.fluxcd.io API version composed into HelmReleases; auto discovers it (FLUX_HELMRELEASE_API_VERSION)")
 	f.StringVar(&o.ociRepositoryAPI, "flux-ocirepository-api-version", envOr("FLUX_OCIREPOSITORY_API_VERSION", "auto"), "source.toolkit.fluxcd.io API version composed into OCIRepositories; auto discovers it (FLUX_OCIREPOSITORY_API_VERSION)")
 	f.StringVar(&o.chartOCIURL, "agent-chart-oci-url", envOr("AGENT_CHART_OCI_URL", agents.DefaultChartOCIURL), "OCI URL of the agent chart every agent renders from (AGENT_CHART_OCI_URL)")
-	f.StringVar(&o.chartSemver, "agent-chart-semver", envOr("AGENT_CHART_SEMVER", agents.DefaultChartSemver), "Semver range the agent-chart OCIRepositories move to; its major picks the path: 2.x migrates 1.x releases (kagent.dev AgentTemplate) to 2.x (api.kagent.dev Agent), 1.x migrates 0.x releases to 1.x. 2.x follows every 2.x release of the Generic chart and never a pre-release (AGENT_CHART_SEMVER)")
+	f.StringVar(&o.chartSemver, "agent-chart-semver", envOr("AGENT_CHART_SEMVER", agents.DefaultChartSemver), "Semver range the agent-chart OCIRepositories move to; its major picks the path: 3.x migrates 2.x releases (muster.requireApproval to default: Ask), 2.x migrates 1.x releases (kagent.dev AgentTemplate) to 2.x (api.kagent.dev Agent), 1.x migrates 0.x releases to 1.x. 2.x follows every 2.x release of the Generic chart and never a pre-release (AGENT_CHART_SEMVER)")
 	f.StringVar(&o.chartSemverFilter, "agent-chart-semver-filter", envOr("AGENT_CHART_SEMVER_FILTER", ""), "Regular expression the agent chart's tags must match before the range is evaluated, as the OCIRepository's ref.semverFilter; empty filters nothing; unset, each source keeps its own, set empty removes it (AGENT_CHART_SEMVER_FILTER)")
 	f.StringVar(&o.skillsGitHubAPI, "skills-github-api", envOr("AGENT_MANAGER_SKILLS_GITHUB_API", "https://api.github.com"), "GitHub API base URL for skill discovery and for resolving a skill's branch or tag to its head commit (AGENT_MANAGER_SKILLS_GITHUB_API)")
 	f.StringVar(&o.skillsToken, "skills-github-token", envOr("GITHUB_TOKEN", ""), "GitHub token for private skill repositories and a higher rate limit; prefer the environment (GITHUB_TOKEN)")
@@ -143,6 +154,7 @@ variable named next to it; flags win.`,
 	f.StringVar(&o.skillsGitAuthPrev, "skills-git-auth-previous-secret-names", envOr("AGENT_MANAGER_SKILLS_GIT_AUTH_PREVIOUS_SECRET_NAMES", ""), "Comma-separated earlier names of the installation's skills credential Secret; empty moves no release (AGENT_MANAGER_SKILLS_GIT_AUTH_PREVIOUS_SECRET_NAMES)")
 	f.DurationVar(&o.skillsGitAuthWait, "skills-git-auth-wait", envDuration("AGENT_MANAGER_SKILLS_GIT_AUTH_WAIT", 10*time.Minute), "How long the run waits, all in all, for the --skills-git-auth-secret-name Secret to appear where a release still names a previous name (agent-manager's rollout may trail the run); then such a release keeps the previous name until a later run (AGENT_MANAGER_SKILLS_GIT_AUTH_WAIT)")
 	f.StringVar(&o.reportConfigMap, "report-configmap", envOr("AGENT_MANAGER_MIGRATE_REPORT_CONFIGMAP", migrate.DefaultReportConfigMap), "Name of the report ConfigMap written in every managed namespace (AGENT_MANAGER_MIGRATE_REPORT_CONFIGMAP)")
+	f.StringVar(&o.organizations, "organization-namespaces", envOr("AGENT_MANAGER_MIGRATE_ORGANIZATION_NAMESPACES", "auto"), "Organization namespaces migrated like the managed ones, their chart sources excepted: those are the agent-platform-operator's, which moves one across a major only once the namespace's report carries agent-platform.giantswarm.io/agent-chart-ready-major (every release there on the target major's values). Releases agent-manager owns are rewritten, GitOps-owned ones get their diff; one not on target values keeps the run pending. auto: on the 2.x -> 3.x path every namespace labelled agent-platform.giantswarm.io/organization (an unreadable list fails the run), none on the others; none: skip; or a comma-separated list (AGENT_MANAGER_MIGRATE_ORGANIZATION_NAMESPACES)")
 	f.BoolVar(&o.dryRun, "dry-run", envBool("AGENT_MANAGER_MIGRATE_DRY_RUN", false), "Print the report and the diffs; write nothing, not even the report (AGENT_MANAGER_MIGRATE_DRY_RUN)")
 	return cmd
 }
@@ -199,9 +211,14 @@ func runMigrate(ctx context.Context, out io.Writer, o *migrateOptions) error {
 		targetFilter = &o.chartSemverFilter
 	}
 	namespaces := svc.Info(ctx).Namespaces.Managed
+	orgs, err := migrateOrganizations(ctx, clients, o.organizations, major, namespaces)
+	if err != nil {
+		return err
+	}
 	runner, err := migrate.New(clients, resolver, pinner, status, migrate.Options{
 		Namespaces:              namespaces,
 		GitOpsNamespaces:        splitList(o.gitopsNamespaces),
+		OrganizationNamespaces:  orgs,
 		HarnessName:             o.harnessName,
 		ChartOCIURL:             o.chartOCIURL,
 		TargetSemver:            o.chartSemver,
@@ -220,7 +237,7 @@ func runMigrate(ctx context.Context, out io.Writer, o *migrateOptions) error {
 	if err != nil {
 		return err
 	}
-	log.Info("agent-manager migrate starting", "version", build.Version, "commit", build.Commit, "namespaces", namespaces, "gitopsNamespaces", splitList(o.gitopsNamespaces),
+	log.Info("agent-manager migrate starting", "version", build.Version, "commit", build.Commit, "namespaces", namespaces, "organizationNamespaces", orgs, "gitopsNamespaces", splitList(o.gitopsNamespaces),
 		"chart", o.chartOCIURL, "targetSemver", o.chartSemver, "targetMajor", major, "targetSemverFilter", o.chartSemverFilter, "targetSemverFilterSet", o.chartSemverFilterSet, "harness", o.harnessName, "kagentAPI", kagentVersion, "dryRun", o.dryRun, "report", o.reportConfigMap, "githubToken", o.skillsToken != "", "skillManager", o.skillManagerURL, "skillsGitAuthSecretName", o.skillsGitAuth, "skillsGitAuthPreviousSecretNames", splitList(o.skillsGitAuthPrev))
 
 	res, runErr := runner.Run(ctx)
@@ -235,6 +252,27 @@ func runMigrate(ctx context.Context, out io.Writer, o *migrateOptions) error {
 	return runErr
 }
 
+// migrateOrganizations are the organization namespaces the run reads (see
+// --organization-namespaces). On the 2.x -> 3.x path an unreadable list is
+// an error: a run that cannot see them must not report the installation
+// migrated, and their sources stay on the old major until a run marks them.
+func migrateOrganizations(ctx context.Context, clients kube.Client, flag string, major uint64, managed []string) ([]string, error) {
+	switch strings.TrimSpace(flag) {
+	case "none", "":
+		return nil, nil
+	case "auto":
+		if major < 3 {
+			return nil, nil
+		}
+		orgs, err := migrate.OrganizationNamespaces(ctx, clients.Typed(), managed)
+		if err != nil {
+			return nil, fmt.Errorf("%w; the run needs list on namespaces, read and update on helmreleases, read on ocirepositories and the report ConfigMap there (or --organization-namespaces none, which leaves the organizations' releases unchecked) — nothing was changed", err)
+		}
+		return orgs, nil
+	}
+	return splitList(flag), nil
+}
+
 // migrateKagentVersion is the served version of the kagent API the target
 // chart renders into; the one precondition that is never guessed. 1.x values
 // under a 0.x chart, or 2.x values before the api.kagent.dev line runs, break
@@ -243,7 +281,7 @@ func runMigrate(ctx context.Context, out io.Writer, o *migrateOptions) error {
 // diffs, and its wait phase says the Agent resource is not served yet.
 func migrateKagentVersion(clients kube.Client, o *migrateOptions, major uint64, log *slog.Logger) (string, error) {
 	group, resource := "kagent.dev", "agenttemplates"
-	if major == 2 {
+	if major >= 2 {
 		group, resource = agents.KagentAPIGroup, "agents"
 	}
 	version := strings.TrimPrefix(o.kagentAPIVersion, group+"/")
@@ -254,7 +292,7 @@ func migrateKagentVersion(clients kube.Client, o *migrateOptions, major uint64, 
 	if err == nil {
 		return version, nil
 	}
-	if major == 2 && o.dryRun {
+	if major >= 2 && o.dryRun {
 		log.Warn("api.kagent.dev agents not served; the dry run validates and diffs only", "error", err, "assumedVersion", agents.DefaultKagentAPIVersion)
 		return agents.DefaultKagentAPIVersion, nil
 	}

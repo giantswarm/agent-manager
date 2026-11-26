@@ -280,6 +280,22 @@ paths:
         that races helm-controller's status update of the release is retried
         on a fresh read, not reported. `400` for a body still carrying the
         removed `toolNames` or `runtime`.
+
+        Tool approval: REST keeps one PATCH for what the MCP tools
+        `update_agent` and `update_agent_access` change (`tools` replaces the
+        whole tool list); it never grants: an `Allow` that selects a tool
+        whose connector asks, new or changed, and `default: Allow` are `400`,
+        and settings are `501 unsupported` where the installation does not
+        bind them. Approval settings with grants are the MCP tool
+        `set_agent_approval` (its answer names the list `toolSettings` and
+        `defaultApproval`, as an Agent does), grants are read with
+        `list_approval_grants` (MCP only: `{grants, unreadable,
+        unreadableCount}`; without `namespace` every managed namespace,
+        organizations included, the caller may list HelmReleases in; a
+        configured one it may not is named in `unreadable`, an organization
+        is never named: skipped when the caller is no member, else counted
+        in `unreadableCount`). Like every save, a PATCH keeps an agent's grants only
+        where the caller is connector admin of their connector.
       operationId: updateAgent
       x-mcp-tool: update_agent
       parameters:
@@ -907,7 +923,7 @@ components:
           properties:
             code:
               type: string
-              enum: [not_found, invalid_request, conflict, gitops_owned, forbidden, unauthenticated, auth_required, unsupported, precondition_failed, precondition_required, credential_consumers_changed, credential_operation_other_login, already_exists, backend_error]
+              enum: [not_found, invalid_request, conflict, gitops_owned, forbidden, unauthenticated, auth_required, unsupported, precondition_failed, precondition_required, credential_consumers_changed, credential_operation_other_login, already_exists, approval_unavailable, backend_error]
               description: "A stable code to switch on. credential_operation_other_login (403, getCredentialOperation, saveCredentialOperation, cancelCredentialOperation): the operation was prepared with another login of the same person (same issuer and verified email address, another subject); sign in the same way as when it was prepared, then open the link again; the answer names nothing of the operation. credential_consumers_changed (409, saveCredentialOperation): the objects that use the credential, or where they send it, changed since the replacement was prepared, live or in git; the credential was not written; prepare the replacement again with a fresh requestId. already_exists (409): a create whose object exists by then, live or as its file in git: set_organization_model, set_organization_connector or set_organization_egress_policy with create, and a saveCredentialOperation whose operation creates a model, connector or egress policy"
             message: { type: string }
     Info:
@@ -1057,9 +1073,46 @@ components:
       type: array
       description: "Free-form keywords as the agent chart's agent.tags takes them (its tag.schema.json; GET /info capabilities.tags), rendered as the ui.giantswarm.io/tags annotation; trimmed, lowercased and deduplicated, order kept"
       items: { type: string }
+    ToolList:
+      type: array
+      maxItems: 32
+      description: "The agent's tool list (agent chart `tools`): each item a toolset selector, or a one-key object {selector: Allow|Ask|Block} with its approval setting. Each selector once. An Allow over a connector's Ask holds only with a grant (set_agent_approval)"
+      items:
+        oneOf:
+          - { type: string, pattern: "^(preset|server|workflow|tool):[^\\s,]+$" }
+          - type: object
+            minProperties: 1
+            maxProperties: 1
+            additionalProperties: { type: string, enum: [Allow, Ask, Block] }
+    Grant:
+      type: object
+      description: "A connector admin's Allow over that connector's Ask for one entry of the agent's tool list (or its default)"
+      properties:
+        agent:
+          type: object
+          description: Set by list_approval_grants
+          properties:
+            uid: { type: string, description: The HelmRelease's metadata.uid }
+            namespace: { type: string }
+            name: { type: string }
+        entry: { type: string, description: "The selector, or default" }
+        server: { type: string, description: "The connector's muster server key" }
+        namespace: { type: string, description: "The MCPServer's namespace" }
+        connectorUid: { type: string, description: "The MCPServer's metadata.uid" }
+        grantedBy: { type: string, description: "Who saved it: the verified email, else the subject" }
+        grantedAt: { type: string, format: date-time }
+        generation: { type: integer, description: "The HelmRelease metadata.generation the recording save wrote" }
+        tools: { type: array, items: { type: string }, description: "The server's own names of the tools the grant covers" }
+        agentDisplayName: { type: string, description: "list_approval_grants: the agent's display name, empty when it has none" }
+    DroppedGrant:
+      type: object
+      properties:
+        entry: { type: string }
+        server: { type: string }
+        reason: { type: string }
     Spec:
       type: object
-      required: [name, toolset]
+      required: [name]
       properties:
         namespace: { type: string }
         organization: { type: string, description: "With cluster: the organization owning the workload cluster the agent runs on (namespace org-<organization> on the installation holds the cluster's kubeconfig Secret and the HelmRelease)" }
@@ -1078,7 +1131,9 @@ components:
         egressPolicyRefs: { $ref: "#/components/schemas/EgressPolicyRefs" }
         connectors: { $ref: "#/components/schemas/Connectors" }
         gitAuthSecretName: { type: string, description: "Secret (key token) in the agent's namespace its git skills and plugins are fetched with (chart skillsGitAuthSecretRef.name); omitted, the installation's (GET /info skillsGitAuthSecretName)" }
-        toolset: { $ref: "#/components/schemas/Toolset" }
+        tools: { $ref: "#/components/schemas/ToolList", description: "The agent's tool list (tools or the deprecated toolset is required, not both); an Allow that selects a tool whose connector asks is refused (granted only with set_agent_approval)" }
+        default: { type: string, enum: [Ask, Block], description: "Approval setting of every listed tool without its own; Allow is refused here (set_agent_approval)" }
+        toolset: { $ref: "#/components/schemas/Toolset", description: "Deprecated: tools without settings" }
         labels: { type: object, additionalProperties: { type: string } }
         annotations: { type: object, additionalProperties: { type: string } }
         mode: { type: string, enum: [apply, commit], default: apply }
@@ -1104,9 +1159,12 @@ components:
         connectors: { $ref: "#/components/schemas/Connectors", description: "Replaces the agent's connectors; [] removes them; the other extraTools entries stay" }
         gitAuthSecretName: { type: string, description: "Replaces the skills credential Secret; an empty string goes back to the installation's" }
         refreshSkills: { type: boolean, description: "Re-resolve every git skill to the head of its repository's default branch (a skill in skills with a ref goes to that ref's head; with skill-manager, one with none to its skill source's ref); nothing else changes" }
-        toolset: { $ref: "#/components/schemas/Toolset" }
+        tools: { $ref: "#/components/schemas/ToolList", description: "Replaces the whole tool list; an entry carried over unchanged keeps its setting (its grant follows the save rules), a new or changed Allow over a connector's Ask is refused" }
+        default: { type: string, enum: [Ask, Block, ""], description: "The list's default; \"\" removes it; Allow is refused here" }
+        toolset: { $ref: "#/components/schemas/Toolset", description: "Deprecated: tools without settings" }
         labels: { type: object, additionalProperties: { type: string } }
         annotations: { type: object, additionalProperties: { type: string } }
+        expectedGeneration: { type: integer, description: "The generation the agent was read at (Agent.generation): a release at another one refuses the write with 409 conflict (`agent <ns>/<name> changed since it was read (generation N now, expectedGeneration M)`), checked against the live release; omitted, the write goes ahead regardless" }
         force: { type: boolean, description: Write a suspended release; a GitOps-owned one is never written live }
         mode: { type: string, enum: [apply, commit], default: apply }
         dryRun: { type: boolean, description: Return what would be written and write nothing }
@@ -1213,7 +1271,14 @@ components:
         connectors: { $ref: "#/components/schemas/Connectors", description: "The connectors the HelmRelease values bind: the extraTools entries of the mcp shape on a RemoteMCPServer" }
         toolset: { $ref: "#/components/schemas/Toolset", description: The declared toolset (the HelmRelease's `toolset` value; for a bare Agent the X-Muster-Toolset header of the agent's RemoteMCPServer); absent when none is declared }
         implicitFullAccess: { type: boolean, description: True when the agent declares no toolset but binds muster — its meta-tools see every tool the gateway exposes to the caller; such agents predate toolsets and still need one (update_agent) }
-        tools: { type: array, items: { $ref: "#/components/schemas/ToolBinding" } }
+        tools: { type: array, items: { $ref: "#/components/schemas/ToolBinding" }, description: "The template's kagent MCP bindings (unchanged by tool approval)" }
+        toolSettings: { $ref: "#/components/schemas/ToolList", description: "The agent's tool list as its release stores it (tools, else toolset without settings); absent without a release" }
+        defaultApproval: { type: string, enum: [Allow, Ask, Block], description: "The tool list's default (chart value default)" }
+        grants: { type: array, items: { $ref: "#/components/schemas/Grant" }, description: "The agent's grants that hold (written at the release's current generation)" }
+        approvalSettings: { type: boolean, description: "True where the agent chart takes tool approval settings and this installation binds them to sessions" }
+        generation: { type: integer, description: "The owning HelmRelease's metadata.generation, which a PATCH (and the MCP tools update_agent, update_agent_access, set_agent_approval) takes as expectedGeneration; absent for a bare Agent" }
+        approvalEnforcement: { type: string, enum: [enforced, not-enforced, pending], description: "Whether the agent's settings are bound to its sessions: enforced; not-enforced (no binding, no HelmRelease, spec.valuesFrom, or a release without tools on an older chart: a session of an agent with settings is refused); pending until the release ran its current generation" }
+        approvalEnforced: { type: boolean, description: "approvalEnforcement as a boolean: true when enforced, false when not-enforced, absent while pending" }
         ready: { type: [boolean, "null"], description: The Agent's verdict (Ready and the desired revision is the latest successful one); null while unreported }
         status: { $ref: "#/components/schemas/ObjectStatus" }
         managed: { type: string, enum: [helmrelease, gitops, platform, none, unknown] }
@@ -1263,6 +1328,10 @@ components:
         before: { type: object }
         after: { type: object }
         changed: { type: array, items: { type: string }, description: Dotted value paths that changed }
+        grants: { type: array, items: { $ref: "#/components/schemas/Grant" }, description: The agent's grants after the save }
+        dropped: { type: array, items: { $ref: "#/components/schemas/DroppedGrant" }, description: The grants the save removed }
+        sessionsUpdated: { type: boolean, description: "false when muster could not be told which grants the agent keeps (its running sessions keep theirs until it is sent again); absent when no call was needed" }
+        warnings: { type: array, items: { type: string } }
         requestedBy: { type: string, description: The authenticated caller the write ran as }
         manifests: { $ref: "#/components/schemas/Manifests" }
         mode: { type: string, enum: [apply, commit] }
@@ -1280,6 +1349,9 @@ components:
         remoteMcpServerDeleted: { type: boolean, description: The agent's RemoteMCPServer was deleted directly (force, a suspended release) }
         ociRepositoryDeleted: { type: boolean }
         ociRepositoryKept: { type: string, description: Why the shared chart source stays }
+        dropped: { type: array, items: { $ref: "#/components/schemas/DroppedGrant" }, description: The grants the delete removed }
+        sessionsUpdated: { type: boolean, description: "false when muster could not be told to drop the agent's grants from its running sessions" }
+        warnings: { type: array, items: { type: string } }
         requestedBy: { type: string, description: The authenticated caller the delete ran as }
         mode: { type: string, enum: [apply, commit] }
         dryRun: { type: boolean }

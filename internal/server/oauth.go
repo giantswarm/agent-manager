@@ -257,6 +257,9 @@ func (o *oauthRuntime) attachIdentity(next http.Handler) http.Handler {
 			id.Source = identity.SourceSSO
 		}
 		ctx = identity.ContextWith(ctx, id)
+		if strings.EqualFold(strings.TrimSpace(r.Header.Get(identity.CallerKindHeader)), identity.CallerKindAgent) {
+			ctx = identity.ContextWithAgentCaller(ctx)
+		}
 		tok := o.downstreamToken(ctx, r, info)
 		if tok == "" && o.cfg.DownstreamOAuth {
 			o.refuse(w, r, id)

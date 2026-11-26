@@ -54,7 +54,8 @@ MCP-server-writer half.
 | Agents of a namespace (Agent objects + HelmReleases of the chart not rendered yet), one summary each: display name, description, model config, Harness, toolset, readiness, management mode, and a suspended, deleting or failing release; `details` reports each in full; `tags` keeps those with any of them | `GET /api/v1/agents?namespace=[&details=true&tags=]` | `list_agents` | no |
 | One agent with its HelmRelease values, Harness, pinned skills and plugins, toolset and the Agent's status | `GET /api/v1/agents/{ns}/{name}` | `get_agent` | no |
 | Create: OCIRepository (when missing) + HelmRelease, after skill pinning, schema, ModelConfig and Harness validation | `POST /api/v1/agents` | `create_agent` | HelmRelease, OCIRepository |
-| Update: merge into the HelmRelease values (`refreshSkills` re-pins git skills), validate, update | `PATCH /api/v1/agents/{ns}/{name}[?force=true]` | `update_agent` | HelmRelease |
+| Update: merge into the HelmRelease values (`refreshSkills` re-pins git skills), validate, update. Over MCP split in three: `update_agent` (what it is), `update_agent_access` (what it reaches), `set_agent_approval`; see [tool approval](docs/tool-approval.md) | `PATCH /api/v1/agents/{ns}/{name}[?force=true]` | `update_agent`, `update_agent_access`, `set_agent_approval` | HelmRelease, approval grants |
+| The approval grants of a namespace's agents (a connector admin's Allow over that connector's Ask), optionally of one connector | — | `list_approval_grants` | no |
 | Delete: the HelmRelease; the OCIRepository only when nothing else references it | `DELETE /api/v1/agents/{ns}/{name}[?force=true&mode=&dryRun=]` | `delete_agent` | HelmRelease, OCIRepository, (bare Agent with force) |
 | Status verdict: the Agent's conditions, HelmRelease conditions/history, Warning events | `GET /api/v1/agents/{ns}/{name}/status` | `get_agent_status` | no |
 | Dry run of create/update: pinned skills, composed manifests + every violation | `POST /api/v1/agents/validate` | `validate_agent` | no |
@@ -375,6 +376,10 @@ public repositories only.
 
 ## The toolset
 
+The toolset is now the agent's **tool list** (`tools`, per-entry settings,
+`default`): see [docs/tool-approval.md](docs/tool-approval.md). `toolset` stays
+accepted without settings; a chart without `tools` keeps getting `toolset`.
+
 Muster owns the runtime limits. The resolved chart supplies the declaration's
 count through `values.schema.json` and checks aggregate UTF-8 bytes during render.
 The MCP input schema publishes that count for Backstage's existing `describe_tool`
@@ -401,7 +406,7 @@ so).
   `preset:full` for the deliberate choice of every tool the gateway exposes.
   An empty list is refused too, so "no tools" is never confused with implicit
   full access.
-- `update_agent` replaces the whole list — the edit path, and the way agents
+- `update_agent_access` replaces the whole list — the edit path, and the way agents
   that predate toolsets get one. `get_agent` / `list_agents` report the
   declared `toolset`, or `implicitFullAccess: true` for a release without one
   (a bare Agent's toolset is read from its RemoteMCPServer's header).
@@ -835,6 +840,9 @@ and without the caller's token a session operation is `401 unauthenticated`.
   created, and when its first turn already carries the first message (the
   message id is derived from the `requestId`) it answers that turn's latest
   state and sends nothing, so a retry after a lost answer starts no second turn.
+  A start refused after kagent created its session deletes it again, which
+  spends the `requestId`: a retry with it is refused `conflict`; use a new one
+  (reuse one only when no answer came back).
 - `message` is optional: without it `start_session` only creates the session
   and answers `{session, workspace}` with no `turn`. The caller then sends the
   first message itself over A2A, with the Agent as `tenant` and the session's
@@ -981,8 +989,58 @@ rewritten. A range that admits two majors (`>=1.0.0`) is refused.
 
 | Target | Path | Old line → new line | Precondition |
 |---|---|---|---|
+| `>=3.0.0 <4.0.0` | 2.x → 3.x | the same `api.kagent.dev/v1alpha3` `Agent`; values only (below) | `agents.api.kagent.dev` served |
 | `2.x` | 1.x → 2.x | `kagent.dev/v1alpha3` `AgentTemplate` → `api.kagent.dev/v1alpha3` `Agent` | `agents.api.kagent.dev` served (kagent 1.3 line); `--dry-run` runs before it |
 | `1.x` | 0.x → 1.x | `kagent.dev/v1alpha2` `Agent` → `kagent.dev/v1alpha3` `AgentTemplate` | `agenttemplates.kagent.dev` served (kagent 1.0 to 1.2 line) |
+
+On the 2.x → 3.x path nothing of the old line is left to delete; the expand
+phase rewrites what chart 3.0 changed and reports each change per release
+(`changes.removed`, `changes.set`, log line `release rewritten`):
+
+- `muster.requireApproval: true` becomes `default: Ask`, only where the muster
+  binding renders (not with `muster.enabled: false` or a tool list of exactly
+  `["preset:none"]`); there and for `requireApproval: false` the key is just
+  dropped. `true` beside `default` or a `tools` setting fails the release and
+  holds the other releases of its chart source.
+- an unset `modelConfig.name` is written as `default-model-config`, what 2.x
+  rendered.
+
+A release is written only once a 3.x chart exists in the registry and the
+namespace's source moves with it. Otherwise it is held `pending` with the diff:
+GitOps-owned, source pinned by tag or digest or owned by git or the platform,
+or source held by a sibling that is held or failed. A release with
+`spec.valuesFrom` is never written: it is `failed` with what to change, holding
+its source (one already on a 3.x chart is done).
+
+Organization namespaces (`--organization-namespaces`, default `auto`: those
+labelled `agent-platform.giantswarm.io/organization`) follow the same rules
+except their chart sources, which are the agent-platform-operator's: a release
+agent-manager owns is rewritten, a git-applied one gets its diff and holds its
+siblings. The run writes its report in every organization namespace and, when
+every release there is on 3.x values, annotates it
+`agent-platform.giantswarm.io/agent-chart-ready-major: "3"` with
+`.../agent-chart-ready-releases` naming them (removed again while one is
+pending). The operator moves a source across a major only while that
+annotation names the new major (or no HelmRelease uses the source), so a
+namespace with a release still on 2.x values stays on its 2.x chart, asking
+as before, until the release is fixed and migrate runs again
+(`kubectl create job --from=cronjob/<release>-agent-manager-migrate`). A
+release created on the 2.x source after the run read the namespace, or a
+failed write, holds the source the same way. Between the run's write and the
+operator's move (within a minute of its next reconcile) a rewritten release's
+2.x upgrade fails and it keeps its deployed revision, which still asks. The
+operator recognises an agent-chart source by chart name too; a release on a
+source of another chart is named in the warnings. A run that may not list,
+read or write these namespaces fails before writing anything. Repair a held
+organization release by applying the diff through its owner, replacing
+`requireApproval: true` with `default: Ask`, never just deleting it.
+
+A range admitting a pre-release of the next major (`<=3.0.0-rc.1`) or spanning
+two majors (`3.0.1 || 2.6.0`) is refused.
+
+Sessions: agent-manager already binds a Session on `requireApproval: true` as
+`default: Ask` on 2.x, so running Sessions keep asking across the upgrade
+(muster ignores `X-Muster-Tool-Approval` for a binding that carries settings).
 
 ```sh
 agent-manager migrate --dry-run \

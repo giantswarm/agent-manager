@@ -34,6 +34,11 @@ var (
 	ErrForbidden = errors.New("forbidden")
 	// ErrUnsupported: the operation is not available on this installation.
 	ErrUnsupported = errors.New("unsupported")
+	// ErrApprovalUnavailable: a write needs muster's word on what an entry
+	// of the agent's tool list selects (an Allow over a connector's Ask), and
+	// muster cannot give it: not configured, unreachable, or approval
+	// reported as unavailable. 503.
+	ErrApprovalUnavailable = errors.New("approval_unavailable")
 	// ErrUnauthenticated: the request reached the service without the caller
 	// token it needs to act (the server runs as the caller only). 401.
 	ErrUnauthenticated = errors.New("unauthenticated")
@@ -290,9 +295,16 @@ type Spec struct {
 	// selects the installation's (ComposeConfig.SkillsGitAuthSecretName).
 	GitAuthSecretName string `json:"gitAuthSecretName,omitempty"`
 	// Toolset is the list of selectors that bounds which of the gateway's
-	// tools the agent can use (chart value `toolset`). Required on create;
-	// see ValidateToolset for the grammar.
+	// tools the agent can use (chart value `toolset`). Deprecated: Tools
+	// with entries without settings; one of the two is required on create.
 	Toolset []string `json:"toolset,omitempty"`
+	// Tools is the agent's tool list (chart value `tools`): selectors, each
+	// optionally with an approval setting.
+	Tools ToolList `json:"tools,omitempty"`
+	// Default is the list's default approval setting (chart value
+	// `default`): Ask or Block on a create; an allowing default is granted
+	// only through set_agent_approval.
+	Default string `json:"default,omitempty"`
 	// DefaultWorkspace is the workspace, <namespace>/<name> in the agent's
 	// namespace, a start_session that names none starts in
 	// (DefaultWorkspaceAnnotation). Empty: no default.
@@ -320,11 +332,16 @@ type Spec struct {
 // empty toolset is refused: use preset:none).
 type Update struct {
 	Location
-	Name          string  `json:"name"`
-	DisplayName   *string `json:"displayName,omitempty"`
-	Description   *string `json:"description,omitempty"`
-	SystemMessage *string `json:"systemMessage,omitempty"`
-	ModelConfig   *string `json:"modelConfig,omitempty"`
+	Name string `json:"name"`
+	// ExpectedGeneration, when set, is the release generation the caller
+	// read (get_agent's generation): a release at another one refuses the
+	// write as a conflict, checked against the live release on every
+	// attempt of the write.
+	ExpectedGeneration *int64  `json:"expectedGeneration,omitempty"`
+	DisplayName        *string `json:"displayName,omitempty"`
+	Description        *string `json:"description,omitempty"`
+	SystemMessage      *string `json:"systemMessage,omitempty"`
+	ModelConfig        *string `json:"modelConfig,omitempty"`
 	// Tags replaces the agent's whole tag list; empty clears it.
 	Tags *[]string `json:"tags,omitempty"`
 	// Harness moves the agent to another Harness of its namespace after the
@@ -344,8 +361,14 @@ type Update struct {
 	Connectors *[]string `json:"connectors,omitempty"`
 	// GitAuthSecretName replaces the skills credential Secret; empty clears it
 	// back to the installation's.
-	GitAuthSecretName *string   `json:"gitAuthSecretName,omitempty"`
-	Toolset           *[]string `json:"toolset,omitempty"`
+	GitAuthSecretName *string `json:"gitAuthSecretName,omitempty"`
+	// Toolset replaces the tool list with entries without settings
+	// (deprecated: Tools).
+	Toolset *[]string `json:"toolset,omitempty"`
+	// Tools replaces the whole tool list.
+	Tools *ToolList `json:"tools,omitempty"`
+	// Default replaces the list's default; "" removes it.
+	Default *string `json:"default,omitempty"`
 	// DefaultWorkspace replaces the agent's default workspace; empty
 	// removes it.
 	DefaultWorkspace *string `json:"defaultWorkspace,omitempty"`
@@ -367,6 +390,20 @@ type Update struct {
 	Force bool `json:"force,omitempty"`
 
 	WriteOptions
+
+	// tool names the MCP tool (or REST route) the save came through, for
+	// messages and logs.
+	tool string
+	// granted is set_agent_approval's checked grants, per entry: such a
+	// save may write an Allow over a connector's Ask.
+	granted map[string][]Connector
+	// approval marks set_agent_approval's save.
+	approval bool
+	// expectTools and expectDefault are the list and default
+	// set_agent_approval checked: the save is refused as a conflict when the
+	// release holds another list by the time it is written.
+	expectTools   *ToolList
+	expectDefault string
 }
 
 // Condition is a Kubernetes-style status condition, flattened.
@@ -506,8 +543,47 @@ type Agent struct {
 	// sandbox within it, header or not, and a change applies to new
 	// sessions. False: the toolset is declared by the agent's runtime.
 	ToolsetBound bool `json:"toolsetBound,omitempty"`
-	// Tools are the template's MCP bindings.
+	// Tools are the template's MCP bindings (unchanged since before tool
+	// approval: the field keeps its meaning for existing clients).
 	Tools []ToolBinding `json:"tools,omitempty"`
+	// ToolSettings is the agent's tool list as its release stores it
+	// (`tools`, else `toolset` without settings), each entry optionally with
+	// its approval setting; absent without a release.
+	ToolSettings ToolList `json:"toolSettings,omitempty"`
+	// DefaultSetting is the list's default approval setting.
+	DefaultSetting string `json:"defaultApproval,omitempty"`
+	// Grants are the agent's approval grants that hold: a connector admin's
+	// Allow over that connector's Ask, per entry.
+	Grants []GrantView `json:"grants,omitempty"`
+	// ApprovalSettings is true when the agent chart takes tool approval
+	// settings (tools, default).
+	ApprovalSettings bool `json:"approvalSettings,omitempty"`
+	// ApprovalEnforcement says whether the agent's settings are bound to its
+	// sessions: enforced (this agent-manager binds approval settings and the
+	// agent's release takes them and runs a chart that does), not-enforced
+	// (no binding, no release, spec.valuesFrom, or a chart without `tools`: a
+	// session start of an agent with settings is refused), or pending (the
+	// release has not run its current generation yet, so its chart is not
+	// confirmed).
+	ApprovalEnforcement string `json:"approvalEnforcement,omitempty"`
+	// ApprovalEnforced is ApprovalEnforcement as a boolean: true when
+	// enforced, false when not, left out while pending.
+	ApprovalEnforced *bool `json:"approvalEnforced,omitempty"`
+	// Generation is the owning HelmRelease's metadata.generation, which
+	// update_agent, update_agent_access and set_agent_approval take as
+	// expectedGeneration; absent for a bare Agent.
+	Generation int64 `json:"generation,omitempty"`
+	// release is the owning HelmRelease's uid and generation, which the
+	// grants are keyed and checked by, and whether it takes valuesFrom.
+	releaseUID        string
+	releaseGeneration int64
+	releaseValuesFrom bool
+	// releaseHasTools: the release values carry `tools`; releaseChart is the
+	// chart version it last ran; releaseRan: it ran its current generation.
+	releaseFound    bool
+	releaseHasTools bool
+	releaseChart    string
+	releaseRan      bool
 	// Ready is the Agent object's verdict (Ready and the desired revision is
 	// the latest successful one); nil while the object is absent or its
 	// Harness has not reported.
@@ -534,24 +610,31 @@ type AgentSummary struct {
 	Name      string `json:"name"`
 	Namespace string `json:"namespace"`
 	Target
-	Exists                    bool     `json:"exists"`
-	DisplayName               string   `json:"displayName,omitempty"`
-	Tags                      []string `json:"tags,omitempty"`
-	Description               string   `json:"description,omitempty"`
-	CreatedBy                 string   `json:"createdBy,omitempty"`
-	CreatedByName             string   `json:"createdByName,omitempty"`
-	DefaultWorkspace          string   `json:"defaultWorkspace,omitempty"`
-	DefaultToolchains         []string `json:"defaultToolchains,omitempty"`
-	DefaultToolchainsImplicit bool     `json:"defaultToolchainsImplicit,omitempty"`
-	ModelConfig               string   `json:"modelConfig,omitempty"`
-	Harness                   string   `json:"harness,omitempty"`
-	Toolset                   []string `json:"toolset,omitempty"`
-	Connectors                []string `json:"connectors,omitempty"`
-	ImplicitFullAccess        bool     `json:"implicitFullAccess,omitempty"`
-	ToolsetBound              bool     `json:"toolsetBound,omitempty"`
-	Ready                     *bool    `json:"ready"`
-	Managed                   string   `json:"managed"`
-	Default                   bool     `json:"default,omitempty"`
+	Exists                    bool        `json:"exists"`
+	DisplayName               string      `json:"displayName,omitempty"`
+	Tags                      []string    `json:"tags,omitempty"`
+	Description               string      `json:"description,omitempty"`
+	CreatedBy                 string      `json:"createdBy,omitempty"`
+	CreatedByName             string      `json:"createdByName,omitempty"`
+	DefaultWorkspace          string      `json:"defaultWorkspace,omitempty"`
+	DefaultToolchains         []string    `json:"defaultToolchains,omitempty"`
+	DefaultToolchainsImplicit bool        `json:"defaultToolchainsImplicit,omitempty"`
+	ModelConfig               string      `json:"modelConfig,omitempty"`
+	Harness                   string      `json:"harness,omitempty"`
+	Toolset                   []string    `json:"toolset,omitempty"`
+	ToolSettings              ToolList    `json:"toolSettings,omitempty"`
+	DefaultSetting            string      `json:"defaultApproval,omitempty"`
+	Grants                    []GrantView `json:"grants,omitempty"`
+	ApprovalSettings          bool        `json:"approvalSettings,omitempty"`
+	ApprovalEnforcement       string      `json:"approvalEnforcement,omitempty"`
+	ApprovalEnforced          *bool       `json:"approvalEnforced,omitempty"`
+	Generation                int64       `json:"generation,omitempty"`
+	Connectors                []string    `json:"connectors,omitempty"`
+	ImplicitFullAccess        bool        `json:"implicitFullAccess,omitempty"`
+	ToolsetBound              bool        `json:"toolsetBound,omitempty"`
+	Ready                     *bool       `json:"ready"`
+	Managed                   string      `json:"managed"`
+	Default                   bool        `json:"default,omitempty"`
 	// The owning HelmRelease's state, when it needs attention: suspended,
 	// being uninstalled, or not Ready (its reason and message).
 	Suspended       bool   `json:"suspended,omitempty"`
@@ -579,6 +662,13 @@ func (a Agent) Summary() AgentSummary {
 		ModelConfig:               a.ModelConfig,
 		Harness:                   a.Harness,
 		Toolset:                   a.Toolset,
+		ToolSettings:              a.ToolSettings,
+		DefaultSetting:            a.DefaultSetting,
+		Grants:                    a.Grants,
+		ApprovalSettings:          a.ApprovalSettings,
+		ApprovalEnforcement:       a.ApprovalEnforcement,
+		ApprovalEnforced:          a.ApprovalEnforced,
+		Generation:                a.Generation,
 		Connectors:                a.Connectors,
 		ImplicitFullAccess:        a.ImplicitFullAccess,
 		ToolsetBound:              a.ToolsetBound,
@@ -726,6 +816,13 @@ type UpdateResult struct {
 	After     map[string]any `json:"after"`
 	Changed   []string       `json:"changed"`
 	Manifests Manifests      `json:"manifests"`
+	// Grants are the agent's grants after the save; Dropped the grants the
+	// save removed.
+	Grants  []GrantView    `json:"grants,omitempty"`
+	Dropped []DroppedGrant `json:"dropped,omitempty"`
+	// SessionSync says whether the agent's running Sessions were told the
+	// grants left (sessionsUpdated, warnings).
+	SessionSync
 	// RequestedBy is the authenticated caller the write ran as.
 	RequestedBy string `json:"requestedBy,omitempty"`
 	WriteOutcome
@@ -745,6 +842,11 @@ type DeleteResult struct {
 	// OCIRepositoryKept explains why the chart source stays (other agents
 	// reference it, or it could not be checked).
 	OCIRepositoryKept string `json:"ociRepositoryKept,omitempty"`
+	// Dropped are the grants the delete removed.
+	Dropped []DroppedGrant `json:"dropped,omitempty"`
+	// SessionSync says whether the agent's running Sessions were told to drop
+	// its grants.
+	SessionSync
 	// RequestedBy is the authenticated caller the delete ran as.
 	RequestedBy string `json:"requestedBy,omitempty"`
 	WriteOutcome

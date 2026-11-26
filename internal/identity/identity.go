@@ -65,7 +65,39 @@ type ctxKey int
 const (
 	identityKey ctxKey = iota
 	tokenKey
+	agentCallerKey
 )
+
+// CallerKindHeader is the header muster adds to the calls an agent makes (an
+// actor JWT or a delegated caller) to the servers its governance
+// configuration names, and strips from what clients send. agent-manager
+// cannot tell an agent from its person otherwise: muster forwards the
+// person's identity for both.
+const CallerKindHeader = "X-Muster-Caller-Kind"
+
+// CallerKindAgent is CallerKindHeader's value for an agent caller.
+const CallerKindAgent = "agent"
+
+// ContextWithAgentCaller marks the request as an agent's (CallerKindHeader).
+// The mark only ever takes rights away (an agent's save keeps no approval
+// grant), so a client sending the header itself gains nothing.
+func ContextWithAgentCaller(ctx context.Context) context.Context {
+	return context.WithValue(ctx, agentCallerKey, true)
+}
+
+// IsAgentCaller reports whether the request carried CallerKindHeader: agent.
+func IsAgentCaller(ctx context.Context) bool {
+	agent, _ := ctx.Value(agentCallerKey).(bool)
+	return agent
+}
+
+// CallerKind is "agent" for an agent caller, else "person", for the logs.
+func CallerKind(ctx context.Context) string {
+	if IsAgentCaller(ctx) {
+		return CallerKindAgent
+	}
+	return "person"
+}
 
 // ContextWith returns ctx carrying id.
 func ContextWith(ctx context.Context, id *Identity) context.Context {
@@ -85,6 +117,20 @@ func FromContext(ctx context.Context) (*Identity, bool) {
 func Caller(ctx context.Context) string {
 	id, _ := FromContext(ctx)
 	return id.String()
+}
+
+// VerifiedCaller is the caller's email where the IdP verified it, else its
+// subject: what a record that someone relies on later names (an approval
+// grant's grantedBy).
+func VerifiedCaller(ctx context.Context) string {
+	id, ok := FromContext(ctx)
+	if !ok || id == nil {
+		return ""
+	}
+	if id.Email != "" && id.EmailVerified {
+		return id.Email
+	}
+	return id.Subject
 }
 
 // CallerName is the caller's display name, or "" without one. For display

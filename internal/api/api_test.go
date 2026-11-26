@@ -357,7 +357,11 @@ var wantHints = map[string]hints{
 	ToolValidateAgent:      annotations(readOnly, additive, notIdempotent, openWorld),
 	ToolListSkills:         annotations(readOnly, additive, notIdempotent, openWorld),
 	ToolCreateAgent:        annotations(writes, additive, notIdempotent, openWorld),
-	ToolUpdateAgent:        annotations(writes, destructive, notIdempotent, openWorld),
+	ToolUpdateAgent:        annotations(writes, destructive, notIdempotent, closedWorld),
+	ToolUpdateAgentAccess:  annotations(writes, destructive, notIdempotent, openWorld),
+	// set_agent_approval converges on its settings and may drop grants.
+	ToolSetAgentApproval:   annotations(writes, destructive, idempotent, closedWorld),
+	ToolListApprovalGrants: annotations(readOnly, additive, notIdempotent, closedWorld),
 	ToolDeleteAgent:        annotations(writes, destructive, notIdempotent, closedWorld),
 	ToolListSessions:       annotations(readOnly, additive, notIdempotent, closedWorld),
 	ToolGetSession:         annotations(readOnly, additive, notIdempotent, closedWorld),
@@ -416,16 +420,27 @@ func TestMCPToolsMirrorREST(t *testing.T) {
 		switch tool.Name {
 		case ToolCreateAgent:
 			assert.EqualValues(t, 128, tool.InputSchema.Properties["toolset"].(map[string]any)["maxItems"])
-			assert.Contains(t, tool.InputSchema.Required, "toolset")
+			assert.EqualValues(t, agents.MaxToolEntries, tool.InputSchema.Properties["tools"].(map[string]any)["maxItems"])
+			assert.NotContains(t, tool.InputSchema.Required, "toolset", "tools or the deprecated toolset")
 			assert.NotContains(t, tool.InputSchema.Required, "modelConfig", "omitted, the namespace default")
 			assert.Contains(t, tool.InputSchema.Properties["toolset"].(map[string]any)["description"], "preset:none")
 			skills := tool.InputSchema.Properties["skills"].(map[string]any)
 			assert.Equal(t, "array", skills["type"], "skills is a list")
 			assert.NotContains(t, tool.InputSchema.Properties, "refreshSkills")
 		case ToolUpdateAgent:
+			for _, access := range []string{"tools", "toolset", "refreshSkills", "skills", "harness", "default"} {
+				assert.NotContains(t, tool.InputSchema.Properties, access, "update_agent changes what an agent is, not %s", access)
+			}
+		case ToolUpdateAgentAccess:
+			assert.Contains(t, tool.InputSchema.Properties, "tools")
 			assert.Contains(t, tool.InputSchema.Properties, "toolset")
 			assert.Contains(t, tool.InputSchema.Properties, "refreshSkills")
-			assert.NotContains(t, tool.InputSchema.Required, "toolset")
+			assert.NotContains(t, tool.InputSchema.Properties, "default")
+			assert.NotContains(t, tool.InputSchema.Properties, "systemMessage")
+		case ToolSetAgentApproval:
+			assert.Contains(t, tool.InputSchema.Properties, "settings")
+			assert.Contains(t, tool.InputSchema.Properties, "default")
+			assert.NotContains(t, tool.InputSchema.Properties, "tools")
 		case ToolValidateAgent:
 			assert.Contains(t, tool.InputSchema.Properties, "toolset")
 			assert.NotContains(t, tool.InputSchema.Required, "toolset")
@@ -438,7 +453,7 @@ func TestMCPToolsMirrorREST(t *testing.T) {
 			assert.NotContains(t, tool.InputSchema.Required, "tags")
 		}
 		switch tool.Name {
-		case ToolCreateAgent, ToolUpdateAgent, ToolDeleteAgent:
+		case ToolCreateAgent, ToolUpdateAgent, ToolUpdateAgentAccess, ToolSetAgentApproval, ToolDeleteAgent:
 			for _, arg := range []string{"mode", "dryRun", "repository", "branch", "path"} {
 				assert.Contains(t, tool.InputSchema.Properties, arg, "%s takes %s", tool.Name, arg)
 			}
@@ -514,17 +529,26 @@ func TestMCPToolsMirrorREST(t *testing.T) {
 	assert.Contains(t, text, `"agent.description"`)
 	assert.Contains(t, text, `"agent.displayName"`)
 
-	// update replaces the toolset as a whole; [] and the removed arguments are refused.
+	// update_agent_access replaces the toolset as a whole; [] and the removed arguments are refused.
 	text, isErr = callTool(t, srv, ToolUpdateAgent, map[string]any{"name": "sre", "toolset": []string{"preset:none"}})
+	assert.True(t, isErr)
+	assert.Contains(t, text, "update_agent does not take toolset: use update_agent_access")
+	text, isErr = callTool(t, srv, ToolUpdateAgentAccess, map[string]any{"name": "sre", "description": "x"})
+	assert.True(t, isErr)
+	assert.Contains(t, text, "update_agent_access does not take description: use update_agent")
+	text, isErr = callTool(t, srv, ToolUpdateAgentAccess, map[string]any{"name": "sre", "default": "Ask"})
+	assert.True(t, isErr)
+	assert.Contains(t, text, "update_agent_access does not take default: use set_agent_approval")
+	text, isErr = callTool(t, srv, ToolUpdateAgentAccess, map[string]any{"name": "sre", "toolset": []string{"preset:none"}})
 	require.False(t, isErr, text)
 	assert.Contains(t, text, `"changed":["toolset"]`)
-	text, isErr = callTool(t, srv, ToolUpdateAgent, map[string]any{"name": "sre", "toolset": []string{}})
+	text, isErr = callTool(t, srv, ToolUpdateAgentAccess, map[string]any{"name": "sre", "toolset": []string{}})
 	assert.True(t, isErr)
 	assert.Contains(t, text, "preset:none")
 	text, isErr = callTool(t, srv, ToolUpdateAgent, map[string]any{"name": "sre", "toolNames": []string{"x_a_b"}})
 	assert.True(t, isErr)
 	assert.Contains(t, text, "toolNames never narrowed")
-	text, isErr = callTool(t, srv, ToolUpdateAgent, map[string]any{"name": "sre", "refreshSkills": true})
+	text, isErr = callTool(t, srv, ToolUpdateAgentAccess, map[string]any{"name": "sre", "refreshSkills": true})
 	require.False(t, isErr, text)
 	assert.Contains(t, text, `"changed":[]`, "already at the head: nothing changes")
 	text, isErr = callTool(t, srv, ToolGetAgent, map[string]any{"name": "sre"})

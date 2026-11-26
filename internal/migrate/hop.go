@@ -3,6 +3,9 @@ package migrate
 import (
 	"context"
 	"fmt"
+	"regexp"
+	"slices"
+	"strconv"
 
 	"github.com/Masterminds/semver/v3"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -25,7 +28,8 @@ type hop struct {
 	rendered     schema.GroupVersionResource
 	renderedKind string
 	// leftover is the old line's agent object a release on chart from.x
-	// renders; Helm removes it when the release upgrades.
+	// renders; Helm removes it when the release upgrades. Empty when both
+	// lines render the same object.
 	leftover     schema.GroupVersionResource
 	leftoverKind string
 	// templates, when set, is where a sub-agent binding's templateRef
@@ -68,39 +72,105 @@ func hopFor(to uint64, kagentAPIVersion string) (*hop, error) {
 			// only the empty ones, as other components may still use them.
 			crds: LegacyCRDs, emptyCRDsOnly: true,
 		}, nil
+	case 3:
+		// 2.x and 3.x render the same Agent: no object of the old line is
+		// left behind and no CRD goes; only the values move (values_v3.go).
+		return &hop{
+			from: 2, to: 3, rewrite: rewriteValuesV3,
+			rendered:     schema.GroupVersionResource{Group: agents.KagentAPIGroup, Version: kagentAPIVersion, Resource: "agents"},
+			renderedKind: "api.kagent.dev Agent",
+		}, nil
 	}
-	return nil, fmt.Errorf("no migration path to Generic chart %d.x: migrate moves releases from 0.x to 1.x and from 1.x to 2.x", to)
+	return nil, fmt.Errorf("no migration path to Generic chart %d.x: migrate moves releases from 0.x to 1.x, from 1.x to 2.x and from 2.x to 3.x", to)
 }
+
+// hasLeftover is true when the source line renders an object the target
+// line does not.
+func (h *hop) hasLeftover() bool { return h.leftover.Resource != "" }
 
 // String names the hop, as the report and the logs carry it.
 func (h *hop) String() string { return fmt.Sprintf("%d.x -> %d.x", h.from, h.to) }
 
 // TargetMajor is the one chart major the range admits; the migration path
-// follows from it (1: 0.x to 1.x, 2: 1.x to 2.x). A range that admits no
-// version or versions of two majors is refused.
+// follows from it (1: 0.x to 1.x, 2: 1.x to 2.x, 3: 2.x to 3.x). A range that admits no
+// version or versions of two majors is refused. majorsOf reads every
+// alternative of a `||` range, as the agent-platform chart's guard reads it
+// (agent-platform.agentChart.majors).
 func TargetMajor(constraint string) (uint64, error) {
 	c, err := semver.NewConstraint(constraint)
 	if err != nil {
 		return 0, fmt.Errorf("target chart range %q: %w", constraint, err)
 	}
-	var majors []uint64
-	for m := range uint64(100) {
-		if admitsMajor(c, m) {
-			majors = append(majors, m)
-		}
-	}
+	majors := majorsOf(c, constraint)
 	switch len(majors) {
 	case 0:
 		return 0, fmt.Errorf("target chart range %q admits no release version", constraint)
 	case 1:
+		// A bound like <=3.0.0-rc.1 admits pre-releases of the next major,
+		// which Flux would serve under a range read as this one.
+		next := majors[0] + 1
+		for _, pre := range []string{"0", "alpha.0", "rc.1", "rc.999"} {
+			if c.Check(semver.New(next, 0, 0, pre, "")) {
+				return 0, fmt.Errorf("target chart range %q admits pre-releases of %d.0.0 (%d.0.0-%s): Flux would serve chart %d.x under it; bound it below %d.0.0-0", constraint, next, next, pre, next, next)
+			}
+		}
 		return majors[0], nil
 	}
 	return 0, fmt.Errorf("target chart range %q spans majors %v: migrate moves releases to exactly one major", constraint, majors)
 }
 
+// versionLiteral is a version a range names (2, 2.6, 2.6.1, v3.0.0-rc.1);
+// its pre-release, if any, is not read.
+var versionLiteral = regexp.MustCompile(`v?([0-9]+)(?:\.([0-9]+))?(?:\.([0-9]+))?`)
+
+// majorsOf are the release majors c (parsed from constraint) admits, sorted.
+// Two kinds of probe, either one counting: per major 0-99 the first and a
+// very late version of every minor below 200 and a very late minor, which
+// covers the forms a chart source carries (x-ranges, carets, tildes,
+// bounds); and every version the range names itself, with the next patch
+// and the next minor, which covers exact pins (2.6.1, = 2.6.1), narrow
+// bounds (>=2.6.1 <2.6.9, 2.6.1 - 2.6.5), late minors (~2.250) and each
+// alternative of a `||` range (3.0.1 || 2.6.0 admits 2 and 3). A probe only
+// counts when c admits it, so a probe more never adds a major the range
+// does not admit.
+func majorsOf(c *semver.Constraints, constraint string) []uint64 {
+	var majors []uint64
+	add := func(m uint64) {
+		if !slices.Contains(majors, m) {
+			majors = append(majors, m)
+		}
+	}
+	for _, lit := range versionLiteral.FindAllStringSubmatch(constraint, -1) {
+		maj, err1 := strconv.ParseUint(lit[1], 10, 64)
+		minor, err2 := parseOrZero(lit[2])
+		patch, err3 := parseOrZero(lit[3])
+		if err1 != nil || err2 != nil || err3 != nil {
+			continue
+		}
+		for _, v := range []*semver.Version{semver.New(maj, minor, patch, "", ""), semver.New(maj, minor, patch+1, "", ""), semver.New(maj, minor+1, 0, "", "")} {
+			if c.Check(v) {
+				add(maj)
+			}
+		}
+	}
+	for m := range uint64(100) {
+		if admitsMajor(c, m) {
+			add(m)
+		}
+	}
+	slices.Sort(majors)
+	return majors
+}
+
+func parseOrZero(s string) (uint64, error) {
+	if s == "" {
+		return 0, nil
+	}
+	return strconv.ParseUint(s, 10, 64)
+}
+
 // admitsMajor probes the range with release versions of major m: every
-// minor's first and a very late patch, and a very late minor, which covers
-// the range forms a chart source carries (x-ranges, carets, tildes, bounds).
+// minor's first and a very late patch, and a very late minor.
 func admitsMajor(c *semver.Constraints, m uint64) bool {
 	const late = 999999
 	if c.Check(semver.New(m, late, late, "", "")) {

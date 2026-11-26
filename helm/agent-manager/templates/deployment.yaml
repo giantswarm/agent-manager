@@ -164,14 +164,38 @@ spec:
             - --kagent-target={{ . }}
             {{- with $.Values.muster.bindingsUrl }}
             - --muster-bindings-url={{ . }}
+            {{- if $.Values.muster.bindingsCA.configMapName }}
+            - --muster-bindings-ca-file=/etc/agent-manager/muster-bindings-ca/{{ $.Values.muster.bindingsCA.key }}
+            {{- end }}
             {{- if $.Values.muster.actorBearer }}
             - --muster-actor-bearer=true
             {{- end }}
             {{- end }}
             {{- $workspaces := and $.Values.muster.bindingsUrl $.Values.muster.mcpUrl $.Values.muster.workspacesToolsPrefix }}
             {{- $toolchainList := and $.Values.toolchains.repository $.Values.muster.mcpUrl $.Values.muster.toolchainsToolsPrefix }}
-            {{- if or $workspaces $toolchainList }}
+            {{- $toolApproval := include "agent-manager.toolApproval" $ }}
+            {{- if or $workspaces $toolchainList $toolApproval }}
             - --muster-mcp-url={{ $.Values.muster.mcpUrl }}
+            {{- end }}
+            {{- if $toolApproval }}
+            - --muster-approval-sender-token-file=/var/run/secrets/agent-manager/muster-approval/token
+            - --approval-grants-namespace={{ include "agent-manager.grantsNamespace" $ }}
+            {{- end }}
+            {{- with $.Values.muster.toolApproval.platformAgents }}
+            {{- range . }}
+            {{- if not (and .namespace .name (dig "namespace" "" (.release | default dict)) (dig "name" "" (.release | default dict))) }}
+            {{- fail (printf "muster.toolApproval.platformAgents: every entry needs namespace, name, release.namespace and release.name, got %v" .) }}
+            {{- end }}
+            {{- end }}
+            - {{ printf "--approval-platform-agents=%s" (toJson .) | quote }}
+            {{- end }}
+            {{- with $.Values.muster.toolApproval.platformReleases }}
+            {{- range . }}
+            {{- if not (and .namespace .name (dig "namespace" "" (.agent | default dict)) (dig "name" "" (.agent | default dict))) }}
+            {{- fail (printf "muster.toolApproval.platformReleases: every entry needs namespace, name, agent.namespace and agent.name, got %v" .) }}
+            {{- end }}
+            {{- end }}
+            - {{ printf "--approval-platform-releases=%s" (toJson .) | quote }}
             {{- end }}
             {{- if $workspaces }}
             - --workspaces-tools-prefix={{ $.Values.muster.workspacesToolsPrefix }}
@@ -360,6 +384,16 @@ spec:
               mountPath: /etc/agent-manager/toolchain-registry
               readOnly: true
             {{- end }}
+            {{- if .Values.muster.bindingsCA.configMapName }}
+            - name: muster-bindings-ca
+              mountPath: /etc/agent-manager/muster-bindings-ca
+              readOnly: true
+            {{- end }}
+            {{- if include "agent-manager.toolApproval" . }}
+            - name: muster-approval-sender
+              mountPath: /var/run/secrets/agent-manager/muster-approval
+              readOnly: true
+            {{- end }}
             {{- if $githubTokenExchange }}
             - name: github-token-exchange
               mountPath: /etc/agent-manager/github-token-exchange
@@ -397,6 +431,20 @@ spec:
             items:
               - key: .dockerconfigjson
                 path: config.json
+        {{- end }}
+        {{- with .Values.muster.bindingsCA.configMapName }}
+        - name: muster-bindings-ca
+          configMap:
+            name: {{ . }}
+        {{- end }}
+        {{- if include "agent-manager.toolApproval" . }}
+        - name: muster-approval-sender
+          projected:
+            sources:
+              - serviceAccountToken:
+                  audience: {{ .Values.muster.toolApproval.audience | quote }}
+                  expirationSeconds: {{ .Values.muster.toolApproval.expirationSeconds }}
+                  path: token
         {{- end }}
         {{- if $githubTokenExchange }}
         - name: github-token-exchange

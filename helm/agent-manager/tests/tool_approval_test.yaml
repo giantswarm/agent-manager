@@ -1,0 +1,231 @@
+# Tool approval per agent (muster.toolApproval): the sender token muster
+# reviews, the flags, the grants Role in the release namespace and, with
+# downstream OAuth, get on HelmReleases in the managed namespaces.
+#
+# Run with: make helm-test (helm unittest helm/agent-manager)
+suite: tool approval per agent
+templates:
+  - templates/deployment.yaml
+  - templates/tool-approval-rbac.yaml
+set:
+  oauth:
+    enabled: true
+    existingSecret: platform-oauth
+  global:
+    domain: example.com
+    identity:
+      issuerUrl: https://dex.example.com
+      clientId: platform-client
+  kagent:
+    controllerTarget: kagent-controller.kagent.svc:8083
+tests:
+  - it: "is on by default (fail closed: settings are refused while nothing binds them)"
+    template: templates/tool-approval-rbac.yaml
+    asserts:
+      - hasDocuments:
+          count: 3
+
+  - it: renders nothing when turned off
+    template: templates/tool-approval-rbac.yaml
+    set:
+      muster.toolApproval.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: sends the projected token and keeps grants in their own namespace
+    template: templates/deployment.yaml
+    release:
+      namespace: agent-platform
+    set:
+      muster.toolApproval.enabled: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --muster-approval-sender-token-file=/var/run/secrets/agent-manager/muster-approval/token
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --approval-grants-namespace=RELEASE-NAME-agent-manager-approval-grants
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --muster-mcp-url=http://muster.agent-platform.svc.cluster.local:8090/mcp
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: muster-approval-sender
+            projected:
+              sources:
+                - serviceAccountToken:
+                    audience: "muster"
+                    expirationSeconds: 3600
+                    path: token
+
+  - it: needs the session tools
+    template: templates/deployment.yaml
+    set:
+      muster.toolApproval.enabled: true
+      kagent.controllerTarget: ""
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --muster-approval-sender-token-file=/var/run/secrets/agent-manager/muster-approval/token
+
+  - it: grants ConfigMaps of the grants namespace only, which it creates
+    template: templates/tool-approval-rbac.yaml
+    release:
+      namespace: agent-platform
+    set:
+      muster.toolApproval.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 3
+      - isKind:
+          of: Namespace
+        documentIndex: 0
+      - equal:
+          path: metadata.name
+          value: RELEASE-NAME-agent-manager-approval-grants
+        documentIndex: 0
+      - equal:
+          path: rules[0].resources
+          value: ["configmaps"]
+        documentIndex: 1
+      - equal:
+          path: metadata.namespace
+          value: RELEASE-NAME-agent-manager-approval-grants
+        documentIndex: 1
+
+  - it: uses a provisioned grants namespace
+    template: templates/tool-approval-rbac.yaml
+    set:
+      muster.toolApproval.grantsNamespace: approval-grants
+      muster.toolApproval.createGrantsNamespace: false
+    asserts:
+      - hasDocuments:
+          count: 2
+      - equal:
+          path: metadata.namespace
+          value: approval-grants
+        documentIndex: 0
+
+  - it: grants get on HelmReleases per managed namespace with downstream OAuth
+    template: templates/tool-approval-rbac.yaml
+    set:
+      muster.toolApproval.enabled: true
+      oauth.downstream.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 5
+      - equal:
+          path: rules[0].verbs
+          value: ["get"]
+        documentIndex: 3
+      - equal:
+          path: rules[0].resources
+          value: ["helmreleases"]
+        documentIndex: 3
+
+  - it: trusts a CA from a ConfigMap for an https bindings URL
+    template: templates/deployment.yaml
+    set:
+      muster.bindingsUrl: https://muster.example.com/session-bindings
+      muster.bindingsCA.configMapName: muster-ca
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --muster-bindings-ca-file=/etc/agent-manager/muster-bindings-ca/ca.crt
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: muster-bindings-ca
+            configMap:
+              name: muster-ca
+
+  - it: grants get on the platform's releases that render agents, by name, in either RBAC mode
+    template: templates/tool-approval-rbac.yaml
+    release:
+      namespace: agent-platform
+    set:
+      oauth.downstream.enabled: false
+      muster.toolApproval.platformReleases:
+        - {namespace: agent-platform, name: default-agent, agent: {namespace: kagent, name: default-agent}}
+    asserts:
+      - hasDocuments:
+          count: 5
+      - equal:
+          path: rules
+          value:
+            - apiGroups: ["helm.toolkit.fluxcd.io"]
+              resources: ["helmreleases"]
+              resourceNames: ["default-agent"]
+              verbs: ["get"]
+        documentIndex: 3
+      - equal:
+          path: metadata.namespace
+          value: agent-platform
+        documentIndex: 3
+      - equal:
+          path: subjects[0]
+          value:
+            kind: ServiceAccount
+            name: RELEASE-NAME-agent-manager
+            namespace: agent-platform
+        documentIndex: 4
+
+  - it: passes the platform releases with the agents they render
+    template: templates/deployment.yaml
+    set:
+      muster.toolApproval.platformReleases:
+        - {namespace: agent-platform, name: default-agent, agent: {namespace: kagent, name: default-agent}}
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: '--approval-platform-releases=[{"agent":{"name":"default-agent","namespace":"kagent"},"name":"default-agent","namespace":"agent-platform"}]'
+
+  - it: refuses a platform release without the agent it renders
+    template: templates/deployment.yaml
+    set:
+      muster.toolApproval.platformReleases:
+        - {namespace: agent-platform, name: default-agent}
+    asserts:
+      - failedTemplate:
+          errorMessage: "muster.toolApproval.platformReleases: every entry needs namespace, name, agent.namespace and agent.name, got map[name:default-agent namespace:agent-platform]"
+
+  - it: refuses a platform release without a name
+    template: templates/tool-approval-rbac.yaml
+    set:
+      muster.toolApproval.platformReleases:
+        - {namespace: agent-platform}
+    asserts:
+      - failedTemplate:
+          errorMessage: "muster.toolApproval.platformReleases: every entry needs namespace and name, got map[namespace:agent-platform]"
+
+  - it: passes the platform's agents on another cluster with their approval values
+    template: templates/deployment.yaml
+    set:
+      muster.toolApproval.platformAgents:
+        - namespace: kagent
+          name: default-agent
+          release: {namespace: flux-giantswarm, name: wc1-default-agent}
+          values:
+            toolset: ["preset:full"]
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: '--approval-platform-agents=[{"name":"default-agent","namespace":"kagent","release":{"name":"wc1-default-agent","namespace":"flux-giantswarm"},"values":{"toolset":["preset:full"]}}]'
+
+  - it: passes no platform agents by default
+    template: templates/deployment.yaml
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --approval-platform-agents=[]
+
+  - it: refuses a platform agent without its release
+    template: templates/deployment.yaml
+    set:
+      muster.toolApproval.platformAgents:
+        - {namespace: kagent, name: default-agent}
+    asserts:
+      - failedTemplate:
+          errorMessage: "muster.toolApproval.platformAgents: every entry needs namespace, name, release.namespace and release.name, got map[name:default-agent namespace:kagent]"

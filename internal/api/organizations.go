@@ -94,6 +94,7 @@ var (
 const (
 	schemaType       = "type"
 	schemaObject     = "object"
+	schemaString     = "string"
 	schemaProperties = "properties"
 )
 
@@ -174,7 +175,7 @@ func addOrganizationTools(s *mcpserver.MCPServer, orgs *organizations.Service, l
 	dryRun := mcp.WithBoolean(argDryRun, mcp.Description("Check every write with the API server as you and write nothing (default false)"))
 	modeProp := mcp.WithString(argMode, mcp.Enum(agents.ModeApply, agents.ModeCommit), mcp.Description("apply (default): write live as you; refused with gitops_owned for what git applies. commit: dry-run as you, then open a pull request as you"))
 	credentialRequestID := mcp.WithString(argRequestID, mcp.Description("Idempotency key, at most 128 characters. Reuse on retries; use a fresh key for another save or a refreshed confirmation."))
-	stringList := map[string]any{"type": "string"}
+	stringList := map[string]any{"type": schemaString}
 	credSecretDesc := "Secret in the target namespace, by name; organizations need tenant-credential-...; never a value"
 
 	t.addTool(s, mcp.NewTool(ToolListOrganizations,

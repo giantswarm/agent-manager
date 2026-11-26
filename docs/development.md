@@ -43,10 +43,12 @@ make helm-docs          # regenerate helm/agent-manager/README.md
   Agent's conditions, the HelmRelease and the Warning events into one verdict.
   `testdata/` holds what Generic chart 2.x renders.
 - `internal/migrate` — the `migrate` command: `hop.go` picks the path (0.x
-  to 1.x or 1.x to 2.x) from the target range's major and says what each
+  to 1.x, 1.x to 2.x or 2.x to 3.x) from the target range's major and says what each
   side renders, `values.go` rewrites 0.x values into the 1.x contract through
   the composer's own lists and skill pinning, `values_v2.go` rewrites 1.x
   values into 2.x (sub-agent bindings, the Harness admission label),
+  `values_v3.go` rewrites 2.x values into 3.x (`muster.requireApproval` to
+  `default: Ask`, the 2.x `modelConfig.name` default spelled out),
   `status.go` reads a kagent.dev AgentTemplate's readiness for the 1.x wait
   phase, `diff.go` renders a GitOps-owned release's rewrite as a unified
   diff, `report.go` is the per-namespace report ConfigMap, `migrate.go` the

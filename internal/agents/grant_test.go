@@ -24,7 +24,7 @@ import (
 // asPerson is the caller as the OAuth layer attaches them: the identity the
 // grant must name and the IdP token the session operations present.
 func asPerson(ctx context.Context, email string) context.Context {
-	return identity.ContextWithToken(identity.ContextWith(ctx, &identity.Identity{Subject: "dex-" + email, Email: email}), callerToken)
+	return identity.ContextWithToken(identity.ContextWith(ctx, &identity.Identity{Subject: "dex-" + email, Email: email, EmailVerified: true}), callerToken)
 }
 
 // platformVolume is the volume source the workspace grant of

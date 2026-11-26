@@ -22,6 +22,7 @@ import (
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/util/retry"
 
+	"github.com/giantswarm/agent-manager/internal/approvalgrants"
 	"github.com/giantswarm/agent-manager/internal/chart"
 	"github.com/giantswarm/agent-manager/internal/identity"
 	"github.com/giantswarm/agent-manager/internal/kube"
@@ -104,6 +105,27 @@ type Config struct {
 	// Installation is the installation's Dev Portal name, which get_info
 	// reports: a portal agent id is <installation>/<namespace>/<name>.
 	Installation string
+	// Approvals is muster's filter_tools with an agent's tool list, which
+	// says whether an Allow is over a connector's Ask. Nil: such an Allow is
+	// refused as approval_unavailable.
+	Approvals ApprovalReporter
+	// Grants keeps the approval grants (internal/approvalgrants). Nil: no
+	// grant is recorded, and set_agent_approval refuses one.
+	Grants approvalgrants.Store
+	// ApprovalReader reads an agent's HelmRelease for its Session binding
+	// when the caller may not: agent-manager's own ServiceAccount client,
+	// granted get on helmreleases where it binds approval settings. Nil: the
+	// caller's own read.
+	ApprovalReader kube.Client
+	// PlatformAgents are agents rendered by a release on another cluster,
+	// with that release's approval values (PlatformAgent): a Session of one
+	// binds them instead of reading the release.
+	PlatformAgents []PlatformAgent
+	// PlatformReleases are the releases the platform renders agents with
+	// on this cluster (the default agent's, in the platform's namespace):
+	// the only other release than agent-manager's own that may carry an
+	// agent's approval settings (PlatformRelease).
+	PlatformReleases []PlatformRelease
 	// DefaultAgentTTL is how long a caller's default agent is reused
 	// (get_info, list_agents and get_agent each report it); zero reads it
 	// on every call.
@@ -601,6 +623,7 @@ func (s *Service) List(ctx context.Context, loc Location, filter tags.Filter) ([
 		}
 	}
 	def := s.defaultAgentAt(ctx, st)
+	s.attachGrants(ctx, st.ns(), out)
 	for i := range out {
 		s.markToolsetBound(&out[i])
 		s.effectiveDefaultToolchains(&out[i])
@@ -651,6 +674,9 @@ func (s *Service) agentOf(ctx context.Context, st *site, name string, obj, hr *u
 	if withheld != "" {
 		withholdRelease(&a, withheld)
 	}
+	list := []Agent{a}
+	s.attachGrants(ctx, st.ns(), list)
+	a = list[0]
 	s.markToolsetBound(&a)
 	s.effectiveDefaultToolchains(&a)
 	if def := s.defaultAgentAt(ctx, st); def != "" {
@@ -1006,7 +1032,10 @@ func checkSpec(spec Spec) []error {
 	if err := ValidateName(spec.Name); err != nil {
 		errs = append(errs, err)
 	}
-	if err := ValidateToolset(spec.Toolset, true); err != nil {
+	if err := ValidateToolList(spec.Tools, true); err != nil {
+		errs = append(errs, err)
+	}
+	if err := ValidateDefault(spec.Default); err != nil {
 		errs = append(errs, err)
 	}
 	if err := ValidateSkills(spec.Skills); err != nil {
@@ -1141,6 +1170,9 @@ func (s *Service) ValidateCreate(ctx context.Context, spec Spec) (*ValidateResul
 	if err := rejectRemoved(spec.removed()...); err != nil {
 		return nil, err
 	}
+	if err := spec.normalizeTools(); err != nil {
+		return nil, err
+	}
 	mode, err := s.checkMode(spec.WriteOptions)
 	if err != nil {
 		return nil, err
@@ -1167,6 +1199,12 @@ func (s *Service) ValidateCreate(ctx context.Context, spec Spec) (*ValidateResul
 	}
 	for _, e := range checkSpec(spec) {
 		res.addError(e)
+	}
+	if err := s.refuseAllowOverAsk(ctx, "create_agent", nil, spec.Tools, spec.Default, true); err != nil {
+		if !isDomainError(err) {
+			return nil, err
+		}
+		res.addError(err)
 	}
 	if err := s.requireTargetMuster(st); err != nil {
 		res.addError(err)
@@ -1226,6 +1264,10 @@ func (s *Service) ValidateCreate(ctx context.Context, spec Spec) (*ValidateResul
 		spec.Skills, spec.Plugins = sk, pl
 	}
 	values := BuildValues(spec, st.compose)
+	takes, version := s.sourceTakesTools(ctx, st)
+	if err := setToolListValues(values, spec.Tools, spec.Default, takes, version, s.sendsApproval()); err != nil {
+		res.addError(err)
+	}
 	setCreator(values, identity.Caller(ctx), identity.CallerName(ctx))
 	if !isCodingRuntime(runtime) {
 		dropEgressNote(values)
@@ -1408,6 +1450,12 @@ func (s *Service) ValidateUpdate(ctx context.Context, upd Update) (*ValidateResu
 	if err := rejectRemoved(upd.removed()...); err != nil {
 		return nil, err
 	}
+	if err := upd.normalizeTools(); err != nil {
+		return nil, err
+	}
+	if upd.tool == "" {
+		upd.tool = "update_agent"
+	}
 	var err error
 	if upd.Mode, err = s.checkMode(upd.WriteOptions); err != nil {
 		return nil, err
@@ -1427,6 +1475,16 @@ func (s *Service) ValidateUpdate(ctx context.Context, upd Update) (*ValidateResu
 			return nil, err
 		}
 		res.addError(err)
+	}
+	if values != nil && (upd.Tools != nil || upd.Default != nil) {
+		beforeList, _ := toolListFromValues(before)
+		afterList, afterDef := toolListFromValues(values)
+		if err := s.refuseAllowOverAsk(ctx, upd.tool, beforeList, afterList, afterDef, upd.Default != nil); err != nil {
+			if !isDomainError(err) {
+				return nil, err
+			}
+			res.addError(err)
+		}
 	}
 	if values != nil {
 		guardErrs, err := s.guardUpdate(ctx, st, upd, before, values)
@@ -1454,7 +1512,7 @@ func (r *ValidateResult) addError(err error) {
 }
 
 func isDomainError(err error) bool {
-	for _, sentinel := range []error{ErrInvalid, ErrNotFound, ErrConflict, ErrGitOpsOwned, ErrUnsupported} {
+	for _, sentinel := range []error{ErrInvalid, ErrNotFound, ErrConflict, ErrGitOpsOwned, ErrUnsupported, ErrApprovalUnavailable} {
 		if errorsIs(err, sentinel) {
 			return true
 		}
@@ -1483,8 +1541,14 @@ func (s *Service) Create(ctx context.Context, spec Spec) (*CreateResult, error) 
 	if err != nil {
 		return nil, err
 	}
+	if err := spec.normalizeTools(); err != nil {
+		return nil, err
+	}
 	if errs := checkSpec(spec); len(errs) > 0 {
 		return nil, errs[0]
+	}
+	if err := s.refuseAllowOverAsk(ctx, "create_agent", nil, spec.Tools, spec.Default, true); err != nil {
+		return nil, err
 	}
 	st, err := s.site(ctx, spec.Location)
 	if err != nil {
@@ -1528,6 +1592,10 @@ func (s *Service) Create(ctx context.Context, spec Spec) (*CreateResult, error) 
 		return nil, err
 	}
 	values := BuildValues(spec, st.compose)
+	takes, version := s.sourceTakesTools(ctx, st)
+	if err := setToolListValues(values, spec.Tools, spec.Default, takes, version, s.sendsApproval()); err != nil {
+		return nil, err
+	}
 	setCreator(values, identity.Caller(ctx), identity.CallerName(ctx))
 	if !isCodingRuntime(runtime) {
 		dropEgressNote(values)
@@ -1597,11 +1665,14 @@ func (s *Service) Create(ctx context.Context, spec Spec) (*CreateResult, error) 
 	res.Created.HelmRelease = true
 	agent := Agent{Name: spec.Name, Namespace: ns, Target: spec.Target, Managed: ManagedHelmRelease}
 	applyHelmRelease(&agent, created, s.cfg.Tags)
-	res.Agent = agent
+	attached := []Agent{agent}
+	s.attachGrants(ctx, ns, attached)
+	res.Agent = attached[0]
 	if status, err := s.status(ctx, st, spec.Name); err == nil {
 		res.Status = status
 	}
 	s.log.Info("agent created", identity.LogAttr(ctx), "namespace", ns, "cluster", spec.Cluster, "name", spec.Name, "modelConfig", spec.ModelConfig, "skills", len(spec.Skills), "ociRepositoryCreated", res.Created.OCIRepository)
+	s.logAccessChanges(ctx, "create_agent", ns+"/"+spec.Name, nil, values)
 	return res, nil
 }
 
@@ -1707,6 +1778,9 @@ func mergeSkillsGitAuth(values map[string]any, own *string, cfg ComposeConfig) {
 // refreshSkills re-pins every git skill and git plugin to the head of its ref
 // (the default branch unless the request names one).
 func (s *Service) mergedValues(ctx context.Context, st *site, upd Update, hr *unstructured.Unstructured) (map[string]any, map[string]any, error) {
+	if upd.ExpectedGeneration != nil && *upd.ExpectedGeneration != hr.GetGeneration() {
+		return nil, nil, conflictf("agent %s/%s changed since it was read (generation %d now, expectedGeneration %d): read it again with get_agent and apply the change to what it holds now", hr.GetNamespace(), upd.Name, hr.GetGeneration(), *upd.ExpectedGeneration)
+	}
 	if upd.SystemMessage != nil {
 		if err := ValidateSystemMessage(*upd.SystemMessage); err != nil {
 			return nil, nil, err
@@ -1817,14 +1891,32 @@ func (s *Service) mergedValues(ctx context.Context, st *site, upd Update, hr *un
 		}
 	}
 	mergeSkillsGitAuth(after, upd.GitAuthSecretName, st.compose)
-	if upd.Toolset != nil {
-		// Replaces the whole list; an empty list is refused (preset:none is
-		// the way to say "no tools"), so a toolset can never be cleared back
-		// to implicit full access.
-		if err := ValidateToolset(*upd.Toolset, false); err != nil {
+	if upd.Tools != nil || upd.Default != nil {
+		// Tools replaces the whole list; an empty list is refused (preset:none
+		// is the way to say "no tools"), so a tool list can never be cleared
+		// back to implicit full access.
+		list, def := toolListFromValues(before)
+		if upd.expectTools != nil && (!slices.Equal(list, *upd.expectTools) || def != upd.expectDefault) {
+			// set_agent_approval read the list before its checks; another
+			// save changed it since.
+			return after, before, conflictf("agent %s's tool list changed while set_agent_approval checked it; read it again and repeat the call", st.describe(upd.Name))
+		}
+		if upd.Tools != nil {
+			list = *upd.Tools
+			if err := ValidateToolList(list, false); err != nil {
+				return after, before, err
+			}
+		}
+		if upd.Default != nil {
+			def = *upd.Default
+			if err := ValidateDefault(def); err != nil {
+				return after, before, err
+			}
+		}
+		takes, version := s.releaseTakesTools(ctx, hr, before)
+		if err := setToolListValues(after, list, def, takes, version, s.sendsApproval()); err != nil {
 			return after, before, err
 		}
-		after[ToolsetValuesKey] = toAnySlice(*upd.Toolset)
 	}
 	if upd.Labels != nil {
 		currentLabels, _ := before["labels"].(map[string]any)
@@ -1895,6 +1987,12 @@ func (s *Service) Update(ctx context.Context, upd Update) (*UpdateResult, error)
 	if err := rejectRemoved(upd.removed()...); err != nil {
 		return nil, err
 	}
+	if err := upd.normalizeTools(); err != nil {
+		return nil, err
+	}
+	if upd.tool == "" {
+		upd.tool = "update_agent"
+	}
 	var err error
 	if upd.Mode, err = s.checkMode(upd.WriteOptions); err != nil {
 		return nil, err
@@ -1925,6 +2023,13 @@ func (s *Service) update(ctx context.Context, st *site, upd Update) (*UpdateResu
 	if err != nil {
 		return nil, err
 	}
+	if !upd.approval && (upd.Tools != nil || upd.Default != nil) {
+		beforeList, _ := toolListFromValues(before)
+		afterList, afterDef := toolListFromValues(after)
+		if err := s.refuseAllowOverAsk(ctx, upd.tool, beforeList, afterList, afterDef, upd.Default != nil); err != nil {
+			return nil, err
+		}
+	}
 	guardErrs, err := s.guardUpdate(ctx, st, upd, before, after)
 	if err != nil {
 		return nil, err
@@ -1944,7 +2049,19 @@ func (s *Service) update(ctx context.Context, st *site, upd Update) (*UpdateResu
 	if upd.Mode == ModeCommit {
 		return s.updateCommit(ctx, st, upd, hr, res)
 	}
-	if len(changed) == 0 || upd.DryRun {
+	if upd.DryRun {
+		agent, err := s.get(ctx, st, upd.Name)
+		if err != nil {
+			return nil, err
+		}
+		res.Agent = *agent
+		return res, nil
+	}
+	if len(changed) == 0 {
+		// Still a save: the grants follow who saved it.
+		if err := s.settleSave(ctx, st, upd, hr, after, res, false); err != nil {
+			return nil, err
+		}
 		agent, err := s.get(ctx, st, upd.Name)
 		if err != nil {
 			return nil, err
@@ -1962,6 +2079,11 @@ func (s *Service) update(ctx context.Context, st *site, upd Update) (*UpdateResu
 		}
 		return nil, wrapKube(err, fmt.Sprintf("update HelmRelease %s/%s", hr.GetNamespace(), hr.GetName()))
 	}
+	s.log.Info("agent updated", identity.LogAttr(ctx), "namespace", ns, "name", upd.Name, "changed", changed, "refreshSkills", upd.RefreshSkills)
+	s.logAccessChanges(ctx, upd.tool, ns+"/"+upd.Name, before, after)
+	if err := s.settleSave(ctx, st, upd, updated, after, res, false); err != nil {
+		return nil, err
+	}
 	agent, err := s.get(ctx, st, upd.Name)
 	if err != nil {
 		agent = &Agent{Name: upd.Name, Namespace: ns, Target: st.loc.Target, Managed: ManagedHelmRelease}
@@ -1969,7 +2091,6 @@ func (s *Service) update(ctx context.Context, st *site, upd Update) (*UpdateResu
 		s.effectiveDefaultToolchains(agent)
 	}
 	res.Agent = *agent
-	s.log.Info("agent updated", identity.LogAttr(ctx), "namespace", ns, "name", upd.Name, "changed", changed, "refreshSkills", upd.RefreshSkills)
 	return res, nil
 }
 
@@ -1995,6 +2116,13 @@ func (s *Service) updateCommit(ctx context.Context, st *site, upd Update, hr *un
 	body := fmt.Sprintf("Updates the agent `%s` in namespace `%s`: %s.", upd.Name, ns, strings.Join(res.Changed, ", "))
 	if res.Commit, err = c.open(ctx, map[string][]byte{p: []byte(res.Manifests.HelmRelease)}, nil, commitBranch("update", ns, upd.Name), title, body, upd.DryRun); err != nil {
 		return nil, err
+	}
+	if !upd.DryRun {
+		before, _, _ := unstructured.NestedMap(hr.Object, "spec", "values")
+		s.logAccessChanges(ctx, upd.tool, ns+"/"+upd.Name, before, res.After)
+		if err := s.settleSave(ctx, st, upd, hr, res.After, res, true); err != nil {
+			return nil, err
+		}
 	}
 	agent, err := s.get(ctx, st, upd.Name)
 	if err != nil {
@@ -2085,6 +2213,9 @@ func (s *Service) Delete(ctx context.Context, loc Location, name string, force b
 		}
 	}
 	res.HelmReleaseDeleted = true
+	if !w.DryRun {
+		res.SessionSync, res.Dropped = s.deleteGrants(ctx, approvalgrants.Agent{UID: string(hr.GetUID()), Namespace: ns, Name: name})
+	}
 	if suspended && force && obj != nil {
 		// Flux drops the finalizer of a suspended release without uninstalling:
 		// the rendered objects would stay behind, so remove them directly.
@@ -2391,6 +2522,20 @@ func headerOf(server *unstructured.Unstructured, name string) string {
 
 // applyHelmRelease folds the owning release into the view and, when the
 // Agent object is absent, reads the identity fields from the values.
+// releaseRan reports whether a release ran its current generation: it has an
+// install in its history and, where Flux reports one, its observed
+// generation caught up with its spec.
+func releaseRan(hr *unstructured.Unstructured) bool {
+	history, _, _ := unstructured.NestedSlice(hr.Object, "status", "history")
+	if len(history) == 0 {
+		return false
+	}
+	if observed, found, _ := unstructured.NestedInt64(hr.Object, "status", "observedGeneration"); found && observed < hr.GetGeneration() {
+		return false
+	}
+	return true
+}
+
 func applyHelmRelease(a *Agent, hr *unstructured.Unstructured, rule *tags.Rule) {
 	ref := &HelmReleaseRef{Name: hr.GetName(), Namespace: hr.GetNamespace()}
 	conds := conditionsOfObject(hr)
@@ -2412,6 +2557,15 @@ func applyHelmRelease(a *Agent, hr *unstructured.Unstructured, rule *tags.Rule) 
 		ref.ChartVersion = ref.LastAttemptedRevision
 	}
 	a.HelmRelease = ref
+	a.releaseUID, a.releaseGeneration = string(hr.GetUID()), hr.GetGeneration()
+	a.Generation = hr.GetGeneration()
+	if from, _, _ := unstructured.NestedSlice(hr.Object, "spec", "valuesFrom"); len(from) > 0 {
+		a.releaseValuesFrom = true
+	}
+	_, a.releaseHasTools, _ = unstructured.NestedFieldNoCopy(hr.Object, "spec", "values", ToolsValuesKey)
+	a.releaseChart = ref.ChartVersion
+	a.releaseFound = true
+	a.releaseRan = releaseRan(hr)
 	if a.CreatedBy == "" {
 		a.CreatedBy = hr.GetAnnotations()[CreatedByAnnotation]
 		a.CreatedByName = hr.GetAnnotations()[CreatedByNameAnnotation]
@@ -2435,8 +2589,9 @@ func applyHelmRelease(a *Agent, hr *unstructured.Unstructured, rule *tags.Rule) 
 	// reported as such, a release without one is implicit full access — even
 	// while the Agent has not been rendered yet.
 	if values != nil {
-		if toolset := stringSlice(values[ToolsetValuesKey]); toolset != nil {
-			a.Toolset, a.ImplicitFullAccess = toolset, false
+		a.ToolSettings, a.DefaultSetting = toolListFromValues(values)
+		if a.ToolSettings != nil {
+			a.Toolset, a.ImplicitFullAccess = a.ToolSettings.Selectors(), false
 		} else {
 			a.Toolset, a.ImplicitFullAccess = nil, true
 		}

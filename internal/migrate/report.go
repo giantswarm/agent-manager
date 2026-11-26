@@ -3,6 +3,8 @@ package migrate
 import (
 	"context"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
@@ -27,6 +29,34 @@ import (
 
 // DefaultReportConfigMap is the report's ConfigMap name.
 const DefaultReportConfigMap = "agent-manager-migrate-report"
+
+// OrganizationReadyAnnotation is set on the report of an organization
+// namespace to the target major (e.g. "3") by a run that found every release
+// there on that major's values, and removed by one that did not. The
+// agent-platform-operator moves the namespace's agent chart source across a
+// major only while it carries the new major (agent-platform-operator's
+// MigrationReadyAnnotation: the two constants are one contract).
+const OrganizationReadyAnnotation = "agent-platform.giantswarm.io/agent-chart-ready-major"
+
+// OrganizationReadyReleasesAnnotation is set beside OrganizationReadyAnnotation
+// to the comma-separated names of the namespace's agent-chart HelmReleases the
+// run found on target values. The operator moves the source only while it
+// names every HelmRelease on it: a release created after the run read the
+// namespace holds the move until migrate runs again
+// (agent-platform-operator's MigrationReadyReleasesAnnotation).
+const OrganizationReadyReleasesAnnotation = "agent-platform.giantswarm.io/agent-chart-ready-releases"
+
+// readyMark is what a run marks an organization's report with.
+type readyMark struct {
+	major    string
+	releases []string
+}
+
+func (m *readyMark) annotations() map[string]string {
+	names := slices.Clone(m.releases)
+	slices.Sort(names)
+	return map[string]string{OrganizationReadyAnnotation: m.major, OrganizationReadyReleasesAnnotation: strings.Join(names, ",")}
+}
 
 // Report ConfigMap data keys.
 const (
@@ -87,6 +117,10 @@ const (
 	// OwnershipPlatform: the Agent Platform ships the object (or, for a
 	// source, a release it serves); read-only for this command.
 	OwnershipPlatform = agents.ManagedPlatform
+	// OwnershipOrganization: the object lives in an organization namespace,
+	// whose chart source the agent-platform-operator owns and moves with the
+	// platform's range; read-only for this command.
+	OwnershipOrganization = "organization"
 )
 
 // Actions on a CRD in the contract phase.
@@ -252,7 +286,9 @@ func (r *Report) String() string {
 }
 
 // writeReport creates or updates the report ConfigMap of the namespace.
-func writeReport(ctx context.Context, typed kubernetes.Interface, name string, r *Report) error {
+// writeReport writes r as the ConfigMap name in its namespace; mark sets the
+// ready annotations, and nil removes them.
+func writeReport(ctx context.Context, typed kubernetes.Interface, name string, r *Report, mark *readyMark) error {
 	data := map[string]string{ReportKeyPhase: r.Phase, ReportKeySummary: r.Summary, ReportKeyReport: r.YAML()}
 	cms := typed.CoreV1().ConfigMaps(r.Namespace)
 	existing, err := cms.Get(ctx, name, metav1.GetOptions{})
@@ -262,6 +298,9 @@ func writeReport(ctx context.Context, typed kubernetes.Interface, name string, r
 			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: r.Namespace, Labels: map[string]string{agents.ManagedByLabel: agents.ManagedByValue}},
 			Data:       data,
 		}
+		if mark != nil {
+			cm.Annotations = mark.annotations()
+		}
 		_, err = cms.Create(ctx, cm, metav1.CreateOptions{FieldManager: agents.FieldManager})
 	case err == nil:
 		existing.Data = data
@@ -269,6 +308,15 @@ func writeReport(ctx context.Context, typed kubernetes.Interface, name string, r
 			existing.Labels = map[string]string{}
 		}
 		existing.Labels[agents.ManagedByLabel] = agents.ManagedByValue
+		if mark != nil {
+			if existing.Annotations == nil {
+				existing.Annotations = map[string]string{}
+			}
+			maps.Copy(existing.Annotations, mark.annotations())
+		} else {
+			delete(existing.Annotations, OrganizationReadyAnnotation)
+			delete(existing.Annotations, OrganizationReadyReleasesAnnotation)
+		}
 		_, err = cms.Update(ctx, existing, metav1.UpdateOptions{FieldManager: agents.FieldManager})
 	}
 	if err != nil {

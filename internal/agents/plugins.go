@@ -34,8 +34,8 @@ func ValidatePlugins(list Plugins) error {
 		case p.Git == nil && p.OCI == "":
 			return invalidf("%s has no source: give git: {url, ref | commit} or oci: <reference>", at)
 		case p.Git != nil:
-			if !httpURL.MatchString(p.Git.URL) {
-				return invalidf("%s.git.url %q must be an http(s) URL", at, p.Git.URL)
+			if err := checkGitURL(at, p.Git.URL); err != nil {
+				return err
 			}
 			if p.Git.Commit != "" && !skills.CommitPattern.MatchString(p.Git.Commit) {
 				return invalidf("%s.git.commit %q is not a full commit id (40 or 64 hex characters); give a branch or tag as ref to have it resolved", at, p.Git.Commit)
