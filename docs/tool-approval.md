@@ -182,17 +182,27 @@ itself carries the agent (`<namespace>/<name>`), the settings of its listed
 entries, `default` and the marks of its live grants, sent with
 agent-manager's projected ServiceAccount token (audience `muster`) in
 `X-Muster-Approval-Sender`. muster takes them only after reviewing that token.
-The release is read with agent-manager's ServiceAccount (the chart grants
-`get` on HelmReleases in the configured namespaces under downstream OAuth);
-where it may not (an organization namespace) the release is read as the
-person starting the Session, and the start is refused only when neither may
-read it. With
+The release is the one that renders the agent: the one its Agent's Flux
+labels name (`helm.toolkit.fluxcd.io/name` and `/namespace`), else the one
+named after the agent in its namespace. It need not carry the agent's name
+or namespace: the platform's default agent is rendered by
+`<platform namespace>/default-agent` into the kagent namespace. A release the
+labels name must render that very Agent (its `values.agent.name`, else its
+Helm release name, in its target namespace), or the start is refused. The
+Agent and the release are each read with agent-manager's ServiceAccount (the
+chart grants `get` on HelmReleases in the configured namespaces under
+downstream OAuth, and on the releases `muster.toolApproval.platformReleases`
+names, which the agent-platform chart sets to its default agent's); where it
+may not (an organization namespace) as the person starting the Session, and
+the start is refused only when neither may read them. A release that renders
+the agent without settings binds it with none. With
 settings, the toolset bound is the release's own list, not the live Agent and
 RemoteMCPServer, so editing those never widens what a grant covers.
 
 A start is refused (`approval_unavailable`) rather than run without the
 agent's `Ask` and `Block` when: the release cannot be read; an agent rendered
-by a HelmRelease (label `helm.toolkit.fluxcd.io/name`) has none; the release
+by a HelmRelease (label `helm.toolkit.fluxcd.io/name`) has none, or one that
+renders another Agent; the release
 takes `spec.valuesFrom` and carries settings (agent-manager binds settings
 from the inline values only); this installation does not bind settings; or
 muster did not take them (its `X-Muster-Approval-Settings` answer is not

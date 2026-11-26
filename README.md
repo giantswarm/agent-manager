@@ -842,6 +842,11 @@ and without the caller's token a session operation is `401 unauthenticated`.
   created, and when its first turn already carries the first message (the
   message id is derived from the `requestId`) it answers that turn's latest
   state and sends nothing, so a retry after a lost answer starts no second turn.
+  A start refused after kagent created its session (a refused bind, missing
+  toolchains) deletes that session again, which spends the `requestId` at
+  kagent: a retry with it is refused `conflict` ("belongs to a session that
+  no longer exists"), and the next attempt needs a new `requestId`. Reuse one
+  only when no answer came back.
 - `message` is optional: without it `start_session` only creates the session
   and answers `{session, workspace}` with no `turn`. The caller then sends the
   first message itself over A2A, with the Agent as `tenant` and the session's

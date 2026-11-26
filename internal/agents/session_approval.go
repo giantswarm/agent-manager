@@ -9,6 +9,8 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/dynamic"
 
 	"github.com/giantswarm/agent-manager/internal/approvalgrants"
 	"github.com/giantswarm/agent-manager/internal/identity"
@@ -55,7 +57,8 @@ func (s *Service) sendsApproval() bool {
 // cannot be bound refuse the start (fail closed): agent-
 // manager sending none (tool approval off), settings that may come from
 // spec.valuesFrom (which agent-manager does not read), or a HelmRelease-
-// managed agent whose release is gone. With settings, the toolset bound is
+// managed agent whose release is gone or unreadable (agentRelease resolves
+// the release that renders the agent, wherever it lives). With settings, the toolset bound is
 // the release's own list, not the live Agent and RemoteMCPServer: an
 // edit of those objects never widens what a grant covers. An agent without
 // a release (a bare Agent) carries none.
@@ -69,32 +72,29 @@ func (s *Service) sessionApproval(ctx context.Context, ref kagent.Ref, liveTools
 		}
 		reader = client
 	}
-	dyn := reader.Dynamic()
-	hr, err := dyn.Resource(s.helmReleaseGVR()).Namespace(ref.Namespace).Get(ctx, ref.Name, metav1.GetOptions{})
-	if apierrors.IsForbidden(err) && s.cfg.ApprovalReader != nil {
-		// agent-manager's ServiceAccount may not read releases in every
-		// namespace (an organization's: the chart grants the reader Role in
-		// the configured namespaces only); the person starting
-		// the Session usually may. Refused only when neither can.
+	// agent-manager's ServiceAccount may not read every object (an
+	// organization's releases: the chart grants the reader Role in the
+	// configured namespaces only; Agents: with downstream OAuth it holds no
+	// such right); the person starting the Session usually may. Each object
+	// is read by the first that may; refused only when neither can.
+	readers := []dynamic.Interface{reader.Dynamic()}
+	if s.cfg.ApprovalReader != nil {
 		if caller, callerErr := s.kube.Client(ctx); callerErr == nil {
-			dyn = caller.Dynamic()
-			hr, err = dyn.Resource(s.helmReleaseGVR()).Namespace(ref.Namespace).Get(ctx, ref.Name, metav1.GetOptions{})
+			readers = append(readers, caller.Dynamic())
 		}
 	}
+	hr, dyn, err := s.agentRelease(ctx, readers, ref)
+	var unreadable *releaseUnreadableError
 	switch {
-	case apierrors.IsNotFound(err):
-		obj, objErr := s.getAgentObject(ctx, dyn, ref.Namespace, ref.Name)
-		if objErr == nil && obj != nil && obj.GetLabels()[HelmReleaseNameLabel] != "" {
-			return nil, nil, approvalUnavailablef("agent %s is rendered by HelmRelease %s, which cannot be found, so its tool approval settings are unknown; a session without them would drop the agent's Ask and Block", ref.Tenant(), obj.GetLabels()[HelmReleaseNameLabel])
-		}
+	case errors.As(err, &unreadable) && !sends:
+		s.log.WarnContext(ctx, "the agent's renderer may not be read; the session starts without checking for tool approval settings", identity.LogAttr(ctx), "agent", ref.Tenant(), "object", unreadable.what)
 		return liveToolset, nil, nil
-	case apierrors.IsForbidden(err) && !sends:
-		s.log.WarnContext(ctx, "the agent's HelmRelease may not be read; the session starts without checking for tool approval settings", identity.LogAttr(ctx), "agent", ref.Tenant())
-		return liveToolset, nil, nil
-	case apierrors.IsForbidden(err):
-		return nil, nil, forbiddenf("the agent's HelmRelease %s/%s, which holds its tool approval settings, may be read neither by agent-manager's ServiceAccount nor by you (get helmreleases); a session without them would drop the agent's Ask and Block", ref.Namespace, ref.Name)
+	case errors.As(err, &unreadable):
+		return nil, nil, forbiddenf("%s, which says where agent %s's tool approval settings are, may be read neither by agent-manager's ServiceAccount nor by you (get %s); a session without them would drop the agent's Ask and Block", unreadable.what, ref.Tenant(), unreadable.resource)
 	case err != nil:
-		return nil, nil, wrapKube(err, fmt.Sprintf("get HelmRelease %s/%s", ref.Namespace, ref.Name))
+		return nil, nil, err
+	case hr == nil:
+		return liveToolset, nil, nil
 	}
 	values, _, _ := unstructured.NestedMap(hr.Object, "spec", "values")
 	list, def := toolListFromValues(values)
@@ -140,6 +140,81 @@ func (s *Service) sessionApproval(ctx context.Context, ref kagent.Ref, liveTools
 		}
 	}
 	return toolset, out, nil
+}
+
+// releaseUnreadableError is an object agentRelease needed that none of its
+// readers may get.
+type releaseUnreadableError struct {
+	what     string
+	resource string
+	err      error
+}
+
+func (e *releaseUnreadableError) Error() string { return e.what + ": " + e.err.Error() }
+func (e *releaseUnreadableError) Unwrap() error { return e.err }
+
+// agentRelease resolves the HelmRelease that renders the agent, where its
+// tool approval settings are: the one its Agent's Flux provenance labels
+// name (HelmReleaseNameLabel, HelmReleaseNamespaceLabel), else the one named
+// after the agent in its namespace (agent-manager's own releases). The
+// release need not carry the agent's name or namespace: the platform's
+// default agent is rendered by a release in the platform's namespace that
+// targets the kagent namespace. A release the labels name must render this
+// very Agent (renderedAgent), so a label never borrows another agent's
+// settings or grants; one that is gone or renders another refuses the start
+// (ErrApprovalUnavailable). nil, nil: no release renders the agent (a bare
+// Agent). Each object is read by the first reader that may; the reader that
+// read the release is returned for the reads that follow.
+func (s *Service) agentRelease(ctx context.Context, readers []dynamic.Interface, ref kagent.Ref) (*unstructured.Unstructured, dynamic.Interface, error) {
+	agent := fmt.Sprintf("Agent %s/%s", ref.Namespace, ref.Name)
+	obj, _, err := readFirst(ctx, readers, s.agentGVR(), ref.Namespace, ref.Name, agent, "agents")
+	if err != nil && !apierrors.IsNotFound(err) {
+		return nil, nil, err
+	}
+	hrNs, hrName, named := ref.Namespace, ref.Name, false
+	if obj != nil {
+		if name, ns := ownerOf(obj); name != "" {
+			hrNs, hrName, named = orDefault(ns, ref.Namespace), name, true
+		}
+	}
+	hr, dyn, err := readFirst(ctx, readers, s.helmReleaseGVR(), hrNs, hrName, fmt.Sprintf("HelmRelease %s/%s", hrNs, hrName), "helmreleases")
+	switch {
+	case apierrors.IsNotFound(err) && named:
+		return nil, nil, approvalUnavailablef("agent %s is rendered by HelmRelease %s/%s (its %s and %s labels), which cannot be found, so its tool approval settings are unknown; a session without them would drop the agent's Ask and Block", ref.Tenant(), hrNs, hrName, HelmReleaseNamespaceLabel, HelmReleaseNameLabel)
+	case apierrors.IsNotFound(err):
+		return nil, nil, nil
+	case err != nil:
+		return nil, nil, err
+	}
+	if named {
+		if secret, ns, name := renderedAgent(hr); secret != "" || ns != ref.Namespace || name != ref.Name {
+			where := ns + "/" + name
+			if secret != "" {
+				where += " on the cluster of kubeconfig Secret " + secret
+			}
+			return nil, nil, approvalUnavailablef("agent %s names HelmRelease %s/%s as its renderer, which renders the Agent %s instead, so the agent's tool approval settings are unknown; a session without them would drop the agent's Ask and Block", ref.Tenant(), hrNs, hrName, where)
+		}
+	}
+	return hr, dyn, nil
+}
+
+// readFirst gets an object with the first reader not refused; an object all
+// refuse is a *releaseUnreadableError, any other error is wrapped.
+func readFirst(ctx context.Context, readers []dynamic.Interface, gvr schema.GroupVersionResource, ns, name, what, resource string) (*unstructured.Unstructured, dynamic.Interface, error) {
+	var err error
+	for _, dyn := range readers {
+		var obj *unstructured.Unstructured
+		obj, err = dyn.Resource(gvr).Namespace(ns).Get(ctx, name, metav1.GetOptions{})
+		switch {
+		case err == nil:
+			return obj, dyn, nil
+		case apierrors.IsNotFound(err):
+			return nil, nil, err
+		case !apierrors.IsForbidden(err):
+			return nil, nil, wrapKube(err, "get "+what)
+		}
+	}
+	return nil, nil, &releaseUnreadableError{what: what, resource: resource, err: err}
 }
 
 // bindWithApproval binds the Session with its agent's approval settings and

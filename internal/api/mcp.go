@@ -609,7 +609,7 @@ func NewMCPServer(svc *agents.Service, version string, opts ...Option) *mcpserve
 		mcp.WithString(argName, mcp.Required(), mcp.Description("Agent name")),
 		nsProp,
 		mcp.WithString(argMessage, mcp.Description(fmt.Sprintf("The first user message, text only, at most %d characters; omit it to send the first message yourself.", agents.MaxSessionMessageLength))),
-		mcp.WithString(argRequestID, mcp.Description("Idempotency key (at most 128 characters): pass one and reuse it on a retry; without it a retry starts a second session.")),
+		mcp.WithString(argRequestID, mcp.Description("Idempotency key (max 128 chars): reuse it on a retry after a lost answer, else a second session starts; a refused start spends it: use a new one.")),
 		mcp.WithString(argSessionName, mcp.Description("Display name of the conversation (at most 200 characters); default: unnamed")),
 		mcp.WithString(argWorkspaceGrant, mcp.Description("The grant authorize_workspace returned to you: the session works in that workspace, its sandbox bound to you in muster. Others' are refused.")),
 		mcp.WithBoolean(argNoWorkspace, mcp.Description("Start without a workspace. With neither it nor workspaceGrant: the agent's defaultWorkspace, as you; a refusal or auth_required starts nothing.")),

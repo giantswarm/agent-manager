@@ -1555,7 +1555,7 @@ Refused with conflict while the agent has no ready revision (get_agent_status). 
       "type": "boolean"
     },
     "requestId": {
-      "description": "Idempotency key (at most 128 characters): pass one and reuse it on a retry; without it a retry starts a second session.",
+      "description": "Idempotency key (max 128 chars): reuse it on a retry after a lost answer, else a second session starts; a refused start spends it: use a new one.",
       "type": "string"
     },
     "sessionName": {

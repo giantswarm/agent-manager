@@ -687,6 +687,9 @@ func (s *Service) StartSession(ctx context.Context, in StartSession) (*SessionSt
 		create.VolumeSource, create.AdmissionToken = workspace.Volume, grant
 	}
 	session, err := s.createSession(ctx, token, create)
+	if requestIDOfDeletedSession(err) {
+		return nil, conflictf("requestId %q belongs to a session that no longer exists: the start that used it was refused and its session deleted again, or the session was deleted since; a start with that requestId cannot create another, so start again with a new requestId (or none)", requestID)
+	}
 	if err != nil {
 		return nil, kagentError(err, fmt.Sprintf("a session of agent %s", ref.Tenant()))
 	}
@@ -934,6 +937,15 @@ func (s *Service) bindSession(ctx context.Context, token string, ref kagent.Ref,
 		s.recheckBoundGrants(ctx, approval)
 	}
 	return binding.Toolset, nil
+}
+
+// requestIDOfDeletedSession reports kagent's refusal of a CreateSession whose
+// request id belongs to a deleted Session (FailedPrecondition): a start
+// refused after kagent created its Session (a failed bind) deletes it, which
+// spends the id, so the retry of that start needs a new one.
+func requestIDOfDeletedSession(err error) bool {
+	st, ok := status.FromError(err)
+	return ok && st.Code() == codes.FailedPrecondition && strings.Contains(st.Message(), "request_id belongs to a deleted Session")
 }
 
 // abandonSession deletes a Session that cannot be handed out (its bind

@@ -8,10 +8,11 @@ import (
 	"strings"
 	"time"
 
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/dynamic"
 
 	"github.com/giantswarm/agent-manager/internal/approvalgrants"
 	"github.com/giantswarm/agent-manager/internal/identity"
+	"github.com/giantswarm/agent-manager/internal/kagent"
 	"github.com/giantswarm/agent-manager/internal/muster"
 )
 
@@ -122,8 +123,8 @@ func (s *Service) recreatedAgentGrants(ctx context.Context, agent approvalgrants
 		}
 		reader = client
 	}
-	hr, err := reader.Dynamic().Resource(s.helmReleaseGVR()).Namespace(agent.Namespace).Get(ctx, agent.Name, metav1.GetOptions{})
-	if err != nil || string(hr.GetUID()) == agent.UID {
+	hr, _, err := s.agentRelease(ctx, []dynamic.Interface{reader.Dynamic()}, kagent.Ref{Namespace: agent.Namespace, Name: agent.Name})
+	if err != nil || hr == nil || string(hr.GetUID()) == agent.UID {
 		return nil, false
 	}
 	successor := approvalgrants.Agent{UID: string(hr.GetUID()), Namespace: agent.Namespace, Name: agent.Name}
