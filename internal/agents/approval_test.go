@@ -606,6 +606,10 @@ func TestASessionOfARequireApprovalAgentIsBoundAskingBeforeEveryCall(t *testing.
 			"muster": map[string]any{"requireApproval": true}, "toolset": []any{"server:github"}}, "Ask"},
 		"requireApproval false": {map[string]any{"agent": map[string]any{"name": "alert-review"}, "modelConfig": map[string]any{"name": "m"},
 			"muster": map[string]any{"requireApproval": false}, "toolset": []any{"server:github"}}, ""},
+		"muster off: the flag sat on no binding": {map[string]any{"agent": map[string]any{"name": "alert-review"}, "modelConfig": map[string]any{"name": "m"},
+			"muster": map[string]any{"requireApproval": true, "enabled": false}, "toolset": []any{"server:github"}}, ""},
+		"chat-only: the flag sat on no binding": {map[string]any{"agent": map[string]any{"name": "alert-review"}, "modelConfig": map[string]any{"name": "m"},
+			"muster": map[string]any{"requireApproval": true}, "toolset": []any{"preset:none"}}, ""},
 	} {
 		t.Run(name, func(t *testing.T) {
 			a := newApprovalFixture(t, tc.values)

@@ -214,20 +214,25 @@ func (r *Runner) Run(ctx context.Context) (*Result, error) {
 		states []*nsState
 		errs   []error
 	)
+	// Everything is read before the first write: a namespace that cannot be
+	// read, an organization's included, fails the run with nothing changed.
 	for _, ns := range r.opts.Namespaces {
 		st, err := r.discover(ctx, ns)
 		if err != nil {
 			return nil, err
 		}
 		st.report.Run = run
-		r.expand(ctx, st, chartAvailable)
-		r.wait(ctx, st)
 		states = append(states, st)
 	}
-	orgs, orgPending, err := r.organizations(ctx, run, chartAvailable)
+	orgs, err := r.discoverOrganizations(ctx, run)
 	if err != nil {
 		return nil, err
 	}
+	for _, st := range states {
+		r.expand(ctx, st, chartAvailable)
+		r.wait(ctx, st)
+	}
+	orgPending := r.planOrganizations(ctx, orgs, chartAvailable)
 	if len(orgPending) > 0 && len(states) > 0 {
 		// The operator moves the organizations' sources with the platform's
 		// range: until their releases are on target values the run is not
@@ -253,22 +258,17 @@ func (r *Runner) Run(ctx context.Context) (*Result, error) {
 	return res, errors.Join(errs...)
 }
 
-// organizations reads every organization namespace the way the managed ones
-// are read and plans their releases without writing anything: each release
-// that needs the target major's values is reported with its diff, and named
-// in the pending lines returned for the run's first report.
-func (r *Runner) organizations(ctx context.Context, run RunInfo, chartAvailable bool) ([]*nsState, []string, error) {
-	var (
-		states  []*nsState
-		pending []string
-	)
+// discoverOrganizations reads every organization namespace the way the
+// managed ones are read (Options.OrganizationNamespaces).
+func (r *Runner) discoverOrganizations(ctx context.Context, run RunInfo) ([]*nsState, error) {
+	var states []*nsState
 	for _, ns := range r.opts.OrganizationNamespaces {
 		if r.managed(ns) {
 			continue
 		}
 		st, err := r.discover(ctx, ns)
 		if err != nil {
-			return nil, nil, err
+			return nil, fmt.Errorf("organization namespace %s: %w", ns, err)
 		}
 		st.org = true
 		st.report.Run = run
@@ -278,14 +278,35 @@ func (r *Runner) organizations(ctx context.Context, run RunInfo, chartAvailable 
 		for _, src := range st.sources {
 			src.org = true
 		}
-		r.expand(ctx, st, chartAvailable)
-		r.wait(ctx, st)
-		for _, line := range st.report.Pending {
-			pending = append(pending, fmt.Sprintf("organization namespace %s: %s", ns, line))
-		}
 		states = append(states, st)
 	}
-	return states, pending, nil
+	return states, nil
+}
+
+// planOrganizations plans the organizations' releases without writing
+// anything and returns, for the run's first report, a pending line per
+// release that needs a change (diff, failed, pending). Flux and the Agents
+// there are not gated on: the operator moves the sources and agent-manager's
+// status reads cover the managed namespaces only, so readiness there is the
+// organization's, not this run's.
+func (r *Runner) planOrganizations(ctx context.Context, states []*nsState, chartAvailable bool) []string {
+	var pending []string
+	for _, st := range states {
+		r.expand(ctx, st, chartAvailable)
+		var own []string
+		for _, rel := range st.releases {
+			switch rel.report.Action {
+			case ActionDiff, ActionFailed, ActionPending:
+				own = append(own, fmt.Sprintf("release %s (%s): %s", rel.id(), rel.report.Action, rel.report.Reason))
+			}
+		}
+		st.report.Pending = own
+		st.expandDone, st.renderedServed = len(own) == 0, true
+		for _, line := range own {
+			pending = append(pending, fmt.Sprintf("organization namespace %s: %s", st.ns, line))
+		}
+	}
+	return pending
 }
 
 // OrganizationNamespaces lists the namespaces the agent-platform-operator
@@ -686,6 +707,15 @@ func (r *Runner) planRelease(ctx context.Context, st *nsState, rel *release, cha
 	values, _, _ := unstructured.NestedMap(rel.obj.Object, "spec", "values")
 	values = orEmpty(values)
 	if from, _, _ := unstructured.NestedSlice(rel.obj.Object, "spec", "valuesFrom"); len(from) > 0 && r.hop.to == 3 {
+		if r.versionOnTarget(rep.ChartVersion) {
+			// The 3.x chart refuses muster.requireApproval in schema and
+			// template, so a release it renders carries none in its merged
+			// values; nothing left for this command.
+			rep.Action, rep.Reason = ActionUnchanged, fmt.Sprintf("deployed from chart %s in the target range; its values from spec.valuesFrom are not read here", rep.ChartVersion)
+			rep.Warnings = append(rep.Warnings, "takes values from spec.valuesFrom: agent-manager binds tool approval settings only from spec.values")
+			rel.onTarget = true
+			return rep
+		}
 		return r.planValuesFrom(rel, rep, values)
 	}
 	rewritten, changes, err := r.hop.rewrite(ctx, values, r.opts.HarnessName, r.pinner)
@@ -750,7 +780,15 @@ func (r *Runner) planRelease(ctx context.Context, st *nsState, rel *release, cha
 // shows what spec.values needs; the release fails, holding its source.
 func (r *Runner) planValuesFrom(rel *release, rep *ReleaseReport, values map[string]any) *ReleaseReport {
 	rep.Action = ActionFailed
-	rep.Reason = "takes values from spec.valuesFrom, which this command does not read: replace muster.requireApproval: true there with default: Ask (never just delete it), set modelConfig.name where 2.x rendered its default (default-model-config), and move the release's settings into spec.values: agent-manager binds tool approval settings only from spec.values. The release and its chart source stay on 2.x until it is fixed"
+	rep.Reason = "takes values from spec.valuesFrom, which this command does not read: replace muster.requireApproval: true there with default: Ask (never just delete it), set modelConfig.name where 2.x rendered its default (default-model-config), and move the release's settings into spec.values: agent-manager binds tool approval settings only from spec.values"
+	switch {
+	case rel.org:
+		rep.Reason += ". The agent-platform-operator moves its chart source with the platform's range; fix it before, or its 3.x render fails and it keeps its 2.x revision"
+	case rel.gitops || rel.external || rel.platform:
+		rep.Reason += ". Apply it in the owning repository together with the move of its chart source"
+	default:
+		rep.Reason += ". The release and its chart source stay on 2.x until it is fixed"
+	}
 	rewritten, changes, err := rewriteV3(values, false)
 	if err != nil {
 		rep.Reason += "; spec.values: " + err.Error()
@@ -1097,10 +1135,16 @@ func (r *Runner) renderedVerdict(ctx context.Context, ns, name string) *Template
 // releaseUpgraded is true when the release's deployed chart is in the target
 // range and, with a target filter, one of the tags it admits.
 func (r *Runner) releaseUpgraded(rel *release) bool {
-	if r.filter != nil && !r.filter.MatchString(chartTag(rel.report.ChartVersion)) {
+	return r.versionOnTarget(rel.report.ChartVersion)
+}
+
+// versionOnTarget is true when a deployed chart version is in the target
+// range and, with a target filter, one of the tags it admits.
+func (r *Runner) versionOnTarget(version string) bool {
+	if r.filter != nil && !r.filter.MatchString(chartTag(version)) {
 		return false
 	}
-	return versionInRange(rel.report.ChartVersion, r.opts.TargetSemver)
+	return versionInRange(version, r.opts.TargetSemver)
 }
 
 // chartTag is a deployed chart version without the OCI digest (@sha256:…) or

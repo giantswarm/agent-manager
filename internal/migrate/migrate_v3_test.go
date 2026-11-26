@@ -3,6 +3,7 @@ package migrate
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,8 +12,12 @@ import (
 
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/giantswarm/agent-manager/internal/agents"
 	"github.com/giantswarm/agent-manager/internal/chart"
@@ -432,4 +437,84 @@ func TestV3OrganizationNamespacesAreFoundByLabel(t *testing.T) {
 	names, err := OrganizationNamespaces(t.Context(), c.typed, []string{kagentNS})
 	require.NoError(t, err)
 	require.Equal(t, []string{"org-acme"}, names)
+}
+
+// M3-S8-R-01: an organization namespace on target, with Ready Agents, leaves
+// the run complete: Flux and the Agents there are not gated on (agent-manager
+// reads status in managed namespaces only).
+func TestV3OrganizationOnTargetDoesNotHoldTheRun(t *testing.T) {
+	c := newCluster(
+		ociRepository(kagentNS, v3Target), helmRelease(kagentNS, "plain", narrowRewritten(), v3Latest), agentObj(kagentNS, "narrow", "plain", kagentNS, true),
+		ociRepository("org-acme", v3Target), helmRelease("org-acme", "composed", narrowRewritten(), v3Latest), agentObj("org-acme", "narrow", "composed", "org-acme", true),
+		ociRepository("org-beta", v2Range), helmRelease("org-beta", "waiting", narrowRewritten(), "2.6.1"), agentObj("org-beta", "narrow", "waiting", "org-beta", false),
+	)
+	res, err := c.runnerV3(t, Options{Namespaces: []string{kagentNS}, OrganizationNamespaces: []string{"org-acme", "org-beta"}}, v3Latest).Run(t.Context())
+	require.NoError(t, err)
+	kagent := res.Reports[0]
+	require.Equal(t, PhaseComplete, kagent.Phase, strings.Join(kagent.Pending, "\n"))
+	require.NotContains(t, strings.Join(append(kagent.Pending, kagent.Warnings...), "\n"), "organization namespace")
+	for _, org := range res.Reports[1:] {
+		require.Equal(t, PhaseComplete, org.Phase, org.Summary)
+	}
+	require.Equal(t, ActionUnchanged, bySource(res.Reports[2])["org-beta/agent"].Action, "the operator's source, never moved here")
+	require.Equal(t, v2Range, c.semver(t, "org-beta", "agent"))
+	require.Empty(t, c.writes("org-beta"))
+}
+
+// M3-S8-R-02: a release with valuesFrom already deployed from a 3.x chart is
+// done: the 3.x chart refuses muster.requireApproval in its merged values.
+func TestV3ValuesFromReleaseOnTargetIsUnchanged(t *testing.T) {
+	hr := valuesFromRelease(kagentNS, "vf", map[string]any{"agent": map[string]any{"name": "a"}})
+	hr.Object["status"].(map[string]any)["history"] = []any{map[string]any{"chartVersion": v3Latest, "status": "deployed"}}
+	c := newCluster(ociRepository(kagentNS, v3Target), hr, helmRelease(kagentNS, "sibling", approvalRewritten(), v3Latest))
+	res, err := c.runnerV3(t, Options{Namespaces: []string{kagentNS}}, v3Latest).Run(t.Context())
+	require.NoError(t, err)
+	rel := byRelease(res.Reports[0])["kagent/vf"]
+	require.Equal(t, ActionUnchanged, rel.Action, rel.Reason)
+	require.Contains(t, strings.Join(rel.Warnings, "\n"), "spec.valuesFrom")
+	require.Equal(t, ActionUnchanged, byRelease(res.Reports[0])["kagent/sibling"].Action)
+}
+
+// M3-S8-R-06: an organization namespace that cannot be read fails the run
+// before anything is written.
+func TestV3UnreadableOrganizationFailsBeforeAnyWrite(t *testing.T) {
+	c := newCluster(ociRepository(kagentNS, v2Range), helmRelease(kagentNS, "triage", approvalValues(), "2.6.1"))
+	c.dyn.PrependReactor("list", "helmreleases", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		if a.GetNamespace() == "org-acme" {
+			return true, nil, apierrors.NewForbidden(schema.GroupResource{Group: "helm.toolkit.fluxcd.io", Resource: "helmreleases"}, "", errors.New("no"))
+		}
+		return false, nil, nil
+	})
+	_, err := c.runnerV3(t, Options{Namespaces: []string{kagentNS}, OrganizationNamespaces: []string{"org-acme"}}, v3Latest).Run(t.Context())
+	require.ErrorContains(t, err, "organization namespace org-acme")
+	require.Equal(t, approvalValues(), c.values(t, kagentNS, "triage"))
+	require.Equal(t, v2Range, c.semver(t, kagentNS, "agent"))
+	require.Empty(t, c.writes(kagentNS))
+}
+
+// The operator's source is never moved, also when every release on it is on
+// target values (no blocker).
+func TestV3OrganizationSourceIsNeverMoved(t *testing.T) {
+	c := newCluster(ociRepository(kagentNS, v3Target), ociRepository("org-acme", v2Range), helmRelease("org-acme", "composed", narrowRewritten(), "2.6.1"))
+	res, err := c.runnerV3(t, Options{Namespaces: []string{kagentNS}, OrganizationNamespaces: []string{"org-acme"}}, v3Latest).Run(t.Context())
+	require.NoError(t, err)
+	src := bySource(res.Reports[1])["org-acme/agent"]
+	require.Equal(t, ActionUnchanged, src.Action)
+	require.Equal(t, OwnershipOrganization, src.Ownership)
+	require.Empty(t, src.Diff)
+	require.Equal(t, v2Range, c.semver(t, "org-acme", "agent"))
+	require.Empty(t, c.writes("org-acme"))
+}
+
+// M3-S8-R-05: a range whose bound admits a pre-release of the next major is
+// refused: Flux would serve that chart under it.
+func TestTargetMajorRefusesThePreReleasesOfTheNextMajor(t *testing.T) {
+	for _, r := range []string{">=2.6.0 <=3.0.0-rc.1", ">=2.6.0 <3.0.0-rc.1", ">=2.6.0 <3.0.0-alpha.2"} {
+		_, err := TargetMajor(r)
+		require.ErrorContains(t, err, "admits pre-releases of 3.0.0", r)
+	}
+	for _, r := range []string{v2Range, ">=2.6.0-0 <3.0.0-0", v3Target} {
+		_, err := TargetMajor(r)
+		require.NoError(t, err, r)
+	}
 }
