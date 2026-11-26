@@ -47,6 +47,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"path"
 	"reflect"
 	"regexp"
 	"slices"
@@ -266,7 +267,7 @@ func (r *Runner) discoverOrganizations(ctx context.Context, run RunInfo) ([]*nsS
 		if r.managed(ns) {
 			continue
 		}
-		st, err := r.discover(ctx, ns)
+		st, err := r.discoverIn(ctx, ns, true)
 		if err != nil {
 			return nil, fmt.Errorf("organization namespace %s: %w", ns, err)
 		}
@@ -461,6 +462,16 @@ func (r *Runner) managed(ns string) bool { return slices.Contains(r.opts.Namespa
 // after its CRDs are gone, the target line's before the kagent upgrade) is
 // read as empty.
 func (r *Runner) discover(ctx context.Context, ns string) (*nsState, error) {
+	return r.discoverIn(ctx, ns, false)
+}
+
+// discoverIn is discover; org reads an organization namespace, where an
+// agent-chart source is recognised by the chart's name as well as its URL:
+// the agent-platform-operator's copy keeps the URL it was created with
+// (decisions-operator #7), and a release on it must still be reported
+// (M3I-3). A HelmRelease there on an OCIRepository of another chart is named
+// in the report's warnings.
+func (r *Runner) discoverIn(ctx context.Context, ns string, org bool) (*nsState, error) {
 	dyn := r.client.Dynamic()
 	st := &nsState{ns: ns, report: &Report{Namespace: ns, Releases: []ReleaseReport{}, Sources: []SourceReport{}, Agents: []AgentReport{}}}
 
@@ -470,7 +481,7 @@ func (r *Runner) discover(ctx context.Context, ns string) (*nsState, error) {
 		return nil, fmt.Errorf("list ocirepositories in %s: %w", ns, err)
 	}
 	for i := range ociList.Items {
-		if s := r.sourceOf(&ociList.Items[i], false); s != nil {
+		if s := r.sourceOfIn(&ociList.Items[i], false, org); s != nil {
 			sources[s.name] = s
 			st.sources = append(st.sources, s)
 		}
@@ -487,6 +498,9 @@ func (r *Runner) discover(ctx context.Context, ns string) (*nsState, error) {
 		}
 		src, ok := sources[ref.Name]
 		if !ok {
+			if org {
+				st.report.Warnings = append(st.report.Warnings, fmt.Sprintf("release %s/%s renders from OCIRepository %s, which serves no agent chart this command recognises (%s): not checked; if it is an agent, check it by hand", ns, hr.GetName(), ref.Name, r.opts.ChartOCIURL))
+			}
 			continue
 		}
 		st.addRelease(hr, src, false)
@@ -582,8 +596,14 @@ func listServed(ctx context.Context, dyn dynamic.Interface, gvr schema.GroupVers
 
 // sourceOf reads an OCIRepository of the agent chart; nil for another chart.
 func (r *Runner) sourceOf(obj *unstructured.Unstructured, external bool) *source {
+	return r.sourceOfIn(obj, external, false)
+}
+
+// sourceOfIn is sourceOf; byName also takes a source whose URL names the
+// chart by the same last path segment (another registry or mirror).
+func (r *Runner) sourceOfIn(obj *unstructured.Unstructured, external, byName bool) *source {
 	url, _, _ := unstructured.NestedString(obj.Object, "spec", "url")
-	if url != r.opts.ChartOCIURL {
+	if url != r.opts.ChartOCIURL && (!byName || url == "" || path.Base(url) != path.Base(r.opts.ChartOCIURL)) {
 		return nil
 	}
 	s := &source{obj: obj, ns: obj.GetNamespace(), name: obj.GetName(), gitops: gitOpsOwned(obj), external: external, platform: agents.PlatformOwned(obj)}
@@ -680,7 +700,7 @@ func (r *Runner) expand(ctx context.Context, st *nsState, chartAvailable bool) {
 		rel.report = r.planRelease(ctx, st, rel, chartAvailable)
 	}
 	r.holdUnmovable(st)
-	holdSiblings(st)
+	r.holdSiblings(st)
 	for _, rel := range st.releases {
 		if rel.write {
 			r.writeRelease(ctx, st, dyn, rel)
@@ -830,12 +850,17 @@ func (r *Runner) subAgentWarnings(st *nsState, rel *release, values map[string]a
 // moves it, and the source, with the platform release), none of its
 // writable siblings is written, since the source cannot move and target
 // values under the source's current chart would fail their render.
-func holdSiblings(st *nsState) {
+func (r *Runner) holdSiblings(st *nsState) {
 	for _, src := range st.sources {
 		var blockers []string
 		for _, rel := range src.releases {
 			switch a := rel.report.Action; {
 			case a == ActionFailed || a == ActionPending:
+				blockers = append(blockers, fmt.Sprintf("%s (%s)", rel.id(), a))
+			case a == ActionDiff && r.hop.to == 3:
+				// On 2.x -> 3.x a sibling waiting for its diff keeps the
+				// source on 2.x, where no released chart takes `default`:
+				// its siblings' 3.x values would fail every upgrade (M3I-2).
 				blockers = append(blockers, fmt.Sprintf("%s (%s)", rel.id(), a))
 			case rel.platform:
 				blockers = append(blockers, fmt.Sprintf("%s (%s)", rel.id(), OwnershipPlatform))
@@ -844,8 +869,27 @@ func holdSiblings(st *nsState) {
 		if len(blockers) == 0 {
 			continue
 		}
+		held := heldWrites(src)
 		holdReleases(src, fmt.Sprintf("held: chart source %s/%s also serves %s, and its releases move together; nothing of it is written until every one of them can", src.ns, src.name, join(blockers)))
+		if r.hop.to == 3 {
+			for _, rel := range held {
+				after := &unstructured.Unstructured{Object: runtime.DeepCopyJSON(rel.obj.Object)}
+				_ = unstructured.SetNestedMap(after.Object, rel.rewritten, "spec", "values")
+				rel.report.Diff = manifestDiff(rel.obj, after)
+			}
+		}
 	}
+}
+
+// heldWrites are the releases of src planned for a write.
+func heldWrites(src *source) []*release {
+	var out []*release
+	for _, rel := range src.releases {
+		if rel.write {
+			out = append(out, rel)
+		}
+	}
+	return out
 }
 
 // holdUnmovable keeps, on the 2.x -> 3.x path, the releases of a source this
@@ -1451,7 +1495,7 @@ func (st *nsState) phase(h *hop) (string, string) {
 		if len(st.report.Pending) > 0 {
 			summary += fmt.Sprintf("; %d item(s) not Ready yet (see warnings)", len(st.report.Pending))
 		}
-		st.report.Warnings, st.report.Pending = st.report.Pending, nil
+		st.report.Warnings, st.report.Pending = append(st.report.Warnings, st.report.Pending...), nil
 		return PhaseComplete, summary
 	}
 	if !st.gatePassed {

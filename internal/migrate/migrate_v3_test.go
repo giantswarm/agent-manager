@@ -518,3 +518,70 @@ func TestTargetMajorRefusesThePreReleasesOfTheNextMajor(t *testing.T) {
 		require.NoError(t, err, r)
 	}
 }
+
+// M3I-2: a GitOps-owned release waiting for its diff keeps the namespace's
+// source on 2.x, so its writable siblings are held, not given 3.x values
+// that every 2.x upgrade would refuse.
+func TestV3DiffOfAGitOpsSiblingHoldsTheSource(t *testing.T) {
+	git := gitOpsLabeled(helmRelease(kagentNS, "m3-git", approvalValues(), "2.6.1"))
+	c := newCluster(ociRepository(kagentNS, v2Range), git, helmRelease(kagentNS, "m3-ra", approvalValues(), "2.6.1"))
+	res, err := c.runnerV3(t, Options{Namespaces: []string{kagentNS}}, v3Latest).Run(t.Context())
+	require.NoError(t, err)
+	rep := res.Reports[0]
+	require.Equal(t, ActionDiff, byRelease(rep)["kagent/m3-git"].Action)
+	ra := byRelease(rep)["kagent/m3-ra"]
+	require.Equal(t, ActionPending, ra.Action)
+	require.Contains(t, ra.Reason, "also serves kagent/m3-git (diff)")
+	require.Contains(t, ra.Diff, "+    default: Ask\n", "the held change is shown")
+	require.Equal(t, approvalValues(), c.values(t, kagentNS, "m3-ra"), "no 3.x values under a source left on 2.x")
+	require.Equal(t, v2Range, c.semver(t, kagentNS, "agent"))
+	for _, w := range c.writes(kagentNS) {
+		require.NotEqual(t, "update helmreleases", w)
+	}
+}
+
+func ociRepositoryAt(ns, url, semver string) *unstructured.Unstructured {
+	o := ociRepository(ns, semver)
+	_ = unstructured.SetNestedField(o.Object, url, "spec", "url")
+	return o
+}
+
+// M3I-3: an organization's chart source the operator created with another
+// registry URL is still the agent chart's: its releases are reported and
+// hold the run; a source of another chart is named in the warnings.
+func TestV3OrganizationSourceOnAnotherRegistryIsStillReported(t *testing.T) {
+	other := helmRelease("org-acme", "other-app", map[string]any{}, "1.0.0")
+	_ = unstructured.SetNestedField(other.Object, "dashboards", "spec", "chartRef", "name")
+	dash := ociRepositoryAt("org-acme", "oci://mirror.example.com/charts/dashboards", "1.x")
+	dash.SetName("dashboards")
+	c := newCluster(
+		ociRepository(kagentNS, v3Target),
+		ociRepositoryAt("org-acme", "oci://gsoci.example.com/charts/giantswarm/agent", v2Range),
+		helmRelease("org-acme", "m3-org", approvalValues(), "2.6.1"),
+		dash, other,
+	)
+	res, err := c.runnerV3(t, Options{Namespaces: []string{kagentNS}, OrganizationNamespaces: []string{"org-acme"}}, v3Latest).Run(t.Context())
+	require.NoError(t, err)
+	org := res.Reports[1]
+	rel := byRelease(org)["org-acme/m3-org"]
+	require.Equal(t, ActionDiff, rel.Action)
+	require.Equal(t, OwnershipOrganization, rel.Ownership)
+	require.Equal(t, PhaseExpand, res.Reports[0].Phase)
+	require.Contains(t, strings.Join(res.Reports[0].Pending, "\n"), "organization namespace org-acme: release org-acme/m3-org")
+	require.NotContains(t, byRelease(org), "org-acme/other-app")
+	require.Contains(t, strings.Join(org.Warnings, "\n"), "release org-acme/other-app renders from OCIRepository dashboards")
+	require.Empty(t, c.writes("org-acme"))
+}
+
+// A warning about an unrecognised release survives a complete phase.
+func TestV3OrganizationWarningSurvivesACompletePhase(t *testing.T) {
+	other := helmRelease("org-acme", "other-app", map[string]any{}, "1.0.0")
+	_ = unstructured.SetNestedField(other.Object, "dashboards", "spec", "chartRef", "name")
+	dash := ociRepositoryAt("org-acme", "oci://mirror.example.com/charts/dashboards", "1.x")
+	dash.SetName("dashboards")
+	c := newCluster(ociRepository(kagentNS, v3Target), dash, other)
+	res, err := c.runnerV3(t, Options{Namespaces: []string{kagentNS}, OrganizationNamespaces: []string{"org-acme"}}, v3Latest).Run(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, PhaseComplete, res.Reports[1].Phase)
+	require.Contains(t, strings.Join(res.Reports[1].Warnings, "\n"), "other-app")
+}
