@@ -1312,6 +1312,17 @@ func TestGetOrganizationKeepsItsFieldNamesOverTheCapabilitiesShape(t *testing.T)
 	assert.Equal(t, orgNS, erases["namespace"])
 	assert.Equal(t, "s3://bucket/uid", erases["snapshotPrefix"])
 	assert.Equal(t, "org-payments", erases["organizationNamespace"])
+
+	// The step is the reason only while the erasure runs: a False
+	// AgentPlatformErasing names no step.
+	live := f.get(t, orgGVR, "", "payments")
+	conditions := live.Object["status"].(map[string]any)["conditions"].([]any)
+	conditions[len(conditions)-1] = condition(orgv1alpha1.AgentPlatformErasing, "False", orgv1alpha1.AgentPlatformErasingSnapshots)
+	_, err := f.dyn.Resource(orgGVR).UpdateStatus(t.Context(), live, metav1.UpdateOptions{})
+	require.NoError(t, err)
+	text, isErr = f.call(t, ToolGetOrganization, map[string]any{"name": "payments"})
+	require.False(t, isErr, text)
+	assert.NotContains(t, decode(t, text), "erasureStep")
 }
 
 // What a Flux Kustomization applies from git is not changed live: Flux

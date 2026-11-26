@@ -13,7 +13,7 @@ require (
 	github.com/giantswarm/mcp-oauth v1.15.1
 	github.com/giantswarm/mcp-toolkit v0.7.0
 	github.com/giantswarm/mcp-toolkit/k8s v0.1.1
-	// Prototype (giantswarm/giantswarm#39492): the head of the open draft giantswarm/organization-operator#673.
+	// Prototype (giantswarm/giantswarm#39492): the head of the open giantswarm/organization-operator#673.
 	github.com/giantswarm/organization-operator v1.6.5-0.20261126132037-fe4507764d20
 	github.com/go-jose/go-jose/v4 v4.1.9
 	github.com/golang-jwt/jwt/v5 v5.3.1
