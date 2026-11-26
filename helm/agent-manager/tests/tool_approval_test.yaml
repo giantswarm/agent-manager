@@ -180,3 +180,33 @@ tests:
     asserts:
       - failedTemplate:
           errorMessage: "muster.toolApproval.platformReleases: every entry needs namespace and name, got map[namespace:agent-platform]"
+
+  - it: passes the platform's agents on another cluster with their approval values
+    template: templates/deployment.yaml
+    set:
+      muster.toolApproval.platformAgents:
+        - namespace: kagent
+          name: default-agent
+          release: {namespace: flux-giantswarm, name: wc1-default-agent}
+          values:
+            toolset: ["preset:full"]
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: '--approval-platform-agents=[{"name":"default-agent","namespace":"kagent","release":{"name":"wc1-default-agent","namespace":"flux-giantswarm"},"values":{"toolset":["preset:full"]}}]'
+
+  - it: passes no platform agents by default
+    template: templates/deployment.yaml
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --approval-platform-agents=[]
+
+  - it: refuses a platform agent without its release
+    template: templates/deployment.yaml
+    set:
+      muster.toolApproval.platformAgents:
+        - {namespace: kagent, name: default-agent}
+    asserts:
+      - failedTemplate:
+          errorMessage: "muster.toolApproval.platformAgents: every entry needs namespace, name, release.namespace and release.name, got map[name:default-agent namespace:kagent]"

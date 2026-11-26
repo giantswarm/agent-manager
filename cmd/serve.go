@@ -68,10 +68,14 @@ type serveOptions struct {
 	// approvalGrantsNamespace keeps the approval grants (agent-manager's
 	// own namespace).
 	approvalGrantsNamespace string
-	workspacesPrefix        string
-	toolchainsPrefix        string
-	helmReleaseAPI          string
-	ociRepositoryAPI        string
+	// approvalPlatformAgents are the agents rendered by a release on
+	// another cluster, with that release's approval values (JSON,
+	// agents.PlatformAgent).
+	approvalPlatformAgents string
+	workspacesPrefix       string
+	toolchainsPrefix       string
+	helmReleaseAPI         string
+	ociRepositoryAPI       string
 
 	chartOCIURL           string
 	chartSemver           string
@@ -164,6 +168,7 @@ environment variable named next to it; flags win over the environment.`,
 	f.StringVar(&o.musterMCPURL, "muster-mcp-url", envOr("AGENT_MANAGER_MUSTER_MCP_URL", ""), "muster's MCP endpoint (http(s)://host[:port]/mcp), where start_session calls, as the caller, the workspace-manager's authorize_workspace for an agent's default workspace when the start names no workspace, and the toolchain-manager's list_toolchains. Needs --workspaces-tools-prefix or --toolchains-tools-prefix (AGENT_MANAGER_MUSTER_MCP_URL)")
 	f.StringVar(&o.musterBindingsCAFile, "muster-bindings-ca-file", envOr("AGENT_MANAGER_MUSTER_BINDINGS_CA_FILE", ""), "PEM CA certificate(s) trusted, beside the system's, for an https --muster-bindings-url (muster's own CA). Empty: the system's only (AGENT_MANAGER_MUSTER_BINDINGS_CA_FILE)")
 	f.StringVar(&o.approvalSenderTokenFile, "muster-approval-sender-token-file", envOr("AGENT_MANAGER_MUSTER_APPROVAL_SENDER_TOKEN_FILE", ""), "agent-manager's projected ServiceAccount token (audience muster), re-read per call: sent with every bind so muster takes the agent's tool approval settings and grants, and with every grant drop. Empty: sessions are bound without approval settings. Needs --muster-bindings-url, --muster-mcp-url and --approval-grants-namespace (AGENT_MANAGER_MUSTER_APPROVAL_SENDER_TOKEN_FILE)")
+	f.StringVar(&o.approvalPlatformAgents, "approval-platform-agents", envOr("AGENT_MANAGER_APPROVAL_PLATFORM_AGENTS", ""), "JSON list of agents rendered by a HelmRelease agent-manager cannot read (on another cluster), each {namespace, name, release: {namespace, name}, values: {tools, toolset, default, muster}} with that release's approval values: a session of one binds these values, refused unless the Agent's Flux labels name the release and its X-Muster-Tool-Approval header, where rendered, matches (AGENT_MANAGER_APPROVAL_PLATFORM_AGENTS)")
 	f.StringVar(&o.approvalGrantsNamespace, "approval-grants-namespace", envOr("AGENT_MANAGER_APPROVAL_GRANTS_NAMESPACE", ""), "agent-manager's own namespace, where it keeps the agents' approval grants (ConfigMaps approval-grants-<agent uid>, written with its ServiceAccount). Empty: no grant is recorded and set_agent_approval refuses one (AGENT_MANAGER_APPROVAL_GRANTS_NAMESPACE)")
 	f.StringVar(&o.workspacesPrefix, "workspaces-tools-prefix", envOr("AGENT_MANAGER_WORKSPACES_TOOLS_PREFIX", ""), "The workspace-manager's tool prefix in muster (x_workspace-manager_). Empty: a start_session on an agent with a default workspace that names no workspace is refused. Needs --muster-mcp-url and --muster-bindings-url (AGENT_MANAGER_WORKSPACES_TOOLS_PREFIX)")
 	f.StringVar(&o.toolchainsPrefix, "toolchains-tools-prefix", envOr("AGENT_MANAGER_TOOLCHAINS_TOOLS_PREFIX", ""), "The toolchain-manager's tool prefix in muster (x_toolchain-manager_): start_session asks its list_toolchains, as the caller, and starts a toolchain only at a version it lists, the newest listed when none is named. Empty: any version the registry carries starts. Needs --muster-mcp-url and --toolchain-repository (AGENT_MANAGER_TOOLCHAINS_TOOLS_PREFIX)")
@@ -471,6 +476,10 @@ func runServe(ctx context.Context, o *serveOptions) error {
 	if o.approvalGrantsNamespace != "" {
 		grants = approvalgrants.NewConfigMapStore(clients.Typed().CoreV1().ConfigMaps(o.approvalGrantsNamespace)).WithLogger(log)
 	}
+	platformAgents, err := agents.ParsePlatformAgents(o.approvalPlatformAgents)
+	if err != nil {
+		return fmt.Errorf("--approval-platform-agents: %w", err)
+	}
 	var approvalReader kube.Client
 	if o.approvalSenderTokenFile != "" {
 		approvalReader = clients
@@ -530,6 +539,7 @@ func runServe(ctx context.Context, o *serveOptions) error {
 		Approvals:        approvals,
 		Grants:           grants,
 		ApprovalReader:   approvalReader,
+		PlatformAgents:   platformAgents,
 		// Every listing reports the default agent: read it once per
 		// caller and quarter minute, not per call.
 		DefaultAgentTTL: 15 * time.Second,

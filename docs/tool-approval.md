@@ -195,7 +195,24 @@ downstream OAuth, and on the releases `muster.toolApproval.platformReleases`
 names, which the agent-platform chart sets to its default agent's); where it
 may not (an organization namespace) as the person starting the Session, and
 the start is refused only when neither may read them. A release that renders
-the agent without settings binds it with none. With
+the agent without settings binds it with none.
+
+An agent whose release is on another cluster is bound from agent-manager's
+configuration instead (`muster.toolApproval.platformAgents`, flag
+`--approval-platform-agents`): the platform's default agent where the
+agent-platform chart installs its components into a target cluster
+(`gitops.target.kubeConfig`), agent-manager runs there and the release stays
+on the management cluster. The agent-platform chart renders each entry from
+the values it renders the release with, so only whoever may change the
+release may change the entry. agent-manager reads no release for such an
+agent and binds the entry's `tools`, `default` and `muster.requireApproval`
+without grants (grants are recorded against a release agent-manager can
+read). The live objects can only refuse, never loosen: the start is refused
+when the Agent is unreadable or its Flux labels do not name the entry's
+release, or when its RemoteMCPServer is unreadable or carries an
+`X-Muster-Tool-Approval` header with other settings than the entry (a release
+changed past agent-manager's configuration, until agent-manager is upgraded
+with it). With
 settings, the toolset bound is the release's own list, not the live Agent and
 RemoteMCPServer, so editing those never widens what a grant covers.
 

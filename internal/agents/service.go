@@ -117,6 +117,10 @@ type Config struct {
 	// granted get on helmreleases where it binds approval settings. Nil: the
 	// caller's own read.
 	ApprovalReader kube.Client
+	// PlatformAgents are agents rendered by a release on another cluster,
+	// with that release's approval values (PlatformAgent): a Session of one
+	// binds them instead of reading the release.
+	PlatformAgents []PlatformAgent
 	// DefaultAgentTTL is how long a caller's default agent is reused
 	// (get_info, list_agents and get_agent each report it); zero reads it
 	// on every call.

@@ -83,6 +83,9 @@ func (s *Service) sessionApproval(ctx context.Context, ref kagent.Ref, liveTools
 			readers = append(readers, caller.Dynamic())
 		}
 	}
+	if p, ok := s.platformAgent(ref); ok {
+		return s.platformAgentApproval(ctx, readers, ref, p, sends, liveToolset)
+	}
 	hr, dyn, err := s.agentRelease(ctx, readers, ref)
 	var unreadable *releaseUnreadableError
 	switch {

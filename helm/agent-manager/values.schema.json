@@ -500,6 +500,73 @@
                             "type": "string",
                             "description": "Namespace that holds the approval grants and nothing else: whoever may write ConfigMaps there may lift any connector's Ask for any agent. Empty: `<release name>-approval-grants` (fullname)."
                         },
+                        "platformAgents": {
+                            "type": "array",
+                            "description": "Agents rendered by a HelmRelease agent-manager cannot read because it is on another cluster, with that release's approval values: the agent-platform chart's default agent with a remote target (gitops.target.kubeConfig: agent-manager on the target, the release on the management cluster), which the agent-platform chart sets from the values it renders the release with. Each `{namespace, name, release: {namespace, name}, values}`: the Agent, the release its Flux labels name, and the release's `tools`, `toolset`, `default` and `muster.requireApproval`/`muster.enabled`. A session of such an agent binds these values without reading the release, and is refused when the Agent's labels name another release or the agent chart's `X-Muster-Tool-Approval` header, where rendered, carries other settings.",
+                            "items": {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "properties": {
+                                    "name": {
+                                        "type": "string",
+                                        "minLength": 1
+                                    },
+                                    "namespace": {
+                                        "type": "string",
+                                        "minLength": 1
+                                    },
+                                    "release": {
+                                        "type": "object",
+                                        "additionalProperties": false,
+                                        "properties": {
+                                            "name": {
+                                                "type": "string",
+                                                "minLength": 1
+                                            },
+                                            "namespace": {
+                                                "type": "string",
+                                                "minLength": 1
+                                            }
+                                        }
+                                    },
+                                    "values": {
+                                        "type": "object",
+                                        "additionalProperties": false,
+                                        "properties": {
+                                            "default": {
+                                                "type": "string",
+                                                "enum": [
+                                                    "Allow",
+                                                    "Ask",
+                                                    "Block"
+                                                ]
+                                            },
+                                            "muster": {
+                                                "type": "object",
+                                                "additionalProperties": false,
+                                                "properties": {
+                                                    "enabled": {
+                                                        "type": "boolean"
+                                                    },
+                                                    "requireApproval": {
+                                                        "type": "boolean"
+                                                    }
+                                                }
+                                            },
+                                            "tools": {
+                                                "type": "array"
+                                            },
+                                            "toolset": {
+                                                "type": "array",
+                                                "items": {
+                                                    "type": "string"
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        },
                         "platformReleases": {
                             "type": "array",
                             "description": "HelmReleases outside the managed namespaces that render an agent into one, `{namespace, name}` each: the agent-platform chart's default agent (`<platform namespace>/default-agent`, targeting the kagent namespace), which the agent-platform chart sets. A session reads an agent's settings from the release its Agent's Flux labels name; the ServiceAccount gets `get` on exactly these releases, so every person who may start a session with such an agent can, not only those who may read the platform's releases.",
