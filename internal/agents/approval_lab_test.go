@@ -49,6 +49,30 @@ func TestACreateFollowsTheNamespacesChartSource(t *testing.T) {
 	assert.False(t, *agent.ApprovalEnforced)
 }
 
+// A namespace's source on another chart URL (another registry or chart) is
+// taken not to take `tools`, whatever it serves: settings are refused and the
+// release gets `toolset` (D-GO-13).
+func TestACreateOnASourceOfAnotherURLTakesNoTools(t *testing.T) {
+	other := ociRepository("org-acme", "2.x")
+	_ = unstructured.SetNestedField(other.Object, "oci://mirror.example.com/charts/agent", "spec", "url")
+	f := newFixture(t, []runtime.Object{modelConfig("org-acme", "default-model-config", "Anthropic", "claude-sonnet-4-6"), harness("org-acme", "kagent", "kagent"), other})
+	withTenants(f, &fakeTenants{namespaces: []string{"org-acme"}})
+	f.svc.chart = toolsChart{}
+	f.svc.cfg.Bindings = &approvalBindings{}
+
+	_, err := f.svc.Create(dana(t), Spec{Location: In("org-acme"), Name: "bot", ModelConfig: "default-model-config", Tools: ToolList{{Selector: "server:github", Setting: "Ask"}}})
+	require.ErrorIs(t, err, ErrUnsupported)
+	assert.Contains(t, err.Error(), "oci://mirror.example.com/charts/agent that OCIRepository org-acme/agent, the namespace's agent chart source, serves")
+
+	_, err = f.svc.Create(dana(t), Spec{Location: In("org-acme"), Name: "bot", ModelConfig: "default-model-config", Tools: ToolList{{Selector: "server:github"}}})
+	require.NoError(t, err)
+	hr, err := f.dyn.Resource(hrGVR).Namespace("org-acme").Get(t.Context(), "bot", metav1.GetOptions{})
+	require.NoError(t, err)
+	values := mustValues(hr)
+	assert.Equal(t, []any{"server:github"}, values[ToolsetValuesKey])
+	assert.NotContains(t, values, ToolsValuesKey)
+}
+
 // delete_agent's result names the grants it dropped.
 func TestDeleteReportsTheDroppedGrants(t *testing.T) {
 	a := newApprovalFixture(t, nil)

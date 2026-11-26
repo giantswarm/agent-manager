@@ -127,6 +127,36 @@ func TestAGoneAgentsRecordKeepsTheRecreatedAgentsMarks(t *testing.T) {
 	assert.Empty(t, rec.Version, "the gone agent's record is removed once sent")
 }
 
+// Only the recreated agent's grants at its release's current generation are
+// kept: a stale grant of an earlier generation is not sent (D-GO-12).
+func TestAGoneAgentsRecordKeepsOnlyTheRecreatedAgentsCurrentMarks(t *testing.T) {
+	a := newApprovalFixture(t, nil)
+	old := approvalgrants.Agent{UID: "old-uid", Namespace: "kagent", Name: "alert-review"}
+	require.NoError(t, a.grants.Replace(context.Background(), approvalgrants.Record{Agent: old, PendingSessionSync: true}))
+	a.grants.Put(alertAgent,
+		approvalgrants.Grant{Entry: "tool:x_github_merge_pull_request", Server: "github", ConnectorNamespace: "muster", ConnectorUID: "uid-github", Generation: 7, Tools: []string{"merge_pull_request"}},
+		approvalgrants.Grant{Entry: "tool:x_github_delete_repository", Server: "github", ConnectorNamespace: "muster", ConnectorUID: "uid-github", Generation: 6, Tools: []string{"delete_repository"}},
+	)
+
+	sent, _ := a.svc.SweepPendingSessionSyncs(context.Background())
+	assert.Equal(t, 1, sent)
+	require.Len(t, a.bindings.drops, 1)
+	assert.Equal(t, []muster.Grant{{Entry: "tool:x_github_merge_pull_request", Server: "github", UID: "uid-github", Tools: []string{"merge_pull_request"}}}, a.bindings.drops[0].Keep,
+		"the grant written at generation 6 is not the release's 7: never kept")
+}
+
+// A record of the live agent itself (same release UID) without grants is no
+// recreated agent: muster is told to keep none, even when the store meanwhile
+// holds grants a later save syncs itself (D-GO-12).
+func TestARecordOfTheLiveAgentIsNoRecreatedAgent(t *testing.T) {
+	a := newApprovalFixture(t, nil)
+	a.grants.Put(alertAgent, approvalgrants.Grant{Entry: "tool:x_github_merge_pull_request", Server: "github", ConnectorNamespace: "muster", ConnectorUID: "uid-github", Generation: 7, Tools: []string{"merge_pull_request"}})
+
+	a.svc.syncSessions(dana(t), "update_agent", approvalgrants.Record{Agent: alertAgent, PendingSessionSync: true}, false)
+	require.Len(t, a.bindings.drops, 1)
+	assert.Empty(t, a.bindings.drops[0].Keep, "the record sent keeps no grant; the same UID is not a successor")
+}
+
 // settings that only the rendered header shows (a release with
 // valuesFrom and no inline settings) refuse a start.
 func TestValuesFromWithSettingsOnlyInTheRenderedHeaderRefusesAStart(t *testing.T) {
