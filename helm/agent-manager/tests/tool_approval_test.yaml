@@ -19,7 +19,7 @@ set:
   kagent:
     controllerTarget: kagent-controller.kagent.svc:8083
 tests:
-  - it: is on by default (fail closed: settings are refused while nothing binds them)
+  - it: "is on by default (fail closed: settings are refused while nothing binds them)"
     template: templates/tool-approval-rbac.yaml
     asserts:
       - hasDocuments:
