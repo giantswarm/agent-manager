@@ -1009,11 +1009,30 @@ phase rewrites what chart 3.0 changed and reports every change per release
   rendered (3.0 has no default and renders no model without it).
 
 A GitOps-owned release gets the same change as a diff for its repository.
-The values are written only once a 3.x chart exists in the registry and
-before the namespace's source moves, so no release renders 3.x values under a
-2.x chart or 2.x values under a 3.x one. An organization's chart source is the
-agent-platform-operator's: it follows the platform's range, and its releases,
-written by agent-manager, carry no `muster.requireApproval`.
+The values are written only once a 3.x chart exists in the registry and only
+where this run then moves the namespace's source: no released 2.x chart takes
+`default`, so a release whose source is pinned by tag or digest, owned by git,
+the platform's or an organization's is held `pending` with the diff instead.
+A release with `spec.valuesFrom` is never written: migrate reads `spec.values`
+only, so it would spell out a model `valuesFrom` sets and miss a
+`requireApproval` there, and agent-manager binds settings only from
+`spec.values`; it is reported `failed` with what to change, holding its source.
+
+Organization namespaces (`--organization-namespaces`, default `auto`: every
+namespace labelled `agent-platform.giantswarm.io/organization` on this path)
+are read, never written: the agent-platform-operator moves their chart sources
+with the platform's range at once. Each release there that needs 3.x values is
+reported (ownership `organization`) with its diff, and each keeps the first
+managed namespace's report in the expand phase until it is fixed. A run that
+may not list them fails and changes nothing. Repair: apply the diff through the
+release's owner (agent-manager's update tools, or its repository), replacing
+`muster.requireApproval: true` with `default: Ask`, never just deleting it.
+
+Sessions: agent-manager binds a Session of an agent on
+`muster.requireApproval: true` with `default: Ask` already on 2.x, so a Session
+that runs across the upgrade keeps asking once chart 3.0 drops kagent's flag
+(muster ignores the agent's `X-Muster-Tool-Approval` header for a binding that
+carries settings).
 
 ```sh
 agent-manager migrate --dry-run \
