@@ -1003,7 +1003,7 @@ phase rewrites what chart 3.0 changed and reports every change per release
   renders: with `muster.enabled: false` or a tool list of exactly
   `["preset:none"]` the key is just dropped, as is `requireApproval: false`.
   `true` beside tool approval settings (`default`, a `tools` entry with a
-  setting) never rendered, since 2.x refused the combination, and fails the
+  setting) never rendered, since no released chart renders both, and fails the
   release, holding the other releases of its chart source.
 - an unset `modelConfig.name` is written as `default-model-config`, what 2.x
   rendered (3.0 has no default and renders no model without it).
@@ -1023,8 +1023,12 @@ namespace labelled `agent-platform.giantswarm.io/organization` on this path)
 are read, never written: the agent-platform-operator moves their chart sources
 with the platform's range at once. Each release there that needs 3.x values is
 reported (ownership `organization`) with its diff, and each keeps the first
-managed namespace's report in the expand phase until it is fixed. A run that
-may not list them fails and changes nothing. Repair: apply the diff through the
+managed namespace's report in the expand phase until it is fixed; Flux and the
+Agents there are not waited for (their readiness is the organization's). A run
+that may not list or read them fails before it writes anything. A release with
+`valuesFrom` already deployed from a 3.x chart is done: the 3.x chart refuses
+`requireApproval` in its merged values. A range whose bound admits a
+pre-release of the next major (`<=3.0.0-rc.1`) is refused: Flux would serve it. Repair: apply the diff through the
 release's owner (agent-manager's update tools, or its repository), replacing
 `muster.requireApproval: true` with `default: Ask`, never just deleting it.
 
