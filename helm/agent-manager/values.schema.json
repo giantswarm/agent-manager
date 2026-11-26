@@ -576,11 +576,11 @@
                                 "properties": {
                                     "agent": {
                                         "type": "object",
-                                        "additionalProperties": false,
                                         "required": [
                                             "namespace",
                                             "name"
                                         ],
+                                        "additionalProperties": false,
                                         "properties": {
                                             "name": {
                                                 "type": "string",
