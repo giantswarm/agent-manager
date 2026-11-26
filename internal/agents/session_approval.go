@@ -175,10 +175,18 @@ func (s *Service) agentRelease(ctx context.Context, readers []dynamic.Interface,
 		return nil, nil, err
 	}
 	hrNs, hrName, named := ref.Namespace, ref.Name, false
+	labelName, labelNs := "", ""
 	if obj != nil {
-		if name, ns := ownerOf(obj); name != "" {
-			hrNs, hrName, named = orDefault(ns, ref.Namespace), name, true
+		labelName, labelNs = ownerOf(obj)
+		if labelName != "" {
+			hrNs, hrName, named = orDefault(labelNs, ref.Namespace), labelName, true
 		}
+	}
+	if err := s.acceptRelease(ref, obj != nil, labelName, hrNs); err != nil {
+		return nil, nil, err
+	}
+	if pr, ok := s.platformRelease(ref); ok {
+		hrNs, hrName, named = pr.Namespace, pr.Name, true
 	}
 	hr, dyn, err := readFirst(ctx, readers, s.helmReleaseGVR(), hrNs, hrName, fmt.Sprintf("HelmRelease %s/%s", hrNs, hrName), "helmreleases")
 	switch {
@@ -199,6 +207,38 @@ func (s *Service) agentRelease(ctx context.Context, readers []dynamic.Interface,
 		}
 	}
 	return hr, dyn, nil
+}
+
+// platformRelease is the configured PlatformRelease rendering ref, if any.
+func (s *Service) platformRelease(ref kagent.Ref) (PlatformRelease, bool) {
+	for _, p := range s.cfg.PlatformReleases {
+		if p.Agent.Namespace == ref.Namespace && p.Agent.Name == ref.Name {
+			return p, true
+		}
+	}
+	return PlatformRelease{}, false
+}
+
+// acceptRelease decides, before any release is read, whether the release the
+// Agent's Flux labels name may carry the agent's tool approval settings. The
+// labels are the Agent's, which whoever may edit the Agent may change, so
+// they are never trusted to point anywhere: an agent the platform renders
+// (muster.toolApproval.platformReleases) is bound only through the release
+// configured for it, and any other agent only through the release agent-manager
+// itself creates for it (create_agent: in the agent's namespace, named after
+// the agent). Anything else refuses the start; for a platform agent so does an
+// Agent whose labels are missing.
+func (s *Service) acceptRelease(ref kagent.Ref, haveAgent bool, labelName, hrNs string) error {
+	if pr, ok := s.platformRelease(ref); ok {
+		if haveAgent && labelName == pr.Name && hrNs == pr.Namespace {
+			return nil
+		}
+		return approvalUnavailablef("agent %s is rendered by the platform's HelmRelease %s/%s (agent-manager's muster.toolApproval.platformReleases), but its %s and %s labels name %q/%q, so its tool approval settings are unknown; a session without them would drop the agent's Ask and Block", ref.Tenant(), pr.Namespace, pr.Name, HelmReleaseNamespaceLabel, HelmReleaseNameLabel, hrNs, labelName)
+	}
+	if labelName == "" || (labelName == ref.Name && hrNs == ref.Namespace) {
+		return nil
+	}
+	return approvalUnavailablef("agent %s names HelmRelease %s/%s as its renderer (its %s and %s labels), which agent-manager does not accept: only the release it creates for the agent (%s/%s), or one the platform configures for it (muster.toolApproval.platformReleases), carries an agent's tool approval settings, so they are unknown; a session without them would drop the agent's Ask and Block", ref.Tenant(), hrNs, labelName, HelmReleaseNamespaceLabel, HelmReleaseNameLabel, ref.Namespace, ref.Name)
 }
 
 // readFirst gets an object with the first reader not refused; an object all

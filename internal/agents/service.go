@@ -121,6 +121,11 @@ type Config struct {
 	// with that release's approval values (PlatformAgent): a Session of one
 	// binds them instead of reading the release.
 	PlatformAgents []PlatformAgent
+	// PlatformReleases are the releases the platform renders agents with
+	// on this cluster (the default agent's, in the platform's namespace):
+	// the only other release than agent-manager's own that may carry an
+	// agent's approval settings (PlatformRelease).
+	PlatformReleases []PlatformRelease
 	// DefaultAgentTTL is how long a caller's default agent is reused
 	// (get_info, list_agents and get_agent each report it); zero reads it
 	// on every call.

@@ -148,7 +148,7 @@ tests:
     set:
       oauth.downstream.enabled: false
       muster.toolApproval.platformReleases:
-        - {namespace: agent-platform, name: default-agent}
+        - {namespace: agent-platform, name: default-agent, agent: {namespace: kagent, name: default-agent}}
     asserts:
       - hasDocuments:
           count: 5
@@ -171,6 +171,25 @@ tests:
             name: RELEASE-NAME-agent-manager
             namespace: agent-platform
         documentIndex: 4
+
+  - it: passes the platform releases with the agents they render
+    template: templates/deployment.yaml
+    set:
+      muster.toolApproval.platformReleases:
+        - {namespace: agent-platform, name: default-agent, agent: {namespace: kagent, name: default-agent}}
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: '--approval-platform-releases=[{"agent":{"name":"default-agent","namespace":"kagent"},"name":"default-agent","namespace":"agent-platform"}]'
+
+  - it: refuses a platform release without the agent it renders
+    template: templates/deployment.yaml
+    set:
+      muster.toolApproval.platformReleases:
+        - {namespace: agent-platform, name: default-agent}
+    asserts:
+      - failedTemplate:
+          errorMessage: "muster.toolApproval.platformReleases: every entry needs namespace, name, agent.namespace and agent.name, got map[name:default-agent namespace:agent-platform]"
 
   - it: refuses a platform release without a name
     template: templates/tool-approval-rbac.yaml

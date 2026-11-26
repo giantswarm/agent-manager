@@ -249,3 +249,44 @@ func describeSettings(m map[string]string) string {
 	}
 	return strings.Join(parts, ",")
 }
+
+// PlatformRelease is a release the platform renders an agent with, in a
+// namespace of its own and not named after the agent: the default agent's
+// (agent-manager's muster.toolApproval.platformReleases, flag
+// --approval-platform-releases, passed by the agent-platform chart). Only a
+// listed release may carry the settings of an agent whose Flux labels name a
+// release other than the one agent-manager creates for it, and a listed
+// agent is bound by no other (acceptRelease).
+type PlatformRelease struct {
+	// Namespace and Name are the HelmRelease's.
+	Namespace string `json:"namespace"`
+	Name      string `json:"name"`
+	// Agent is the Agent the release renders.
+	Agent AgentRef `json:"agent"`
+}
+
+// ParsePlatformReleases reads the platform releases from JSON (an array;
+// empty is none) and checks every entry strictly.
+func ParsePlatformReleases(raw string) ([]PlatformRelease, error) {
+	if strings.TrimSpace(raw) == "" {
+		return nil, nil
+	}
+	dec := json.NewDecoder(strings.NewReader(raw))
+	dec.DisallowUnknownFields()
+	var out []PlatformRelease
+	if err := dec.Decode(&out); err != nil {
+		return nil, fmt.Errorf("platform releases: %w", err)
+	}
+	seen := map[string]bool{}
+	for i, p := range out {
+		if p.Namespace == "" || p.Name == "" || p.Agent.Namespace == "" || p.Agent.Name == "" {
+			return nil, fmt.Errorf("platform releases[%d]: namespace, name, agent.namespace and agent.name are required", i)
+		}
+		key := p.Agent.Namespace + "/" + p.Agent.Name
+		if seen[key] {
+			return nil, fmt.Errorf("platform releases[%d]: agent %s is listed twice", i, key)
+		}
+		seen[key] = true
+	}
+	return out, nil
+}

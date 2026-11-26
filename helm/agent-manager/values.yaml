@@ -441,14 +441,17 @@ muster:
     # namespace is provisioned beforehand.
     createGrantsNamespace: true
     # -- HelmReleases outside the managed namespaces that render an agent
-    # into one, `{namespace, name}` each: the agent-platform chart's default
-    # agent (`<platform namespace>/default-agent`, targeting the kagent
-    # namespace), which the agent-platform chart sets. A session reads an
-    # agent's settings from the release its Agent's Flux labels name; the
-    # ServiceAccount gets `get` on exactly these releases, so every person who
-    # may start a session with such an agent can, not only those who may
-    # read the platform's releases.
-    platformReleases: []  # @schema item: object ; itemProperties: {namespace: {type: string, minLength: 1}, name: {type: string, minLength: 1}}
+    # into one, `{namespace, name, agent: {namespace, name}}` each (the
+    # release, and the Agent it renders): the agent-platform chart's default
+    # agent (`<platform namespace>/default-agent`, rendering
+    # `kagent/default-agent`), which the agent-platform chart sets. A session
+    # reads the settings of such an agent from that release only, and refuses
+    # the start when the Agent's Flux labels name another or none; any agent
+    # not listed is read from the release agent-manager creates for it (its
+    # namespace, its name) only. The ServiceAccount gets `get` on exactly
+    # these releases, so every person who may start a session with such an
+    # agent can, not only those who may read the platform's releases.
+    platformReleases: []  # @schema item: object ; itemProperties: {namespace: {type: string, minLength: 1}, name: {type: string, minLength: 1}, agent: {type: object, required: [namespace, name], properties: {namespace: {type: string, minLength: 1}, name: {type: string, minLength: 1}}}}
     # -- Agents rendered by a HelmRelease agent-manager cannot read because it
     # is on another cluster, with that release's approval values: the
     # agent-platform chart's default agent with a remote target

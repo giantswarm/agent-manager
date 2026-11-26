@@ -182,13 +182,20 @@ itself carries the agent (`<namespace>/<name>`), the settings of its listed
 entries, `default` and the marks of its live grants, sent with
 agent-manager's projected ServiceAccount token (audience `muster`) in
 `X-Muster-Approval-Sender`. muster takes them only after reviewing that token.
-The release is the one that renders the agent: the one its Agent's Flux
-labels name (`helm.toolkit.fluxcd.io/name` and `/namespace`), else the one
-named after the agent in its namespace. It need not carry the agent's name
-or namespace: the platform's default agent is rendered by
-`<platform namespace>/default-agent` into the kagent namespace. A release the
-labels name must render that very Agent (its `values.agent.name`, else its
-Helm release name, in its target namespace), or the start is refused. The
+The release is the one that renders the agent, found by the Agent's Flux
+labels (`helm.toolkit.fluxcd.io/name` and `/namespace`), which whoever may
+edit the Agent may change, so they point nowhere agent-manager does not
+already know. The platform's agents are listed in
+`muster.toolApproval.platformReleases` (flag `--approval-platform-releases`,
+set by the agent-platform chart: the default agent, rendered by
+`<platform namespace>/default-agent` into the kagent namespace): such an agent
+is bound by its listed release only, and refused when its labels name another
+release or none. Any other agent is bound by the release agent-manager creates
+for it (`create_agent`: in the agent's namespace, named after the agent),
+which the labels may name; a label naming any other release is refused, and an
+agent without labels uses that release by name. A release must also render
+that very Agent (its `values.agent.name`, else its Helm release name, in its
+target namespace), or the start is refused. The
 Agent and the release are each read with agent-manager's ServiceAccount (the
 chart grants `get` on HelmReleases in the configured namespaces under
 downstream OAuth, and on the releases `muster.toolApproval.platformReleases`

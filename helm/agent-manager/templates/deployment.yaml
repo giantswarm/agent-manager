@@ -189,6 +189,14 @@ spec:
             {{- end }}
             - {{ printf "--approval-platform-agents=%s" (toJson .) | quote }}
             {{- end }}
+            {{- with $.Values.muster.toolApproval.platformReleases }}
+            {{- range . }}
+            {{- if not (and .namespace .name (dig "namespace" "" (.agent | default dict)) (dig "name" "" (.agent | default dict))) }}
+            {{- fail (printf "muster.toolApproval.platformReleases: every entry needs namespace, name, agent.namespace and agent.name, got %v" .) }}
+            {{- end }}
+            {{- end }}
+            - {{ printf "--approval-platform-releases=%s" (toJson .) | quote }}
+            {{- end }}
             {{- if $workspaces }}
             - --workspaces-tools-prefix={{ $.Values.muster.workspacesToolsPrefix }}
             {{- end }}

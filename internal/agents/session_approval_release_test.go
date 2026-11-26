@@ -47,6 +47,12 @@ func (a *approvalFixture) relabel(t *testing.T, hrNs, hrName string) {
 	require.NoError(t, err)
 }
 
+// listed registers hrNs/hrName as the platform's release for alert-review
+// (muster.toolApproval.platformReleases).
+func (a *approvalFixture) listed(hrNs, hrName string) {
+	a.svc.cfg.PlatformReleases = []PlatformRelease{{Namespace: hrNs, Name: hrName, Agent: AgentRef{Namespace: "kagent", Name: "alert-review"}}}
+}
+
 func askingValues() map[string]any {
 	return map[string]any{
 		"modelConfig": map[string]any{"name": "default-model-config"},
@@ -59,12 +65,6 @@ func TestASessionBindsTheSettingsOfTheReleaseThatRendersItsAgent(t *testing.T) {
 		hrNs, hrName string
 		edit         func(hr *unstructured.Unstructured)
 	}{
-		"release named otherwise, agent.name set": {"kagent", "alert-review-release", func(hr *unstructured.Unstructured) {
-			_ = unstructured.SetNestedField(hr.Object, "alert-review", "spec", "values", "agent", "name")
-		}},
-		"release named otherwise, releaseName set": {"kagent", "alert-review-release", func(hr *unstructured.Unstructured) {
-			_ = unstructured.SetNestedField(hr.Object, "alert-review", "spec", "releaseName")
-		}},
 		// The platform's default agent: agent-platform/default-agent with
 		// targetNamespace kagent and releaseName default-agent.
 		"release in another namespace targeting the agent's": {"agent-platform", "alert-review", func(hr *unstructured.Unstructured) {
@@ -79,6 +79,7 @@ func TestASessionBindsTheSettingsOfTheReleaseThatRendersItsAgent(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			a := newApprovalFixture(t, nil)
 			a.renderedBy(t, tc.hrNs, tc.hrName, askingValues(), tc.edit)
+			a.listed(tc.hrNs, tc.hrName)
 			b := a.start(t)
 			assert.Equal(t, "kagent/alert-review", b.Agent)
 			require.NotNil(t, b.Approval)
@@ -99,6 +100,7 @@ func TestAnAgentWhoseReleaseHasNoSettingsBindsWithNone(t *testing.T) {
 		_ = unstructured.SetNestedField(hr.Object, "kagent", "spec", "targetNamespace")
 		_ = unstructured.SetNestedField(hr.Object, "alert-review", "spec", "releaseName")
 	})
+	a.listed("agent-platform", "alert-review")
 	b := a.start(t)
 	assert.Equal(t, "kagent/alert-review", b.Agent)
 	require.NotNil(t, b.Approval)
@@ -113,17 +115,20 @@ func TestAStartIsRefusedWhenTheRendererIsUnknown(t *testing.T) {
 		want  string
 	}{
 		"labels name a release in another namespace that is gone": {func(t *testing.T, a *approvalFixture) {
+			a.listed("agent-platform", "default-agent")
 			a.relabel(t, "agent-platform", "default-agent")
 		}, "HelmRelease agent-platform/default-agent (its helm.toolkit.fluxcd.io/namespace and helm.toolkit.fluxcd.io/name labels), which cannot be found"},
 		"labels name a release that renders another agent": {func(t *testing.T, a *approvalFixture) {
 			hr := helmRelease("kagent", "other", map[string]any{"agent": map[string]any{"name": "other"}, "tools": []any{"server:github"}}, true, nil)
 			mustCreate(t, a.fixture, hrGVR, hr)
+			a.listed("kagent", "other")
 			a.relabel(t, "kagent", "other")
 		}, "names HelmRelease kagent/other as its renderer, which renders the Agent kagent/other instead"},
 		"labels name a release that targets another namespace": {func(t *testing.T, a *approvalFixture) {
 			hr := helmRelease("agent-platform", "alert-review", map[string]any{"tools": []any{"server:github"}}, true, nil)
 			_ = unstructured.SetNestedField(hr.Object, "alert-review", "spec", "releaseName")
 			mustCreate(t, a.fixture, hrGVR, hr)
+			a.listed("agent-platform", "alert-review")
 			a.relabel(t, "agent-platform", "alert-review")
 		}, "which renders the Agent agent-platform/alert-review instead"},
 	} {
@@ -160,4 +165,102 @@ func TestARetryOfARefusedStartNeedsANewRequestID(t *testing.T) {
 	out, err := svc.StartSession(dana(t), StartSession{Name: "alert-review", RequestID: "req-2"})
 	require.NoError(t, err)
 	assert.NotEmpty(t, out.Session)
+}
+
+// The Agent's Flux labels are the Agent's, which its editors may change: they
+// never point a Session's settings at a release agent-manager does not
+// know as the agent's renderer (L-01).
+
+// An Agent editor (no rights on the platform's release) creates a decoy
+// release in the agent's namespace and points the Agent's labels at it: the
+// platform's agent is refused, not bound to the decoy's entries and toolset.
+func TestAPlatformAgentRelabelledToADecoyReleaseIsRefused(t *testing.T) {
+	a := newApprovalFixture(t, nil)
+	a.renderedBy(t, "agent-platform", "alert-review", askingValues(), func(hr *unstructured.Unstructured) {
+		_ = unstructured.SetNestedField(hr.Object, "kagent", "spec", "targetNamespace")
+		_ = unstructured.SetNestedField(hr.Object, "alert-review", "spec", "releaseName")
+	})
+	a.listed("agent-platform", "alert-review")
+	decoy := helmRelease("kagent", "decoy", map[string]any{
+		"agent": map[string]any{"name": "alert-review"},
+		"tools": []any{"server:github", "server:kubernetes", map[string]any{"tool:noop": "Ask"}},
+	}, true, nil)
+	mustCreate(t, a.fixture, hrGVR, decoy)
+	a.relabel(t, "kagent", "decoy")
+	err := a.startErr(t)
+	require.ErrorIs(t, err, ErrApprovalUnavailable)
+	assert.Contains(t, err.Error(), "rendered by the platform's HelmRelease agent-platform/alert-review")
+	assert.Empty(t, a.bindings.Bound, "nothing bound")
+}
+
+// A platform agent whose labels are removed is refused, not bound bare.
+func TestAPlatformAgentWithoutItsLabelsIsRefused(t *testing.T) {
+	a := newApprovalFixture(t, nil)
+	a.renderedBy(t, "agent-platform", "alert-review", askingValues(), func(hr *unstructured.Unstructured) {
+		_ = unstructured.SetNestedField(hr.Object, "kagent", "spec", "targetNamespace")
+		_ = unstructured.SetNestedField(hr.Object, "alert-review", "spec", "releaseName")
+	})
+	a.listed("agent-platform", "alert-review")
+	obj, err := a.dyn.Resource(agentGVR).Namespace("kagent").Get(t.Context(), "alert-review", metav1.GetOptions{})
+	require.NoError(t, err)
+	labels := obj.GetLabels()
+	delete(labels, HelmReleaseNameLabel)
+	delete(labels, HelmReleaseNamespaceLabel)
+	obj.SetLabels(labels)
+	_, err = a.dyn.Resource(agentGVR).Namespace("kagent").Update(t.Context(), obj, metav1.UpdateOptions{})
+	require.NoError(t, err)
+	err = a.startErr(t)
+	require.ErrorIs(t, err, ErrApprovalUnavailable)
+	assert.Empty(t, a.bindings.Bound, "nothing bound")
+}
+
+// Any other agent: only the release agent-manager creates (the agent's
+// namespace, the agent's name) is accepted through the labels.
+func TestAnAgentOutsideThePlatformListAcceptsOnlyItsOwnRelease(t *testing.T) {
+	for name, tc := range map[string]struct {
+		hrNs, hrName string
+		refused      bool
+	}{
+		"decoy named otherwise in the agent's namespace": {"kagent", "decoy", true},
+		"release of the platform's namespace":            {"agent-platform", "alert-review", true},
+		"the release named after the agent, labelled":    {"kagent", "alert-review", false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			a := newApprovalFixture(t, nil)
+			if tc.hrName != "alert-review" || tc.hrNs != "kagent" {
+				mustCreate(t, a.fixture, hrGVR, helmRelease(tc.hrNs, tc.hrName, map[string]any{
+					"agent": map[string]any{"name": "alert-review"},
+					"tools": []any{"server:github", map[string]any{"tool:noop": "Ask"}},
+				}, true, nil))
+			}
+			a.relabel(t, tc.hrNs, tc.hrName)
+			if tc.refused {
+				err := a.startErr(t)
+				require.ErrorIs(t, err, ErrApprovalUnavailable)
+				assert.Contains(t, err.Error(), "which agent-manager does not accept")
+				assert.Empty(t, a.bindings.Bound, "nothing bound")
+				return
+			}
+			b := a.start(t)
+			require.NotNil(t, b.Approval)
+			assert.Equal(t, []muster.ApprovalEntry{{Entry: "tool:x_github_merge_pull_request", Setting: "Allow"}}, b.Approval.Entries)
+		})
+	}
+}
+
+func TestParsePlatformReleases(t *testing.T) {
+	got, err := ParsePlatformReleases(`[{"namespace":"agent-platform","name":"default-agent","agent":{"namespace":"kagent","name":"default-agent"}}]`)
+	require.NoError(t, err)
+	assert.Equal(t, []PlatformRelease{{Namespace: "agent-platform", Name: "default-agent", Agent: AgentRef{Namespace: "kagent", Name: "default-agent"}}}, got)
+	none, err := ParsePlatformReleases("")
+	require.NoError(t, err)
+	assert.Empty(t, none)
+	for name, raw := range map[string]string{
+		"no agent":      `[{"namespace":"a","name":"b"}]`,
+		"unknown field": `[{"namespace":"a","name":"b","agent":{"namespace":"k","name":"x"},"x":1}]`,
+		"twice":         `[{"namespace":"a","name":"b","agent":{"namespace":"k","name":"x"}},{"namespace":"c","name":"d","agent":{"namespace":"k","name":"x"}}]`,
+	} {
+		_, err := ParsePlatformReleases(raw)
+		assert.Error(t, err, name)
+	}
 }
