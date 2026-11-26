@@ -23,6 +23,9 @@ type SetApproval struct {
 	Default *string `json:"default,omitempty"`
 	// Force writes to a suspended release anyway.
 	Force bool `json:"force,omitempty"`
+	// ExpectedGeneration refuses the write when the release moved since
+	// the caller read it (Update.ExpectedGeneration).
+	ExpectedGeneration *int64 `json:"expectedGeneration,omitempty"`
 	WriteOptions
 }
 
@@ -126,7 +129,7 @@ func (s *Service) SetApproval(ctx context.Context, in SetApproval) (*SetApproval
 			return nil, err
 		}
 	}
-	upd := Update{Location: in.Location, Name: in.Name, Tools: &list, Default: &def, Force: in.Force, WriteOptions: in.WriteOptions,
+	upd := Update{Location: in.Location, Name: in.Name, ExpectedGeneration: in.ExpectedGeneration, Tools: &list, Default: &def, Force: in.Force, WriteOptions: in.WriteOptions,
 		tool: "set_agent_approval", approval: true, granted: needs, expectTools: &before, expectDefault: beforeDef}
 	res, err := s.Update(ctx, upd)
 	if err != nil {

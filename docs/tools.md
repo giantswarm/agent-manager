@@ -1208,6 +1208,10 @@ settings names entries of the agent's tools ({"tool:x": "Allow"}; "" removes a s
       "description": "Return what the write would do, the manifests and with mode commit the pull request's files, and write nothing (default false).",
       "type": "boolean"
     },
+    "expectedGeneration": {
+      "description": "The generation get_agent reported: the write is refused with conflict when the agent changed since (omit to write regardless)",
+      "type": "number"
+    },
     "force": {
       "description": "Write even when the HelmRelease is suspended (default false)",
       "type": "boolean"
@@ -1644,6 +1648,10 @@ Change what an agent is: name, description, prompt, model, tags, labels, annotat
       "description": "Return what the write would do, the manifests and with mode commit the pull request's files, and write nothing (default false).",
       "type": "boolean"
     },
+    "expectedGeneration": {
+      "description": "The generation get_agent reported: the write is refused with conflict when the agent changed since (omit to write regardless)",
+      "type": "number"
+    },
     "force": {
       "description": "Write even when the HelmRelease is suspended (default false). A GitOps-owned release is never written live: use mode commit",
       "type": "boolean"
@@ -1766,6 +1774,10 @@ Only fields passed change; a list replaces the whole value. Presets: preset:read
         "type": "string"
       },
       "type": "array"
+    },
+    "expectedGeneration": {
+      "description": "The generation get_agent reported: the write is refused with conflict when the agent changed since (omit to write regardless)",
+      "type": "number"
     },
     "force": {
       "description": "Write even when the HelmRelease is suspended (default false). A GitOps-owned release is never written live: use mode commit",

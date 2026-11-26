@@ -1161,6 +1161,7 @@ components:
         toolset: { $ref: "#/components/schemas/Toolset", description: "Deprecated: tools without settings" }
         labels: { type: object, additionalProperties: { type: string } }
         annotations: { type: object, additionalProperties: { type: string } }
+        expectedGeneration: { type: integer, description: "The generation the agent was read at (Agent.generation): a release at another one refuses the write with 409 conflict (`agent <ns>/<name> changed since it was read (generation N now, expectedGeneration M)`), checked against the live release; omitted, the write goes ahead regardless" }
         force: { type: boolean, description: Write a suspended release; a GitOps-owned one is never written live }
         mode: { type: string, enum: [apply, commit], default: apply }
         dryRun: { type: boolean, description: Return what would be written and write nothing }
@@ -1272,6 +1273,7 @@ components:
         defaultApproval: { type: string, enum: [Allow, Ask, Block], description: "The tool list's default (chart value default)" }
         grants: { type: array, items: { $ref: "#/components/schemas/Grant" }, description: "The agent's grants that hold (written at the release's current generation)" }
         approvalSettings: { type: boolean, description: "True where the agent chart takes tool approval settings and this installation binds them to sessions" }
+        generation: { type: integer, description: "The owning HelmRelease's metadata.generation, which a PATCH (and the MCP tools update_agent, update_agent_access, set_agent_approval) takes as expectedGeneration; absent for a bare Agent" }
         approvalEnforced: { type: boolean, description: "True when the agent's settings are bound to its sessions: this installation binds settings and the agent's HelmRelease is there and takes no spec.valuesFrom. False: a session of an agent with settings is refused rather than run without them. Always present" }
         ready: { type: [boolean, "null"], description: The Agent's verdict (Ready and the desired revision is the latest successful one); null while unreported }
         status: { $ref: "#/components/schemas/ObjectStatus" }

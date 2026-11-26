@@ -48,3 +48,13 @@ func TestTheSplitToolsRefuseArgumentsInAnotherCase(t *testing.T) {
 		}
 	}
 }
+
+// expectedGeneration is declared on the update tools and reaches the write.
+func TestUpdateToolsTakeExpectedGeneration(t *testing.T) {
+	svc, _ := newService(t)
+	srv := NewMCPServer(svc, "test")
+	text, isErr := callTool(t, srv, ToolUpdateAgent, map[string]any{"name": "sre", "description": "x", "expectedGeneration": 999})
+	require.True(t, isErr, text)
+	assert.NotContains(t, text, "does not take")
+	assert.Contains(t, text, "not_found", "bound and passed on to the write")
+}

@@ -332,11 +332,16 @@ type Spec struct {
 // empty toolset is refused: use preset:none).
 type Update struct {
 	Location
-	Name          string  `json:"name"`
-	DisplayName   *string `json:"displayName,omitempty"`
-	Description   *string `json:"description,omitempty"`
-	SystemMessage *string `json:"systemMessage,omitempty"`
-	ModelConfig   *string `json:"modelConfig,omitempty"`
+	Name string `json:"name"`
+	// ExpectedGeneration, when set, is the release generation the caller
+	// read (get_agent's generation): a release at another one refuses the
+	// write as a conflict, checked against the live release on every
+	// attempt of the write.
+	ExpectedGeneration *int64  `json:"expectedGeneration,omitempty"`
+	DisplayName        *string `json:"displayName,omitempty"`
+	Description        *string `json:"description,omitempty"`
+	SystemMessage      *string `json:"systemMessage,omitempty"`
+	ModelConfig        *string `json:"modelConfig,omitempty"`
 	// Tags replaces the agent's whole tag list; empty clears it.
 	Tags *[]string `json:"tags,omitempty"`
 	// Harness moves the agent to another Harness of its namespace after the
@@ -558,6 +563,10 @@ type Agent struct {
 	// release is there and takes no spec.valuesFrom. False otherwise: a
 	// session start of an agent with settings is then refused.
 	ApprovalEnforced bool `json:"approvalEnforced"`
+	// Generation is the owning HelmRelease's metadata.generation, which
+	// update_agent, update_agent_access and set_agent_approval take as
+	// expectedGeneration; absent for a bare Agent.
+	Generation int64 `json:"generation,omitempty"`
 	// release is the owning HelmRelease's uid and generation, which the
 	// grants are keyed and checked by, and whether it takes valuesFrom.
 	releaseUID        string
@@ -606,6 +615,7 @@ type AgentSummary struct {
 	Grants                    []GrantView `json:"grants,omitempty"`
 	ApprovalSettings          bool        `json:"approvalSettings,omitempty"`
 	ApprovalEnforced          bool        `json:"approvalEnforced"`
+	Generation                int64       `json:"generation,omitempty"`
 	Connectors                []string    `json:"connectors,omitempty"`
 	ImplicitFullAccess        bool        `json:"implicitFullAccess,omitempty"`
 	ToolsetBound              bool        `json:"toolsetBound,omitempty"`
@@ -644,6 +654,7 @@ func (a Agent) Summary() AgentSummary {
 		Grants:                    a.Grants,
 		ApprovalSettings:          a.ApprovalSettings,
 		ApprovalEnforced:          a.ApprovalEnforced,
+		Generation:                a.Generation,
 		Connectors:                a.Connectors,
 		ImplicitFullAccess:        a.ImplicitFullAccess,
 		ToolsetBound:              a.ToolsetBound,

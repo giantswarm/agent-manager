@@ -559,6 +559,10 @@ func runServe(ctx context.Context, o *serveOptions) error {
 		"namespaces", svc.Managed(ctx), "multiTenant", o.multiTenant, "chart", o.chartOCIURL, "chartSemver", o.chartSemver, "chartVersion", info.Chart.LatestVersion, "schemaSource", info.Chart.SchemaSource,
 		"kagentAPI", kagentVersion, "harness", info.Harness.Name, "musterURL", info.Muster.URL, "helmReleaseAPI", helmReleaseAPI, "ociRepositoryAPI", ociRepositoryAPI, "skillsRepositories", info.SkillsRepositories, "skillManager", info.SkillManager, "skillsGitHubApp", o.skillsAppID, "skillsGitAuthSecretName", o.skillsGitAuth, "kagentTarget", o.kagentTarget, "defaultModelAgent", o.defaultModelAgent)
 
+	// Grant drops an earlier run could not get to muster: sent once at
+	// start, with the sender token alone (session_sync.go).
+	go svc.SweepPendingSessionSyncs(ctx)
+
 	if bootSecret != nil {
 		go bootSecret.Run(ctx)
 	}

@@ -155,3 +155,21 @@ func TestBindLimitFitsTheApprovalSettings(t *testing.T) {
 	require.ErrorIs(t, err, ErrInvalid)
 	assert.Contains(t, err.Error(), "tool approval settings and grants")
 }
+
+// A grant drop goes with the sender token alone where no person's token is
+// at hand (the startup sweep); a bind never does.
+func TestDropGrantsWithTheSenderTokenAlone(t *testing.T) {
+	var got []recorded
+	srv := recorder(t, &got)
+	token := filepath.Join(t.TempDir(), "token")
+	require.NoError(t, os.WriteFile(token, []byte("sa-token"), 0o600))
+	c, err := New(srv.URL+"/session-bindings", nil)
+	require.NoError(t, err)
+	c = c.WithSenderTokenFile(token)
+	require.NoError(t, c.DropGrants(t.Context(), "", "kagent/a", nil))
+	require.Len(t, got, 1)
+	assert.Empty(t, got[0].auth, "no person bearer")
+	assert.Equal(t, "sa-token", got[0].sender)
+	_, err = c.Bind(t.Context(), "", Binding{Actor: actor, Providers: []string{"github"}})
+	require.ErrorIs(t, err, ErrUnauthenticated)
+}

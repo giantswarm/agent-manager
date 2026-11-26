@@ -335,3 +335,52 @@ func TestSetAgentApprovalAnswersToolSettings(t *testing.T) {
 	assert.NotContains(t, doc, "tools")
 	assert.Contains(t, doc["before"], "toolSettings")
 }
+
+// M2-S5-04: get_agent reports the release generation; the update tools and
+// set_agent_approval refuse a write when the release moved past the
+// generation the caller read, accept a matching one, and an absent one
+// changes nothing.
+func TestExpectedGenerationRefusesAStaleWrite(t *testing.T) {
+	a := newApprovalFixture(t, nil)
+	agent, err := a.svc.Get(dana(t), Location{}, "alert-review")
+	require.NoError(t, err)
+	require.Equal(t, int64(7), agent.Generation)
+	assert.Equal(t, int64(7), agent.Summary().Generation)
+
+	stale := int64(6)
+	_, err = a.svc.UpdateAs(dana(t), "update_agent", Update{Name: "alert-review", Description: new("x"), ExpectedGeneration: &stale})
+	require.ErrorIs(t, err, ErrConflict)
+	assert.Contains(t, err.Error(), "agent kagent/alert-review changed since it was read (generation 7 now, expectedGeneration 6): read it again with get_agent")
+	_, err = a.svc.SetApproval(dana(t), SetApproval{Name: "alert-review", Settings: map[string]string{"server:github": "Ask"}, ExpectedGeneration: &stale})
+	require.ErrorIs(t, err, ErrConflict)
+	assert.NotContains(t, a.values(t), DefaultValuesKey)
+	assert.Equal(t, []any{"server:github", map[string]any{"tool:x_github_merge_pull_request": "Allow"}}, a.values(t)[ToolsValuesKey], "nothing written")
+
+	current := int64(7)
+	_, err = a.svc.UpdateAs(dana(t), "update_agent", Update{Name: "alert-review", Description: new("matching"), ExpectedGeneration: &current})
+	require.NoError(t, err)
+	_, err = a.svc.UpdateAs(dana(t), "update_agent", Update{Name: "alert-review", Description: new("unconditional")})
+	require.NoError(t, err)
+}
+
+// A drop that never reached muster is sent at startup, without a person's
+// token (muster takes the sender token alone), and the record is cleared.
+func TestStartupSweepSendsPendingDrops(t *testing.T) {
+	a := newApprovalFixture(t, nil)
+	a.grantMerge()
+	a.bindings.dropFails = 100
+	_, err := a.svc.UpdateAs(asPerson(t.Context(), "bob@example.com"), "update_agent", Update{Name: "alert-review", Description: new("x")})
+	require.NoError(t, err)
+	rec, _ := a.grants.Get(t.Context(), alertAgent)
+	require.True(t, rec.PendingSessionSync)
+
+	a.bindings.dropFails = 0
+	sent, failed := a.svc.SweepPendingSessionSyncs(context.Background())
+	assert.Equal(t, 1, sent)
+	assert.Zero(t, failed)
+	require.Len(t, a.bindings.drops, 1)
+	assert.Empty(t, a.bindings.drops[0].Keep)
+	rec, _ = a.grants.Get(t.Context(), alertAgent)
+	assert.Empty(t, rec.Version, "synced: the empty record is gone")
+	assert.Contains(t, a.logs.String(), `"msg":"pending approval grant syncs swept"`)
+}

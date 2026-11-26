@@ -75,7 +75,13 @@ The split tools take only the arguments they declare, exactly as named: an
 argument in another case (`Toolset`, `EGRESS`) is refused, never bound.
 `set_agent_approval` writes its settings only over the list it checked: when
 another save changed the list meanwhile it answers `conflict` and writes
-nothing.
+nothing. `get_agent` and `list_agents` report the release's `generation`;
+`update_agent`, `update_agent_access`, `set_agent_approval` and REST `PATCH`
+take it as `expectedGeneration` and refuse a write when the release moved
+since it was read: `conflict: agent <ns>/<name> changed since it was read
+(generation <N> now, expectedGeneration <M>): read it again with get_agent and
+apply the change to what it holds now` (checked against the live release on
+every attempt of the write; omitted, the write goes ahead).
 
 ## Approval grants
 
@@ -146,8 +152,10 @@ written past agent-manager (GitOps, a hand edit) can never carry one.
   `pendingSessionSync`; the call is tried three times with backoff; only
   muster's confirmation clears the mark. A mark left set is sent again on the
   agent's next start, save or read (`get_agent`, `list_agents`,
-  `list_approval_grants`), a deleted agent's empty record included, which is
-  then removed. The result of the save (`update_agent`,
+  `list_approval_grants`) and swept once when agent-manager starts, a deleted
+  agent's empty record included, which is then removed. Where no person's
+  token is at hand (the sweep) the call goes with agent-manager's sender
+  token alone, which muster accepts for grant drops. The result of the save (`update_agent`,
   `update_agent_access`, `set_agent_approval`, `delete_agent`) carries
   `sessionsUpdated: false` and a `warnings` entry when muster was not told;
   running Sessions then keep the grants they were bound with until the
@@ -190,6 +198,7 @@ Every line carries `agent`, `tool`, `savedBy` and `callerKind`.
 | `approval grant dropped` | `entry`, `server`, `connectorUid`, `reason` (also when a regrant leaves a connector out) |
 | `approval grants removed from running sessions` | `kept` (and `attempts`, `error` at warn level) |
 | `approval grants record skipped` (warn) | `configmap`, `reason` |
+| `pending approval grant syncs swept` | `sent`, `failed` (at start) |
 
 Skill and plugin URLs carrying a credential (`user:password@`) are refused;
 one written before is redacted (`***@`) in `agent access changed`.

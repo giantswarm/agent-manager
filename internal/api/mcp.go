@@ -120,6 +120,7 @@ const (
 	argTurn           = "turn"
 	argToolCall       = "toolCall"
 	argFromMessage    = "fromMessage"
+	argExpectedGen    = "expectedGeneration"
 )
 
 var systemMessageLimit = fmt.Sprintf("At most %d characters; put long reference material in a skill.", agents.MaxSystemMessageLength)
@@ -372,10 +373,12 @@ func NewMCPServer(svc *agents.Service, version string, opts ...Option) *mcpserve
 		mcp.WithOpenWorldHintAnnotation(true),
 	), t.createAgent)
 
+	expectedGenProp := mcp.WithNumber(argExpectedGen, mcp.Description("The generation get_agent reported: the write is refused with conflict when the agent changed since (omit to write regardless)"))
 	addStrict(s, mcp.NewTool(ToolUpdateAgent,
 		tooldesc.Describe("Change what an agent is: name, description, prompt, model, tags, labels, annotations; only fields passed change.",
 			"\"\" clears a text field to the chart default; tags, labels, annotations replace the whole value. Reach changes with update_agent_access, approval settings with set_agent_approval. Returns values before and after. A suspended release needs force; GitOps-owned mode commit; platform is refused. Saving drops approval grants of connectors you are not connector admin of."),
 		mcp.WithString(argName, mcp.Required(), mcp.Description("Agent name")),
+		expectedGenProp,
 		mcp.WithString(argDisplayName, mcp.Description("New friendly name; \"\" clears it")),
 		tagsReplaceProp,
 		mcp.WithString(argDescription, mcp.Description("New description; \"\" clears it")),
@@ -400,6 +403,7 @@ func NewMCPServer(svc *agents.Service, version string, opts ...Option) *mcpserve
 		tooldesc.Describe("Change what an agent can reach: tool list, skills, plugins, egress, connectors, Harness, workspace, toolchains.",
 			"Only fields passed change; a list replaces the whole value. "+presetsSentence+" refreshSkills re-pins git skills and plugins. tools keeps carried-over settings; a new Allow over a connector's Ask is refused (set_agent_approval grants it). Saving drops grants of connectors you are not connector admin of. Returns values before and after, grants kept and dropped."),
 		mcp.WithString(argName, mcp.Required(), mcp.Description("Agent name")),
+		expectedGenProp,
 		toolsReplaceProp,
 		toolsetReplaceProp,
 		mcp.WithString(argHarness, mcp.Description("Move the agent to another Harness of the namespace; \"\" selects the platform Harness. Existing Sessions keep their runtime")),
@@ -428,6 +432,7 @@ func NewMCPServer(svc *agents.Service, version string, opts ...Option) *mcpserve
 		tooldesc.Describe("Set an agent's approval settings: Allow, Ask or Block per tool list entry, and the default.",
 			"settings names entries of the agent's tools ({\"tool:x\": \"Allow\"}; \"\" removes a setting); default the list's default. The only way to let an agent skip a connector's Ask: such an Allow needs you to be its connector admin (update mcpservers in its namespace), is recorded as a grant, mode apply only. Saving drops other grants of connectors you are not admin of. An agent calling it is asked first."),
 		mcp.WithString(argName, mcp.Required(), mcp.Description("Agent name")),
+		expectedGenProp,
 		mcp.WithObject(argSettings, mcp.Description("Setting per entry of the agent's tools: Allow, Ask, Block, or \"\" to remove it"),
 			mcp.AdditionalProperties(map[string]any{"type": schemaString, "enum": []string{agents.SettingAllow, agents.SettingAsk, agents.SettingBlock, ""}})),
 		mcp.WithString(argDefault, mcp.Enum(agents.SettingAllow, agents.SettingAsk, agents.SettingBlock, ""), mcp.Description("The list's default setting; \"\" removes it; omit to keep it")),

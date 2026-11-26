@@ -237,7 +237,8 @@ func (c *Client) Bind(ctx context.Context, token string, b Binding) (BindResult,
 
 // DropGrants removes, from every live binding of agent (<namespace>/<name>),
 // each grant mark not in keep (PATCH <endpoint>/grants), changing nothing
-// else. It needs the sender token: muster refuses it without.
+// else. It needs the sender token: muster refuses it without. token is the
+// person's bearer where there is one; "" sends the sender token alone.
 func (c *Client) DropGrants(ctx context.Context, token, agent string, keep []Grant) error {
 	if keep == nil {
 		keep = []Grant{}
@@ -263,7 +264,10 @@ func (c *Client) Unbind(ctx context.Context, token, actor string) error {
 
 // call sends one request and returns muster's response headers on success.
 func (c *Client) call(ctx context.Context, method, target, token string, body []byte, needSender bool) (http.Header, error) {
-	if token == "" {
+	// A grant drop may go with the sender token alone (muster takes it
+	// without a person's bearer: a startup sweep has none); every other
+	// call is the person's.
+	if token == "" && (!needSender || c.senderToken == nil) {
 		return nil, fmt.Errorf("%w: the request carries no identity token", ErrUnauthenticated)
 	}
 	var reader io.Reader
@@ -274,7 +278,9 @@ func (c *Client) call(ctx context.Context, method, target, token string, body []
 	if err != nil {
 		return nil, fmt.Errorf("muster: %w", err)
 	}
-	req.Header.Set("Authorization", "Bearer "+token)
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
 	if c.senderToken != nil && method != http.MethodDelete {
 		sender, err := c.senderToken()
 		if err != nil {

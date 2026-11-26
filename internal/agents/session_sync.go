@@ -138,3 +138,34 @@ func (s *Service) resendPendingIn(ctx context.Context, tool string, records []ap
 		}
 	}
 }
+
+// SweepPendingSessionSyncs sends, at startup, every pending sync of the
+// managed namespaces' grant records: drops an earlier request could not get
+// to muster. It runs without a person's token: muster takes a grant drop
+// with agent-manager's sender token alone. A deleted agent's empty record
+// goes once muster has it. It returns how many syncs were sent and how many
+// failed (they stay pending for the next start, save, read or sweep).
+func (s *Service) SweepPendingSessionSyncs(ctx context.Context) (sent, failed int) {
+	if s.cfg.Grants == nil || s.cfg.Bindings == nil || !s.sendsApproval() {
+		return 0, 0
+	}
+	for _, ns := range s.cfg.ManagedNamespaces {
+		records, err := s.cfg.Grants.ListByNamespace(ctx, ns)
+		if err != nil {
+			s.log.WarnContext(ctx, "approval grants unreadable; pending session syncs of the namespace not swept", "namespace", ns, "error", err.Error())
+			continue
+		}
+		for _, r := range records {
+			if !r.PendingSessionSync {
+				continue
+			}
+			sync := s.syncSessions(ctx, "startup", r, false)
+			sent++
+			if sync.SessionsUpdated != nil && !*sync.SessionsUpdated {
+				failed++
+			}
+		}
+	}
+	s.log.InfoContext(ctx, "pending approval grant syncs swept", "sent", sent, "failed", failed)
+	return sent, failed
+}

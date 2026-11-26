@@ -1765,6 +1765,9 @@ func mergeSkillsGitAuth(values map[string]any, own *string, cfg ComposeConfig) {
 // refreshSkills re-pins every git skill and git plugin to the head of its ref
 // (the default branch unless the request names one).
 func (s *Service) mergedValues(ctx context.Context, st *site, upd Update, hr *unstructured.Unstructured) (map[string]any, map[string]any, error) {
+	if upd.ExpectedGeneration != nil && *upd.ExpectedGeneration != hr.GetGeneration() {
+		return nil, nil, conflictf("agent %s/%s changed since it was read (generation %d now, expectedGeneration %d): read it again with get_agent and apply the change to what it holds now", hr.GetNamespace(), upd.Name, hr.GetGeneration(), *upd.ExpectedGeneration)
+	}
 	if upd.SystemMessage != nil {
 		if err := ValidateSystemMessage(*upd.SystemMessage); err != nil {
 			return nil, nil, err
@@ -2528,6 +2531,7 @@ func applyHelmRelease(a *Agent, hr *unstructured.Unstructured, rule *tags.Rule) 
 	}
 	a.HelmRelease = ref
 	a.releaseUID, a.releaseGeneration = string(hr.GetUID()), hr.GetGeneration()
+	a.Generation = hr.GetGeneration()
 	if from, _, _ := unstructured.NestedSlice(hr.Object, "spec", "valuesFrom"); len(from) > 0 {
 		a.releaseValuesFrom = true
 	}
