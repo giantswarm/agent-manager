@@ -180,11 +180,11 @@ is empty; the chart mounts the whole Secret. With `clientSecret` instead of
 `existingSecret` the chart renders `<fullname>-github-token-exchange`. An
 optional CA Secret contains `ca.crt`. The endpoint and audience are
 operator-controlled; requests cannot change them. This mode requires
-`github.enabled`, a configured OpenID Provider and downstream authorization.
-With the local authorization server disabled, exactly one trusted issuer must
-have `openIDProvider: true`; its issuer identifies the subject token to the broker.
-This also supplies
-ordinary agent and organization commits with the person's grant.
+`github.enabled`, OAuth and downstream authorization. With a local authorization
+server, the supported upstream is Dex. In resource-server-only mode, exactly one
+trusted issuer must have `openIDProvider: true`; its issuer identifies the subject
+token to the broker. An active Google upstream is not supported. This also
+supplies ordinary agent and organization commits with the person's grant.
 
 The authorization server must independently validate the subject ID token and
 confidential client, allow that client only the manager App's target audience,

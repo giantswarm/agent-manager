@@ -84,12 +84,12 @@ func TestValidateGitHubTokenExchangeOptions(t *testing.T) {
 			options := exchange()
 			options.githubExchangeClient = "manager-client"
 			mutate(options)
-			require.EqualError(t, validateCredentialOptions(options, dexSettings), "GitHub token exchange requires OAuth, downstream OAuth and an OpenID Provider")
+			require.EqualError(t, validateCredentialOptions(options, dexSettings), "GitHub token exchange requires OAuth and downstream OAuth")
 		})
 	}
 	options = exchange()
 	options.githubExchangeClient = "manager-client"
-	require.EqualError(t, validateCredentialOptions(options, oauthconfig.Settings{Google: &google.Config{}}), "GitHub token exchange requires OAuth, downstream OAuth and an OpenID Provider", "the subject token must be a Dex token")
+	require.EqualError(t, validateCredentialOptions(options, oauthconfig.Settings{Google: &google.Config{}}), "GitHub token exchange requires a Dex upstream or exactly one trusted openIDProvider in resource-server-only mode")
 
 	require.ErrorContains(t, validateCredentialOptions(&serveOptions{githubExchangeClientFile: "/etc/agent-manager/github-token-exchange/client-id"}, dexSettings), "--github-token-exchange-endpoint")
 }

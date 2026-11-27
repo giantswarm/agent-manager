@@ -694,7 +694,7 @@ func validateCredentialOptions(options *serveOptions, settings oauthconfig.Setti
 	}
 	if options.githubExchangeEndpoint != "" {
 		if !options.oauthEnabled || !options.downstreamOAuth {
-			return errors.New("GitHub token exchange requires OAuth, downstream OAuth and an OpenID Provider")
+			return errors.New("GitHub token exchange requires OAuth and downstream OAuth")
 		}
 		subjectIssuer, err := githubSubjectIssuer(settings)
 		if err != nil {
@@ -727,7 +727,7 @@ func githubSubjectIssuer(settings oauthconfig.Settings) (string, error) {
 			return issuer, nil
 		}
 	}
-	return "", errors.New("GitHub token exchange requires OAuth, downstream OAuth and an OpenID Provider")
+	return "", errors.New("GitHub token exchange requires a Dex upstream or exactly one trusted openIDProvider in resource-server-only mode")
 }
 
 // skillsTokenSource is what skills are read with: the skills GitHub App's
