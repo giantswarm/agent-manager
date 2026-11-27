@@ -15,6 +15,10 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/giantswarm/mcp-oauth/handler"
+	"github.com/giantswarm/mcp-oauth/providers"
+	"github.com/giantswarm/mcp-oauth/providers/oidc"
+
 	apov1alpha1 "github.com/giantswarm/agent-platform-operator/api/v1alpha1"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
@@ -32,7 +36,6 @@ import (
 
 	"github.com/giantswarm/gitops-commit/commit"
 
-	"github.com/giantswarm/agent-manager/internal/identity"
 	"github.com/giantswarm/agent-manager/internal/organizations"
 )
 
@@ -159,14 +162,14 @@ func prepareModelOperation(t *testing.T, fixture *orgFixture, extra map[string]a
 	return result
 }
 
-func operationHTTP(t *testing.T, fixture *orgFixture, method, id, version, body string, person *identity.Identity) (int, string, http.Header) {
+func operationHTTP(t *testing.T, fixture *orgFixture, method, id, version, body string, person *providers.UserInfo) (int, string, http.Header) {
 	t.Helper()
 	service, _ := newService(t)
 	mux := http.NewServeMux()
 	NewREST(service, nil, WithOrganizations(fixture.orgs)).Register(mux)
 	ctx := fixture.ctx
 	if person != nil {
-		ctx = identity.ContextWith(ctx, person)
+		ctx = handler.ContextWithUserInfo(ctx, person)
 	}
 	request := httptest.NewRequestWithContext(ctx, method, Prefix+"/credential-operations/"+id, strings.NewReader(body))
 	request.Header.Set("Content-Type", "application/json")
@@ -337,14 +340,14 @@ func TestCredentialOperationOwnershipAndConfirmation(t *testing.T) {
 			confirmation := confirmOperation(t, fixture, result.CredentialOperation)
 			body := valuesBody(t, result, "sensitive-fixture")
 			version := confirmation.Version
-			var person *identity.Identity
+			var person *providers.UserInfo
 			switch scenario {
 			case "other subject":
-				person = &identity.Identity{Issuer: "https://identity.example.com", Subject: "other"}
+				person = &providers.UserInfo{Issuer: "https://identity.example.com", ID: "other"}
 			case "other issuer":
-				person = &identity.Identity{Issuer: "https://other.example.com", Subject: "a"}
+				person = &providers.UserInfo{Issuer: "https://other.example.com", ID: "a"}
 			case "delegated actor":
-				person = &identity.Identity{Issuer: "https://identity.example.com", Subject: "a", Delegated: true}
+				person = &providers.UserInfo{Issuer: "https://identity.example.com", ID: "a", ActorChain: []oidc.ActorClaim{{Subject: "agent"}}}
 			case "wrong version":
 				version = "999"
 			case "missing confirmation":

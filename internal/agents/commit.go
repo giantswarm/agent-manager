@@ -20,8 +20,6 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
-
-	"github.com/giantswarm/agent-manager/internal/identity"
 )
 
 // The Flux objects commit mode follows from a namespace to the repository
@@ -243,7 +241,7 @@ func (s *Service) gitOpsRefusal(ctx context.Context, dyn dynamic.Interface, hr *
 
 // gitHubFor is the caller's GitHub remote, or the refusal naming the consent
 // that gives one.
-func (s *Service) gitHubFor(ctx context.Context) (GitHubRemote, *identity.GitHub, error) {
+func (s *Service) gitHubFor(ctx context.Context) (GitHubRemote, *GitHubUserAccessToken, error) {
 	if s.cfg.GitHubUser == nil {
 		return nil, nil, fmt.Errorf("%w: commit mode needs the GitHub grant exchange (github.tokenExchange), which this server is not configured with", ErrUnsupported)
 	}
@@ -271,7 +269,7 @@ var readOps = []string{commit.OpStatus, commit.OpHead, commit.OpReadFile, commit
 // that grant again, and a 403 names what the App and the person lack, which
 // no new grant gives. A 403 on a read names the step and the App's
 // permissions.
-func GitHubRefusal(gh *identity.GitHub, auth *commit.AuthError) error {
+func GitHubRefusal(gh *GitHubUserAccessToken, auth *commit.AuthError) error {
 	switch {
 	case auth.Status == http.StatusForbidden && slices.Contains(readOps, auth.Op):
 		return fmt.Errorf("%w: GitHub refused the step %q (status %d) for the permissions of the GitHub App %s: the App lacks the permission for this read or is not installed on the repository, which a new sign-in does not change", ErrForbidden, auth.Op, auth.Status, gh.App)
@@ -282,7 +280,7 @@ func GitHubRefusal(gh *identity.GitHub, auth *commit.AuthError) error {
 }
 
 // commitError answers a token GitHub refused with what renews it.
-func commitError(gh *identity.GitHub, err error) error {
+func commitError(gh *GitHubUserAccessToken, err error) error {
 	var auth *commit.AuthError
 	if errors.As(err, &auth) {
 		return GitHubRefusal(gh, auth)
@@ -298,7 +296,7 @@ func commitError(gh *identity.GitHub, err error) error {
 type agentCommit struct {
 	loc    commitLocation
 	remote GitHubRemote
-	gh     *identity.GitHub
+	gh     *GitHubUserAccessToken
 	log    *slog.Logger
 }
 

@@ -9,7 +9,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/giantswarm/agent-manager/internal/agents"
-	"github.com/giantswarm/agent-manager/internal/identity"
 )
 
 func TestOrganizationCommitGitHubRefusals(t *testing.T) {
@@ -24,7 +23,7 @@ func TestOrganizationCommitGitHubRefusals(t *testing.T) {
 				writer := &orgCommit{
 					cfg:    &CommitConfig{Objects: location},
 					remote: remote,
-					gh:     &identity.GitHub{App: "agent-manager"},
+					gh:     &agents.GitHubUserAccessToken{App: "agent-manager"},
 				}
 				_, err := writer.land(t.Context(), []commit.Change{{Location: location, Files: map[string][]byte{"organization.yaml": []byte("kind: Organization\n")}}}, []string{"organization.yaml"}, "change", "Change organization", "Change organization")
 				if status == http.StatusUnauthorized {

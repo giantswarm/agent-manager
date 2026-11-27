@@ -19,7 +19,6 @@ import (
 	kubeyaml "k8s.io/apimachinery/pkg/util/yaml"
 
 	"github.com/giantswarm/agent-manager/internal/agents"
-	"github.com/giantswarm/agent-manager/internal/identity"
 	"github.com/giantswarm/agent-manager/internal/kube"
 )
 
@@ -97,7 +96,7 @@ func (s *Service) createCommit(ctx context.Context, c kube.Client, req CreateReq
 		res.Next = "dry run: no pull request was opened; the files are in commit.files"
 	} else {
 		res.Next = "merge the pull request " + res.Commit.PullRequest + "; " + reviewNote
-		s.log.Info("organization create committed", identity.LogAttr(ctx), "name", req.Name, "pullRequest", res.Commit.PullRequest)
+		s.log.Info("organization create committed", agents.UserAttr(ctx), "name", req.Name, "pullRequest", res.Commit.PullRequest)
 	}
 	return res, nil
 }
@@ -130,7 +129,7 @@ func (s *Service) updateCommit(ctx context.Context, c kube.Client, u *unstructur
 	if file == nil {
 		return nil, fmt.Errorf("%w: Organization %s is applied from git, but not from %s in %s: change it in the file that defines it", agents.ErrConflict, req.Name, p, cm.cfg.Objects.Repository)
 	}
-	res := &UpdateResult{Before: s.summary(org), DryRun: req.DryRun, RequestedBy: identity.Caller(ctx)}
+	res := &UpdateResult{Before: s.summary(org), DryRun: req.DryRun, RequestedBy: agents.RequestedBy(ctx)}
 	if res.Changed, err = changeOrganization(file, req); err != nil {
 		return nil, err
 	}
@@ -670,7 +669,7 @@ func (s *Service) openDelete(ctx context.Context, c kube.Client, cm *orgCommit, 
 	step := fmt.Sprintf("after the merge the organization shows Pending erase (AgentPlatformOrphaned, reason DeleteMerged); then call delete_organization with mode commit and confirm %q to erase it (Erase now). Until then nothing is erased", req.Name)
 	res.Commit.LiveSteps = []string{step}
 	res.Next += "the pull request " + res.Commit.PullRequest + " removes the organization from git; " + reviewNote + "; " + step
-	s.log.Info("organization delete committed", identity.LogAttr(ctx), "name", req.Name, "pullRequest", res.Commit.PullRequest)
+	s.log.Info("organization delete committed", agents.UserAttr(ctx), "name", req.Name, "pullRequest", res.Commit.PullRequest)
 	return nil
 }
 

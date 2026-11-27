@@ -1,31 +1,74 @@
 package api
 
 import (
+	"crypto/ed25519"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"testing"
 	"time"
+
+	"github.com/giantswarm/mcp-oauth/handler"
+	"github.com/giantswarm/mcp-oauth/providers"
+	"github.com/giantswarm/mcp-oauth/providers/oidc"
+	"github.com/go-jose/go-jose/v4"
+	"github.com/go-jose/go-jose/v4/jwt"
 
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	typedcore "k8s.io/client-go/kubernetes/typed/core/v1"
 
-	"github.com/giantswarm/agent-manager/internal/identity"
+	"github.com/giantswarm/agent-manager/internal/idtoken"
 	"github.com/giantswarm/agent-manager/internal/organizations"
 )
 
 const ownerIssuer = "https://identity.example.com"
 
+func TestCredentialOperationsAcrossAuthenticationPaths(t *testing.T) {
+	signer, err := jose.NewSigner(jose.SigningKey{Algorithm: jose.EdDSA, Key: ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize))}, nil)
+	require.NoError(t, err)
+	token, err := jwt.Signed(signer).Claims(jwt.Claims{Issuer: ownerIssuer, Subject: "a", Expiry: jwt.NewNumericDate(time.Now().Add(time.Hour))}).Serialize()
+	require.NoError(t, err)
+	for _, method := range []string{http.MethodGet, http.MethodPost, http.MethodDelete} {
+		for _, prepareOAuth := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%s/oauth=%t", method, prepareOAuth), func(t *testing.T) {
+				fixture, _ := otherLoginFixture(t)
+				oauthUser := owner()
+				oauthUser.Issuer = "https://manager.example.com"
+				oauthUser.TokenSource = providers.TokenSourceOAuth
+				forwardedUser := owner()
+				forwardedUser.TokenSource = providers.TokenSourceTrustedIssuer
+				preparer, reader := oauthUser, forwardedUser
+				if !prepareOAuth {
+					preparer, reader = reader, preparer
+				}
+				fixture.ctx = idtoken.ContextWith(handler.ContextWithUserInfo(fixture.ctx, preparer), token)
+				result := prepareModelOperation(t, fixture, nil)
+				confirmation := confirmOperation(t, fixture, result.CredentialOperation)
+				verified, ok := handler.UserInfoFromContext(fixture.ctx)
+				require.True(t, ok)
+				require.Equal(t, preparer.Issuer, verified.Issuer)
+				body := ""
+				if method == http.MethodPost {
+					body = valuesBody(t, result, "fixture-credential")
+				}
+				status, answer, _ := operationHTTP(t, fixture, method, result.CredentialOperation, confirmation.Version, body, reader)
+				require.Contains(t, []int{http.StatusOK, http.StatusNoContent}, status, answer)
+			})
+		}
+	}
+}
+
 // owner is the fixture's caller with a verified email address: the person
 // who prepares the operations below.
-func owner() *identity.Identity {
-	return &identity.Identity{Issuer: ownerIssuer, Client: "platform", Subject: "a", Email: "alice@example.com", EmailVerified: true}
+func owner() *providers.UserInfo {
+	return &providers.UserInfo{Issuer: ownerIssuer, ClientID: "platform", ID: "a", Email: "alice@example.com", EmailVerified: true}
 }
 
 // otherLogin is the owner signed in through another connector: same issuer
 // and verified email address, written with other case, another subject.
-func otherLogin() *identity.Identity {
-	return &identity.Identity{Issuer: ownerIssuer, Client: "platform", Subject: "a-other-connector", Email: "Alice@Example.com", EmailVerified: true}
+func otherLogin() *providers.UserInfo {
+	return &providers.UserInfo{Issuer: ownerIssuer, ClientID: "platform", ID: "a-other-connector", Email: "Alice@Example.com", EmailVerified: true}
 }
 
 func otherLoginFixture(t *testing.T) (*orgFixture, typedcore.ConfigMapInterface) {
@@ -34,7 +77,7 @@ func otherLoginFixture(t *testing.T) (*orgFixture, typedcore.ConfigMapInterface)
 	fixture := newOrgFixtureWith(t, func(cfg *organizations.Config) {
 		cfg.CredentialOperations = organizations.NewCredentialOperations(maps)
 	})
-	fixture.ctx = identity.ContextWith(fixture.ctx, owner())
+	fixture.ctx = handler.ContextWithUserInfo(fixture.ctx, owner())
 	return fixture, maps
 }
 
@@ -70,16 +113,17 @@ func requireNothingOfTheOperation(t *testing.T, answer string) {
 func TestCredentialOperationCallers(t *testing.T) {
 	callers := []struct {
 		name   string
-		person *identity.Identity
+		person *providers.UserInfo
 		status int
 		code   string
 	}{
 		{"the owner", nil, http.StatusOK, ""},
 		{"the same person with another login", otherLogin(), http.StatusForbidden, "credential_operation_other_login"},
-		{"another person", &identity.Identity{Issuer: ownerIssuer, Client: "platform", Subject: "b", Email: "bob@example.com", EmailVerified: true}, http.StatusNotFound, "not_found"},
-		{"an unverified email address", &identity.Identity{Issuer: ownerIssuer, Client: "platform", Subject: "a-other-connector", Email: "alice@example.com"}, http.StatusNotFound, "not_found"},
-		{"another issuer", &identity.Identity{Issuer: "https://other.example.com", Client: "platform", Subject: "a-other-connector", Email: "alice@example.com", EmailVerified: true}, http.StatusNotFound, "not_found"},
-		{"a delegated token", &identity.Identity{Issuer: ownerIssuer, Client: "platform", Subject: "a-other-connector", Email: "alice@example.com", EmailVerified: true, Delegated: true}, http.StatusNotFound, "not_found"},
+		{"another person", &providers.UserInfo{Issuer: ownerIssuer, ClientID: "platform", ID: "b", Email: "bob@example.com", EmailVerified: true}, http.StatusNotFound, "not_found"},
+		{"an unverified email address", &providers.UserInfo{Issuer: ownerIssuer, ClientID: "platform", ID: "a-other-connector", Email: "alice@example.com"}, http.StatusNotFound, "not_found"},
+		{"another issuer", &providers.UserInfo{Issuer: "https://other.example.com", ClientID: "platform", ID: "a-other-connector", Email: "alice@example.com", EmailVerified: true}, http.StatusNotFound, "not_found"},
+		{"a delegated token", &providers.UserInfo{Issuer: ownerIssuer, ClientID: "platform", ID: "a-other-connector", Email: "alice@example.com", EmailVerified: true, ActorChain: []oidc.ActorClaim{{Subject: "agent"}}}, http.StatusNotFound, "not_found"},
+		{"a flattened actor", &providers.UserInfo{Issuer: ownerIssuer, ClientID: "platform", ID: "a", Email: "alice@example.com", EmailVerified: true, ActorSubject: "agent"}, http.StatusNotFound, "not_found"},
 	}
 	for _, caller := range callers {
 		t.Run(caller.name, func(t *testing.T) {
@@ -160,7 +204,7 @@ func TestCredentialOperationOfAnUnverifiedOwnerAnswersNotFound(t *testing.T) {
 	fixture, _ := otherLoginFixture(t)
 	unverified := owner()
 	unverified.EmailVerified = false
-	fixture.ctx = identity.ContextWith(fixture.ctx, unverified)
+	fixture.ctx = handler.ContextWithUserInfo(fixture.ctx, unverified)
 	result := prepareModelOperation(t, fixture, nil)
 
 	status, answer, _ := operationHTTP(t, fixture, http.MethodGet, result.CredentialOperation, "", "", otherLogin())

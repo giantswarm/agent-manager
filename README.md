@@ -600,26 +600,41 @@ person (a token with `act`) is refused with `forbidden`.
 
 The caller, not the ServiceAccount. With `--enable-oauth` agent-manager is an
 OAuth 2.1 resource server ([mcp-oauth](https://github.com/giantswarm/mcp-oauth))
-in front of **both** the MCP endpoint and the REST API; providers `dex` (with
-`--dex-ca-file` for a Dex with a private certificate; the Dex client follows
-`HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY`) and
-`google`. Nobody logs in to agent-manager itself: muster forwards the session's
+in front of **both** the MCP endpoint and the REST API; providers `dex`
+(`OAUTH_PROVIDER=dex`, the default, with `OAUTH_DEX_CA_FILE` for a Dex with a
+private certificate; the Dex client follows `HTTP_PROXY`, `HTTPS_PROXY` and
+`NO_PROXY`) and `google` (`OAUTH_PROVIDER=google`). mcp-oauth's `OAUTH_*`
+variables configure it (`oauthconfig.SettingsFromEnv`: `OAUTH_ISSUER`,
+`OAUTH_DEX_ISSUER_URL`, `OAUTH_DEX_CLIENT_ID`, `OAUTH_DEX_CLIENT_SECRET_FILE`,
+`OAUTH_DEX_CA_FILE`, `OAUTH_TRUSTED_ISSUERS`, …); agent-manager turns on
+client ID metadata documents unless `OAUTH_ENABLE_CLIENT_ID_METADATA_DOCUMENTS`
+says otherwise. The earlier flags and variables (`--oauth-base-url`,
+`--oauth-provider`, `--dex-*`, `--google-*`, `--oauth-trusted-audiences`,
+`--sso-allow-private-ip-jwks-hosts`, `--allow-public-client-registration` and
+their `AGENT_MANAGER_OAUTH_*`, `DEX_*`, `GOOGLE_*` and `SSO_*` variables) still
+work for one more release and log a deprecation warning naming the
+replacement; an `OAUTH_*` variable wins over them. Nobody logs in to agent-manager itself: muster forwards the session's
 IdP id_token byte-identical (MCPServer `auth: {type: oauth, forwardToken: true,
 requiredAudiences}`, rendered by the chart under `muster.mcpServer.auth`) and
-the portal sends the signed-in user's id_token through the gateway; both are
-validated against the IdP's JWKS because their audience is in
-`--oauth-trusted-audiences`. Which audience that is depends on the session:
-muster's own sessions and MCP clients sign in through the platform OAuth
-client, a portal session forwards the id_token of the portal's own client —
-and every forwarded token carries the audiences the MCPServer requires, the
-ones the kube-apiserver trusts. So the chart trusts both: `oauth.trustedAudiences`
-(default `[global.identity.clientId]`) plus `muster.mcpServer.auth.requiredAudiences`,
-always. A token for none of them is refused with `401`; the
-`Unknown JWT bearer refused` log line names its `token_audience` next to the
-`trusted_audiences`. The caller
-(`internal/identity`: subject, email, groups, source `sso|oauth`) is on every
-write's log line (`caller=`) and on every create/update/delete result as
-`requestedBy`.
+the portal sends the signed-in user's id_token through the gateway. The chart
+lists the IdP in `OAUTH_TRUSTED_ISSUERS` as the OpenID Provider people sign in
+with (`openIDProvider`), so agent-manager validates those id_tokens against the
+IdP's JWKS and presents them to agentgateway and, with `--downstream-oauth`, the
+Kubernetes API. Which
+audience a token carries depends on the session: muster's own sessions and MCP
+clients sign in through the platform OAuth client, a portal session forwards
+the id_token of the portal's own client — and every forwarded token carries
+the audiences the MCPServer requires, the ones the kube-apiserver trusts. So
+the entry's audiences are the platform client (`global.identity.clientId`)
+plus `muster.mcpServer.auth.requiredAudiences`, always. A token for none of
+them is refused with `401`. The chart's values follow mcp-oauth's layout for
+MCP servers (`oauth.resourceServer`, `oauth.authorizationServer`); the earlier
+`oauth.*` keys still work for one more release and the release notes name
+each one that is set. The user is mcp-oauth's `providers.UserInfo`: every
+write's log line names them as `user.issuer` and `user.subject`, plus
+`user.actor.issuer` and `user.actor.subject` for a call an agent makes for
+them, never profile data; every create/update/delete result records the
+`email`, else the `sub`, as `requestedBy`.
 
 `--downstream-oauth` presents the caller's token to the kube-apiserver for
 everything a request does (the HelmRelease and OCIRepository writes, the

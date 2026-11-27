@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/giantswarm/agent-manager/internal/identity"
+	"github.com/giantswarm/agent-manager/internal/idtoken"
 	"github.com/giantswarm/agent-manager/internal/kagent"
 	"github.com/giantswarm/agent-manager/internal/kagent/kagenttest"
 )
@@ -73,7 +73,7 @@ func conversation(t *testing.T) (*Service, *kagenttest.Controller, context.Conte
 			agentSays(kagenttest.ToolCall("adk_", "c4", "get_events", nil)),
 		),
 	)
-	return svc, ctrl, identity.ContextWithToken(t.Context(), callerToken), s.GetId()
+	return svc, ctrl, idtoken.ContextWith(t.Context(), callerToken), s.GetId()
 }
 
 func TestGetSessionSummaryLeavesToolPayloadsOut(t *testing.T) {
@@ -130,7 +130,7 @@ func TestPollingTheLastTurnReadsOnlyIt(t *testing.T) {
 
 func TestGetSessionReadsAtMostMaxSummaryTurns(t *testing.T) {
 	svc, ctrl := newSessionFixture(t)
-	ctx := identity.ContextWithToken(t.Context(), callerToken)
+	ctx := idtoken.ContextWith(t.Context(), callerToken)
 	tasks := make([]*a2apb.Task, MaxSummaryTurns+50)
 	for i := range tasks {
 		tasks[i] = taskOf(fmt.Sprintf("task-%d", i), a2apb.TaskState_TASK_STATE_COMPLETED, "ok")
@@ -148,7 +148,7 @@ func TestGetSessionReadsAtMostMaxSummaryTurns(t *testing.T) {
 
 func TestGetSessionRefusesAConversationLongerThanItLists(t *testing.T) {
 	svc, ctrl := newSessionFixture(t)
-	ctx := identity.ContextWithToken(t.Context(), callerToken)
+	ctx := idtoken.ContextWith(t.Context(), callerToken)
 	tasks := make([]*a2apb.Task, kagent.MaxListedTasks+1)
 	for i := range tasks {
 		tasks[i] = &a2apb.Task{Id: fmt.Sprintf("task-%d", i)}
@@ -165,7 +165,7 @@ func TestGetSessionRefusesAConversationLongerThanItLists(t *testing.T) {
 
 func TestASessionWithoutTurnsAnswersAnEmptyList(t *testing.T) {
 	svc, ctrl := newSessionFixture(t)
-	ctx := identity.ContextWithToken(t.Context(), callerToken)
+	ctx := idtoken.ContextWith(t.Context(), callerToken)
 	s := ctrl.AddSession("kagent", "sre")
 	for detail, key := range map[string]string{DetailSummary: `"turns":[]`, DetailFull: `"tasks":[]`} {
 		got, err := svc.GetSession(ctx, SessionQuery{SessionID: s.GetId(), Detail: detail})
@@ -176,7 +176,7 @@ func TestASessionWithoutTurnsAnswersAnEmptyList(t *testing.T) {
 
 func TestAnArtifactReplyIsAnswered(t *testing.T) {
 	svc, ctrl := newSessionFixture(t)
-	ctx := identity.ContextWithToken(t.Context(), callerToken)
+	ctx := idtoken.ContextWith(t.Context(), callerToken)
 	task := taskOf("task-0", a2apb.TaskState_TASK_STATE_COMPLETED, "", userSays("report please"))
 	task.Artifacts = []*a2apb.Artifact{
 		{ArtifactId: "a1", Name: "report", Parts: []*a2apb.Part{kagenttest.Text("the report")}},
@@ -236,7 +236,7 @@ func TestGetSessionTranscriptClipsArgumentsAndStubsResults(t *testing.T) {
 
 func TestGetSessionKeepsTheNewestTurnsWithinMaxBytes(t *testing.T) {
 	svc, ctrl := newSessionFixture(t)
-	ctx := identity.ContextWithToken(t.Context(), callerToken)
+	ctx := idtoken.ContextWith(t.Context(), callerToken)
 	var tasks []*a2apb.Task
 	for i := range 40 {
 		tasks = append(tasks, taskOf("task-"+string(rune('a'+i%26))+strings.Repeat("x", i), a2apb.TaskState_TASK_STATE_COMPLETED, strings.Repeat("reply ", 100), userSays("question")))
@@ -260,7 +260,7 @@ func TestGetSessionKeepsTheNewestTurnsWithinMaxBytes(t *testing.T) {
 
 func TestGetSessionClipsANewestTurnThatAloneIsTooBig(t *testing.T) {
 	svc, ctrl := newSessionFixture(t)
-	ctx := identity.ContextWithToken(t.Context(), callerToken)
+	ctx := idtoken.ContextWith(t.Context(), callerToken)
 	s := ctrl.AddSession("kagent", "sre", taskOf("task-0", a2apb.TaskState_TASK_STATE_COMPLETED, strings.Repeat("é", 10_000), userSays("question")))
 
 	got, err := svc.GetSession(ctx, SessionQuery{SessionID: s.GetId(), MaxBytes: MinSessionMaxBytes})
@@ -370,7 +370,7 @@ func TestGetSessionTurnAnswersAToolCallWhole(t *testing.T) {
 
 func TestAToolCallsSmallResponseStaysWholeBesideLargeArguments(t *testing.T) {
 	svc, ctrl := newSessionFixture(t)
-	ctx := identity.ContextWithToken(t.Context(), callerToken)
+	ctx := idtoken.ContextWith(t.Context(), callerToken)
 	s := ctrl.AddSession("kagent", "sre", taskOf("task-0", a2apb.TaskState_TASK_STATE_COMPLETED, "done",
 		agentSays(kagenttest.ToolCall("adk_", "c1", "write_file", map[string]any{"content": strings.Repeat("y", 50_000)})),
 		agentSays(kagenttest.ToolResult("adk_", "c1", "write_file", map[string]any{"ok": true})),

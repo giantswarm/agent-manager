@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/giantswarm/agent-manager/internal/identity"
+	"github.com/giantswarm/agent-manager/internal/idtoken"
 	"github.com/giantswarm/agent-manager/internal/kube"
 	"github.com/giantswarm/agent-manager/internal/skillmanager"
 	"github.com/giantswarm/agent-manager/internal/tags"
@@ -125,7 +125,7 @@ func withSkillManager(t *testing.T, sm *fakeSkillManager) *fixture {
 func TestCreatePinsThroughSkillManager(t *testing.T) {
 	sm := &fakeSkillManager{}
 	f := withSkillManager(t, sm)
-	ctx := identity.ContextWithToken(t.Context(), "id-token")
+	ctx := idtoken.ContextWith(t.Context(), "id-token")
 
 	res, err := f.svc.Create(ctx, Spec{Name: "sre", ModelConfig: "default-model-config", Toolset: []string{"preset:read-only"}, Skills: Skills{
 		{Git: &GitSkill{URL: platformSkillsRepo}, Path: "skills/kubectl"},
@@ -148,7 +148,7 @@ func TestCreatePinsThroughSkillManager(t *testing.T) {
 func TestSkillsAndPluginsArePinnedInOneResolve(t *testing.T) {
 	sm := &fakeSkillManager{}
 	f := withSkillManager(t, sm)
-	ctx := identity.ContextWithToken(t.Context(), "id-token")
+	ctx := idtoken.ContextWith(t.Context(), "id-token")
 
 	res, err := f.svc.Create(ctx, Spec{Name: "sre", ModelConfig: "default-model-config", Toolset: []string{"preset:read-only"},
 		Skills:  Skills{{Git: &GitSkill{URL: skillsRepo, Ref: "feature"}, Path: "runbooks"}},
@@ -171,7 +171,7 @@ func TestSkillsAndPluginsArePinnedInOneResolve(t *testing.T) {
 func TestRefreshSkillsPinsThroughSkillManager(t *testing.T) {
 	sm := &fakeSkillManager{}
 	f := withSkillManager(t, sm)
-	ctx := identity.ContextWithToken(t.Context(), "id-token")
+	ctx := idtoken.ContextWith(t.Context(), "id-token")
 	_, err := f.svc.Update(ctx, Update{Name: "verifier", Skills: &Skills{
 		{Git: &GitSkill{URL: platformSkillsRepo, Commit: featureHead}, Path: "skills/kubectl"},
 		{Git: &GitSkill{URL: skillsRepo, Commit: featureHead}, Path: "runbooks"},
@@ -222,7 +222,7 @@ func TestSkillManagerRefusalsAreMapped(t *testing.T) {
 func TestListSkillsProxiesSkillManager(t *testing.T) {
 	sm := &fakeSkillManager{}
 	f := withSkillManager(t, sm)
-	ctx := identity.ContextWithToken(t.Context(), "id-token")
+	ctx := idtoken.ContextWith(t.Context(), "id-token")
 
 	got, err := f.svc.ListSkills(ctx, "", "", false, tags.Filter{"alerting": {}})
 	require.NoError(t, err)
@@ -260,7 +260,7 @@ func TestListSkillsProxiesSkillManager(t *testing.T) {
 func TestPluginsPinThroughSkillManager(t *testing.T) {
 	sm := &fakeSkillManager{}
 	f := withSkillManager(t, sm)
-	ctx := identity.ContextWithToken(t.Context(), "id-token")
+	ctx := idtoken.ContextWith(t.Context(), "id-token")
 
 	res, err := f.svc.Create(ctx, Spec{Name: "sre", ModelConfig: "default-model-config", Toolset: []string{"preset:read-only"}, Plugins: Plugins{
 		{Git: &GitSkill{URL: skillsRepo, Ref: "feature"}, Path: "plugins/ops", Skills: []string{"triage"}},

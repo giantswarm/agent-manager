@@ -10,6 +10,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/giantswarm/mcp-oauth/handler"
+	"github.com/giantswarm/mcp-oauth/providers"
+
 	apov1alpha1 "github.com/giantswarm/agent-platform-operator/api/v1alpha1"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel"
@@ -27,7 +30,6 @@ import (
 
 	"github.com/giantswarm/agent-manager/internal/agents"
 	"github.com/giantswarm/agent-manager/internal/api"
-	"github.com/giantswarm/agent-manager/internal/identity"
 	"github.com/giantswarm/agent-manager/internal/kube"
 	"github.com/giantswarm/agent-manager/internal/kube/kubetest"
 	"github.com/giantswarm/agent-manager/internal/organizations"
@@ -68,8 +70,8 @@ func TestTheCredentialBodyIsInNoTraceOrLog(t *testing.T) {
 	logs := &bytes.Buffer{}
 	log := slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	orgs := organizations.New(provider, organizations.Config{Namespaces: organizations.NewNamespaces(typed, dyn, "kagent"), CredentialUIURL: "https://credentials.example.com/?operation={operation}", CredentialOperations: organizations.NewCredentialOperations(typed.CoreV1().ConfigMaps("credential-operations"))}, log) // #nosec G101 -- a fixture UI URL and fake ConfigMap store
-	person := &identity.Identity{Issuer: "https://dex.example.com", Subject: "sub-admin", Client: "fixture"}
-	ctx := identity.ContextWith(t.Context(), person)
+	person := &providers.UserInfo{Issuer: "https://dex.example.com", ID: "sub-admin", ClientID: "fixture"}
+	ctx := handler.ContextWithUserInfo(t.Context(), person)
 	ctx = organizations.ContextWithCredentialRequest(ctx, api.ToolSetOrganizationModel, "fixture-arguments", "fixture-client")
 	prepared, err := orgs.SetModel(ctx, organizations.ModelRequest{Organization: "payments", Name: "claude", Provider: "Anthropic", Model: "claude-sonnet-4-6"})
 	require.NoError(t, err)
@@ -79,7 +81,7 @@ func TestTheCredentialBodyIsInNoTraceOrLog(t *testing.T) {
 	srv, err := New(Config{Addr: "127.0.0.1:0", Organizations: orgs}, svc, nil, log)
 	require.NoError(t, err)
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		srv.Handler().ServeHTTP(w, r.WithContext(identity.ContextWith(r.Context(), person)))
+		srv.Handler().ServeHTTP(w, r.WithContext(handler.ContextWithUserInfo(r.Context(), person)))
 	}))
 	defer ts.Close()
 

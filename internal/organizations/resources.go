@@ -16,7 +16,6 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/giantswarm/agent-manager/internal/agents"
-	"github.com/giantswarm/agent-manager/internal/identity"
 	"github.com/giantswarm/agent-manager/internal/kube"
 )
 
@@ -190,7 +189,7 @@ func (s *Service) SetModel(ctx context.Context, req ModelRequest) (*ResourceResu
 	if err != nil {
 		return nil, err
 	}
-	res := &ResourceResult{Organization: org.Organization, Namespace: ns, Kind: KindModel, Name: req.Name, DryRun: req.DryRun, RequestedBy: identity.Caller(ctx)}
+	res := &ResourceResult{Organization: org.Organization, Namespace: ns, Kind: KindModel, Name: req.Name, DryRun: req.DryRun, RequestedBy: agents.RequestedBy(ctx)}
 	if obj == nil {
 		if req.Provider == "" || req.Model == "" {
 			return nil, invalidf("provider and model are required for a new model (provider as kagent's ModelConfig takes it, e.g. Anthropic or OpenAI)")
@@ -389,7 +388,7 @@ func (s *Service) confirmDefaultMark(ctx context.Context, c kube.Client, gvr sch
 func (s *Service) doubleMarkNote(ctx context.Context, c kube.Client, gvr schema.GroupVersionResource, ns, name string) string {
 	items, err := s.existing(ctx, c, ns, gvr, "ModelConfigs")
 	if err != nil {
-		s.log.Warn("the models could not be read again after a new model took the default mark", identity.LogAttr(ctx), fieldNamespace, ns, "name", name, "error", err)
+		s.log.Warn("the models could not be read again after a new model took the default mark", agents.UserAttr(ctx), fieldNamespace, ns, "name", name, "error", err)
 		return ""
 	}
 	var marks []string
@@ -409,7 +408,7 @@ func (s *Service) logModelWritten(ctx context.Context, req ModelRequest, res *Re
 	if req.DryRun || res.Commit != nil || res.CredentialOperation != "" {
 		return
 	}
-	s.log.Info("organization model written", identity.LogAttr(ctx), fieldNamespace, res.Namespace, "name", req.Name, "created", res.Created, "default", agents.IsMarkedDefault(obj), "credential", !req.NoCredential)
+	s.log.Info("organization model written", agents.UserAttr(ctx), fieldNamespace, res.Namespace, "name", req.Name, "created", res.Created, "default", agents.IsMarkedDefault(obj), "credential", !req.NoCredential)
 }
 
 // refuseProviderChangeOnSameSecret refuses a change of the provider of the
@@ -823,7 +822,7 @@ func (s *Service) SetConnector(ctx context.Context, req ConnectorRequest) (*Reso
 	if err != nil {
 		return nil, err
 	}
-	res := &ResourceResult{Organization: org.Organization, Namespace: ns, Kind: KindConnector, Name: req.Name, DryRun: req.DryRun, RequestedBy: identity.Caller(ctx)}
+	res := &ResourceResult{Organization: org.Organization, Namespace: ns, Kind: KindConnector, Name: req.Name, DryRun: req.DryRun, RequestedBy: agents.RequestedBy(ctx)}
 	if obj == nil {
 		if req.URL == "" {
 			return nil, invalidf("url is required for a new connector")
@@ -856,7 +855,7 @@ func (s *Service) SetConnector(ctx context.Context, req ConnectorRequest) (*Reso
 		return nil, createOnly(err, req.Create, "RemoteMCPServer", ns, req.Name)
 	}
 	if !req.DryRun && res.Commit == nil && res.CredentialOperation == "" {
-		s.log.Info("organization connector written", identity.LogAttr(ctx), fieldNamespace, ns, "name", req.Name, "created", res.Created)
+		s.log.Info("organization connector written", agents.UserAttr(ctx), fieldNamespace, ns, "name", req.Name, "created", res.Created)
 	}
 	return res, nil
 }
@@ -1036,7 +1035,7 @@ func (s *Service) SetEgressPolicy(ctx context.Context, req EgressRequest) (*Reso
 	if err != nil {
 		return nil, err
 	}
-	res := &ResourceResult{Organization: org.Organization, Namespace: ns, Kind: KindEgressPolicy, Name: req.Name, DryRun: req.DryRun, RequestedBy: identity.Caller(ctx)}
+	res := &ResourceResult{Organization: org.Organization, Namespace: ns, Kind: KindEgressPolicy, Name: req.Name, DryRun: req.DryRun, RequestedBy: agents.RequestedBy(ctx)}
 	if obj == nil {
 		obj = newObject(s.apiVersion(), "EgressPolicy", ns, req.Name)
 		res.Created = true
@@ -1065,7 +1064,7 @@ func (s *Service) SetEgressPolicy(ctx context.Context, req EgressRequest) (*Reso
 		return nil, createOnly(err, req.Create, "EgressPolicy", ns, req.Name)
 	}
 	if !req.DryRun && res.Commit == nil && res.CredentialOperation == "" {
-		s.log.Info("organization egress policy written", identity.LogAttr(ctx), fieldNamespace, ns, "name", req.Name, "created", res.Created)
+		s.log.Info("organization egress policy written", agents.UserAttr(ctx), fieldNamespace, ns, "name", req.Name, "created", res.Created)
 	}
 	return res, nil
 }
@@ -1118,13 +1117,13 @@ func (s *Service) DeleteResource(ctx context.Context, organization, kind, name s
 	if err != nil {
 		return nil, err
 	}
-	res := &ResourceResult{Organization: org.Organization, Namespace: ns, Kind: kind, Name: name, Deleted: !dryRun && committed == nil, DryRun: dryRun, RequestedBy: identity.Caller(ctx),
+	res := &ResourceResult{Organization: org.Organization, Namespace: ns, Kind: kind, Name: name, Deleted: !dryRun && committed == nil, DryRun: dryRun, RequestedBy: agents.RequestedBy(ctx),
 		Note: "its credential Secret, if any, stays: another object may name it", Commit: committed}
 	if kind == KindModel && agents.IsMarkedDefault(obj) {
 		res.Note = "it was the organization's default model, so the organization has none now: set_organization_model with default true on another; " + res.Note
 	}
 	if !dryRun && committed == nil {
-		s.log.Info("organization object deleted", identity.LogAttr(ctx), fieldNamespace, ns, "kind", kind, "name", name)
+		s.log.Info("organization object deleted", agents.UserAttr(ctx), fieldNamespace, ns, "kind", kind, "name", name)
 	}
 	return res, nil
 }

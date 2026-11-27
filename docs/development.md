@@ -19,9 +19,14 @@ make helm-docs          # regenerate helm/agent-manager/README.md
   (`rest.AnonymousClientConfig` + the bearer the OAuth layer put on the
   context; no ServiceAccount fallback), `ServiceAccountProvider` is the
   one shared client of a server without OAuth.
-- `internal/identity` — the authenticated caller on the request context
-  (subject, email, groups, source) and the IdP token downstream OAuth presents
-  to the apiserver.
+- The user is mcp-oauth's `providers.UserInfo` (`handler.UserInfoFromContext`;
+  `agents.User`, `agents.RequestedBy`, `agents.UserAttr`); agent-manager keeps
+  no identity type of its own. Log lines name the user with
+  `slog.Any("user", userInfo)`: issuer, subject and the actor of a delegated
+  call, never profile data.
+- `internal/idtoken` — the user's OpenID Connect ID token on the request,
+  which the session operations present to agentgateway and, with
+  `--downstream-oauth`, the Kubernetes clients present.
 - `internal/oci` — a minimal OCI distribution client (anonymous bearer
   challenge, tag list, a chart archive or one file out of it, the digest a tag
   resolves to) with a fake registry for tests in `ocitest`.

@@ -23,7 +23,6 @@ import (
 	"k8s.io/client-go/util/retry"
 
 	"github.com/giantswarm/agent-manager/internal/chart"
-	"github.com/giantswarm/agent-manager/internal/identity"
 	"github.com/giantswarm/agent-manager/internal/kube"
 	"github.com/giantswarm/agent-manager/internal/skills"
 	"github.com/giantswarm/agent-manager/internal/tags"
@@ -55,7 +54,7 @@ type Config struct {
 	// with the grant GitHubUser fetches. Nil: commit mode is refused as
 	// unsupported.
 	GitHub     RemoteFor
-	GitHubUser func(context.Context) (*identity.GitHub, error)
+	GitHubUser func(context.Context) (*GitHubUserAccessToken, error)
 	// SkillsBootSecret keeps the installation's skills credential Secret
 	// filled with the skills GitHub App's token; nil: the Secret is
 	// provisioned by someone else.
@@ -386,7 +385,7 @@ func (s *Service) creatableNamespaces(ctx context.Context) []string {
 			}}
 			res, err := c.Typed().AuthorizationV1().SelfSubjectAccessReviews().Create(gctx, review, metav1.CreateOptions{})
 			if err != nil {
-				s.log.Debug("access review failed; leaving the namespace out", identity.LogAttr(ctx), "namespace", ns, "error", err)
+				s.log.Debug("access review failed; leaving the namespace out", UserAttr(ctx), "namespace", ns, "error", err)
 				return nil
 			}
 			allowed[i] = res.Status.Allowed
@@ -1229,7 +1228,7 @@ func (s *Service) ValidateCreate(ctx context.Context, spec Spec) (*ValidateResul
 		spec.Skills, spec.Plugins = sk, pl
 	}
 	values := BuildValues(spec, st.compose)
-	setCreator(values, identity.Caller(ctx), identity.CallerName(ctx))
+	setCreator(values, RequestedBy(ctx), UserName(ctx))
 	if !isCodingRuntime(runtime) {
 		dropEgressNote(values)
 	}
@@ -1531,7 +1530,7 @@ func (s *Service) Create(ctx context.Context, spec Spec) (*CreateResult, error) 
 		return nil, err
 	}
 	values := BuildValues(spec, st.compose)
-	setCreator(values, identity.Caller(ctx), identity.CallerName(ctx))
+	setCreator(values, RequestedBy(ctx), UserName(ctx))
 	if !isCodingRuntime(runtime) {
 		dropEgressNote(values)
 	}
@@ -1554,7 +1553,7 @@ func (s *Service) Create(ctx context.Context, spec Spec) (*CreateResult, error) 
 		return nil, err
 	}
 
-	res := &CreateResult{RequestedBy: identity.Caller(ctx), ModelConfig: mc.Name, ModelConfigFromDefault: fromDefault, WriteOutcome: WriteOutcome{Mode: mode, DryRun: spec.DryRun}}
+	res := &CreateResult{RequestedBy: RequestedBy(ctx), ModelConfig: mc.Name, ModelConfigFromDefault: fromDefault, WriteOutcome: WriteOutcome{Mode: mode, DryRun: spec.DryRun}}
 	res.Manifests = st.manifests(spec.Name, values)
 	if mode == ModeCommit {
 		return s.createCommit(ctx, st, spec, values, res)
@@ -1604,7 +1603,7 @@ func (s *Service) Create(ctx context.Context, spec Spec) (*CreateResult, error) 
 	if status, err := s.status(ctx, st, spec.Name); err == nil {
 		res.Status = status
 	}
-	s.log.Info("agent created", identity.LogAttr(ctx), "namespace", ns, "cluster", spec.Cluster, "name", spec.Name, "modelConfig", spec.ModelConfig, "skills", len(spec.Skills), "ociRepositoryCreated", res.Created.OCIRepository)
+	s.log.Info("agent created", UserAttr(ctx), "namespace", ns, "cluster", spec.Cluster, "name", spec.Name, "modelConfig", spec.ModelConfig, "skills", len(spec.Skills), "ociRepositoryCreated", res.Created.OCIRepository)
 	return res, nil
 }
 
@@ -1650,7 +1649,7 @@ func (s *Service) createCommit(ctx context.Context, st *site, spec Spec, values 
 	res.Agent = Agent{Name: spec.Name, Namespace: st.ns(), Target: spec.Target}
 	applyHelmRelease(&res.Agent, st.helmRelease(spec.Name, values), s.cfg.Tags)
 	res.Agent.Managed = ManagedGitOps
-	s.log.Info("agent create committed", identity.LogAttr(ctx), "namespace", ns, "name", spec.Name, "repository", res.Commit.Repository, "pullRequest", res.Commit.PullRequest, "dryRun", spec.DryRun)
+	s.log.Info("agent create committed", UserAttr(ctx), "namespace", ns, "name", spec.Name, "repository", res.Commit.Repository, "pullRequest", res.Commit.PullRequest, "dryRun", spec.DryRun)
 	return res, nil
 }
 
@@ -1942,7 +1941,7 @@ func (s *Service) update(ctx context.Context, st *site, upd Update) (*UpdateResu
 	if changed == nil {
 		changed = []string{}
 	}
-	res := &UpdateResult{Before: before, After: after, Changed: changed, RequestedBy: identity.Caller(ctx), WriteOutcome: WriteOutcome{Mode: upd.Mode, DryRun: upd.DryRun}}
+	res := &UpdateResult{Before: before, After: after, Changed: changed, RequestedBy: RequestedBy(ctx), WriteOutcome: WriteOutcome{Mode: upd.Mode, DryRun: upd.DryRun}}
 	res.Manifests = st.manifests(upd.Name, after)
 	if upd.Mode == ModeCommit {
 		return s.updateCommit(ctx, st, upd, hr, res)
@@ -1961,7 +1960,7 @@ func (s *Service) update(ctx context.Context, st *site, upd Update) (*UpdateResu
 	updated, err := st.flux.Resource(s.helmReleaseGVR()).Namespace(hr.GetNamespace()).Update(ctx, hr, metav1.UpdateOptions{FieldManager: FieldManager})
 	if err != nil {
 		if apierrors.IsConflict(err) {
-			s.log.Debug("HelmRelease moved between read and write", identity.LogAttr(ctx), "namespace", hr.GetNamespace(), "name", hr.GetName(), "resourceVersion", hr.GetResourceVersion())
+			s.log.Debug("HelmRelease moved between read and write", UserAttr(ctx), "namespace", hr.GetNamespace(), "name", hr.GetName(), "resourceVersion", hr.GetResourceVersion())
 		}
 		return nil, wrapKube(err, fmt.Sprintf("update HelmRelease %s/%s", hr.GetNamespace(), hr.GetName()))
 	}
@@ -1972,7 +1971,7 @@ func (s *Service) update(ctx context.Context, st *site, upd Update) (*UpdateResu
 		s.effectiveDefaultToolchains(agent)
 	}
 	res.Agent = *agent
-	s.log.Info("agent updated", identity.LogAttr(ctx), "namespace", ns, "name", upd.Name, "changed", changed, "refreshSkills", upd.RefreshSkills)
+	s.log.Info("agent updated", UserAttr(ctx), "namespace", ns, "name", upd.Name, "changed", changed, "refreshSkills", upd.RefreshSkills)
 	return res, nil
 }
 
@@ -2004,7 +2003,7 @@ func (s *Service) updateCommit(ctx context.Context, st *site, upd Update, hr *un
 		return nil, err
 	}
 	res.Agent = *agent
-	s.log.Info("agent update committed", identity.LogAttr(ctx), "namespace", ns, "name", upd.Name, "changed", res.Changed, "repository", res.Commit.Repository, "pullRequest", res.Commit.PullRequest, "dryRun", upd.DryRun)
+	s.log.Info("agent update committed", UserAttr(ctx), "namespace", ns, "name", upd.Name, "changed", res.Changed, "repository", res.Commit.Repository, "pullRequest", res.Commit.PullRequest, "dryRun", upd.DryRun)
 	return res, nil
 }
 
@@ -2063,7 +2062,7 @@ func (s *Service) Delete(ctx context.Context, loc Location, name string, force b
 		return nil, err
 	}
 	ns, dyn := st.ns(), st.flux
-	res := &DeleteResult{Name: name, Namespace: ns, Target: st.loc.Target, RequestedBy: identity.Caller(ctx), WriteOutcome: WriteOutcome{Mode: mode, DryRun: w.DryRun}}
+	res := &DeleteResult{Name: name, Namespace: ns, Target: st.loc.Target, RequestedBy: RequestedBy(ctx), WriteOutcome: WriteOutcome{Mode: mode, DryRun: w.DryRun}}
 	hr, obj, err := s.writableHelmRelease(ctx, st, name, force, mode == ModeCommit)
 	if err != nil {
 		if mode == ModeApply && hr == nil && obj != nil && force && errorsIs(err, ErrConflict) && !PlatformOwned(obj) {
@@ -2073,7 +2072,7 @@ func (s *Service) Delete(ctx context.Context, loc Location, name string, force b
 			if err := s.deleteRendered(ctx, st.agent, ns, name, res, false, w.DryRun); err != nil {
 				return nil, err
 			}
-			s.log.Info("bare agent deleted", identity.LogAttr(ctx), "namespace", ns, "name", name, "dryRun", w.DryRun)
+			s.log.Info("bare agent deleted", UserAttr(ctx), "namespace", ns, "name", name, "dryRun", w.DryRun)
 			return res, nil
 		}
 		return nil, err
@@ -2117,7 +2116,7 @@ func (s *Service) Delete(ctx context.Context, loc Location, name string, force b
 		return res, nil
 	}
 	res.OCIRepositoryDeleted = true
-	s.log.Info("agent deleted", identity.LogAttr(ctx), "namespace", ns, "name", name, "ociRepositoryDeleted", true)
+	s.log.Info("agent deleted", UserAttr(ctx), "namespace", ns, "name", name, "ociRepositoryDeleted", true)
 	return res, nil
 }
 
@@ -2184,7 +2183,7 @@ func (s *Service) deleteCommit(ctx context.Context, dyn dynamic.Interface, hr *u
 	if !loc.prune && loc.kustomization != "" {
 		res.Commit.LiveSteps = append(res.Commit.LiveSteps, fmt.Sprintf("Kustomization %s does not prune: after the merge, delete HelmRelease %s/%s by hand (kubectl delete helmrelease -n %s %s)", loc.kustomization, ns, name, ns, name))
 	}
-	s.log.Info("agent delete committed", identity.LogAttr(ctx), "namespace", ns, "name", name, "repository", res.Commit.Repository, "pullRequest", res.Commit.PullRequest, "dryRun", w.DryRun)
+	s.log.Info("agent delete committed", UserAttr(ctx), "namespace", ns, "name", name, "repository", res.Commit.Repository, "pullRequest", res.Commit.PullRequest, "dryRun", w.DryRun)
 	return res, nil
 }
 

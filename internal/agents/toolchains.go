@@ -10,7 +10,6 @@ import (
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
-	"github.com/giantswarm/agent-manager/internal/identity"
 	"github.com/giantswarm/agent-manager/internal/kagent"
 	apiv1alpha1 "github.com/giantswarm/agent-manager/internal/kagent/gen/kagent/api/v1alpha1"
 	"github.com/giantswarm/agent-manager/internal/oci"
@@ -341,7 +340,7 @@ func (s *Service) implicitToolchains(ctx context.Context, token string, ref kage
 	}
 	toolchains, err := s.resolveSessionToolchains(ctx, token, ref, "the default toolchain", []string{ImplicitDefaultToolchain})
 	if err != nil {
-		s.log.WarnContext(ctx, "session starts without the default toolchain", identity.LogAttr(ctx), "agent", ref.Tenant(), "toolchain", ImplicitDefaultToolchain, "error", err)
+		s.log.WarnContext(ctx, "session starts without the default toolchain", UserAttr(ctx), "agent", ref.Tenant(), "toolchain", ImplicitDefaultToolchain, "error", err)
 		return nil, fmt.Sprintf("started without toolchain %s, the default of an agent without defaultToolchains: %s", ImplicitDefaultToolchain, strings.TrimPrefix(err.Error(), ErrInvalid.Error()+": ")), nil
 	}
 	return toolchains, "", nil

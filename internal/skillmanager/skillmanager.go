@@ -19,7 +19,7 @@ import (
 
 	"k8s.io/utils/lru"
 
-	"github.com/giantswarm/agent-manager/internal/identity"
+	"github.com/giantswarm/agent-manager/internal/idtoken"
 	"github.com/giantswarm/agent-manager/internal/skills"
 )
 
@@ -282,7 +282,7 @@ func (c *Client) do(ctx context.Context, method, p string, q url.Values, body an
 // token; with no caller, the service token on POST /v1/resolve, the one call
 // skill-manager takes it on.
 func (c *Client) authorize(ctx context.Context, req *http.Request, p string) error {
-	bearer, _ := identity.TokenFromContext(ctx)
+	bearer, _ := idtoken.FromContext(ctx)
 	if bearer == "" && p == resolvePath {
 		bearer = c.token
 	}

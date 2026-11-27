@@ -10,6 +10,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/giantswarm/mcp-oauth/handler"
+	"github.com/giantswarm/mcp-oauth/providers"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	authenticationv1 "k8s.io/api/authentication/v1"
@@ -26,7 +29,7 @@ import (
 	"sigs.k8s.io/yaml"
 
 	"github.com/giantswarm/agent-manager/internal/chart"
-	"github.com/giantswarm/agent-manager/internal/identity"
+	"github.com/giantswarm/agent-manager/internal/idtoken"
 	"github.com/giantswarm/agent-manager/internal/kube"
 	"github.com/giantswarm/agent-manager/internal/tags/tagstest"
 )
@@ -1128,7 +1131,7 @@ func TestListModelConfigsAndInfo(t *testing.T) {
 // and a caller-only server refuses to act for a request without a token.
 func TestMutationsCarryTheCaller(t *testing.T) {
 	f := seeded(t)
-	ctx := identity.ContextWith(context.Background(), &identity.Identity{Subject: "sub-1", Email: "admin@lab.local", Source: identity.SourceSSO})
+	ctx := handler.ContextWithUserInfo(context.Background(), &providers.UserInfo{ID: "sub-1", Email: "admin@lab.local", TokenSource: providers.TokenSourceSSO})
 
 	created, err := f.svc.Create(ctx, Spec{Name: "sre", ModelConfig: "default-model-config", Toolset: []string{"preset:read-only"}})
 	require.NoError(t, err)
@@ -1217,7 +1220,7 @@ func TestUpdateRetriesTheWriteWhenTheReleaseMovedUnderneath(t *testing.T) {
 func TestCreateOnTheHarnessTheCallerNames(t *testing.T) {
 	f := seeded(t)
 	mustCreate(t, f, f.svc.harnessGVR(), harness("kagent", "claude", "claude"))
-	ctx := identity.ContextWithToken(t.Context(), "caller-token")
+	ctx := idtoken.ContextWith(t.Context(), "caller-token")
 	readOnly := []string{"preset:read-only"}
 
 	dry, err := f.svc.ValidateCreate(ctx, Spec{Name: "coder", ModelConfig: "default-model-config", Toolset: readOnly, Harness: "claude"})

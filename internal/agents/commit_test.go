@@ -14,8 +14,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-
-	"github.com/giantswarm/agent-manager/internal/identity"
 )
 
 var (
@@ -60,8 +58,8 @@ func gitOpsFixture(t *testing.T, prune bool) (*fixture, *commit.Fake, context.Co
 		"agents/agent-manager/agent.yaml":         []byte(ToYAML(BuildOCIRepository("kagent", f.svc.cfg.Compose))),
 		"agents/agent-manager/gitops.yaml":        []byte(ToYAML(BuildHelmRelease("gitops", "kagent", values, f.svc.cfg.Compose))),
 	})
-	f.svc.cfg.GitHubUser = func(context.Context) (*identity.GitHub, error) {
-		return &identity.GitHub{Login: "jane", Token: "ghu_person", App: "agent-manager"}, nil // #nosec G101 -- fixture grant
+	f.svc.cfg.GitHubUser = func(context.Context) (*GitHubUserAccessToken, error) {
+		return &GitHubUserAccessToken{Login: "jane", Token: "ghu_person", App: "agent-manager"}, nil // #nosec G101 -- fixture grant
 	}
 	return f, fake, context.Background()
 }
@@ -177,7 +175,7 @@ func TestCommitNeedsTheGitHubGrantAndATarget(t *testing.T) {
 	spec := Spec{Name: "sre", ModelConfig: "default-model-config", Toolset: []string{"preset:read-only"}, WriteOptions: WriteOptions{Mode: ModeCommit}}
 
 	granted := f.svc.cfg.GitHubUser
-	f.svc.cfg.GitHubUser = func(context.Context) (*identity.GitHub, error) {
+	f.svc.cfg.GitHubUser = func(context.Context) (*GitHubUserAccessToken, error) {
 		return nil, &GrantRequiredError{App: "agent-manager", Reason: "grant it (core_auth_login app=agent-manager)"}
 	}
 	_, err := f.svc.Create(ctx, spec)
@@ -329,7 +327,7 @@ func str(s string) *string { return &s }
 
 func TestCommitKeepsTheGrantRequiredApp(t *testing.T) {
 	fixture, forge, _ := gitOpsFixture(t, true)
-	fixture.svc.cfg.GitHubUser = func(context.Context) (*identity.GitHub, error) {
+	fixture.svc.cfg.GitHubUser = func(context.Context) (*GitHubUserAccessToken, error) {
 		return nil, &GrantRequiredError{App: "github", Reason: "grant it"}
 	}
 	_, err := fixture.svc.Create(t.Context(), Spec{Name: "sre", ModelConfig: "default-model-config", Toolset: []string{"preset:read-only"}, WriteOptions: WriteOptions{Mode: ModeCommit}})
@@ -341,7 +339,7 @@ func TestCommitKeepsTheGrantRequiredApp(t *testing.T) {
 }
 
 func TestGitHubRefusalNamesWhatRenewsTheToken(t *testing.T) {
-	granted := &identity.GitHub{Login: "alice", Token: "granted", App: "manager-app"}
+	granted := &GitHubUserAccessToken{Login: "alice", Token: "granted", App: "manager-app"}
 
 	err := GitHubRefusal(granted, &commit.AuthError{Op: "create branch", Status: 401})
 	grant, isGrant := errors.AsType[*GrantRequiredError](err)
@@ -362,7 +360,7 @@ func TestGitHubRefusalNamesWhatRenewsTheToken(t *testing.T) {
 // sign-in or grant changes: the answer names the step and the App and asks
 // for no sign-in and no push access. A 401 on it still asks for the grant.
 func TestAReadRefusedWith403NamesTheAppsPermissions(t *testing.T) {
-	granted := &identity.GitHub{Login: "alice", Token: "granted", App: "manager-app"}
+	granted := &GitHubUserAccessToken{Login: "alice", Token: "granted", App: "manager-app"}
 	reads := []string{commit.OpStatus, commit.OpHead, commit.OpReadFile, commit.OpListFiles, commit.OpFindPullRequest, commit.OpFindByPrefix, commit.OpMergedFiles}
 	for _, op := range reads {
 		t.Run(op, func(t *testing.T) {
@@ -390,11 +388,11 @@ func TestCommitResolvesProviderAuthorizationWithoutAnMCPProviderBearer(t *testin
 	for _, authorized := range []bool{true, false} {
 		t.Run(fmt.Sprintf("authorized=%v", authorized), func(t *testing.T) {
 			fixture, forge, _ := gitOpsFixture(t, true)
-			fixture.svc.cfg.GitHubUser = func(context.Context) (*identity.GitHub, error) {
+			fixture.svc.cfg.GitHubUser = func(context.Context) (*GitHubUserAccessToken, error) {
 				if !authorized {
 					return nil, fmt.Errorf("%w: provider authorization is required", ErrAuthRequired)
 				}
-				return &identity.GitHub{Login: "jane", Token: "ghu_person"}, nil // #nosec G101 -- fixture provider grant
+				return &GitHubUserAccessToken{Login: "jane", Token: "ghu_person"}, nil // #nosec G101 -- fixture provider grant
 			}
 			result, err := fixture.svc.Create(t.Context(), Spec{Name: "sre", ModelConfig: "default-model-config", Toolset: []string{"preset:read-only"}, WriteOptions: WriteOptions{Mode: ModeCommit}})
 			if !authorized {

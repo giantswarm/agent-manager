@@ -3,8 +3,9 @@
 {{- /*
 Registers this server with muster. Tools appear as x_<name>_<tool>. With
 oauth.enabled the CR carries the auth block: muster forwards the session's IdP
-id_token (forwardToken), which this server validates through
-oauth.trustedAudiences, and requests the requiredAudiences at login. Without
+ID token (forwardToken), which this server accepts from the OpenID Provider for
+the platform client and the requiredAudiences below (agent-manager.oauth), and
+requests the requiredAudiences at login. Without
 OAuth muster connects anonymously. With github.enabled and
 github.tokenExchange the auth lists the App (github.tokenExchange.audience)
 under providerApps, so muster answers a grant_required with its sign-in link.
@@ -43,7 +44,7 @@ spec:
     providerApps:
       - {{ .Values.github.tokenExchange.audience | quote }}
     {{- end }}
-    {{- with .Values.muster.mcpServer.auth.requiredAudiences }}
+    {{- with include "agent-manager.requiredAudiences" . | fromJsonArray }}
     requiredAudiences:
       {{- toYaml . | nindent 6 }}
     {{- end }}

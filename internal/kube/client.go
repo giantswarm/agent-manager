@@ -18,13 +18,14 @@ import (
 	"sync"
 	"time"
 
+	"github.com/giantswarm/mcp-oauth/handler"
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 
-	"github.com/giantswarm/agent-manager/internal/identity"
+	"github.com/giantswarm/agent-manager/internal/idtoken"
 )
 
 // Identities a Provider reports through GET /info.
@@ -285,7 +286,7 @@ func NewCallerProvider(base *Clients, log *slog.Logger) *CallerProvider {
 
 // Client implements Provider.
 func (p *CallerProvider) Client(ctx context.Context) (Client, error) {
-	token, ok := identity.TokenFromContext(ctx)
+	token, ok := idtoken.FromContext(ctx)
 	if !ok {
 		return nil, ErrNoCallerToken
 	}
@@ -303,13 +304,14 @@ func (p *CallerProvider) Client(ctx context.Context) (Client, error) {
 		if err != nil {
 			return nil, fmt.Errorf("caller clients: %w", err)
 		}
-		e = &callerEntry{clients: clients, expires: identity.TokenExpiry(token)}
+		e = &callerEntry{clients: clients, expires: idtoken.ClaimsOf(token).Expiry}
 		p.byToken[key] = e
 	}
 	if !e.expires.IsZero() && now.After(e.expires) && !e.expiredLogged {
 		e.expiredLogged = true
+		user, _ := handler.UserInfoFromContext(ctx)
 		p.log.Warn("caller token expired; the Kubernetes API will reject the remaining calls of this request (the ServiceAccount holds no permissions)",
-			identity.LogAttr(ctx), "expired", e.expires.UTC().Format(time.RFC3339))
+			slog.Any("user", user), "expired", e.expires.UTC().Format(time.RFC3339))
 	}
 	return e.clients, nil
 }
@@ -320,7 +322,7 @@ func (p *CallerProvider) Identity() string { return IdentityCaller }
 // Remote implements Provider: the caller's token, presented to the cluster
 // the kubeconfig names. Not cached: the kubeconfig is read per request.
 func (p *CallerProvider) Remote(ctx context.Context, kubeconfig []byte) (Client, error) {
-	token, ok := identity.TokenFromContext(ctx)
+	token, ok := idtoken.FromContext(ctx)
 	if !ok {
 		return nil, ErrNoCallerToken
 	}

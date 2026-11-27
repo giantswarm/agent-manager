@@ -1,8 +1,9 @@
-# The OAuth arguments the Deployment renders — above all the trusted
-# audiences, which decide whose forwarded id_tokens the server accepts.
+# The OAuth settings the Deployment renders — above all the audiences of the
+# OpenID Provider's trusted issuer entry, which decide whose forwarded ID
+# tokens the server accepts.
 #
 # Run with: make helm-test (helm unittest helm/agent-manager)
-suite: deployment oauth arguments
+suite: deployment oauth settings
 templates:
   - templates/deployment.yaml
 set:
@@ -15,7 +16,7 @@ set:
       issuerUrl: https://dex.example.com
       clientId: platform-client
 tests:
-  - it: trusts the platform client and the audiences the MCPServer requires by default
+  - it: trusts the platform client and the audiences the MCPServer requires by default, as the OpenID Provider
     set:
       muster:
         mcpServer:
@@ -23,18 +24,30 @@ tests:
             requiredAudiences:
               - dex-k8s-authenticator
     asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].env[?(@.name == "OAUTH_TRUSTED_ISSUERS")].value
+          pattern: '"audiences":\["platform-client","dex-k8s-authenticator"\]'
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          any: true
+          content:
+            name: OAUTH_TRUSTED_AUDIENCES
       - contains:
-          path: spec.template.spec.containers[0].args
-          content: --oauth-trusted-audiences=platform-client,dex-k8s-authenticator
-      - contains:
-          path: spec.template.spec.containers[0].args
-          content: --dex-client-id=platform-client
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OAUTH_DEX_CLIENT_ID
+            value: platform-client
 
   - it: trusts only the platform client when no audience is required (a Google-shaped installation)
     asserts:
-      - contains:
-          path: spec.template.spec.containers[0].args
-          content: --oauth-trusted-audiences=platform-client
+      - matchRegex:
+          path: spec.template.spec.containers[0].env[?(@.name == "OAUTH_TRUSTED_ISSUERS")].value
+          pattern: '"audiences":\["platform-client"\]'
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          any: true
+          content:
+            name: OAUTH_TRUSTED_AUDIENCES
 
   - it: adds the required audiences to an explicit list, de-duplicated, order kept
     set:
@@ -50,11 +63,16 @@ tests:
               - dex-k8s-authenticator
               - kubernetes
     asserts:
-      - contains:
-          path: spec.template.spec.containers[0].args
-          content: --oauth-trusted-audiences=platform-client,portal-client,dex-k8s-authenticator,kubernetes
+      - matchRegex:
+          path: spec.template.spec.containers[0].env[?(@.name == "OAUTH_TRUSTED_ISSUERS")].value
+          pattern: '"audiences":\["platform-client","portal-client","dex-k8s-authenticator","kubernetes"\]'
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          any: true
+          content:
+            name: OAUTH_TRUSTED_AUDIENCES
 
-  - it: trusts the required audiences even when they are the only ones named
+  - it: trusts the client people sign in with when no platform client is shared, plus the required audiences
     set:
       global:
         identity:
@@ -68,12 +86,19 @@ tests:
             requiredAudiences:
               - kubernetes
     asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].env[?(@.name == "OAUTH_TRUSTED_ISSUERS")].value
+          pattern: '"audiences":\["explicit-client","kubernetes"\]'
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          any: true
+          content:
+            name: OAUTH_TRUSTED_AUDIENCES
       - contains:
-          path: spec.template.spec.containers[0].args
-          content: --oauth-trusted-audiences=kubernetes
-      - contains:
-          path: spec.template.spec.containers[0].args
-          content: --dex-client-id=explicit-client
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OAUTH_DEX_CLIENT_ID
+            value: explicit-client
 
   - it: refuses github.enabled without github.tokenExchange
     set:
@@ -227,13 +252,12 @@ tests:
             - keys.internal.example
             - jwks.internal.example
     asserts:
-      - contains:
-          path: spec.template.spec.containers[0].args
-          content: --sso-allow-private-ip-jwks-hosts=keys.internal.example,jwks.internal.example
+      - matchRegex:
+          path: spec.template.spec.containers[0].env[?(@.name == "OAUTH_TRUSTED_ISSUERS")].value
+          pattern: '"allowPrivateIPJWKSHosts":\["dex.example.com","keys.internal.example","jwks.internal.example"\]'
 
-  - it: renders no JWKS host list by default
+  - it: allows only the issuer's own host to resolve privately by default
     asserts:
-      - notContains:
-          path: spec.template.spec.containers[0].args
-          any: true
-          content: --sso-allow-private-ip-jwks-hosts
+      - matchRegex:
+          path: spec.template.spec.containers[0].env[?(@.name == "OAUTH_TRUSTED_ISSUERS")].value
+          pattern: '"allowPrivateIPJWKSHosts":\["dex.example.com"\]'

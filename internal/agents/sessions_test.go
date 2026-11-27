@@ -18,7 +18,7 @@ import (
 	"google.golang.org/protobuf/encoding/protojson"
 	"k8s.io/apimachinery/pkg/runtime"
 
-	"github.com/giantswarm/agent-manager/internal/identity"
+	"github.com/giantswarm/agent-manager/internal/idtoken"
 	"github.com/giantswarm/agent-manager/internal/kagent"
 	apiv1alpha1 "github.com/giantswarm/agent-manager/internal/kagent/gen/kagent/api/v1alpha1"
 	"github.com/giantswarm/agent-manager/internal/kagent/kagenttest"
@@ -107,7 +107,7 @@ func (f *fakeBindings) Unbind(_ context.Context, token, actor string) error {
 
 func TestSessionsUnsupportedWithoutATarget(t *testing.T) {
 	f := newFixture(t, []runtime.Object{})
-	ctx := identity.ContextWithToken(t.Context(), callerToken)
+	ctx := idtoken.ContextWith(t.Context(), callerToken)
 	assert.False(t, f.svc.Info(ctx).Capabilities["sessions"])
 	_, err := f.svc.ListSessions(ctx, "", "sre", false, "")
 	require.ErrorIs(t, err, ErrUnsupported)
@@ -135,7 +135,7 @@ func TestSessionsNeverRunWithoutTheCallerToken(t *testing.T) {
 
 func TestSessionArgumentsAreChecked(t *testing.T) {
 	svc, ctrl := newSessionFixture(t)
-	ctx := identity.ContextWithToken(t.Context(), callerToken)
+	ctx := idtoken.ContextWith(t.Context(), callerToken)
 	for name, in := range map[string]StartSession{
 		"blank message":       {Name: "sre", Message: "  "},
 		"long message":        {Name: "sre", Message: strings.Repeat("x", MaxSessionMessageLength+1)},
@@ -158,7 +158,7 @@ func TestSessionArgumentsAreChecked(t *testing.T) {
 
 func TestStartSessionThenReadTheAnswer(t *testing.T) {
 	svc, ctrl := newSessionFixture(t)
-	ctx := identity.ContextWithToken(t.Context(), callerToken)
+	ctx := idtoken.ContextWith(t.Context(), callerToken)
 
 	started, err := svc.StartSession(ctx, StartSession{Namespace: "tenant", Name: "sre", Message: "hello", SessionName: "triage"})
 	require.NoError(t, err)
@@ -237,7 +237,7 @@ func TestStartSessionThenReadTheAnswer(t *testing.T) {
 
 func TestStartSessionWithoutAMessageStartsNoTurn(t *testing.T) {
 	svc, ctrl := newSessionFixture(t)
-	ctx := identity.ContextWithToken(t.Context(), callerToken)
+	ctx := idtoken.ContextWith(t.Context(), callerToken)
 
 	started, err := svc.StartSession(ctx, StartSession{Namespace: "tenant", Name: "sre", SessionName: "triage", RequestID: "req-1"})
 	require.NoError(t, err)
@@ -276,7 +276,7 @@ func TestStartSessionWithoutAMessageStartsNoTurn(t *testing.T) {
 
 func TestStartSessionRetryReusesTheSession(t *testing.T) {
 	svc, ctrl := newSessionFixture(t)
-	ctx := identity.ContextWithToken(t.Context(), callerToken)
+	ctx := idtoken.ContextWith(t.Context(), callerToken)
 	ctrl.Fail["SendStreamingMessage"] = status.Error(codes.Unavailable, "runtime unavailable")
 
 	_, err := svc.StartSession(ctx, StartSession{Name: "sre", Message: "hello", RequestID: "req-1"})
@@ -299,7 +299,7 @@ func TestStartSessionRetryReusesTheSession(t *testing.T) {
 
 func TestStartSessionTwiceSendsTheFirstMessageOnce(t *testing.T) {
 	svc, ctrl := newSessionFixture(t)
-	ctx := identity.ContextWithToken(t.Context(), callerToken)
+	ctx := idtoken.ContextWith(t.Context(), callerToken)
 	in := StartSession{Name: "sre", Message: "hello", RequestID: "req-1"}
 
 	first, err := svc.StartSession(ctx, in)
@@ -342,7 +342,7 @@ func TestStartSessionTwiceSendsTheFirstMessageOnce(t *testing.T) {
 
 func TestStartSessionSendsItsMessageAfterTheCallersOwnFirstTurn(t *testing.T) {
 	svc, ctrl := newSessionFixture(t)
-	ctx := identity.ContextWithToken(t.Context(), callerToken)
+	ctx := idtoken.ContextWith(t.Context(), callerToken)
 	created, err := svc.StartSession(ctx, StartSession{Name: "sre", RequestID: "req-1"})
 	require.NoError(t, err)
 	var session struct {
@@ -362,14 +362,14 @@ func TestStartSessionSendsItsMessageAfterTheCallersOwnFirstTurn(t *testing.T) {
 func TestStartSessionRefusedWhileTheAgentIsNotReady(t *testing.T) {
 	svc, ctrl := newSessionFixture(t)
 	ctrl.NotReady["kagent/sre"] = true
-	_, err := svc.StartSession(identity.ContextWithToken(t.Context(), callerToken), StartSession{Name: "sre", Message: "hi"})
+	_, err := svc.StartSession(idtoken.ContextWith(t.Context(), callerToken), StartSession{Name: "sre", Message: "hi"})
 	require.ErrorIs(t, err, ErrConflict)
 	assert.Contains(t, err.Error(), "no ready revision")
 }
 
 func TestGetSessionErrors(t *testing.T) {
 	svc, _ := newSessionFixture(t)
-	ctx := identity.ContextWithToken(t.Context(), callerToken)
+	ctx := idtoken.ContextWith(t.Context(), callerToken)
 	_, err := svc.GetSession(ctx, SessionQuery{SessionID: uuid.NewString()})
 	require.ErrorIs(t, err, ErrNotFound)
 	_, err = svc.GetSession(ctx, SessionQuery{SessionID: "not-a-uuid"})
@@ -378,7 +378,7 @@ func TestGetSessionErrors(t *testing.T) {
 
 func TestDeleteSessionRemovesTheCallersOwn(t *testing.T) {
 	svc, ctrl := newSessionFixture(t)
-	ctx := identity.ContextWithToken(t.Context(), callerToken)
+	ctx := idtoken.ContextWith(t.Context(), callerToken)
 	session := ctrl.AddSession("kagent", "sre", &a2apb.Task{Id: uuid.NewString()})
 	kept := ctrl.AddSession("kagent", "sre")
 
@@ -409,7 +409,7 @@ func TestDeleteSessionRemovesTheCallersOwn(t *testing.T) {
 func TestASessionNamesItsOrganization(t *testing.T) {
 	svc, ctrl := newSessionFixture(t)
 	svc.cfg.Tenants = &fakeTenants{owners: map[string]string{"agents-pay-x7k2q": "pay"}}
-	ctx := identity.ContextWithToken(t.Context(), callerToken)
+	ctx := idtoken.ContextWith(t.Context(), callerToken)
 	theirs := ctrl.AddSession("agents-pay-x7k2q", "sre", &a2apb.Task{Id: uuid.NewString()})
 	platform := ctrl.AddSession("kagent", "sre", &a2apb.Task{Id: uuid.NewString()})
 
@@ -427,7 +427,7 @@ func TestASessionNamesItsOrganization(t *testing.T) {
 
 func TestDeleteSessionRefusesAnotherPersonsSession(t *testing.T) {
 	svc, ctrl := newSessionFixture(t)
-	ctx := identity.ContextWithToken(t.Context(), callerToken)
+	ctx := idtoken.ContextWith(t.Context(), callerToken)
 	theirs := ctrl.AddSessionOf("dev@lab.local", "kagent", "sre")
 
 	_, err := svc.DeleteSession(ctx, theirs.GetId())
@@ -443,7 +443,7 @@ func TestDeleteSessionWhileAnotherOperationRunsAsksForARetry(t *testing.T) {
 	svc, ctrl := newSessionFixture(t)
 	session := ctrl.AddSession("kagent", "sre")
 	ctrl.Fail["DeleteSession"] = status.Error(codes.Aborted, "session operation conflict")
-	_, err := svc.DeleteSession(identity.ContextWithToken(t.Context(), callerToken), session.GetId())
+	_, err := svc.DeleteSession(idtoken.ContextWith(t.Context(), callerToken), session.GetId())
 	require.ErrorIs(t, err, ErrConflict)
 	assert.Contains(t, err.Error(), "session operation conflict")
 	assert.Contains(t, err.Error(), "retry the delete")

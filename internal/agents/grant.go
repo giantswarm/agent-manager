@@ -7,7 +7,6 @@ import (
 	"github.com/go-jose/go-jose/v4"
 	"github.com/go-jose/go-jose/v4/jwt"
 
-	"github.com/giantswarm/agent-manager/internal/identity"
 	apiv1alpha1 "github.com/giantswarm/agent-manager/internal/kagent/gen/kagent/api/v1alpha1"
 )
 
@@ -70,7 +69,7 @@ func workspaceGrant(ctx context.Context, raw string, now time.Time) (*Workspace,
 	if len(raw) > MaxWorkspaceGrantLength {
 		return nil, invalidf("workspaceGrant is longer than %d characters", MaxWorkspaceGrantLength)
 	}
-	caller, _ := identity.FromContext(ctx)
+	caller := User(ctx)
 	if caller == nil || caller.Email == "" {
 		return nil, forbiddenf("a workspace grant names the person by email and the caller has none")
 	}

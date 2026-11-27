@@ -9,7 +9,6 @@ import (
 	"slices"
 
 	"github.com/giantswarm/agent-manager/internal/agents"
-	"github.com/giantswarm/agent-manager/internal/identity"
 )
 
 // CredentialRequest is replace_organization_credential's arguments.
@@ -93,7 +92,7 @@ func (s *Service) ReplaceCredential(ctx context.Context, req CredentialRequest) 
 		}
 	}
 	credential.Next = s.next(credential, users...)
-	res := &ResourceResult{Organization: org.Organization, Namespace: org.Name, Kind: KindCredential, Name: req.Secret, DryRun: req.DryRun, RequestedBy: identity.Caller(ctx), Credentials: []Credential{credential}}
+	res := &ResourceResult{Organization: org.Organization, Namespace: org.Name, Kind: KindCredential, Name: req.Secret, DryRun: req.DryRun, RequestedBy: agents.RequestedBy(ctx), Credentials: []Credential{credential}}
 	if err := s.landResource(ctx, w, nil, res, "credential-"+req.Secret, "chore(organizations): replace credential "+req.Secret); err != nil {
 		return nil, err
 	}

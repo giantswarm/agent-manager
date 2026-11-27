@@ -10,7 +10,7 @@ import (
 	"google.golang.org/grpc/status"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
-	"github.com/giantswarm/agent-manager/internal/identity"
+	"github.com/giantswarm/agent-manager/internal/idtoken"
 	"github.com/giantswarm/agent-manager/internal/kagent"
 	apiv1alpha1 "github.com/giantswarm/agent-manager/internal/kagent/gen/kagent/api/v1alpha1"
 	"github.com/giantswarm/agent-manager/internal/kagent/kagenttest"
@@ -81,7 +81,7 @@ func TestTheErasePreviewCountsTheSessions(t *testing.T) {
 			tc.seed(ctrl)
 			f := newOrgFixtureWith(t, func(cfg *organizations.Config) { cfg.Sessions = kagent.NewClient(conn) },
 				organization("payments", nil), orgAgent("review"), orgAgent("triage"))
-			f.ctx = identity.ContextWithToken(f.ctx, "id-token-of-alice")
+			f.ctx = idtoken.ContextWith(f.ctx, "id-token-of-alice")
 
 			text, isErr := f.call(t, ToolGetOrganization, map[string]any{"name": "payments"})
 			require.False(t, isErr, text)
@@ -123,7 +123,7 @@ func TestTheErasePreviewCountsTheSessions(t *testing.T) {
 		ctrl.AddSession(orgNS, "review")
 		f := newOrgFixtureWith(t, func(cfg *organizations.Config) { cfg.Sessions = kagent.NewClient(conn) },
 			organization("payments", nil), orgAgent("review"))
-		f.ctx = identity.ContextWithToken(f.ctx, "id-token-of-alice")
+		f.ctx = idtoken.ContextWith(f.ctx, "id-token-of-alice")
 
 		text, isErr := f.call(t, ToolDeleteOrganization, map[string]any{"name": "payments"})
 		require.False(t, isErr, text)

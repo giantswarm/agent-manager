@@ -118,7 +118,9 @@ func TestCredentialLab(t *testing.T) {
 	organizationNamespaces := organizations.NewNamespaces(manager.Typed(), manager.Dynamic(), "kagent")
 	organizationService := organizations.New(provider, organizations.Config{Namespaces: organizationNamespaces, CredentialUIURL: "https://credentials.example.com/?operation={operation}", CredentialOperations: operations}, logger) // #nosec G101 -- public fixture UI URL
 	service := agents.New(provider, embeddedChart{}, nil, nil, agents.Config{}, logger)
-	oauth := OAuthConfig{BaseURL: "http://localhost:8080", Provider: ProviderDex, DexIssuerURL: issuer, DexClientID: "agent-platform", DexClientSecret: "agent-platform-lab-secret", DexCAFile: caFile, TrustedAudiences: []string{"agent-platform"}, DownstreamOAuth: true} // #nosec G101 -- isolated agentlab client
+	environment := dexEnvironment(issuer, caFile)
+	environment["OAUTH_DEX_CLIENT_SECRET"] = "agent-platform-lab-secret" // #nosec G101 -- isolated agentlab client
+	oauth := OAuthConfig{Settings: oauthSettings(t, environment), DownstreamOAuth: true}
 	server, err := New(Config{Organizations: organizationService, OAuth: &oauth, MCPEnabled: true}, service, api.NewMCPServer(service, "slice14-lab", api.WithOrganizations(organizationService), api.WithLifecycle(t.Context())), logger)
 	require.NoError(t, err)
 	listener := httptest.NewTLSServer(server.Handler())

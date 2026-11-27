@@ -9,7 +9,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/giantswarm/agent-manager/internal/agents"
-	"github.com/giantswarm/agent-manager/internal/identity"
 )
 
 // Each write gets a head branch of its own: the object's branch name, the
@@ -58,7 +57,7 @@ func TestOpenPullRequestOfAnObject(t *testing.T) {
 					require.NoError(t, remote.Close(t.Context(), pr, false))
 				}
 			}
-			c := &orgCommit{cfg: &CommitConfig{Objects: provenance.Location{Repository: repository, Branch: "main"}}, remote: remote, gh: &identity.GitHub{}}
+			c := &orgCommit{cfg: &CommitConfig{Objects: provenance.Location{Repository: repository, Branch: "main"}}, remote: remote, gh: &agents.GitHubUserAccessToken{}}
 			pr, has, err := c.openPullRequest(t.Context(), scenario.object)
 			require.NoError(t, err)
 			require.Equal(t, scenario.want != "", has)

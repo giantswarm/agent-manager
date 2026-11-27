@@ -20,7 +20,6 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/giantswarm/agent-manager/internal/agents"
-	"github.com/giantswarm/agent-manager/internal/identity"
 	"github.com/giantswarm/agent-manager/internal/kube"
 )
 
@@ -155,7 +154,7 @@ func (s *Service) SaveCredentialOperation(ctx context.Context, id, version strin
 		if errors.Is(answer, errCredentialSaveFailed) {
 			level = slog.LevelError
 		}
-		s.log.Log(ctx, level, "credential save failed", identity.LogAttr(ctx), "operation", id, "step", step, "cause", credentialSaveCause(err, values))
+		s.log.Log(ctx, level, "credential save failed", agents.UserAttr(ctx), "operation", id, "step", step, "cause", credentialSaveCause(err, values))
 		return nil, answer
 	}
 	return result, nil
@@ -365,7 +364,7 @@ func (s *Service) saveCredentialOperation(ctx context.Context, id, version strin
 	if err != nil {
 		operation.State = operationUncertain
 		if recordErr := s.cfg.CredentialOperations.put(record, operation); recordErr != nil {
-			s.log.Warn("a failed credential save could not be recorded as uncertain", identity.LogAttr(ctx), "operation", id, "cause", recordErr.Error())
+			s.log.Warn("a failed credential save could not be recorded as uncertain", agents.UserAttr(ctx), "operation", id, "cause", recordErr.Error())
 		}
 		return nil, err
 	}
@@ -382,7 +381,7 @@ func (s *Service) saveCredentialOperation(ctx context.Context, id, version strin
 		return nil, err
 	}
 	if request.Err() != nil {
-		s.log.Info("a credential save completed after its request ended", identity.LogAttr(ctx), "operation", id, "mode", operation.Mode)
+		s.log.Info("a credential save completed after its request ended", agents.UserAttr(ctx), "operation", id, "mode", operation.Mode)
 	}
 	return &operation.Result, nil
 }
@@ -408,7 +407,7 @@ func (s *Service) removeCreatedSecrets(ctx context.Context, caller kube.Client, 
 		}
 		err := caller.Dynamic().Resource(secretGVR).Namespace(operation.Namespace.Name).Delete(ctx, name, metav1.DeleteOptions{Preconditions: &metav1.Preconditions{ResourceVersion: &version}})
 		if apierrors.IsConflict(err) || apierrors.IsForbidden(err) {
-			s.log.Warn("a credential save could not take back the Secret it created; it stays", identity.LogAttr(ctx), "namespace", operation.Namespace.Name, "secret", name, "reason", string(apierrors.ReasonForError(err)))
+			s.log.Warn("a credential save could not take back the Secret it created; it stays", agents.UserAttr(ctx), "namespace", operation.Namespace.Name, "secret", name, "reason", string(apierrors.ReasonForError(err)))
 			continue
 		}
 		delete(operation.AppliedVersions, kindSecret+"/"+name)

@@ -180,8 +180,11 @@ is empty; the chart mounts the whole Secret. With `clientSecret` instead of
 `existingSecret` the chart renders `<fullname>-github-token-exchange`. An
 optional CA Secret contains `ca.crt`. The endpoint and audience are
 operator-controlled; requests cannot change them. This mode requires
-`github.enabled`, Dex OAuth and downstream authorization. It also supplies
-ordinary agent and organization commits with the person's grant.
+`github.enabled`, OAuth and downstream authorization. With a local authorization
+server, the supported upstream is Dex. In resource-server-only mode, exactly one
+trusted issuer must have `openIDProvider: true`; its issuer identifies the subject
+token to the broker. An active Google upstream is not supported. This also
+supplies ordinary agent and organization commits with the person's grant.
 
 The authorization server must independently validate the subject ID token and
 confidential client, allow that client only the manager App's target audience,
@@ -215,7 +218,7 @@ The chart creates a dedicated namespace, a ConfigMap-only Role and a quota of
 256 ConfigMaps. Records are limited to 128 KiB and expire after 15 minutes, with
 minute-based cleanup. They hold nonsecret intent, verified issuer/subject,
 the SHA-256 digest of the verified email address (see
-[Who owns an operation](#who-owns-an-operation)), authenticated audience and
+[Who owns an operation](#who-owns-an-operation)), the authenticated OAuth client and
 MCP session context, revisions, file hashes and the receipt. Values, ciphertext, ID tokens and App tokens never enter them. The
 manager's ServiceAccount gains no tenant Secret or application ConfigMap access.
 
@@ -295,9 +298,25 @@ applied it. See [repository requirements](organizations-commit-mode.md).
 
 ## Who owns an operation
 
-An operation belongs to the person who prepared it, as the token's issuer and
-subject (`sub`) name them. Reads, saves and cancellations of every other caller
-are refused.
+When a validated provider ID token is available, an operation belongs to its
+account, identified by issuer and subject (`sub`). Otherwise ownership remains
+with the validated bearer principal. The same provider account
+can prepare with a manager-issued access token and open its link through the
+portal's forwarded ID token. The bearer issuer in authentication and audit
+records remains unchanged. Reads, saves and cancellations of every other
+account are refused.
+
+### Upgrading with unfinished operations
+
+Operations expire after 15 minutes. Before upgrading, finish or cancel pending
+operations and allow in-flight saves to complete. If an operation is `saving`
+or `uncertain`, inspect its credential consumer, Secret references and commit
+receipt before preparing a replacement. Check whether the write or pull request
+already exists; do not blindly repeat it. Resume the original version when its
+operation record is needed to finish recovery. A pending operation that has
+written nothing can be prepared again after the upgrade.
+
+### Signing in through another connector
 
 Dex gives one person a different subject for each connector. A person who
 prepares an operation from an MCP client signed in through one connector and

@@ -11,7 +11,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"github.com/giantswarm/agent-manager/internal/identity"
+	"github.com/giantswarm/agent-manager/internal/idtoken"
 	apiv1alpha1 "github.com/giantswarm/agent-manager/internal/kagent/gen/kagent/api/v1alpha1"
 )
 
@@ -56,7 +56,7 @@ func TestStartSessionWaitsForAColdToolset(t *testing.T) {
 		return nil
 	}
 	progress := &progressLog{}
-	ctx := WithProgress(identity.ContextWithToken(t.Context(), callerToken), progress.report)
+	ctx := WithProgress(idtoken.ContextWith(t.Context(), callerToken), progress.report)
 
 	started, err := svc.StartSession(ctx, StartSession{Name: "sre", RequestID: "req-1"})
 	require.NoError(t, err)
@@ -85,7 +85,7 @@ func TestStartSessionGivesUpOnAColdToolsetAtItsBudget(t *testing.T) {
 		return status.Error(codes.Unavailable, "the toolset's golden snapshot is not ready")
 	}
 
-	_, err := svc.StartSession(identity.ContextWithToken(t.Context(), callerToken), StartSession{Name: "sre", RequestID: "req-1"})
+	_, err := svc.StartSession(idtoken.ContextWith(t.Context(), callerToken), StartSession{Name: "sre", RequestID: "req-1"})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), `start again with requestId "req-1"`)
 	assert.Contains(t, err.Error(), "golden snapshot is not ready", "kagent's last answer is kept over the attempt the budget cut short")
@@ -97,7 +97,7 @@ func TestStartSessionRetriesNoRefusal(t *testing.T) {
 	svc, ctrl := newSessionFixture(t)
 	ctrl.NotReady["kagent/sre"] = true
 
-	_, err := svc.StartSession(identity.ContextWithToken(t.Context(), callerToken), StartSession{Name: "sre"})
+	_, err := svc.StartSession(idtoken.ContextWith(t.Context(), callerToken), StartSession{Name: "sre"})
 	require.ErrorIs(t, err, ErrConflict)
 	assert.Len(t, methodCalls(ctrl, "CreateSession"), 1, "a refusal is answered at once")
 }
@@ -105,7 +105,7 @@ func TestStartSessionRetriesNoRefusal(t *testing.T) {
 func TestStartSessionStopsWithItsCaller(t *testing.T) {
 	shortSessionCreate(t, 5*time.Second)
 	svc, ctrl := newSessionFixture(t)
-	ctx, cancel := context.WithCancel(identity.ContextWithToken(t.Context(), callerToken))
+	ctx, cancel := context.WithCancel(idtoken.ContextWith(t.Context(), callerToken))
 	ctrl.Prepare = func(context.Context, *apiv1alpha1.CreateSessionRequest) error {
 		cancel()
 		return status.Error(codes.Unavailable, "the toolset's golden snapshot is not ready")

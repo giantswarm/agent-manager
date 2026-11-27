@@ -13,7 +13,6 @@ import (
 	toolkitk8s "github.com/giantswarm/mcp-toolkit/k8s"
 
 	"github.com/giantswarm/agent-manager/internal/agents"
-	"github.com/giantswarm/agent-manager/internal/identity"
 	"github.com/giantswarm/agent-manager/internal/kube"
 )
 
@@ -168,7 +167,7 @@ func (s *Service) allowed(ctx context.Context, c kube.Client, attributes authori
 		return false, false, errTokenRefused
 	}
 	if err != nil {
-		s.log.Debug("access review failed", identity.LogAttr(ctx), "namespace", attributes.Namespace, "verb", attributes.Verb, "resource", attributes.Resource, "error", err)
+		s.log.Debug("access review failed", agents.UserAttr(ctx), "namespace", attributes.Namespace, "verb", attributes.Verb, "resource", attributes.Resource, "error", err)
 		return false, false, nil
 	}
 	return allowed, true, nil

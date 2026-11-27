@@ -6,6 +6,9 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/giantswarm/mcp-oauth/handler"
+	"github.com/giantswarm/mcp-oauth/providers"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -15,8 +18,6 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	k8stesting "k8s.io/client-go/testing"
-
-	"github.com/giantswarm/agent-manager/internal/identity"
 )
 
 // fakeTenants is the organization namespace finder as the service sees it.
@@ -77,8 +78,8 @@ func TestInfoListsTheCreatableNamespaces(t *testing.T) {
 // nobody can set or change it.
 func TestCreatorAnnotation(t *testing.T) {
 	f := seeded(t)
-	alice := identity.ContextWith(context.Background(), &identity.Identity{Subject: "a", Email: "alice@example.com"})
-	bob := identity.ContextWith(context.Background(), &identity.Identity{Subject: "b", Email: "bob@example.com"})
+	alice := handler.ContextWithUserInfo(context.Background(), &providers.UserInfo{ID: "a", Email: "alice@example.com"})
+	bob := handler.ContextWithUserInfo(context.Background(), &providers.UserInfo{ID: "b", Email: "bob@example.com"})
 
 	_, err := f.svc.Create(alice, Spec{Name: "sre", ModelConfig: "default-model-config", Toolset: []string{"preset:read-only"},
 		Annotations: map[string]string{CreatedByAnnotation: "mallory@example.com"}})
@@ -121,8 +122,8 @@ func TestCreatorAnnotation(t *testing.T) {
 // rules; without one from the IdP nothing is recorded.
 func TestCreatorNameAnnotation(t *testing.T) {
 	f := seeded(t)
-	alice := identity.ContextWith(context.Background(), &identity.Identity{Subject: "a", Email: "alice@example.com", Name: "Alice Doe"})
-	bob := identity.ContextWith(context.Background(), &identity.Identity{Subject: "b", Email: "bob@example.com", Name: "Bob"})
+	alice := handler.ContextWithUserInfo(context.Background(), &providers.UserInfo{ID: "a", Email: "alice@example.com", Name: "Alice Doe"})
+	bob := handler.ContextWithUserInfo(context.Background(), &providers.UserInfo{ID: "b", Email: "bob@example.com", Name: "Bob"})
 	spec := func(name string) Spec {
 		return Spec{Name: name, ModelConfig: "default-model-config", Toolset: []string{"preset:read-only"}}
 	}
@@ -160,7 +161,7 @@ func TestCreatorNameAnnotation(t *testing.T) {
 	}
 
 	// No name from the IdP records the creator only, and none can be added.
-	carol := identity.ContextWith(context.Background(), &identity.Identity{Subject: "c", Email: "carol@example.com"})
+	carol := handler.ContextWithUserInfo(context.Background(), &providers.UserInfo{ID: "c", Email: "carol@example.com"})
 	res, err = f.svc.Create(carol, spec("ops"))
 	require.NoError(t, err)
 	assert.Equal(t, "carol@example.com", res.Agent.CreatedBy)
