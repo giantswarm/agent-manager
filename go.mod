@@ -10,8 +10,8 @@ require (
 	// The release candidate with the Organization kind (giantswarm/agent-platform-operator#69).
 	github.com/giantswarm/agent-platform-operator v0.5.0-rc.1
 	github.com/giantswarm/gitops-commit v0.12.0-rc.10
-	github.com/giantswarm/mcp-oauth v1.15.1
-	github.com/giantswarm/mcp-toolkit v0.11.0
+	github.com/giantswarm/mcp-oauth v1.24.0
+	github.com/giantswarm/mcp-toolkit v0.12.0
 	github.com/giantswarm/mcp-toolkit/k8s v0.1.1
 	// The commit of organization-operator's v2.2.0 tag: its module path has no /v2 (giantswarm/giantswarm#39492).
 	github.com/giantswarm/organization-operator v1.6.5-0.20261126222953-a0e2ace225a7
@@ -186,6 +186,7 @@ require (
 	github.com/spiffe/go-spiffe/v2 v2.8.1 // indirect
 	github.com/tjfoc/gmsm v1.4.1 // indirect
 	github.com/urfave/cli v1.22.17 // indirect
+	github.com/valkey-io/valkey-go v1.0.80 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
 	go.mongodb.org/mongo-driver v1.17.10 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect

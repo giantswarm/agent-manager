@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -179,17 +180,24 @@ func NewMCPServer(svc *agents.Service, version string, opts ...Option) *mcpserve
 	for _, opt := range opts {
 		opt(&o)
 	}
-	s := mcpserver.NewMCPServer("agent-manager", version,
+	middleware := []mcpserver.ServerOption{
 		mcpserver.WithToolHandlerMiddleware(genAIToolName),
 		mcpserver.WithToolHandlerMiddleware(toolDuration(otel.Meter(tracerName))),
 		mcpserver.WithToolHandlerMiddleware(reportProgress),
+	}
+	log := o.log
+	if log == nil {
+		log = slog.Default()
+	}
+	middleware = append(middleware, mcpserver.WithToolHandlerMiddleware(relayURLElicitations(o.urlElicitations, log)))
+	s := mcpserver.NewMCPServer("agent-manager", version, append(middleware,
 		// The HTTP server span already joined the inbound traceparent, so the
 		// MCP spans nest under it instead of extracting it a second time.
 		mcpotel.WithServerTracingPropagator(otel.Tracer(tracerName), propagation.NewCompositeTextMapPropagator()),
 		brand.WithGiantSwarmIcon(),
 		mcpserver.WithToolCapabilities(false),
 		mcpserver.WithInstructions("Manage the agents of the Agent Platform. An agent is a Flux HelmRelease of the Generic agent chart, which renders a kagent Agent, its Harness reference and the agent's muster RemoteMCPServer carrying its toolset. Call get_info first, and list_model_configs and list_skills before create_agent. Names are DNS-1123 labels the person chooses and confirms. Every agent needs a toolset. create_agent, update_agent and delete_agent take dryRun and mode: apply writes live as you, commit opens a pull request as you in the repository that owns the namespace. No tool takes an organization's namespace: organization, the organization's name, addresses an organization's agents, and with cluster an agent on a workload cluster of the organization, in every later call of a tool that takes them; namespace is only for the installation's own platform namespaces and, with cluster, the namespace on the cluster. Talk to an agent with start_session and get_session. Organizations: list_organizations lists the organizations you manage or belong to; the *_organization* tools manage organizations, their members, models, connectors and egress policies as you, and never take a secret value."),
-	)
+	)...)
 	t := &tools{svc: svc, orgs: o.orgs}
 
 	skillShape := "{name, path, git: {url, ref | commit}} or {name, oci} entries, pinned at write time"

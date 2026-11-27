@@ -787,6 +787,10 @@ argument, result, operation record, log or trace. See
 [Credential operations](docs/organization-credentials.md) for the API,
 replacement rules, trust policy and recovery behavior.
 
+`start_session` reads workspace and toolchain information through Muster. See
+[URL elicitation](docs/url-elicitation.md) for caller consent, sealed retries
+and the `oauth.requestStateSecret` configuration.
+
 A muster toolset preset excludes them all with the rule
 `pattern: x_agent-manager_*organization*`: the curated
 `agent-manager-assistant` carries the agent tools and not these.

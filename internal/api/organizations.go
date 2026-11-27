@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"sync"
 
@@ -105,8 +106,10 @@ const organizationArgDescription = "The organization's name (list_organizations)
 type Option func(*serverOptions)
 
 type serverOptions struct {
-	orgs      *organizations.Service
-	lifecycle context.Context
+	orgs            *organizations.Service
+	lifecycle       context.Context
+	urlElicitations *URLElicitor
+	log             *slog.Logger
 }
 
 func WithLifecycle(ctx context.Context) Option {
