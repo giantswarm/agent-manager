@@ -10,13 +10,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/giantswarm/mcp-oauth/handler"
+	"github.com/giantswarm/mcp-oauth/providers"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/giantswarm/agent-manager/internal/identity"
+	"github.com/giantswarm/agent-manager/internal/idtoken"
 	apiv1alpha1 "github.com/giantswarm/agent-manager/internal/kagent/gen/kagent/api/v1alpha1"
 	"github.com/giantswarm/agent-manager/internal/kagent/kagenttest"
 )
@@ -24,7 +27,7 @@ import (
 // asPerson is the caller as the OAuth layer attaches them: the identity the
 // grant must name and the IdP token the session operations present.
 func asPerson(ctx context.Context, email string) context.Context {
-	return identity.ContextWithToken(identity.ContextWith(ctx, &identity.Identity{Subject: "dex-" + email, Email: email}), callerToken)
+	return idtoken.ContextWith(handler.ContextWithUserInfo(ctx, &providers.UserInfo{ID: "dex-" + email, Email: email}), callerToken)
 }
 
 // platformVolume is the volume source the workspace grant of
@@ -152,7 +155,7 @@ func TestStartSessionRefusesAGrantKagentWouldRefuse(t *testing.T) {
 			want: ErrInvalid, says: "longer than",
 		},
 		"a caller without an email": {
-			ctx: identity.ContextWithToken(t.Context(), callerToken), grant: signer.Sign(t, "admin@lab.local", 5*time.Minute, kagenttest.WorkspaceGrant()),
+			ctx: idtoken.ContextWith(t.Context(), callerToken), grant: signer.Sign(t, "admin@lab.local", 5*time.Minute, kagenttest.WorkspaceGrant()),
 			want: ErrForbidden, says: "the caller has none",
 		},
 	} {

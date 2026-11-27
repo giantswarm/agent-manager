@@ -18,7 +18,7 @@ import (
 	"github.com/giantswarm/mcp-oauth/providers/oidc"
 
 	"github.com/giantswarm/agent-manager/internal/agents"
-	"github.com/giantswarm/agent-manager/internal/identity"
+	"github.com/giantswarm/agent-manager/internal/idtoken"
 )
 
 // DefaultGitHubAPIURL is GitHub's REST API.
@@ -73,7 +73,7 @@ func (c GitHubExchangeConfig) resolveClientID() (string, error) {
 
 // NewGitHubExchange obtains a user grant on demand. Tokens are neither cached
 // nor attached to a session; only the returned request-local identity holds one.
-func NewGitHubExchange(configuration GitHubExchangeConfig) (func(context.Context) (*identity.GitHub, error), error) {
+func NewGitHubExchange(configuration GitHubExchangeConfig) (func(context.Context) (*agents.GitHubUserAccessToken, error), error) {
 	if err := configuration.Validate(); err != nil {
 		return nil, err
 	}
@@ -94,7 +94,7 @@ func NewGitHubExchange(configuration GitHubExchangeConfig) (func(context.Context
 	return newGitHubExchange(configuration, client), nil
 }
 
-func newGitHubExchange(configuration GitHubExchangeConfig, client *http.Client) func(context.Context) (*identity.GitHub, error) {
+func newGitHubExchange(configuration GitHubExchangeConfig, client *http.Client) func(context.Context) (*agents.GitHubUserAccessToken, error) {
 	logger := configuration.Logger
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
@@ -105,15 +105,17 @@ func newGitHubExchange(configuration GitHubExchangeConfig, client *http.Client) 
 	grantRequired := func(reason string) error {
 		return &agents.GrantRequiredError{App: configuration.Audience, Reason: fmt.Sprintf(reason, configuration.Audience, configuration.Audience)}
 	}
-	return func(ctx context.Context) (*identity.GitHub, error) {
-		person, ok := identity.FromContext(ctx)
-		subjectToken, hasToken := identity.TokenFromContext(ctx)
-		if !ok || !hasToken || subjectToken == "" || person.Issuer != configuration.SubjectIssuer || person.Subject == "" {
+	return func(ctx context.Context) (*agents.GitHubUserAccessToken, error) {
+		person := agents.User(ctx)
+		subjectToken, hasToken := idtoken.FromContext(ctx)
+		claims := idtoken.ClaimsOf(subjectToken)
+		if person == nil || person.ID == "" || !hasToken || claims.Issuer != configuration.SubjectIssuer {
 			return nil, fmt.Errorf("%w: a verified platform identity is required for GitHub authorization", agents.ErrUnauthenticated)
 		}
-		// A delegated caller, or one whose token cannot show it is not,
-		// never receives the person's GitHub grant.
-		if claims, err := oidc.ParseUnverifiedClaims(subjectToken); err != nil || claims["act"] != nil || person.Delegated {
+		// A delegated call (an actor acting for the user, RFC 8693 4.1) never
+		// receives the person's GitHub grant, whether mcp-oauth or the subject
+		// token names the actor.
+		if agents.Delegated(person) || claims.Actor {
 			return nil, fmt.Errorf("%w: commit mode opens the pull request as you, and only you, not an agent acting for you, can authorize it", agents.ErrForbidden)
 		}
 		secret, err := os.ReadFile(configuration.ClientSecretFile)
@@ -167,6 +169,6 @@ func newGitHubExchange(configuration GitHubExchangeConfig, client *http.Client) 
 		if response.StatusCode != http.StatusOK || json.NewDecoder(io.LimitReader(response.Body, 16*1024)).Decode(&user) != nil || user.Login == "" {
 			return nil, fmt.Errorf("GitHub user verification is unavailable (status %d)", response.StatusCode)
 		}
-		return &identity.GitHub{Login: user.Login, Token: result.AccessToken, App: configuration.Audience}, nil
+		return &agents.GitHubUserAccessToken{Login: user.Login, Token: result.AccessToken, App: configuration.Audience}, nil
 	}
 }

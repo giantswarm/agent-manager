@@ -630,10 +630,11 @@ plus `muster.mcpServer.auth.requiredAudiences`, always. A token for none of
 them is refused with `401`. The chart's values follow mcp-oauth's layout for
 MCP servers (`oauth.resourceServer`, `oauth.authorizationServer`); the earlier
 `oauth.*` keys still work for one more release and the release notes name
-each one that is set. The caller
-(`internal/identity`: subject, email, groups, source `sso|oauth`) is on every
-write's log line (`caller=`) and on every create/update/delete result as
-`requestedBy`.
+each one that is set. The user is mcp-oauth's `providers.UserInfo`: every
+write's log line names them as `user.issuer` and `user.subject`, plus
+`user.actor.issuer` and `user.actor.subject` for a call an agent makes for
+them, never profile data; every create/update/delete result records the
+`email`, else the `sub`, as `requestedBy`.
 
 `--downstream-oauth` presents the caller's token to the kube-apiserver for
 everything a request does (the HelmRelease and OCIRepository writes, the

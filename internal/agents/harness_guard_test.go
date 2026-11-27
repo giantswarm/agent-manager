@@ -13,7 +13,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 
 	"github.com/giantswarm/agent-manager/internal/chart"
-	"github.com/giantswarm/agent-manager/internal/identity"
+	"github.com/giantswarm/agent-manager/internal/idtoken"
 )
 
 // claudeFixture is the seeded namespace plus a claude Harness and a coding
@@ -25,7 +25,7 @@ func claudeFixture(t *testing.T, values map[string]any) (*fixture, context.Conte
 	if values != nil {
 		mustCreate(t, f, hrGVR, helmRelease("kagent", "coder", values, true, nil))
 	}
-	return f, identity.ContextWithToken(t.Context(), "caller-token")
+	return f, idtoken.ContextWith(t.Context(), "caller-token")
 }
 
 func coderValues(toolset ...string) map[string]any {

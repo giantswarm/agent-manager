@@ -22,7 +22,6 @@ import (
 	"sigs.k8s.io/yaml"
 
 	"github.com/giantswarm/agent-manager/internal/agents"
-	"github.com/giantswarm/agent-manager/internal/identity"
 )
 
 // Commit mode writes an organization into the installation's repository
@@ -76,7 +75,7 @@ type RemoteFor = agents.RemoteFor
 // CommitConfig is where commit mode writes an installation's organizations.
 type CommitConfig struct {
 	PlatformModelsPath string
-	User               func(context.Context) (*identity.GitHub, error)
+	User               func(context.Context) (*agents.GitHubUserAccessToken, error)
 	// GitHub builds the caller's remote.
 	GitHub RemoteFor
 	// Objects is the installation's repository, its branch, and the
@@ -160,7 +159,7 @@ func (s *Service) mode(m string) (string, error) {
 type orgCommit struct {
 	cfg    *CommitConfig
 	remote GitHubRemote
-	gh     *identity.GitHub
+	gh     *agents.GitHubUserAccessToken
 	log    *slog.Logger
 }
 
@@ -184,7 +183,7 @@ func (s *Service) newCommit(ctx context.Context) (*orgCommit, error) {
 
 // commitError answers a token GitHub refused with what renews it, and
 // a secret file the repository cannot encrypt with what it lacks.
-func commitError(gh *identity.GitHub, err error) error {
+func commitError(gh *agents.GitHubUserAccessToken, err error) error {
 	var auth *commit.AuthError
 	if errors.As(err, &auth) {
 		return agents.GitHubRefusal(gh, auth)

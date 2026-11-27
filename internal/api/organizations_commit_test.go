@@ -21,7 +21,6 @@ import (
 	"sigs.k8s.io/yaml"
 
 	"github.com/giantswarm/agent-manager/internal/agents"
-	"github.com/giantswarm/agent-manager/internal/identity"
 	"github.com/giantswarm/agent-manager/internal/organizations"
 )
 
@@ -86,8 +85,8 @@ func commitFixtureWith(t *testing.T, base map[string][]byte, wrap func(*commit.F
 		var err error
 		cfg.Commit, err = organizations.NewCommitConfig(remote, mcRepo.String(), "main", objectsPath, "")
 		require.NoError(t, err)
-		cfg.Commit.User = func(context.Context) (*identity.GitHub, error) {
-			return &identity.GitHub{Login: "jane", Token: "ghu_person", App: "agent-manager"}, nil // #nosec G101 -- fixture grant
+		cfg.Commit.User = func(context.Context) (*agents.GitHubUserAccessToken, error) {
+			return &agents.GitHubUserAccessToken{Login: "jane", Token: "ghu_person", App: "agent-manager"}, nil // #nosec G101 -- fixture grant
 		}
 	}, objs...)
 	return f, fake

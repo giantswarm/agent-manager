@@ -9,6 +9,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/json"
 	"encoding/pem"
+	"maps"
 	"math/big"
 	"net"
 	"net/http"
@@ -20,13 +21,17 @@ import (
 	"testing"
 	"time"
 
+	"github.com/giantswarm/mcp-oauth/handler"
+	"github.com/giantswarm/mcp-oauth/providers"
+
 	"github.com/go-jose/go-jose/v4"
 	"github.com/go-jose/go-jose/v4/jwt"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/net/dns/dnsmessage"
 
-	"github.com/giantswarm/agent-manager/internal/identity"
+	"github.com/giantswarm/agent-manager/internal/agents"
+	"github.com/giantswarm/agent-manager/internal/idtoken"
 )
 
 // privateIdP is an OIDC issuer the production chain reaches as it reaches
@@ -214,12 +219,19 @@ func resolveTestHosts(t *testing.T, ip net.IP, hosts ...string) {
 
 func (p *privateIdP) idToken(t *testing.T, aud []string) string {
 	t.Helper()
+	return p.idTokenWith(t, aud, nil)
+}
+
+// idTokenWith is idToken with extra claims.
+func (p *privateIdP) idTokenWith(t *testing.T, aud []string, more map[string]any) string {
+	t.Helper()
 	signer, err := jose.NewSigner(jose.SigningKey{Algorithm: jose.RS256, Key: p.key},
 		(&jose.SignerOptions{}).WithHeader("kid", privateTestKID).WithType("JWT"))
 	require.NoError(t, err)
 	claims := jwt.Claims{Issuer: p.issuer, Subject: "sub-admin", Audience: jwt.Audience(aud),
 		Expiry: jwt.NewNumericDate(time.Now().Add(30 * time.Minute)), IssuedAt: jwt.NewNumericDate(time.Now().Add(-time.Minute))}
 	extra := map[string]any{"email": "admin@lab.local", "email_verified": true, "name": "Lab Admin", "groups": []string{"platform-admins"}}
+	maps.Copy(extra, more)
 	tok, err := jwt.Signed(signer).Claims(claims).Claims(extra).Serialize()
 	require.NoError(t, err)
 	return tok
@@ -235,7 +247,7 @@ func (p *privateIdP) config(t *testing.T, jwksHosts ...string) OAuthConfig {
 // seen is what a handler behind the production chain sees of the request.
 type seen struct {
 	code   int
-	caller *identity.Identity
+	caller *providers.UserInfo
 	token  string
 }
 
@@ -244,7 +256,10 @@ type seen struct {
 func callThroughChain(t *testing.T, cfg OAuthConfig, bearer string) (int, string) {
 	t.Helper()
 	got := throughChain(t, cfg, bearer)
-	return got.code, got.caller.String()
+	if got.caller == nil {
+		return got.code, ""
+	}
+	return got.code, got.caller.Email
 }
 
 func throughChain(t *testing.T, cfg OAuthConfig, bearer string) seen {
@@ -258,8 +273,8 @@ func throughChain(t *testing.T, cfg OAuthConfig, bearer string) seen {
 	})
 	var got seen
 	h := o.protect(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		got.caller, _ = identity.FromContext(r.Context())
-		got.token, _ = identity.TokenFromContext(r.Context())
+		got.caller, _ = handler.UserInfoFromContext(r.Context())
+		got.token, _ = idtoken.FromContext(r.Context())
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/agents", nil)
@@ -288,10 +303,10 @@ func TestForwardedIDTokenBecomesTheCaller(t *testing.T) {
 		require.NotNil(t, got.caller)
 		assert.Equal(t, "admin@lab.local", got.caller.Email)
 		assert.True(t, got.caller.EmailVerified)
-		assert.Equal(t, "sub-admin", got.caller.Subject)
-		assert.Equal(t, idp.issuer, got.caller.Issuer)
-		assert.JSONEq(t, `["agent-platform"]`, got.caller.Client)
-		assert.False(t, got.caller.Delegated)
+		assert.Equal(t, "sub-admin", got.caller.ID)
+		assert.Equal(t, idp.issuer, got.caller.Issuer, "the validated token's issuer")
+		assert.Equal(t, "agent-platform", got.caller.ClientID, "the token's single audience")
+		assert.Empty(t, got.caller.ActorChain)
 		assert.Equal(t, forwarded, got.token, "downstream %v: the forwarded id_token travels with the request", downstream)
 	}
 }
@@ -315,6 +330,28 @@ func (p *privateIdP) trustedIssuerConfig(t *testing.T, openIDProvider, downstrea
 	require.NoError(t, err)
 	environment["OAUTH_TRUSTED_ISSUERS"] = string(entry)
 	return OAuthConfig{Settings: oauthSettings(t, environment), DownstreamOAuth: downstream}
+}
+
+// TestActorMakesTheCallDelegated pins what credential operations and the
+// GitHub grant rely on: a forwarded token with an act claim, even one that
+// names nobody, is refused or arrives as a delegated call, never as the
+// user's own.
+func TestActorMakesTheCallDelegated(t *testing.T) {
+	idp := newPrivateIdP(t, "")
+	for name, act := range map[string]map[string]any{
+		"named actor": {"sub": "agent"},
+		"empty actor": {},
+	} {
+		got := throughChain(t, idp.config(t), idp.idTokenWith(t, []string{"agent-platform"}, map[string]any{"act": act}))
+		if got.code == http.StatusNoContent {
+			require.True(t, agents.Delegated(got.caller), name)
+			continue
+		}
+		require.Equal(t, http.StatusUnauthorized, got.code, name)
+		require.Nil(t, got.caller, name)
+	}
+	got := throughChain(t, idp.config(t), idp.idToken(t, []string{"agent-platform"}))
+	require.False(t, agents.Delegated(got.caller))
 }
 
 // TestValidatedBearerWithoutIDToken: a bearer mcp-oauth validates that is not
@@ -351,7 +388,7 @@ func TestOpenIDProviderTrustedIssuer(t *testing.T) {
 	got := throughChain(t, idp.trustedIssuerConfig(t, true, false), token)
 	require.Equal(t, http.StatusNoContent, got.code)
 	require.NotNil(t, got.caller)
-	assert.Equal(t, "admin@lab.local", got.caller.String())
+	assert.Equal(t, "admin@lab.local", got.caller.Email)
 	assert.Equal(t, token, got.token)
 
 	got = throughChain(t, idp.trustedIssuerConfig(t, true, true), idp.idToken(t, []string{"someone-else"}))

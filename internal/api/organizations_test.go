@@ -14,6 +14,9 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/giantswarm/mcp-oauth/handler"
+	"github.com/giantswarm/mcp-oauth/providers"
+
 	apov1alpha1 "github.com/giantswarm/agent-platform-operator/api/v1alpha1"
 	orgv1alpha1 "github.com/giantswarm/organization-operator/api/v1alpha1"
 	mcpserver "github.com/mark3labs/mcp-go/server"
@@ -31,7 +34,6 @@ import (
 	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/giantswarm/agent-manager/internal/agents"
-	"github.com/giantswarm/agent-manager/internal/identity"
 	"github.com/giantswarm/agent-manager/internal/kube"
 	"github.com/giantswarm/agent-manager/internal/kube/kubetest"
 	"github.com/giantswarm/agent-manager/internal/organizations"
@@ -50,7 +52,7 @@ var (
 type callerOnly struct{ c kube.Client }
 
 func (p callerOnly) Client(ctx context.Context) (kube.Client, error) {
-	if _, ok := identity.FromContext(ctx); !ok {
+	if _, ok := handler.UserInfoFromContext(ctx); !ok {
 		return nil, kube.ErrNoCallerToken
 	}
 	return p.c, nil
@@ -197,7 +199,7 @@ func newOrgFixtureOf(t *testing.T, configure func(*organizations.Config), seed b
 	f.orgs = orgs
 	svc, _ := newService(t)
 	f.srv = NewMCPServer(svc, "test", WithOrganizations(orgs), WithLifecycle(t.Context()))
-	f.ctx = identity.ContextWith(t.Context(), &identity.Identity{Issuer: "https://identity.example.com", Client: "platform", Subject: "a", Email: "alice@example.com"})
+	f.ctx = handler.ContextWithUserInfo(t.Context(), &providers.UserInfo{Issuer: "https://identity.example.com", ClientID: "platform", ID: "a", Email: "alice@example.com"})
 	return f
 }
 

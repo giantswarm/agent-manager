@@ -2,46 +2,42 @@ package server
 
 import (
 	"context"
-	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"maps"
 	"net/http"
 	"net/url"
-	"slices"
 	"strings"
 
 	"github.com/giantswarm/mcp-oauth/handler"
 	"github.com/giantswarm/mcp-oauth/oauthconfig"
-	"github.com/giantswarm/mcp-oauth/providers/oidc"
 	"github.com/giantswarm/mcp-oauth/security"
 	oauthserver "github.com/giantswarm/mcp-oauth/server"
 
 	"github.com/giantswarm/agent-manager/internal/api"
-	"github.com/giantswarm/agent-manager/internal/identity"
+	"github.com/giantswarm/agent-manager/internal/idtoken"
 )
 
 // OAuthConfig makes agent-manager an OAuth 2.1 resource server (mcp-oauth)
-// in front of the MCP endpoint and the REST API. The platform's identity provider is the
-// authority: on the Agent Platform, muster forwards the session's IdP
-// id_token byte-identical (MCPServer auth.forwardToken) and the portal sends
-// the signed-in user's id_token through the gateway; both are validated
-// against the IdP's JWKS when their audience is one of the trusted audiences
-// (OAUTH_TRUSTED_AUDIENCES, the platform's OAuth client). The caller's
-// identity then travels with the request (identity package) and, with
-// DownstreamOAuth, so does the token: the Kubernetes API is called as the
-// caller.
+// in front of the MCP endpoint and the REST API. The OpenID Provider people
+// sign in with is the authority: on the Agent Platform, muster forwards the
+// session's ID token byte-identical (MCPServer auth.forwardToken) and the
+// portal sends the signed-in user's ID token through the gateway; both are
+// validated against the provider's JWKS as a trusted issuer
+// (OAUTH_TRUSTED_ISSUERS). The user mcp-oauth validated (providers.UserInfo)
+// then travels with the request, and so does their ID token: the session
+// operations act as the user towards agentgateway and, with DownstreamOAuth,
+// the Kubernetes API is called as the user.
 type OAuthConfig struct {
 	// Settings is mcp-oauth's configuration, read from the OAUTH_* variables
 	// by oauthconfig.SettingsFromEnv.
 	Settings oauthconfig.Settings
-	// DownstreamOAuth puts the caller's IdP token on the request so
-	// Kubernetes API calls are made as the caller instead of the
-	// ServiceAccount (the apiserver must trust the IdP and the token's
-	// audience). The ServiceAccount holds no permissions then, so a request
-	// that yields no IdP token to present is refused (401).
+	// DownstreamOAuth makes Kubernetes API calls as the user, with their ID
+	// token, instead of the ServiceAccount (the apiserver must trust the
+	// provider and the token's audience). The ServiceAccount holds no
+	// permissions then, so a request that yields no ID token to present is
+	// refused (401).
 	DownstreamOAuth bool
 }
 
@@ -50,7 +46,6 @@ type oauthRuntime struct {
 	handler         *handler.Handler
 	cleanup         func(context.Context) error
 	downstreamOAuth bool
-	issuer          string
 	mcpPath         string
 	log             *slog.Logger
 }
@@ -77,7 +72,7 @@ func newOAuth(cfg OAuthConfig, mcpPath string, log *slog.Logger) (*oauthRuntime,
 		"trustedAudiences", serverConfig.TrustedAudiences, "trustedIssuers", len(settings.TrustedIssuers),
 		"downstreamOAuth", cfg.DownstreamOAuth)
 	return &oauthRuntime{server: runtime.Server, handler: runtime.Handler, cleanup: cleanup,
-		downstreamOAuth: cfg.DownstreamOAuth, issuer: providerIssuer(settings), mcpPath: mcpPath, log: log}, nil
+		downstreamOAuth: cfg.DownstreamOAuth, mcpPath: mcpPath, log: log}, nil
 }
 
 // protectedResources adds the REST API and the MCP endpoint to the protected
@@ -125,100 +120,49 @@ func providerName(settings oauthconfig.Settings) string {
 	}
 }
 
-// providerIssuer is the issuer of the provider people sign in with through
-// this server's authorization server.
-func providerIssuer(settings oauthconfig.Settings) string {
-	switch {
-	case settings.Dex != nil:
-		return settings.Dex.IssuerURL
-	case settings.Google != nil:
-		return "https://accounts.google.com"
-	default:
-		return ""
-	}
-}
-
 func (o *oauthRuntime) register(mux *http.ServeMux) {
 	o.handler.RegisterOAuthRoutes(mux, handler.OAuthRoutesOptions{MCPPath: o.mcpPath, IncludeMetadata: true})
 }
 
 // protect requires a valid bearer token (mcp-oauth ValidateToken: this
-// server's own access tokens, or a forwarded IdP id_token whose audience is
-// trusted) and then attaches the caller and their IdP token to the request.
-// With DownstreamOAuth a request without an IdP token is refused
-// (RequireProviderIDToken): the ServiceAccount holds no permissions, so there
-// is nothing else to run it as.
+// server's own access tokens, or a forwarded ID token of a trusted issuer),
+// which puts the validated user on the request, then attaches the user's ID
+// token when there is one. With DownstreamOAuth a request without an ID token
+// is refused (RequireProviderIDToken): the ServiceAccount holds no
+// permissions, so there is nothing else to run it as.
 func (o *oauthRuntime) protect(next http.Handler) http.Handler {
-	protected := o.attachIdentity(next)
+	protected := o.logUser(attachIDToken(next))
 	if o.downstreamOAuth {
 		protected = o.handler.RequireProviderIDToken(protected)
 	}
 	return o.handler.ValidateToken(protected)
 }
 
-// attachIdentity translates the validated mcp-oauth user into the request's
-// identity and puts the caller's IdP token on it when there is one: a
-// forwarded id_token is the bearer itself; for a token this server issued,
-// the provider's id_token stored with it. The token is what the session
-// operations present to agentgateway and, with DownstreamOAuth, what every
-// Kubernetes call presents.
-func (o *oauthRuntime) attachIdentity(next http.Handler) http.Handler {
+// logUser logs at debug level who a request authenticated as and how
+// mcp-oauth validated the bearer.
+func (o *oauthRuntime) logUser(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ctx := r.Context()
-		info, ok := handler.UserInfoFromContext(ctx)
-		if !ok || info == nil {
-			// ValidateToken admits nothing without user info; defensive.
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
+		if user, ok := handler.UserInfoFromContext(r.Context()); ok && user != nil {
+			o.log.DebugContext(r.Context(), "authenticated request", slog.Any("user", user), "token_source", user.TokenSource, "path", r.URL.Path)
 		}
-		id := &identity.Identity{Issuer: o.issuer, Subject: info.ID, Email: info.Email, EmailVerified: info.EmailVerified, Name: info.Name, Groups: info.Groups, Source: identity.SourceOAuth}
-		if info.IsSSO() {
-			id.Source = identity.SourceSSO
-		}
-		ctx = identity.ContextWith(ctx, id)
-		tok, _ := handler.ProviderIDTokenFromContext(ctx)
-		ctx = identity.ContextWithToken(ctx, tok)
-		if claims, err := oidc.ParseUnverifiedClaims(tok); err == nil {
-			if actor, exists := claims["act"]; exists && actor != nil {
-				id.Delegated = true
-			}
-		}
-		if audiences, ok := unverifiedAudience(tok); ok {
-			slices.Sort(audiences)
-			encoded, _ := json.Marshal(audiences)
-			id.Client = string(encoded)
-		}
-		o.log.Debug("authenticated request", "caller", id.String(), "source", id.Source, "path", r.URL.Path)
-		next.ServeHTTP(w, r.WithContext(ctx))
+		next.ServeHTTP(w, r)
 	})
 }
 
-// unverifiedAudience reads the aud claim (a string or a list) of a compact
-// JWS without verifying anything about it.
-func unverifiedAudience(token string) ([]string, bool) {
-	parts := strings.Split(token, ".")
-	if len(parts) != 3 {
-		return nil, false
-	}
-	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil {
-		return nil, false
-	}
-	var claims struct {
-		Aud json.RawMessage `json:"aud"`
-	}
-	if err := json.Unmarshal(payload, &claims); err != nil || len(claims.Aud) == 0 {
-		return nil, false
-	}
-	var one string
-	if json.Unmarshal(claims.Aud, &one) == nil && one != "" {
-		return []string{one}, true
-	}
-	var many []string
-	if json.Unmarshal(claims.Aud, &many) == nil && len(many) > 0 {
-		return many, true
-	}
-	return nil, false
+// attachIDToken puts the user's ID token on the request when mcp-oauth
+// resolves one: a forwarded ID token is the bearer itself; for a token this
+// server issued, the provider's ID token stored with it. The session
+// operations present it to agentgateway and, with DownstreamOAuth, every
+// Kubernetes call presents it.
+func attachIDToken(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		token, err := handler.ProviderIDTokenFromContext(r.Context())
+		if err != nil {
+			next.ServeHTTP(w, r)
+			return
+		}
+		next.ServeHTTP(w, r.WithContext(idtoken.ContextWith(r.Context(), token)))
+	})
 }
 
 func (o *oauthRuntime) shutdown(ctx context.Context) {

@@ -1,13 +1,13 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
-	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
 	"io"
@@ -22,7 +22,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/giantswarm/mcp-oauth/handler"
 	"github.com/giantswarm/mcp-oauth/oauthconfig"
+	"github.com/giantswarm/mcp-oauth/providers"
 	oauthserver "github.com/giantswarm/mcp-oauth/server"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -160,32 +162,6 @@ func TestProtectedResources(t *testing.T) {
 	}, protectedResources(trailing, "/mcp"), "a configured path with a trailing slash describes the MCP endpoint")
 }
 
-func TestUnverifiedAudience(t *testing.T) {
-	payload := func(claims string) string {
-		return "eyJhbGciOiJSUzI1NiJ9." + base64.RawURLEncoding.EncodeToString([]byte(claims)) + ".sig"
-	}
-	for name, tc := range map[string]struct {
-		token string
-		want  []string
-		ok    bool
-	}{
-		"single audience":    {payload(`{"aud":"portal-client","sub":"x"}`), []string{"portal-client"}, true},
-		"audience list":      {payload(`{"aud":["portal-client","kubernetes"]}`), []string{"portal-client", "kubernetes"}, true},
-		"no audience":        {payload(`{"sub":"x"}`), nil, false},
-		"empty audience":     {payload(`{"aud":""}`), nil, false},
-		"not json":           {payload(`{"aud":`), nil, false},
-		"opaque":             {"not-a-jwt", nil, false},
-		"four segments":      {"a.b.c.d", nil, false},
-		"payload not base64": {"a.!!!.c", nil, false},
-	} {
-		t.Run(name, func(t *testing.T) {
-			got, ok := unverifiedAudience(tc.token)
-			assert.Equal(t, tc.ok, ok)
-			assert.Equal(t, tc.want, got)
-		})
-	}
-}
-
 // TestServerGuardsRESTAndMCPButNotProbes wires OAuth through the assembled
 // server: probes and the OAuth metadata stay open, the API and the MCP
 // endpoint demand a token.
@@ -228,4 +204,20 @@ func TestServerGuardsRESTAndMCPButNotProbes(t *testing.T) {
 	assert.Equal(t, http.StatusUnauthorized, status(http.MethodPost, "/mcp", ""), "MCP needs a token")
 	assert.Equal(t, http.StatusOK, status(http.MethodGet, "/.well-known/oauth-authorization-server", ""), "metadata stays public")
 
+}
+
+func TestLogUserNamesTheUserWithoutProfileData(t *testing.T) {
+	var logs bytes.Buffer
+	o := &oauthRuntime{log: slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))}
+	user := &providers.UserInfo{Issuer: "https://dex.example.test", ID: "sub-admin", Email: "admin@lab.local", TokenSource: providers.TokenSourceSSO}
+	request := httptest.NewRequest(http.MethodGet, "/mcp", nil)
+	request = request.WithContext(handler.ContextWithUserInfo(request.Context(), user))
+
+	o.logUser(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })).ServeHTTP(httptest.NewRecorder(), request)
+
+	var line map[string]any
+	require.NoError(t, json.Unmarshal(logs.Bytes(), &line))
+	require.Equal(t, map[string]any{"issuer": "https://dex.example.test", "subject": "sub-admin"}, line["user"])
+	require.Equal(t, string(providers.TokenSourceSSO), line["token_source"])
+	require.NotContains(t, logs.String(), "admin@lab.local")
 }

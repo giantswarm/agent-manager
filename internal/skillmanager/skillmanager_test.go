@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/giantswarm/agent-manager/internal/identity"
+	"github.com/giantswarm/agent-manager/internal/idtoken"
 	"github.com/giantswarm/agent-manager/internal/skills"
 )
 
@@ -148,7 +148,7 @@ func newClient(t *testing.T, f *fakeSkillManager, token string) *Client {
 func TestResolvePinsSkillsAndPluginsInOneCall(t *testing.T) {
 	f := &fakeSkillManager{}
 	c := newClient(t, f, "")
-	ctx := identity.ContextWithToken(t.Context(), "id-token")
+	ctx := idtoken.ContextWith(t.Context(), "id-token")
 
 	gotSkills, gotPlugins, err := c.Resolve(ctx,
 		[]Item{
@@ -190,7 +190,7 @@ func TestResolvePinsSkillsAndPluginsInOneCall(t *testing.T) {
 func TestTheFormatIsFoundByTheAskedAndTheCleanedPath(t *testing.T) {
 	f := &fakeSkillManager{}
 	c := newClient(t, f, "")
-	ctx := identity.ContextWithToken(t.Context(), "id-token")
+	ctx := idtoken.ContextWith(t.Context(), "id-token")
 
 	_, got, err := c.Resolve(ctx, nil, []Item{{Path: "./claude/review/", Git: &Git{URL: repo, Ref: "main"}}, {Git: &Git{URL: repo, Ref: "main"}}})
 	require.NoError(t, err)
@@ -213,7 +213,7 @@ func TestTheFormatIsFoundByTheAskedAndTheCleanedPath(t *testing.T) {
 func TestTheCallersIDTokenIsTheOnlyCredentialSent(t *testing.T) {
 	f := &fakeSkillManager{}
 	c := newClient(t, f, "service")
-	ctx := identity.ContextWithToken(t.Context(), "id-token")
+	ctx := idtoken.ContextWith(t.Context(), "id-token")
 
 	_, _, err := c.Resolve(ctx, []Item{{Name: "r", Git: &Git{URL: repo, Ref: "main"}}}, nil)
 	require.NoError(t, err)
@@ -342,7 +342,7 @@ func TestAMalformedPinIsUnavailable(t *testing.T) {
 func TestSkillsProxiesTheCatalogue(t *testing.T) {
 	f := &fakeSkillManager{}
 	c := newClient(t, f, "")
-	ctx := identity.ContextWithToken(t.Context(), "id-token")
+	ctx := idtoken.ContextWith(t.Context(), "id-token")
 
 	got, err := c.Skills(ctx, repo, true)
 	require.NoError(t, err)

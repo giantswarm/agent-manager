@@ -24,7 +24,6 @@ import (
 	"github.com/giantswarm/agent-manager/internal/agents"
 	"github.com/giantswarm/agent-manager/internal/api"
 	"github.com/giantswarm/agent-manager/internal/chart"
-	"github.com/giantswarm/agent-manager/internal/identity"
 	"github.com/giantswarm/agent-manager/internal/kagent"
 	"github.com/giantswarm/agent-manager/internal/kube"
 	"github.com/giantswarm/agent-manager/internal/migrate"
@@ -396,7 +395,7 @@ func runServe(ctx context.Context, o *serveOptions) error {
 	// caller.
 	var orgNamespaces *organizations.Namespaces
 	var orgs *organizations.Service
-	var resolveGitHub func(context.Context) (*identity.GitHub, error)
+	var resolveGitHub func(context.Context) (*agents.GitHubUserAccessToken, error)
 	if o.githubExchangeEndpoint != "" {
 		resolveGitHub, err = server.NewGitHubExchange(server.GitHubExchangeConfig{TokenEndpoint: o.githubExchangeEndpoint, ClientID: o.githubExchangeClient, ClientIDFile: o.githubExchangeClientFile, ClientSecretFile: o.githubExchangeSecretFile, Audience: o.githubExchangeAudience, CAFile: o.githubExchangeCAFile, APIURL: o.githubAPIURL, SubjectIssuer: dexIssuerURL(oauthSettings), Logger: log})
 		if err != nil {

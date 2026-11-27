@@ -11,6 +11,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/giantswarm/mcp-oauth/handler"
+	"github.com/giantswarm/mcp-oauth/providers"
+
 	a2apb "github.com/a2aproject/a2a-go/v2/a2apb/v1"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -19,7 +22,7 @@ import (
 	kubefake "k8s.io/client-go/kubernetes/fake"
 
 	"github.com/giantswarm/agent-manager/internal/agents"
-	"github.com/giantswarm/agent-manager/internal/identity"
+	"github.com/giantswarm/agent-manager/internal/idtoken"
 	"github.com/giantswarm/agent-manager/internal/kagent"
 	apiv1alpha1 "github.com/giantswarm/agent-manager/internal/kagent/gen/kagent/api/v1alpha1"
 	"github.com/giantswarm/agent-manager/internal/kagent/kagenttest"
@@ -50,8 +53,8 @@ func newSessionService(t *testing.T) (*agents.Service, *kagenttest.Controller) {
 // token the session operations present.
 func asCaller(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ctx := identity.ContextWith(r.Context(), &identity.Identity{Email: "admin@lab.local"})
-		next.ServeHTTP(w, r.WithContext(identity.ContextWithToken(ctx, callerToken)))
+		ctx := handler.ContextWithUserInfo(r.Context(), &providers.UserInfo{Email: "admin@lab.local"})
+		next.ServeHTTP(w, r.WithContext(idtoken.ContextWith(ctx, callerToken)))
 	})
 }
 
@@ -188,7 +191,7 @@ func TestSessionsOverREST(t *testing.T) {
 func TestSessionsOverMCP(t *testing.T) {
 	svc, ctrl := newSessionService(t)
 	srv := NewMCPServer(svc, "test")
-	ctx := identity.ContextWithToken(t.Context(), callerToken)
+	ctx := idtoken.ContextWith(t.Context(), callerToken)
 
 	text, isErr := callToolCtx(t, ctx, srv, ToolStartSession, map[string]any{"name": "sre", "message": "hello", "sessionName": "triage"})
 	require.False(t, isErr, text)
@@ -242,7 +245,7 @@ func TestSessionsOverMCP(t *testing.T) {
 	assert.Contains(t, text, "invalid_request")
 
 	// With a workspace grant, as the person it names.
-	person := identity.ContextWith(ctx, &identity.Identity{Subject: "dex-admin", Email: "admin@lab.local"})
+	person := handler.ContextWithUserInfo(ctx, &providers.UserInfo{ID: "dex-admin", Email: "admin@lab.local"})
 	signer := kagenttest.NewSigner(t)
 	grant := signer.Sign(t, "admin@lab.local", 5*time.Minute, kagenttest.WorkspaceGrant())
 	text, isErr = callToolCtx(t, person, srv, ToolStartSession, map[string]any{"name": "sre", "message": "hello", "workspaceGrant": grant})
@@ -279,7 +282,7 @@ func TestSessionsOverMCP(t *testing.T) {
 func TestGetSessionAnswersAWholeSessionOverMCP(t *testing.T) {
 	svc, ctrl := newSessionService(t)
 	srv := NewMCPServer(svc, "test")
-	ctx := identity.ContextWithToken(t.Context(), callerToken)
+	ctx := idtoken.ContextWith(t.Context(), callerToken)
 	// 250 turns of 5 kB each: more turns than a summary reads and more bytes
 	// than the former ceiling.
 	tasks := make([]*a2apb.Task, 250)
@@ -381,7 +384,7 @@ func TestListSessionsContinuesPastItsBound(t *testing.T) {
 
 	t.Run("mcp", func(t *testing.T) {
 		srv := NewMCPServer(svc, "test")
-		ctx := identity.ContextWithToken(t.Context(), callerToken)
+		ctx := idtoken.ContextWith(t.Context(), callerToken)
 
 		text, isErr := callToolCtx(t, ctx, srv, ToolListSessions, map[string]any{"name": "sre"})
 		require.False(t, isErr, text)

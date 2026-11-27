@@ -11,7 +11,6 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/giantswarm/agent-manager/internal/agents"
-	"github.com/giantswarm/agent-manager/internal/identity"
 	"github.com/giantswarm/agent-manager/internal/kube"
 )
 
@@ -237,7 +236,7 @@ func (s *Service) AddMember(ctx context.Context, req MemberRequest) (*MemberResu
 	}
 	ns := org.Name
 	name := memberBinding(req.Role)
-	res := &MemberResult{Organization: org.Organization, Namespace: ns, Member: Member{Kind: sub.Kind, Name: sub.Name, Role: req.Role, Binding: name}, DryRun: req.DryRun, RequestedBy: identity.Caller(ctx)}
+	res := &MemberResult{Organization: org.Organization, Namespace: ns, Member: Member{Kind: sub.Kind, Name: sub.Name, Role: req.Role, Binding: name}, DryRun: req.DryRun, RequestedBy: agents.RequestedBy(ctx)}
 	// The caller reads first: one who may not gets forbidden, not the
 	// organization's state.
 	bindings, err := s.roleBindings(ctx, c, ns, wayOrganizationAdmin(ns))
@@ -284,7 +283,7 @@ func (s *Service) AddMember(ctx context.Context, req MemberRequest) (*MemberResu
 	}
 	res.Changed, res.Bindings = true, []string{name}
 	if !req.DryRun && res.Commit == nil {
-		s.log.Info("organization member added", identity.LogAttr(ctx), "namespace", ns, "role", req.Role, "kind", sub.Kind)
+		s.log.Info("organization member added", agents.UserAttr(ctx), "namespace", ns, "role", req.Role, "kind", sub.Kind)
 	}
 	return res, nil
 }
@@ -316,7 +315,7 @@ func (s *Service) RemoveMember(ctx context.Context, req MemberRequest) (*MemberR
 		return nil, err
 	}
 	ns := org.Name
-	res := &MemberResult{Organization: org.Organization, Namespace: ns, Member: Member{Kind: sub.Kind, Name: sub.Name, Role: req.Role}, DryRun: req.DryRun, RequestedBy: identity.Caller(ctx)}
+	res := &MemberResult{Organization: org.Organization, Namespace: ns, Member: Member{Kind: sub.Kind, Name: sub.Name, Role: req.Role}, DryRun: req.DryRun, RequestedBy: agents.RequestedBy(ctx)}
 	// The caller reads first: one who may not gets forbidden, not the
 	// organization's state.
 	bindings, err := s.roleBindings(ctx, c, ns, wayOrganizationAdmin(ns))
@@ -388,7 +387,7 @@ func (s *Service) RemoveMember(ctx context.Context, req MemberRequest) (*MemberR
 	}
 	res.Changed = true
 	if !req.DryRun && res.Commit == nil {
-		s.log.Info("organization member removed", identity.LogAttr(ctx), "namespace", ns, "role", req.Role, "kind", sub.Kind)
+		s.log.Info("organization member removed", agents.UserAttr(ctx), "namespace", ns, "role", req.Role, "kind", sub.Kind)
 	}
 	return res, nil
 }

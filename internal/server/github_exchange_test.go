@@ -14,27 +14,32 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/giantswarm/mcp-oauth/handler"
+	"github.com/giantswarm/mcp-oauth/providers"
+
 	"log/slog"
 
 	"github.com/giantswarm/mcp-oauth/providers/oidc"
 	"github.com/stretchr/testify/require"
 
 	"github.com/giantswarm/agent-manager/internal/agents"
-	"github.com/giantswarm/agent-manager/internal/identity"
+	"github.com/giantswarm/agent-manager/internal/idtoken"
 )
 
 func unsignedJWT(t *testing.T, claims map[string]any) string {
 	t.Helper()
 	payload, err := json.Marshal(claims)
 	require.NoError(t, err)
-	return base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"RS256"}`)) + "." + base64.RawURLEncoding.EncodeToString(payload) + ".signature"
+	return base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"RS256"}`)) + "." + base64.RawURLEncoding.EncodeToString(payload) + "." + base64.RawURLEncoding.EncodeToString([]byte("signature"))
 }
 
 func TestGitHubExchange(t *testing.T) {
-	for _, scenario := range []string{"success", "wrong identity issuer", "delegated actor", "act claim", "opaque subject token", "missing identity token", "no grant", "broker error", "redirect", "invalid token type", "refresh token", "missing expiry", "GitHub refuses", "GitHub unavailable", "GitHub forbids"} {
+	for _, scenario := range []string{"success", "wrong identity issuer", "missing user", "delegated actor", "act claim", "opaque subject token", "missing identity token", "no grant", "broker error", "redirect", "invalid token type", "refresh token", "missing expiry", "GitHub refuses", "GitHub unavailable", "GitHub forbids"} {
 		t.Run(scenario, func(t *testing.T) {
 			subjectToken := unsignedJWT(t, map[string]any{"iss": "https://identity.example.com", "sub": "alice"})
 			switch scenario {
+			case "wrong identity issuer":
+				subjectToken = unsignedJWT(t, map[string]any{"iss": "https://other.example.com", "sub": "alice"})
 			case "act claim":
 				subjectToken = unsignedJWT(t, map[string]any{"iss": "https://identity.example.com", "sub": "alice", "act": map[string]any{"sub": "agent"}})
 			case "opaque subject token":
@@ -43,7 +48,7 @@ func TestGitHubExchange(t *testing.T) {
 			secretFile := filepath.Join(t.TempDir(), "client-secret")
 			require.NoError(t, os.WriteFile(secretFile, []byte("fixture-secret"), 0o600))
 			exchanges, verifications := 0, 0
-			handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			upstreamHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
 				if r.URL.Path == "/token" {
 					exchanges++
@@ -103,27 +108,27 @@ func TestGitHubExchange(t *testing.T) {
 				}
 				_, _ = fmt.Fprint(w, `{"login":"alice"}`)
 			})
-			upstream := httptest.NewTLSServer(handler)
+			upstream := httptest.NewTLSServer(upstreamHandler)
 			defer upstream.Close()
 			client := hostnameClient(upstream)
 			client.CheckRedirect = func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }
 			var logs bytes.Buffer
 			configuration := GitHubExchangeConfig{TokenEndpoint: "https://example.com:" + upstreamPort(t, upstream) + "/token", ClientID: "manager-client", ClientSecretFile: secretFile, Audience: "manager-app", APIURL: upstream.URL, SubjectIssuer: "https://identity.example.com", Logger: slog.New(slog.NewTextHandler(&logs, nil))}
-			ctx := identity.ContextWith(t.Context(), &identity.Identity{Issuer: configuration.SubjectIssuer, Subject: "alice"})
-			if scenario == "wrong identity issuer" {
-				ctx = identity.ContextWith(ctx, &identity.Identity{Issuer: "https://other.example.com", Subject: "alice"})
+			ctx := handler.ContextWithUserInfo(t.Context(), &providers.UserInfo{Issuer: configuration.SubjectIssuer, ID: "alice"})
+			if scenario == "missing user" {
+				ctx = t.Context()
 			}
 			if scenario == "delegated actor" {
-				ctx = identity.ContextWith(ctx, &identity.Identity{Issuer: configuration.SubjectIssuer, Subject: "alice", Delegated: true})
+				ctx = handler.ContextWithUserInfo(ctx, &providers.UserInfo{Issuer: configuration.SubjectIssuer, ID: "alice", ActorChain: []oidc.ActorClaim{{Subject: "agent"}}})
 			}
 			if scenario != "missing identity token" {
-				ctx = identity.ContextWithToken(ctx, subjectToken)
+				ctx = idtoken.ContextWith(ctx, subjectToken)
 			}
 			resolve := newGitHubExchange(configuration, client)
 			result, err := resolve(ctx)
 			if scenario == "success" {
 				require.NoError(t, err)
-				require.Equal(t, &identity.GitHub{Login: "alice", Token: "fixture-user-grant", App: "manager-app"}, result) // #nosec G101 -- synthetic broker response
+				require.Equal(t, &agents.GitHubUserAccessToken{Login: "alice", Token: "fixture-user-grant", App: "manager-app"}, result) // #nosec G101 -- synthetic broker response
 				_, err = resolve(ctx)
 				require.NoError(t, err)
 				require.Equal(t, 2, exchanges)
@@ -144,11 +149,11 @@ func TestGitHubExchange(t *testing.T) {
 				require.True(t, ok)
 				require.Equal(t, "manager-app", grant.App)
 				require.Contains(t, grant.Reason, "core_auth_login app=manager-app")
-			case "delegated actor", "act claim", "opaque subject token":
+			case "delegated actor", "act claim":
 				require.ErrorIs(t, err, agents.ErrForbidden)
 				require.NotErrorIs(t, err, agents.ErrUnauthenticated)
 				require.Zero(t, exchanges)
-			case "wrong identity issuer", "missing identity token":
+			case "wrong identity issuer", "missing user", "missing identity token", "opaque subject token":
 				require.ErrorIs(t, err, agents.ErrUnauthenticated)
 				require.Zero(t, exchanges)
 			case "GitHub unavailable", "GitHub forbids":
@@ -253,8 +258,8 @@ func TestGitHubExchangeRefusesIPLiteralPrivateEndpoint(t *testing.T) {
 	require.NoError(t, os.WriteFile(secretFile, []byte("fixture-secret"), 0o600))
 	subjectToken := unsignedJWT(t, map[string]any{"iss": "https://identity.example.com", "sub": "alice"})
 	configuration := GitHubExchangeConfig{TokenEndpoint: upstream.URL + "/token", ClientID: "manager-client", ClientSecretFile: secretFile, Audience: "manager-app", SubjectIssuer: "https://identity.example.com"}
-	ctx := identity.ContextWith(t.Context(), &identity.Identity{Issuer: configuration.SubjectIssuer, Subject: "alice"})
-	ctx = identity.ContextWithToken(ctx, subjectToken)
+	ctx := handler.ContextWithUserInfo(t.Context(), &providers.UserInfo{Issuer: configuration.SubjectIssuer, ID: "alice"})
+	ctx = idtoken.ContextWith(ctx, subjectToken)
 
 	result, err := newGitHubExchange(configuration, upstream.Client())(ctx)
 	require.Error(t, err)

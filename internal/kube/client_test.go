@@ -7,11 +7,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/giantswarm/mcp-oauth/handler"
+	"github.com/giantswarm/mcp-oauth/providers"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"k8s.io/client-go/rest"
 
-	"github.com/giantswarm/agent-manager/internal/identity"
+	"github.com/giantswarm/agent-manager/internal/idtoken"
 )
 
 func testClients(t *testing.T) *Clients {
@@ -59,7 +62,7 @@ func TestCallerProviderNeedsTheCallerToken(t *testing.T) {
 	assert.ErrorIs(t, err, ErrNoCallerToken, "no token, no client: there is no ServiceAccount to fall back to")
 
 	valid := jwt(t, time.Now().Add(time.Hour))
-	ctx := identity.ContextWithToken(identity.ContextWith(context.Background(), &identity.Identity{Email: "admin@lab.local"}), valid)
+	ctx := idtoken.ContextWith(handler.ContextWithUserInfo(context.Background(), &providers.UserInfo{Email: "admin@lab.local"}), valid)
 	user, err := p.Client(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, valid, user.(*Clients).restCfg.BearerToken, "the caller's token is what the apiserver sees")
@@ -67,19 +70,19 @@ func TestCallerProviderNeedsTheCallerToken(t *testing.T) {
 	require.NoError(t, err)
 	assert.Same(t, user, again, "cached per token")
 
-	other := identity.ContextWithToken(context.Background(), jwt(t, time.Now().Add(time.Hour), 7))
+	other := idtoken.ContextWith(context.Background(), jwt(t, time.Now().Add(time.Hour), 7))
 	second, err := p.Client(other)
 	require.NoError(t, err)
 	assert.NotSame(t, user, second, "another token, another client")
 
-	expired := identity.ContextWithToken(context.Background(), jwt(t, time.Now().Add(-time.Minute)))
+	expired := idtoken.ContextWith(context.Background(), jwt(t, time.Now().Add(-time.Minute)))
 	stale, err := p.Client(expired)
 	require.NoError(t, err, "an expired token is still presented: the apiserver rejects it, nothing else answers")
 	again, err = p.Client(expired)
 	require.NoError(t, err)
 	assert.Same(t, stale, again)
 
-	opaque := identity.ContextWithToken(context.Background(), "opaque")
+	opaque := idtoken.ContextWith(context.Background(), "opaque")
 	_, err = p.Client(opaque)
 	require.NoError(t, err, "a token without exp is presented as long as the request lasts")
 }
@@ -87,11 +90,11 @@ func TestCallerProviderNeedsTheCallerToken(t *testing.T) {
 func TestCallerProviderEvictsExpiredEntriesWhenFull(t *testing.T) {
 	p := NewCallerProvider(testClients(t), nil)
 	for i := 0; i < maxCallerClients; i++ {
-		_, err := p.Client(identity.ContextWithToken(context.Background(), jwt(t, time.Now().Add(-time.Hour), i)))
+		_, err := p.Client(idtoken.ContextWith(context.Background(), jwt(t, time.Now().Add(-time.Hour), i)))
 		require.NoError(t, err)
 	}
 	assert.Len(t, p.byToken, maxCallerClients)
-	_, err := p.Client(identity.ContextWithToken(context.Background(), jwt(t, time.Now().Add(time.Hour), -1)))
+	_, err := p.Client(idtoken.ContextWith(context.Background(), jwt(t, time.Now().Add(time.Hour), -1)))
 	require.NoError(t, err)
 	assert.Len(t, p.byToken, 1, "expired entries are evicted before a new one is cached")
 }

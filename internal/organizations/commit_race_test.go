@@ -11,7 +11,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/giantswarm/agent-manager/internal/agents"
-	"github.com/giantswarm/agent-manager/internal/identity"
 )
 
 // racingRemote is the forge where another write of the same object opens
@@ -85,7 +84,7 @@ func TestTwoWritesOfAnObjectAtTheSameTimeLeaveOnePullRequest(t *testing.T) {
 		fake.AddBranch(repository, "main", map[string][]byte{})
 		remote := &racingRemote{Fake: fake, object: object, beforeCut: beforeCut}
 		cfg := &CommitConfig{Objects: provenance.Location{Repository: repository, Branch: "main", Directory: "organizations"}, ContentPrefix: DefaultContentPrefix}
-		c := &orgCommit{cfg: cfg, remote: remote, gh: &identity.GitHub{Login: "jane"}}
+		c := &orgCommit{cfg: cfg, remote: remote, gh: &agents.GitHubUserAccessToken{Login: "jane"}}
 		changes := []fileChange{{dir: c.objectDir(), write: map[string][]byte{c.objectFile("payments"): []byte("kind: Organization\n")}}}
 		return remote, c, changes
 	}

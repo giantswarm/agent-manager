@@ -19,7 +19,7 @@ import (
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/giantswarm/agent-manager/internal/identity"
+	"github.com/giantswarm/agent-manager/internal/idtoken"
 	"github.com/giantswarm/agent-manager/internal/kagent"
 	apiv1alpha1 "github.com/giantswarm/agent-manager/internal/kagent/gen/kagent/api/v1alpha1"
 	"github.com/giantswarm/agent-manager/internal/muster"
@@ -713,7 +713,7 @@ func (s *Service) StartSession(ctx context.Context, in StartSession) (*SessionSt
 		}
 	}
 	out := &SessionStart{Toolset: bound, Toolchains: toolchains, Warning: warning}
-	attrs := []any{identity.LogAttr(ctx), "agent", ref.Tenant(), "session", session.GetId()}
+	attrs := []any{UserAttr(ctx), "agent", ref.Tenant(), "session", session.GetId()}
 	if workspace != nil {
 		out.Workspace = workspace.Name
 		attrs = append(attrs, "workspace", workspace.Name)
@@ -840,13 +840,13 @@ func (s *Service) DeleteSession(ctx context.Context, sessionID string) (*Session
 	if err != nil {
 		return nil, kagentError(err, fmt.Sprintf("session %s", sessionID))
 	}
-	s.log.InfoContext(ctx, "session deleted", identity.LogAttr(ctx), "agent", kagent.Ref{
+	s.log.InfoContext(ctx, "session deleted", UserAttr(ctx), "agent", kagent.Ref{
 		Namespace: session.GetAgent().GetNamespace(), Name: session.GetAgent().GetName(),
 	}.Tenant(), "session", session.GetId())
 	out := &SessionDelete{Organization: s.owners(ctx)[session.GetAgent().GetNamespace()]}
 	if binding != nil {
 		if err := s.cfg.Bindings.Unbind(ctx, token, binding.Actor); err != nil {
-			s.log.ErrorContext(ctx, "session deleted but not unbound in muster", identity.LogAttr(ctx), "session", session.GetId(), "actor", binding.Actor, "error", err)
+			s.log.ErrorContext(ctx, "session deleted but not unbound in muster", UserAttr(ctx), "session", session.GetId(), "actor", binding.Actor, "error", err)
 			out.Warning = fmt.Sprintf("the session was deleted, but muster did not remove its sandbox's binding (it expires with the Session idle TTL): %v", err)
 		}
 	}
@@ -913,7 +913,7 @@ func (s *Service) bindSession(ctx context.Context, token string, ref kagent.Ref,
 		return nil, err
 	}
 	if binding == nil {
-		s.log.InfoContext(ctx, "session has no providers: nothing to bind in muster", identity.LogAttr(ctx), "session", session.GetId())
+		s.log.InfoContext(ctx, "session has no providers: nothing to bind in muster", UserAttr(ctx), "session", session.GetId())
 		return nil, nil
 	}
 	if slices.Contains(binding.Providers, muster.Provider) {
@@ -924,7 +924,7 @@ func (s *Service) bindSession(ctx context.Context, token string, ref kagent.Ref,
 	if err := s.cfg.Bindings.Bind(ctx, token, *binding); err != nil {
 		return nil, bindingError(err, session.GetId())
 	}
-	s.log.InfoContext(ctx, "session bound in muster", identity.LogAttr(ctx), "session", session.GetId(), "actor", binding.Actor, "providers", binding.Providers, "toolset", binding.Toolset)
+	s.log.InfoContext(ctx, "session bound in muster", UserAttr(ctx), "session", session.GetId(), "actor", binding.Actor, "providers", binding.Providers, "toolset", binding.Toolset)
 	return binding.Toolset, nil
 }
 
@@ -934,10 +934,10 @@ func (s *Service) bindSession(ctx context.Context, token string, ref kagent.Ref,
 // failed too.
 func (s *Service) abandonSession(ctx context.Context, token string, session *apiv1alpha1.Session, cause error) error {
 	if _, err := s.cfg.Sessions.DeleteSession(ctx, token, session.GetId()); err != nil {
-		s.log.ErrorContext(ctx, "session left behind after a failed bind", identity.LogAttr(ctx), "session", session.GetId(), "error", err)
+		s.log.ErrorContext(ctx, "session left behind after a failed bind", UserAttr(ctx), "session", session.GetId(), "error", err)
 		return fmt.Errorf("%w (session %s could not be deleted again: delete it with delete_session: %v)", cause, session.GetId(), kagentError(err, fmt.Sprintf("session %s", session.GetId())))
 	}
-	s.log.InfoContext(ctx, "session deleted after a refused start", identity.LogAttr(ctx), "session", session.GetId())
+	s.log.InfoContext(ctx, "session deleted after a refused start", UserAttr(ctx), "session", session.GetId())
 	return cause
 }
 
@@ -985,7 +985,7 @@ func (s *Service) sessionCall(ctx context.Context, namespace, name string) (kage
 // sessionToken is the caller's IdP token: a session operation runs as the
 // caller through agentgateway and never as the ServiceAccount.
 func sessionToken(ctx context.Context) (string, error) {
-	token, ok := identity.TokenFromContext(ctx)
+	token, ok := idtoken.FromContext(ctx)
 	if !ok {
 		return "", fmt.Errorf("%w: the session tools act as the caller towards kagent and the request carries no identity token (agent-manager runs without OAuth, or the caller's token could not be resolved)", ErrUnauthenticated)
 	}

@@ -11,7 +11,6 @@ import (
 	mcpserver "github.com/mark3labs/mcp-go/server"
 
 	"github.com/giantswarm/agent-manager/internal/agents"
-	"github.com/giantswarm/agent-manager/internal/identity"
 	"github.com/giantswarm/agent-manager/internal/organizations"
 )
 
@@ -44,10 +43,9 @@ func (t *orgTools) runWrite(fn func(context.Context, mcp.CallToolRequest) (*orga
 			delete(bound, argRequestID)
 			req.Params.Arguments = bound
 		}
-		person, _ := identity.FromContext(ctx)
 		client := ""
-		if person != nil {
-			client = person.Client
+		if user := agents.User(ctx); user != nil {
+			client = user.ClientID
 		}
 		if session := mcpserver.ClientSessionFromContext(ctx); session != nil {
 			client += "/" + session.SessionID()

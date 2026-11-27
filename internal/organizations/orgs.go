@@ -19,7 +19,7 @@ import (
 	"k8s.io/client-go/dynamic"
 
 	"github.com/giantswarm/agent-manager/internal/agents"
-	"github.com/giantswarm/agent-manager/internal/identity"
+	"github.com/giantswarm/agent-manager/internal/idtoken"
 	"github.com/giantswarm/agent-manager/internal/kagent"
 	apiv1alpha1 "github.com/giantswarm/agent-manager/internal/kagent/gen/kagent/api/v1alpha1"
 	"github.com/giantswarm/agent-manager/internal/kube"
@@ -352,7 +352,7 @@ func (s *Service) erasedSessions(ctx context.Context, ns string, agentNames []st
 	if !agentsRead {
 		return nil, "the organization's agents could not be read (see unreadable)"
 	}
-	token, ok := identity.TokenFromContext(ctx)
+	token, ok := idtoken.FromContext(ctx)
 	if !ok {
 		return nil, "the request carries no identity token, and sessions are listed as the caller"
 	}
@@ -486,7 +486,7 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (*CreateResult,
 	default:
 		return nil, refuseExisting(existing, what)
 	}
-	res := &CreateResult{DryRun: req.DryRun, RequestedBy: identity.Caller(ctx)}
+	res := &CreateResult{DryRun: req.DryRun, RequestedBy: agents.RequestedBy(ctx)}
 	if mode == agents.ModeCommit {
 		return s.createCommit(ctx, c, req, admins, res)
 	}
@@ -505,7 +505,7 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (*CreateResult,
 	}
 	res.Created = true
 	res.Next = operatorNext
-	s.log.Info("organization created", identity.LogAttr(ctx), "name", req.Name, "admins", len(admins))
+	s.log.Info("organization created", agents.UserAttr(ctx), "name", req.Name, "admins", len(admins))
 	return res, nil
 }
 
@@ -609,7 +609,7 @@ func (s *Service) Update(ctx context.Context, req UpdateRequest) (*UpdateResult,
 	if err := refuseLive(org); err != nil {
 		return nil, err
 	}
-	res := &UpdateResult{Before: s.summary(org), DryRun: req.DryRun, RequestedBy: identity.Caller(ctx)}
+	res := &UpdateResult{Before: s.summary(org), DryRun: req.DryRun, RequestedBy: agents.RequestedBy(ctx)}
 	next := u.DeepCopy()
 	if res.Changed, err = changeOrganization(next, req); err != nil {
 		return nil, err
@@ -628,7 +628,7 @@ func (s *Service) Update(ctx context.Context, req UpdateRequest) (*UpdateResult,
 		return nil, err
 	}
 	if !req.DryRun {
-		s.log.Info("organization updated", identity.LogAttr(ctx), "name", req.Name, "changed", res.Changed)
+		s.log.Info("organization updated", agents.UserAttr(ctx), "name", req.Name, "changed", res.Changed)
 	}
 	return res, nil
 }
@@ -767,7 +767,7 @@ func (s *Service) Delete(ctx context.Context, req DeleteRequest) (*DeleteResult,
 		}
 	}
 	confirm := req.Name
-	res := &DeleteResult{Organization: s.summary(org), Erases: s.erases(ctx, c.Dynamic(), org), DryRun: req.DryRun, RequestedBy: identity.Caller(ctx)}
+	res := &DeleteResult{Organization: s.summary(org), Erases: s.erases(ctx, c.Dynamic(), org), DryRun: req.DryRun, RequestedBy: agents.RequestedBy(ctx)}
 	if org.DeletionTimestamp != nil {
 		res.Next = "the organization is being erased already (" + orDefault(res.Organization.ErasureStep, "starting") + ")"
 		return res, nil
@@ -835,7 +835,7 @@ func (s *Service) Delete(ctx context.Context, req DeleteRequest) (*DeleteResult,
 	}
 	res.Deleted = true
 	res.Next = "the operator erases the organization now; get_organization reports its erasure step until it is gone"
-	s.log.Info("organization deleted", identity.LogAttr(ctx), "name", req.Name)
+	s.log.Info("organization deleted", agents.UserAttr(ctx), "name", req.Name)
 	return res, nil
 }
 

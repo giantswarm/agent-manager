@@ -215,7 +215,7 @@ The chart creates a dedicated namespace, a ConfigMap-only Role and a quota of
 256 ConfigMaps. Records are limited to 128 KiB and expire after 15 minutes, with
 minute-based cleanup. They hold nonsecret intent, verified issuer/subject,
 the SHA-256 digest of the verified email address (see
-[Who owns an operation](#who-owns-an-operation)), authenticated audience and
+[Who owns an operation](#who-owns-an-operation)), the authenticated OAuth client and
 MCP session context, revisions, file hashes and the receipt. Values, ciphertext, ID tokens and App tokens never enter them. The
 manager's ServiceAccount gains no tenant Secret or application ConfigMap access.
 

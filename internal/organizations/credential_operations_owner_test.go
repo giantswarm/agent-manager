@@ -3,15 +3,15 @@ package organizations
 import (
 	"testing"
 
-	"github.com/stretchr/testify/require"
+	"github.com/giantswarm/mcp-oauth/providers"
 
-	"github.com/giantswarm/agent-manager/internal/identity"
+	"github.com/stretchr/testify/require"
 )
 
 // The digest folds ASCII case only: a Kelvin sign is not the letter k.
 func TestVerifiedEmailDigestFoldsASCIICaseOnly(t *testing.T) {
 	digest := func(email string, verified bool) string {
-		return verifiedEmailDigest(&identity.Identity{Email: email, EmailVerified: verified})
+		return verifiedEmailDigest(&providers.UserInfo{Email: email, EmailVerified: verified})
 	}
 	require.NotEmpty(t, digest("kim@example.com", true))
 	require.Equal(t, digest("kim@example.com", true), digest("KIM@Example.COM", true))

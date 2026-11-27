@@ -8,8 +8,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/giantswarm/mcp-oauth/providers"
+
 	"github.com/giantswarm/agent-manager/internal/agents"
-	"github.com/giantswarm/agent-manager/internal/identity"
 )
 
 // ErrCredentialOperationOtherLogin answers a caller that is not the owner of
@@ -24,7 +25,7 @@ var ErrCredentialOperationOtherLogin = errors.New("this credential operation was
 // otherwise. It is a pseudonym, not a secret. Only ASCII is folded: full
 // Unicode folding would map other characters (the Kelvin sign) to ASCII
 // letters and so match another address.
-func verifiedEmailDigest(person *identity.Identity) string {
+func verifiedEmailDigest(person *providers.UserInfo) string {
 	if person == nil || !person.EmailVerified || person.Email == "" {
 		return ""
 	}
@@ -37,9 +38,9 @@ func verifiedEmailDigest(person *identity.Identity) string {
 // operation is neither expired nor cancelled, else not found. A delegated
 // caller, another issuer, another or unverified email address, and an
 // operation prepared without a verified address all get not found.
-func refuseNonOwner(operation *credentialOperation, person *identity.Identity) error {
+func refuseNonOwner(operation *credentialOperation, person *providers.UserInfo) error {
 	digest := verifiedEmailDigest(person)
-	if person != nil && !person.Delegated && operation.Issuer == person.Issuer &&
+	if person != nil && !agents.Delegated(person) && operation.Issuer == person.Issuer &&
 		digest != "" && operation.EmailDigest == digest &&
 		operation.State != operationCancelled && time.Now().Before(operation.ExpiresAt) {
 		return ErrCredentialOperationOtherLogin

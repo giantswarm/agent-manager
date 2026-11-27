@@ -7,8 +7,6 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-
-	"github.com/giantswarm/agent-manager/internal/identity"
 )
 
 // maxDefaultAgentEntries bounds the callers whose default agent is kept.
@@ -30,7 +28,10 @@ func (s *Service) defaultAgentAt(ctx context.Context, st *site) string {
 // Each caller's answer is kept for Config.DefaultAgentTTL.
 func (s *Service) defaultAgent(ctx context.Context) string {
 	ttl := s.cfg.DefaultAgentTTL
-	caller := identity.Caller(ctx)
+	var caller string
+	if user := User(ctx); user != nil {
+		caller = user.Issuer + "\x00" + user.ID
+	}
 	if ttl > 0 {
 		if agent, ok := s.defaults.Get(caller); ok {
 			return agent.(string)
@@ -65,7 +66,7 @@ func (s *Service) readDefaultAgent(ctx context.Context) (string, bool) {
 		for _, ns := range managed {
 			list, err := dyn.Resource(s.agentGVR()).Namespace(ns).List(ctx, selector)
 			if err != nil {
-				s.log.Debug("default agent: list failed; leaving the namespace out", identity.LogAttr(ctx), "namespace", ns, "error", err)
+				s.log.Debug("default agent: list failed; leaving the namespace out", UserAttr(ctx), "namespace", ns, "error", err)
 				continue
 			}
 			for i := range list.Items {
