@@ -106,10 +106,10 @@ const organizationArgDescription = "The organization's name (list_organizations)
 type Option func(*serverOptions)
 
 type serverOptions struct {
-	orgs      *organizations.Service
-	lifecycle context.Context
-	signIns   *SignInElicitor
-	log       *slog.Logger
+	orgs            *organizations.Service
+	lifecycle       context.Context
+	urlElicitations *URLElicitor
+	log             *slog.Logger
 }
 
 func WithLifecycle(ctx context.Context) Option {

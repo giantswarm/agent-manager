@@ -516,14 +516,14 @@ func runServe(ctx context.Context, o *serveOptions) error {
 	}
 	srvCfg.Organizations = orgs
 	mcpOptions := []api.Option{api.WithOrganizations(orgs), api.WithLifecycle(ctx)}
-	signIns, err := signInElicitor()
+	urlElicitations, err := urlElicitor()
 	if err != nil {
 		return err
 	}
-	if signIns != nil {
-		mcpOptions = append(mcpOptions, api.WithSignInRelay(signIns, log))
+	if urlElicitations != nil {
+		mcpOptions = append(mcpOptions, api.WithURLElicitationRelay(urlElicitations, log))
 	} else if workspaceManager != nil || toolchainCatalog != nil {
-		log.Info("OAUTH_REQUEST_STATE_KEY is not set: muster's sign-ins are answered as tool errors naming their URL, not relayed as URL elicitation")
+		log.Info("OAUTH_REQUEST_STATE_KEY is not set: URL interactions requested by muster are answered as tool errors naming their URL, not relayed as URL elicitation")
 	}
 	srv, err := server.New(srvCfg, svc, api.NewMCPServer(svc, build.Version, mcpOptions...), log)
 	if err != nil {
@@ -723,11 +723,11 @@ func skillsTokenSource(o *serveOptions) (skills.TokenSource, error) {
 	return skills.NewApp(o.skillsGitHubAPI, o.skillsAppID, o.skillsAppInstall, key, nil)
 }
 
-// signInElicitor relays muster's sign-ins to a tool's caller with
+// urlElicitor relays URL interactions requested by muster to a tool's caller with
 // requestState sealed by OAUTH_REQUEST_STATE_KEY (and, during a rotation,
 // OAUTH_REQUEST_STATE_PREVIOUS_KEY, each also as _FILE); nil when no key is
 // set.
-func signInElicitor() (*api.SignInElicitor, error) {
+func urlElicitor() (*api.URLElicitor, error) {
 	sealer, err := oauthconfig.NewRequestStateSealerFromEnv()
 	if err != nil {
 		return nil, fmt.Errorf("request state key: %w", err)

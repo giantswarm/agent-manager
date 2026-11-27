@@ -185,13 +185,11 @@ func NewMCPServer(svc *agents.Service, version string, opts ...Option) *mcpserve
 		mcpserver.WithToolHandlerMiddleware(toolDuration(otel.Meter(tracerName))),
 		mcpserver.WithToolHandlerMiddleware(reportProgress),
 	}
-	if o.signIns != nil {
-		log := o.log
-		if log == nil {
-			log = slog.Default()
-		}
-		middleware = append(middleware, mcpserver.WithToolHandlerMiddleware(relaySignIns(o.signIns, log)))
+	log := o.log
+	if log == nil {
+		log = slog.Default()
 	}
+	middleware = append(middleware, mcpserver.WithToolHandlerMiddleware(relayURLElicitations(o.urlElicitations, log)))
 	s := mcpserver.NewMCPServer("agent-manager", version, append(middleware,
 		// The HTTP server span already joined the inbound traceparent, so the
 		// MCP spans nest under it instead of extracting it a second time.
