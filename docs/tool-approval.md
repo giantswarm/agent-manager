@@ -1,7 +1,7 @@
 # Tool approval per agent
 
 What agent-manager does for it. The concept (modes, floors, connector
-settings) is in [Governing tool calls](https://docs.giantswarm.io/overview/agent-platform/governing-tool-calls/).
+settings) is in [Governing tool calls](https://github.com/giantswarm/agent-platform/blob/main/docs/tool-approval.md).
 
 ## The tool list
 

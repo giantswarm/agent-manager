@@ -484,7 +484,7 @@ muster:
     # `set_organization_connector`, `add_organization_member`,
     # `set_organization_model`, `set_organization_egress_policy`,
     # `replace_organization_credential`). Needs a muster CRD with
-    # `spec.approval`. See https://docs.giantswarm.io/overview/agent-platform/governing-tool-calls/
+    # `spec.approval`. See https://github.com/giantswarm/agent-platform/blob/main/docs/tool-approval.md
     approval:
       rule: Allow  # @schema enum: [Allow, Ask, Block]
       tools:  # @schema skipProperties: true; maxProperties: 512; additionalProperties: {type: string, enum: [Allow, Ask, Block]}
