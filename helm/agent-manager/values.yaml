@@ -397,6 +397,17 @@ oauth:
   # registration without an initial access token, public clients included
   # (labs only). MCP clients register with client ID metadata documents.
   allowPublicClientRegistration: false
+  # -- Existing Secret with the 32-byte key (base64 or hex) that seals the
+  # requestState of a URL interaction relayed to the tool's caller as URL mode
+  # elicitation, mounted as `OAUTH_REQUEST_STATE_KEY_FILE`; `previousKey`
+  # names the Secret's key holding the key before a rotation, mounted as
+  # `OAUTH_REQUEST_STATE_PREVIOUS_KEY_FILE`. Each server has its own key.
+  # Empty name: no key, and a URL interaction is answered as a tool error
+  # naming its URL.
+  requestStateSecret:
+    name: ""
+    key: key
+    previousKey: ""
   downstream:
     # -- Call the Kubernetes API as the caller: everything a request does
     # (HelmReleases and OCIRepositories, the Agents, RemoteMCPServers,

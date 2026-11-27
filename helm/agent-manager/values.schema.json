@@ -829,6 +829,22 @@
                         }
                     }
                 },
+                "requestStateSecret": {
+                    "type": "object",
+                    "description": "Existing Secret with the 32-byte key (base64 or hex) that seals the requestState of a URL interaction relayed to the tool's caller as URL mode elicitation, mounted as `OAUTH_REQUEST_STATE_KEY_FILE`; `previousKey` names the Secret's key holding the key before a rotation, mounted as `OAUTH_REQUEST_STATE_PREVIOUS_KEY_FILE`. Each server has its own key. Empty name: no key, and a URL interaction is answered as a tool error naming its URL.",
+                    "additionalProperties": false,
+                    "properties": {
+                        "key": {
+                            "type": "string"
+                        },
+                        "name": {
+                            "type": "string"
+                        },
+                        "previousKey": {
+                            "type": "string"
+                        }
+                    }
+                },
                 "sso": {
                     "type": "object",
                     "additionalProperties": false,

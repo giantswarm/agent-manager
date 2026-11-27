@@ -12,8 +12,10 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/giantswarm/mcp-toolkit/urlelicitation"
 	mcpclient "github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/client/transport"
 	"github.com/mark3labs/mcp-go/mcp"
@@ -136,20 +138,23 @@ func (c *Client) SignInLink(ctx context.Context, bearer, server string) (string,
 	return out.AuthURL, nil
 }
 
-// Call runs tool through muster's call_tool as the caller, one MCP session
-// per call. A tool's error result is a ToolError or, for muster's sign-in
-// challenge, an AuthRequiredError.
+// Call runs a tool through muster. URL input requests retain the producer
+// message and URL; legacy auth_required results remain AuthRequiredError.
 func (c *Client) Call(ctx context.Context, bearer, tool string, args map[string]any) (*Result, error) {
 	if bearer == "" {
 		return nil, errors.New("muster: the request carries no identity token")
 	}
 	ctx, cancel := context.WithTimeout(ctx, callTimeout)
 	defer cancel()
-	client, err := mcpclient.NewStreamableHttpClient(c.endpoint,
+	t, err := transport.NewStreamableHTTP(c.endpoint,
 		transport.WithHTTPHeaders(map[string]string{"Authorization": "Bearer " + bearer}))
 	if err != nil {
 		return nil, fmt.Errorf("muster MCP client: %w", err)
 	}
+	// A server/discover slower than mcp-go's probe bound would fall back to
+	// the 2025-11-25 handshake, which carries no InputRequiredResult; the
+	// call's own deadline bounds it.
+	client := mcpclient.NewClient(t, mcpclient.WithDiscoverTimeout(-1), mcpclient.WithManualInputRoundTrips())
 	defer func() { _ = client.Close() }()
 	host := c.host()
 	if err := client.Start(ctx); err != nil {
@@ -164,9 +169,28 @@ func (c *Client) Call(ctx context.Context, bearer, tool string, args map[string]
 	req := mcp.CallToolRequest{}
 	req.Params.Name = MetaCallTool
 	req.Params.Arguments = map[string]any{"name": tool, "arguments": args}
+	relay := relayFrom(ctx)
+	target, err := urlelicitation.RequestBinding(req)
+	if err != nil {
+		return nil, err
+	}
+	if relay != nil {
+		ctx = mcpclient.WithRequestClientCapabilities(ctx, urlElicitation)
+		req.Params.MultiRoundTripParams = relay.answer(target)
+	}
 	outer, err := client.CallTool(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("muster (%s): call %s: %w", host, tool, err)
+	}
+	if outer.NeedsInput() {
+		relayed, err := urlelicitation.FromInputRequired(outer)
+		if err != nil {
+			return nil, fmt.Errorf("muster (%s): call %s: %w", host, tool, err)
+		}
+		if relay != nil {
+			relay.record(target, relayed)
+		}
+		return nil, fmt.Errorf("muster requires URL input: %s Open %s and then retry", relayed.Message, relayed.URL)
 	}
 	inner, dispatched := unwrap(outer)
 	if !inner.IsError {
@@ -174,11 +198,16 @@ func (c *Client) Call(ctx context.Context, bearer, tool string, args map[string]
 	}
 	if challenge := authChallenge(inner); challenge != nil {
 		if challenge.Server == "" {
-			challenge.Server = strings.TrimSuffix(strings.TrimPrefix(c.prefix, "x_"), "_")
+			challenge.Server = c.server()
 		}
 		return nil, challenge
 	}
 	return nil, &ToolError{Tool: tool, Message: textOf(inner), Dispatched: dispatched}
+}
+
+// server is the muster server the prefix names.
+func (c *Client) server() string {
+	return strings.TrimSuffix(strings.TrimPrefix(c.prefix, "x_"), "_")
 }
 
 func (c *Client) host() string {
@@ -236,4 +265,64 @@ func authChallenge(r *mcp.CallToolResult) *AuthRequiredError {
 		return &AuthRequiredError{}
 	}
 	return nil
+}
+
+// urlElicitation is what a call on a context from WithRelay declares to
+// muster.
+var urlElicitation = mcp.ClientCapabilities{Elicitation: &mcp.ElicitationCapability{URL: &struct{}{}}}
+
+// Relay binds the first URL elicitation to its originating call and sends
+// the caller's answer only to that call, once per handler invocation.
+type Relay struct {
+	mu          sync.Mutex
+	retry       *urlelicitation.Retry
+	answered    bool
+	elicitation *Elicitation
+}
+
+// Elicitation is a URL interaction requested by muster.
+type Elicitation struct {
+	// Target names the call: the tool and a digest of its arguments.
+	Target string
+	// Relayed is muster's URL elicitation and requestState.
+	Relayed *urlelicitation.Relayed
+}
+
+type relayKey struct{}
+
+// WithRelay records URL elicitations and forwards a matching retry once.
+func WithRelay(ctx context.Context, retry *urlelicitation.Retry) (context.Context, *Relay) {
+	r := &Relay{retry: retry}
+	return context.WithValue(ctx, relayKey{}, r), r
+}
+
+func relayFrom(ctx context.Context) *Relay {
+	r, _ := ctx.Value(relayKey{}).(*Relay)
+	return r
+}
+
+// Elicitation returns the first pending URL interaction, or nil.
+func (r *Relay) Elicitation() *Elicitation {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.elicitation
+}
+
+// answer is the caller's answer for the call target, once.
+func (r *Relay) answer(target string) mcp.MultiRoundTripParams {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.retry == nil || r.answered || r.retry.Target != target {
+		return mcp.MultiRoundTripParams{}
+	}
+	r.answered = true
+	return r.retry.Params
+}
+
+func (r *Relay) record(target string, relayed *urlelicitation.Relayed) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.elicitation == nil {
+		r.elicitation = &Elicitation{Target: target, Relayed: relayed}
+	}
 }

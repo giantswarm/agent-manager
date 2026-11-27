@@ -17,8 +17,10 @@ import (
 	apov1alpha1 "github.com/giantswarm/agent-platform-operator/api/v1alpha1"
 	"github.com/giantswarm/gitops-commit/commit"
 	"github.com/giantswarm/mcp-oauth/oauthconfig"
+	"github.com/giantswarm/mcp-oauth/requeststate"
 	"github.com/giantswarm/mcp-toolkit/metrics"
 	"github.com/giantswarm/mcp-toolkit/tracing"
+	"github.com/giantswarm/mcp-toolkit/urlelicitation"
 	"github.com/spf13/cobra"
 
 	"github.com/giantswarm/agent-manager/internal/agents"
@@ -506,7 +508,17 @@ func runServe(ctx context.Context, o *serveOptions) error {
 		srvCfg.OAuth = &server.OAuthConfig{Settings: oauthSettings, DownstreamOAuth: o.downstreamOAuth}
 	}
 	srvCfg.Organizations = orgs
-	srv, err := server.New(srvCfg, svc, api.NewMCPServer(svc, build.Version, api.WithOrganizations(orgs), api.WithLifecycle(ctx)), log)
+	mcpOptions := []api.Option{api.WithOrganizations(orgs), api.WithLifecycle(ctx)}
+	urlElicitations, err := urlElicitor()
+	if err != nil {
+		return err
+	}
+	if urlElicitations != nil {
+		mcpOptions = append(mcpOptions, api.WithURLElicitationRelay(urlElicitations, log))
+	} else if workspaceManager != nil || toolchainCatalog != nil {
+		log.Info("OAUTH_REQUEST_STATE_KEY is not set: URL interactions requested by muster are answered as tool errors naming their URL, not relayed as URL elicitation")
+	}
+	srv, err := server.New(srvCfg, svc, api.NewMCPServer(svc, build.Version, mcpOptions...), log)
 	if err != nil {
 		return err
 	}
@@ -711,4 +723,21 @@ func skillsTokenSource(o *serveOptions) (skills.TokenSource, error) {
 		return nil, fmt.Errorf("--skills-github-app-private-key-file: %w", err)
 	}
 	return skills.NewApp(o.skillsGitHubAPI, o.skillsAppID, o.skillsAppInstall, key, nil)
+}
+
+// urlElicitor relays URL interactions requested by muster to a tool's caller with
+// requestState sealed by OAUTH_REQUEST_STATE_KEY (and, during a rotation,
+// OAUTH_REQUEST_STATE_PREVIOUS_KEY, each also as _FILE); nil when no key is
+// set.
+func urlElicitor() (*api.URLElicitor, error) {
+	sealer, err := oauthconfig.NewRequestStateSealerFromEnv()
+	if err != nil {
+		return nil, fmt.Errorf("request state key: %w", err)
+	}
+	if sealer == nil {
+		return nil, nil
+	}
+	return urlelicitation.New(sealer, urlelicitation.WithExpired(func(err error) bool {
+		return errors.Is(err, requeststate.ErrExpired)
+	}))
 }

@@ -11,7 +11,7 @@ require (
 	github.com/giantswarm/agent-platform-operator v0.5.0-rc.1
 	github.com/giantswarm/gitops-commit v0.12.0-rc.10
 	github.com/giantswarm/mcp-oauth v1.24.0
-	github.com/giantswarm/mcp-toolkit v0.11.0
+	github.com/giantswarm/mcp-toolkit v0.12.0
 	github.com/giantswarm/mcp-toolkit/k8s v0.1.1
 	// The commit of organization-operator's v2.2.0 tag: its module path has no /v2 (giantswarm/giantswarm#39492).
 	github.com/giantswarm/organization-operator v1.6.5-0.20261126222953-a0e2ace225a7

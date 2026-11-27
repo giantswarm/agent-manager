@@ -1,0 +1,72 @@
+suite: request state key
+templates:
+  - templates/deployment.yaml
+tests:
+  - it: mounts no key by default
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OAUTH_REQUEST_STATE_KEY_FILE
+          any: true
+      - notContains:
+          path: spec.template.spec.volumes
+          content:
+            name: request-state
+          any: true
+  - it: mounts the key from the Secret
+    set:
+      oauth.requestStateSecret.name: manager-request-state
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OAUTH_REQUEST_STATE_KEY_FILE
+            value: /etc/agent-manager/request-state/key
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OAUTH_REQUEST_STATE_PREVIOUS_KEY_FILE
+          any: true
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: request-state
+            mountPath: /etc/agent-manager/request-state
+            readOnly: true
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: request-state
+            secret:
+              secretName: manager-request-state
+              items:
+                - key: key
+                  path: key
+  - it: mounts the previous key during a rotation
+    set:
+      oauth.requestStateSecret.name: manager-request-state
+      oauth.requestStateSecret.key: current
+      oauth.requestStateSecret.previousKey: previous
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OAUTH_REQUEST_STATE_KEY_FILE
+            value: /etc/agent-manager/request-state/current
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OAUTH_REQUEST_STATE_PREVIOUS_KEY_FILE
+            value: /etc/agent-manager/request-state/previous
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: request-state
+            secret:
+              secretName: manager-request-state
+              items:
+                - key: current
+                  path: current
+                - key: previous
+                  path: previous
