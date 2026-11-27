@@ -48,12 +48,6 @@ func UserName(ctx context.Context) string {
 	return ""
 }
 
-// Delegated reports whether an actor acts for the user (an RFC 8693 4.1 act
-// claim, whatever it names): such a call never gets what only the user may.
-func Delegated(user *providers.UserInfo) bool {
-	return user != nil && len(user.ActorChain) > 0
-}
-
 // GitHubUserAccessToken is a GitHub App user access token for one commit,
 // obtained through muster's broker, with the login GET /user answered for
 // it. Commit mode opens the pull request with that token.

@@ -10,6 +10,7 @@ import (
 	"github.com/giantswarm/mcp-oauth/oauthconfig"
 	"github.com/giantswarm/mcp-oauth/providers/dex"
 	"github.com/giantswarm/mcp-oauth/providers/google"
+	oauthserver "github.com/giantswarm/mcp-oauth/server"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -61,6 +62,13 @@ func TestValidateGitHubTokenExchangeOptions(t *testing.T) {
 	options := exchange()
 	options.githubExchangeClient = "manager-client"
 	require.NoError(t, validateCredentialOptions(options, dexSettings), "the client ID flag")
+	resourceOnly := oauthconfig.Settings{TrustedIssuers: []oauthserver.TrustedIssuer{{Issuer: "https://identity.example.com", OpenIDProvider: true}}}
+	require.NoError(t, validateCredentialOptions(options, resourceOnly))
+	issuer, err := githubSubjectIssuer(resourceOnly)
+	require.NoError(t, err)
+	require.Equal(t, "https://identity.example.com", issuer)
+	resourceOnly.TrustedIssuers = append(resourceOnly.TrustedIssuers, oauthserver.TrustedIssuer{Issuer: "https://other.example.com", OpenIDProvider: true})
+	require.ErrorContains(t, validateCredentialOptions(options, resourceOnly), "exactly one trusted openIDProvider")
 
 	options = exchange()
 	options.githubExchangeClientFile = "/etc/agent-manager/github-token-exchange/client-id"
@@ -76,12 +84,12 @@ func TestValidateGitHubTokenExchangeOptions(t *testing.T) {
 			options := exchange()
 			options.githubExchangeClient = "manager-client"
 			mutate(options)
-			require.EqualError(t, validateCredentialOptions(options, dexSettings), "GitHub token exchange requires Dex OAuth and downstream OAuth")
+			require.EqualError(t, validateCredentialOptions(options, dexSettings), "GitHub token exchange requires OAuth, downstream OAuth and an OpenID Provider")
 		})
 	}
 	options = exchange()
 	options.githubExchangeClient = "manager-client"
-	require.EqualError(t, validateCredentialOptions(options, oauthconfig.Settings{Google: &google.Config{}}), "GitHub token exchange requires Dex OAuth and downstream OAuth", "the subject token must be a Dex token")
+	require.EqualError(t, validateCredentialOptions(options, oauthconfig.Settings{Google: &google.Config{}}), "GitHub token exchange requires OAuth, downstream OAuth and an OpenID Provider", "the subject token must be a Dex token")
 
 	require.ErrorContains(t, validateCredentialOptions(&serveOptions{githubExchangeClientFile: "/etc/agent-manager/github-token-exchange/client-id"}, dexSettings), "--github-token-exchange-endpoint")
 }

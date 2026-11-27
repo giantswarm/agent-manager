@@ -1,6 +1,7 @@
 package organizations
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -11,7 +12,29 @@ import (
 	"github.com/giantswarm/mcp-oauth/providers"
 
 	"github.com/giantswarm/agent-manager/internal/agents"
+	"github.com/giantswarm/agent-manager/internal/idtoken"
 )
+
+// credentialOwner uses the provider account across access-token and
+// forwarded-ID-token authentication without changing the bearer identity.
+func credentialOwner(ctx context.Context) *providers.UserInfo {
+	person := agents.User(ctx)
+	if person == nil || person.IsOBO() {
+		return nil
+	}
+	token, present := idtoken.FromContext(ctx)
+	if !present {
+		return person
+	}
+	claims := idtoken.ClaimsOf(token)
+	if claims.Issuer == "" || claims.Subject == "" || claims.Subject != person.ID || claims.Actor ||
+		(claims.Issuer != person.Issuer && !person.IsOAuth()) {
+		return nil
+	}
+	owner := *person
+	owner.Issuer = claims.Issuer
+	return &owner
+}
 
 // ErrCredentialOperationOtherLogin answers a caller that is not the owner of
 // a credential operation (the token's issuer and subject) but has the
@@ -40,7 +63,7 @@ func verifiedEmailDigest(person *providers.UserInfo) string {
 // operation prepared without a verified address all get not found.
 func refuseNonOwner(operation *credentialOperation, person *providers.UserInfo) error {
 	digest := verifiedEmailDigest(person)
-	if person != nil && !agents.Delegated(person) && operation.Issuer == person.Issuer &&
+	if person != nil && !person.IsOBO() && operation.Issuer == person.Issuer &&
 		digest != "" && operation.EmailDigest == digest &&
 		operation.State != operationCancelled && time.Now().Before(operation.ExpiresAt) {
 		return ErrCredentialOperationOtherLogin

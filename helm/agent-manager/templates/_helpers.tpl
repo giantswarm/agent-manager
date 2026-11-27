@@ -219,7 +219,7 @@ A CA is a mount: {volume, secret or configMap, key, dir}; caFile is dir/key.
 {{- end -}}
 {{- if not $issuers -}}
 {{- $audiences := list -}}
-{{- range concat ($o.trustedAudiences | default (list ($clientID | default (dig "clientId" "" $g)))) (include "agent-manager.requiredAudiences" . | fromJsonArray) -}}
+{{- range concat ($o.trustedAudiences | default (list (dig "clientId" "" $g | default $clientID))) (include "agent-manager.requiredAudiences" . | fromJsonArray) -}}
 {{- if and . (not (has . $audiences)) }}{{ $audiences = append $audiences . }}{{ end -}}
 {{- end -}}
 {{- if and $audiences $upstreamIssuer -}}

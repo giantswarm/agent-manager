@@ -30,7 +30,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/net/dns/dnsmessage"
 
-	"github.com/giantswarm/agent-manager/internal/agents"
 	"github.com/giantswarm/agent-manager/internal/idtoken"
 )
 
@@ -344,14 +343,14 @@ func TestActorMakesTheCallDelegated(t *testing.T) {
 	} {
 		got := throughChain(t, idp.config(t), idp.idTokenWith(t, []string{"agent-platform"}, map[string]any{"act": act}))
 		if got.code == http.StatusNoContent {
-			require.True(t, agents.Delegated(got.caller), name)
+			require.True(t, got.caller.IsOBO(), name)
 			continue
 		}
 		require.Equal(t, http.StatusUnauthorized, got.code, name)
 		require.Nil(t, got.caller, name)
 	}
 	got := throughChain(t, idp.config(t), idp.idToken(t, []string{"agent-platform"}))
-	require.False(t, agents.Delegated(got.caller))
+	require.False(t, got.caller.IsOBO())
 }
 
 // TestValidatedBearerWithoutIDToken: a bearer mcp-oauth validates that is not

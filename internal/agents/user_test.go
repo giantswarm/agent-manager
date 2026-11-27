@@ -8,7 +8,6 @@ import (
 
 	"github.com/giantswarm/mcp-oauth/handler"
 	"github.com/giantswarm/mcp-oauth/providers"
-	"github.com/giantswarm/mcp-oauth/providers/oidc"
 	"github.com/stretchr/testify/require"
 )
 
@@ -45,11 +44,4 @@ func TestRequestedBy(t *testing.T) {
 	require.Equal(t, "Alice", UserName(ctx))
 	ctx = handler.ContextWithUserInfo(t.Context(), &providers.UserInfo{Issuer: "https://dex.example.test", ID: "subject"})
 	require.Equal(t, "subject", RequestedBy(ctx), "without an email, the subject")
-}
-
-func TestDelegated(t *testing.T) {
-	require.False(t, Delegated(nil))
-	require.False(t, Delegated(&providers.UserInfo{ID: "alice"}))
-	require.True(t, Delegated(&providers.UserInfo{ID: "alice", ActorSubject: "agent", ActorChain: []oidc.ActorClaim{{Subject: "agent"}}}))
-	require.True(t, Delegated(&providers.UserInfo{ID: "alice", ActorChain: []oidc.ActorClaim{{}}}), "an act claim that names nobody still delegates")
 }

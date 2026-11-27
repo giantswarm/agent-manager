@@ -33,7 +33,7 @@ func TestClaimsOf(t *testing.T) {
 		return token
 	}
 
-	require.Equal(t, Claims{Issuer: "https://dex.example.test", Expiry: expiry}, ClaimsOf(sign(nil)))
+	require.Equal(t, Claims{Issuer: "https://dex.example.test", Subject: "alice", Expiry: expiry}, ClaimsOf(sign(nil)))
 	require.True(t, ClaimsOf(sign(map[string]any{"act": map[string]any{"sub": "agent"}})).Actor)
 	require.True(t, ClaimsOf(sign(map[string]any{"act": map[string]any{}})).Actor, "an act claim that names nobody is still an actor")
 	require.Equal(t, Claims{}, ClaimsOf("opaque-token"))

@@ -115,7 +115,7 @@ func newGitHubExchange(configuration GitHubExchangeConfig, client *http.Client) 
 		// A delegated call (an actor acting for the user, RFC 8693 4.1) never
 		// receives the person's GitHub grant, whether mcp-oauth or the subject
 		// token names the actor.
-		if agents.Delegated(person) || claims.Actor {
+		if person.IsOBO() || claims.Actor {
 			return nil, fmt.Errorf("%w: commit mode opens the pull request as you, and only you, not an agent acting for you, can authorize it", agents.ErrForbidden)
 		}
 		secret, err := os.ReadFile(configuration.ClientSecretFile)

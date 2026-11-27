@@ -399,7 +399,11 @@ func runServe(ctx context.Context, o *serveOptions) error {
 	var orgs *organizations.Service
 	var resolveGitHub func(context.Context) (*agents.GitHubUserAccessToken, error)
 	if o.githubExchangeEndpoint != "" {
-		resolveGitHub, err = server.NewGitHubExchange(server.GitHubExchangeConfig{TokenEndpoint: o.githubExchangeEndpoint, ClientID: o.githubExchangeClient, ClientIDFile: o.githubExchangeClientFile, ClientSecretFile: o.githubExchangeSecretFile, Audience: o.githubExchangeAudience, CAFile: o.githubExchangeCAFile, APIURL: o.githubAPIURL, SubjectIssuer: dexIssuerURL(oauthSettings), Logger: log})
+		subjectIssuer, err := githubSubjectIssuer(oauthSettings)
+		if err != nil {
+			return err
+		}
+		resolveGitHub, err = server.NewGitHubExchange(server.GitHubExchangeConfig{TokenEndpoint: o.githubExchangeEndpoint, ClientID: o.githubExchangeClient, ClientIDFile: o.githubExchangeClientFile, ClientSecretFile: o.githubExchangeSecretFile, Audience: o.githubExchangeAudience, CAFile: o.githubExchangeCAFile, APIURL: o.githubAPIURL, SubjectIssuer: subjectIssuer, Logger: log})
 		if err != nil {
 			return err
 		}
@@ -689,10 +693,14 @@ func validateCredentialOptions(options *serveOptions, settings oauthconfig.Setti
 		}
 	}
 	if options.githubExchangeEndpoint != "" {
-		if !options.oauthEnabled || !options.downstreamOAuth || settings.Dex == nil {
-			return errors.New("GitHub token exchange requires Dex OAuth and downstream OAuth")
+		if !options.oauthEnabled || !options.downstreamOAuth {
+			return errors.New("GitHub token exchange requires OAuth, downstream OAuth and an OpenID Provider")
 		}
-		return (server.GitHubExchangeConfig{TokenEndpoint: options.githubExchangeEndpoint, ClientID: options.githubExchangeClient, ClientIDFile: options.githubExchangeClientFile, ClientSecretFile: options.githubExchangeSecretFile, Audience: options.githubExchangeAudience, CAFile: options.githubExchangeCAFile, APIURL: options.githubAPIURL, SubjectIssuer: dexIssuerURL(settings)}).Validate()
+		subjectIssuer, err := githubSubjectIssuer(settings)
+		if err != nil {
+			return err
+		}
+		return (server.GitHubExchangeConfig{TokenEndpoint: options.githubExchangeEndpoint, ClientID: options.githubExchangeClient, ClientIDFile: options.githubExchangeClientFile, ClientSecretFile: options.githubExchangeSecretFile, Audience: options.githubExchangeAudience, CAFile: options.githubExchangeCAFile, APIURL: options.githubAPIURL, SubjectIssuer: subjectIssuer}).Validate()
 	}
 	if options.githubExchangeClient != "" || options.githubExchangeClientFile != "" || options.githubExchangeSecretFile != "" || options.githubExchangeAudience != "" || options.githubExchangeCAFile != "" {
 		return errors.New("GitHub token exchange options require --github-token-exchange-endpoint")
@@ -700,13 +708,26 @@ func validateCredentialOptions(options *serveOptions, settings oauthconfig.Setti
 	return nil
 }
 
-// dexIssuerURL is the issuer of the Dex the server signs people in with, ""
-// without one.
-func dexIssuerURL(settings oauthconfig.Settings) string {
-	if settings.Dex == nil {
-		return ""
+func githubSubjectIssuer(settings oauthconfig.Settings) (string, error) {
+	if settings.Dex != nil && settings.Dex.IssuerURL != "" {
+		return settings.Dex.IssuerURL, nil
 	}
-	return settings.Dex.IssuerURL
+	if settings.Google == nil {
+		issuer := ""
+		for _, trusted := range settings.TrustedIssuers {
+			if !trusted.OpenIDProvider {
+				continue
+			}
+			if issuer != "" {
+				return "", errors.New("GitHub token exchange requires exactly one trusted openIDProvider")
+			}
+			issuer = trusted.Issuer
+		}
+		if issuer != "" {
+			return issuer, nil
+		}
+	}
+	return "", errors.New("GitHub token exchange requires OAuth, downstream OAuth and an OpenID Provider")
 }
 
 // skillsTokenSource is what skills are read with: the skills GitHub App's

@@ -10,7 +10,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/go-jose/go-jose/v4"
+	"github.com/giantswarm/mcp-oauth/providers/oidc"
 	"github.com/go-jose/go-jose/v4/jwt"
 )
 
@@ -30,36 +30,23 @@ func FromContext(ctx context.Context) (string, bool) {
 	return token, ok && token != ""
 }
 
-// signatureAlgorithms are the JWS algorithms whose tokens Claims reads. The
-// signature is not checked: mcp-oauth verified it when the request came in.
-var signatureAlgorithms = []jose.SignatureAlgorithm{
-	jose.RS256, jose.RS384, jose.RS512,
-	jose.PS256, jose.PS384, jose.PS512,
-	jose.ES256, jose.ES384, jose.ES512,
-	jose.EdDSA,
-}
-
-// Claims are the registered claims (RFC 7519 4.1) of an ID token, and
-// whether it names an actor (RFC 8693 4.1 act).
+// Claims are the identity, expiry and actor presence of a validated ID token.
 type Claims struct {
-	Issuer string
-	Expiry time.Time
-	Actor  bool
+	Issuer  string
+	Subject string
+	Expiry  time.Time
+	Actor   bool
 }
 
-// ClaimsOf reads the claims of token without verifying it. The zero Claims
-// when the token is not a JWS.
+// ClaimsOf decodes a previously validated token without verifying it again.
+// Invalid claim encodings produce zero Claims.
 func ClaimsOf(token string) Claims {
-	parsed, err := jwt.ParseSigned(token, signatureAlgorithms)
-	if err != nil {
-		return Claims{}
-	}
-	var registered jwt.Claims
-	var private struct {
+	var claims struct {
+		jwt.Claims
 		Act any `json:"act"`
 	}
-	if err := parsed.UnsafeClaimsWithoutVerification(&registered, &private); err != nil {
+	if err := oidc.UnmarshalUnverifiedClaims(token, &claims); err != nil {
 		return Claims{}
 	}
-	return Claims{Issuer: registered.Issuer, Expiry: registered.Expiry.Time(), Actor: private.Act != nil}
+	return Claims{Issuer: claims.Issuer, Subject: claims.Subject, Expiry: claims.Expiry.Time(), Actor: claims.Act != nil}
 }

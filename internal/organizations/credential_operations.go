@@ -173,9 +173,9 @@ type CredentialOperation struct {
 }
 
 func credentialOperationID(ctx context.Context) (string, error) {
-	person := agents.User(ctx)
+	person := credentialOwner(ctx)
 	request, bound := ctx.Value(credentialRequestKey{}).(credentialRequest)
-	if person == nil || agents.Delegated(person) || person.Issuer == "" || person.ID == "" || !bound || request.Client == "" {
+	if person == nil || person.IsOBO() || person.Issuer == "" || person.ID == "" || !bound || request.Client == "" {
 		return "", fmt.Errorf("%w: credential preparation needs a verified identity and client", agents.ErrUnauthenticated)
 	}
 	raw, err := json.Marshal([]string{person.Issuer, person.ID, request.Client, request.Tool, request.Intent})
@@ -191,8 +191,8 @@ func (s *Service) credentialOperation(ctx context.Context, id string) (*credenti
 	if err != nil {
 		return nil, err
 	}
-	person := agents.User(ctx)
-	if person == nil || agents.Delegated(person) || operation.Issuer != person.Issuer || operation.Subject != person.ID {
+	person := credentialOwner(ctx)
+	if person == nil || person.IsOBO() || operation.Issuer != person.Issuer || operation.Subject != person.ID {
 		return nil, refuseNonOwner(operation, person)
 	}
 	if time.Now().After(operation.ExpiresAt) {
@@ -353,7 +353,7 @@ func (s *Service) landResource(ctx context.Context, writer *contentWriter, write
 	if err != nil {
 		return err
 	}
-	person := agents.User(ctx)
+	person := credentialOwner(ctx)
 	request, _ := ctx.Value(credentialRequestKey{}).(credentialRequest)
 	operation := &credentialOperation{ID: id, Issuer: person.Issuer, Subject: person.ID, EmailDigest: verifiedEmailDigest(person), Request: request, ElicitationID: uuid.NewString(), ExpiresAt: time.Now().Add(credentialOperationTTL), State: operationPending, Namespace: writer.org, Mode: writer.mode, Result: *result}
 	for _, planned := range writes {
