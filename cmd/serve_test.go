@@ -7,11 +7,13 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/giantswarm/mcp-oauth/oauthconfig"
+	"github.com/giantswarm/mcp-oauth/providers/dex"
+	"github.com/giantswarm/mcp-oauth/providers/google"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/giantswarm/agent-manager/internal/oci"
-	"github.com/giantswarm/agent-manager/internal/server"
 )
 
 func TestToolchainSourceReadsTheRegistryConfig(t *testing.T) {
@@ -42,13 +44,14 @@ func TestToolchainSourceReadsTheRegistryConfig(t *testing.T) {
 	require.ErrorContains(t, err, "--toolchain-registry-config")
 }
 
+// dexSettings are OAuth settings whose people sign in with Dex.
+var dexSettings = oauthconfig.Settings{Dex: &dex.Config{IssuerURL: "https://identity.example.com"}}
+
 func TestValidateGitHubTokenExchangeOptions(t *testing.T) {
 	exchange := func() *serveOptions {
 		return &serveOptions{ // #nosec G101 -- configuration fixture with a path, no secret value
 			oauthEnabled:             true,
 			downstreamOAuth:          true,
-			oauthProvider:            server.ProviderDex,
-			dexIssuerURL:             "https://identity.example.com",
 			githubExchangeEndpoint:   "https://broker.example.com/oauth/token",
 			githubExchangeAudience:   "manager-app",
 			githubExchangeSecretFile: "/etc/agent-manager/github-token-exchange/client-secret",
@@ -57,28 +60,30 @@ func TestValidateGitHubTokenExchangeOptions(t *testing.T) {
 
 	options := exchange()
 	options.githubExchangeClient = "manager-client"
-	require.NoError(t, validateCredentialOptions(options), "the client ID flag")
+	require.NoError(t, validateCredentialOptions(options, dexSettings), "the client ID flag")
 
 	options = exchange()
 	options.githubExchangeClientFile = "/etc/agent-manager/github-token-exchange/client-id"
-	require.NoError(t, validateCredentialOptions(options), "the client ID file")
+	require.NoError(t, validateCredentialOptions(options, dexSettings), "the client ID file")
 
-	require.Error(t, validateCredentialOptions(exchange()), "neither client ID nor its file")
+	require.Error(t, validateCredentialOptions(exchange(), dexSettings), "neither client ID nor its file")
 
 	for name, mutate := range map[string]func(*serveOptions){
 		"OAuth off":            func(options *serveOptions) { options.oauthEnabled = false },
 		"downstream OAuth off": func(options *serveOptions) { options.downstreamOAuth = false },
-		"Google provider":      func(options *serveOptions) { options.oauthProvider = server.ProviderGoogle },
 	} {
 		t.Run(name, func(t *testing.T) {
 			options := exchange()
 			options.githubExchangeClient = "manager-client"
 			mutate(options)
-			require.EqualError(t, validateCredentialOptions(options), "GitHub token exchange requires Dex OAuth and downstream OAuth")
+			require.EqualError(t, validateCredentialOptions(options, dexSettings), "GitHub token exchange requires Dex OAuth and downstream OAuth")
 		})
 	}
+	options = exchange()
+	options.githubExchangeClient = "manager-client"
+	require.EqualError(t, validateCredentialOptions(options, oauthconfig.Settings{Google: &google.Config{}}), "GitHub token exchange requires Dex OAuth and downstream OAuth", "the subject token must be a Dex token")
 
-	require.ErrorContains(t, validateCredentialOptions(&serveOptions{githubExchangeClientFile: "/etc/agent-manager/github-token-exchange/client-id"}), "--github-token-exchange-endpoint")
+	require.ErrorContains(t, validateCredentialOptions(&serveOptions{githubExchangeClientFile: "/etc/agent-manager/github-token-exchange/client-id"}, dexSettings), "--github-token-exchange-endpoint")
 }
 
 func TestCredentialOptionsWithoutTenants(t *testing.T) {
@@ -89,7 +94,7 @@ func TestCredentialOptionsWithoutTenants(t *testing.T) {
 		credentialOperationsNamespace: "model-operations",
 	}
 	require.False(t, options.multiTenant)
-	require.NoError(t, validateCredentialOptions(&options))
+	require.NoError(t, validateCredentialOptions(&options, dexSettings))
 	for _, missing := range []string{"OAuth", "downstream", "namespace"} {
 		incomplete := options
 		switch missing {
@@ -100,12 +105,12 @@ func TestCredentialOptionsWithoutTenants(t *testing.T) {
 		case "namespace":
 			incomplete.credentialOperationsNamespace = ""
 		}
-		require.Error(t, validateCredentialOptions(&incomplete), missing)
+		require.Error(t, validateCredentialOptions(&incomplete, dexSettings), missing)
 	}
 	options.credentialUIURL = "https://portal.example.com/organizations/{organization}/{operation}"
-	require.ErrorContains(t, validateCredentialOptions(&options), "{namespace}")
+	require.ErrorContains(t, validateCredentialOptions(&options, dexSettings), "{namespace}")
 	options.multiTenant = true
-	require.NoError(t, validateCredentialOptions(&options))
+	require.NoError(t, validateCredentialOptions(&options, dexSettings))
 }
 
 func TestOrganizationToolsNeedTenancyOrAnInstallationForm(t *testing.T) {
@@ -127,9 +132,9 @@ func TestCredentialUIURLWithoutTenantsNamesTheNamespace(t *testing.T) {
 	} {
 		options.credentialUIURL = template
 		if valid {
-			require.NoError(t, validateCredentialOptions(&options), template)
+			require.NoError(t, validateCredentialOptions(&options, dexSettings), template)
 		} else {
-			require.Error(t, validateCredentialOptions(&options), template)
+			require.Error(t, validateCredentialOptions(&options, dexSettings), template)
 		}
 	}
 }

@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/giantswarm/mcp-oauth/oauthconfig"
 	"github.com/giantswarm/mcp-oauth/providers/oidc"
 
 	"github.com/giantswarm/agent-manager/internal/agents"
@@ -81,14 +82,13 @@ func NewGitHubExchange(configuration GitHubExchangeConfig) (func(context.Context
 		return nil, err
 	}
 	configuration.ClientID = clientID
-	roots, err := loadRootCAs(configuration.CAFile)
+	roots, err := oauthconfig.LoadRootCAs(configuration.CAFile)
 	if err != nil {
 		return nil, err
 	}
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	if roots != nil {
-		transport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12}
-		transport.TLSClientConfig.RootCAs = roots
+		transport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: roots}
 	}
 	client := &http.Client{Transport: transport, Timeout: 15 * time.Second, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}
 	return newGitHubExchange(configuration, client), nil

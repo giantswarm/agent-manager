@@ -1,8 +1,8 @@
-# The OAuth arguments the Deployment renders — above all the trusted
+# The OAuth settings the Deployment renders — above all the trusted
 # audiences, which decide whose forwarded id_tokens the server accepts.
 #
 # Run with: make helm-test (helm unittest helm/agent-manager)
-suite: deployment oauth arguments
+suite: deployment oauth settings
 templates:
   - templates/deployment.yaml
 set:
@@ -24,17 +24,23 @@ tests:
               - dex-k8s-authenticator
     asserts:
       - contains:
-          path: spec.template.spec.containers[0].args
-          content: --oauth-trusted-audiences=platform-client,dex-k8s-authenticator
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OAUTH_TRUSTED_AUDIENCES
+            value: platform-client,dex-k8s-authenticator
       - contains:
-          path: spec.template.spec.containers[0].args
-          content: --dex-client-id=platform-client
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OAUTH_DEX_CLIENT_ID
+            value: platform-client
 
   - it: trusts only the platform client when no audience is required (a Google-shaped installation)
     asserts:
       - contains:
-          path: spec.template.spec.containers[0].args
-          content: --oauth-trusted-audiences=platform-client
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OAUTH_TRUSTED_AUDIENCES
+            value: platform-client
 
   - it: adds the required audiences to an explicit list, de-duplicated, order kept
     set:
@@ -51,8 +57,10 @@ tests:
               - kubernetes
     asserts:
       - contains:
-          path: spec.template.spec.containers[0].args
-          content: --oauth-trusted-audiences=platform-client,portal-client,dex-k8s-authenticator,kubernetes
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OAUTH_TRUSTED_AUDIENCES
+            value: platform-client,portal-client,dex-k8s-authenticator,kubernetes
 
   - it: trusts the required audiences even when they are the only ones named
     set:
@@ -69,11 +77,15 @@ tests:
               - kubernetes
     asserts:
       - contains:
-          path: spec.template.spec.containers[0].args
-          content: --oauth-trusted-audiences=kubernetes
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OAUTH_TRUSTED_AUDIENCES
+            value: kubernetes
       - contains:
-          path: spec.template.spec.containers[0].args
-          content: --dex-client-id=explicit-client
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OAUTH_DEX_CLIENT_ID
+            value: explicit-client
 
   - it: refuses github.enabled without github.tokenExchange
     set:
@@ -228,12 +240,15 @@ tests:
             - jwks.internal.example
     asserts:
       - contains:
-          path: spec.template.spec.containers[0].args
-          content: --sso-allow-private-ip-jwks-hosts=keys.internal.example,jwks.internal.example
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OAUTH_ALLOW_PRIVATE_IP_JWKS_HOSTS
+            value: keys.internal.example,jwks.internal.example
 
   - it: renders no JWKS host list by default
     asserts:
       - notContains:
-          path: spec.template.spec.containers[0].args
+          path: spec.template.spec.containers[0].env
           any: true
-          content: --sso-allow-private-ip-jwks-hosts
+          content:
+            name: OAUTH_ALLOW_PRIVATE_IP_JWKS_HOSTS

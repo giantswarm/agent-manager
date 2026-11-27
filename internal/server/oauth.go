@@ -2,244 +2,166 @@ package server
 
 import (
 	"context"
-	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/url"
-	"os"
 	"slices"
 	"strings"
 
-	oauth "github.com/giantswarm/mcp-oauth"
 	"github.com/giantswarm/mcp-oauth/handler"
-	"github.com/giantswarm/mcp-oauth/providers"
-	"github.com/giantswarm/mcp-oauth/providers/dex"
-	"github.com/giantswarm/mcp-oauth/providers/google"
+	"github.com/giantswarm/mcp-oauth/oauthconfig"
 	"github.com/giantswarm/mcp-oauth/providers/oidc"
 	"github.com/giantswarm/mcp-oauth/security"
-	"github.com/giantswarm/mcp-oauth/storage/memory"
+	oauthserver "github.com/giantswarm/mcp-oauth/server"
 
+	"github.com/giantswarm/agent-manager/internal/api"
 	"github.com/giantswarm/agent-manager/internal/identity"
 )
 
-// OAuth providers.
-const (
-	ProviderDex    = "dex"
-	ProviderGoogle = "google"
-)
-
-// OAuthConfig makes agent-manager an OAuth 2.1 resource server (mcp-oauth) in
-// front of the MCP endpoint and the REST API. The platform's identity
-// provider is the authority: on the Agent Platform, muster forwards the
-// session's IdP id_token byte-identical (MCPServer auth.forwardToken) and the
-// portal sends the signed-in user's id_token through the gateway; both are
-// validated here against the IdP's JWKS when their audience is one of
-// TrustedAudiences (the platform's OAuth client). The caller's identity then
-// travels with the request (identity package) and, with DownstreamOAuth, so
-// does the token — every Kubernetes call is made as the caller.
+// OAuthConfig makes agent-manager an OAuth 2.1 resource server (mcp-oauth)
+// in front of the MCP endpoint and the REST API. The platform's identity provider is the
+// authority: on the Agent Platform, muster forwards the session's IdP
+// id_token byte-identical (MCPServer auth.forwardToken) and the portal sends
+// the signed-in user's id_token through the gateway; both are validated
+// against the IdP's JWKS when their audience is one of the trusted audiences
+// (OAUTH_TRUSTED_AUDIENCES, the platform's OAuth client). The caller's
+// identity then travels with the request (identity package) and, with
+// DownstreamOAuth, so does the token: the Kubernetes API is called as the
+// caller.
 type OAuthConfig struct {
-	// BaseURL is the public URL of this server: the OAuth issuer identifier
-	// of its own authorization-server metadata (https, or http on loopback).
-	BaseURL string
-	// Provider is the IdP: dex (default) or google.
-	Provider string
-
-	// Dex provider (Provider == dex).
-	DexIssuerURL    string
-	DexClientID     string
-	DexClientSecret string
-	// DexCAFile is a PEM CA bundle for an IdP with a private certificate;
-	// verifies discovery, token and JWKS calls. Empty: system trust.
-	DexCAFile string
-
-	// Google provider (Provider == google).
-	GoogleClientID     string
-	GoogleClientSecret string
-
-	// TrustedAudiences are the OAuth client ids whose IdP id_tokens are
-	// accepted as bearers (SSO token forwarding): the platform client, and
-	// the audiences the MCPServer requires — what the kube-apiserver trusts,
-	// which every token muster forwards carries by construction (the chart
-	// unions both). A portal session's id_token names the portal's own
-	// client, not the platform client. Empty: only tokens this server issued
-	// itself.
-	TrustedAudiences []string
-	// AllowPrivateIPJWKSHosts lists the hosts, other than the issuer's own,
-	// whose JWKS may resolve to RFC 1918 and RFC 4193 addresses: a jwks_uri
-	// the IdP's discovery document puts on another host. The issuer host needs
-	// no entry. Loopback, link-local and metadata addresses stay refused.
-	AllowPrivateIPJWKSHosts []string
-	// AllowPublicClientRegistration lets MCP clients register over DCR
-	// without a token (labs only).
-	AllowPublicClientRegistration bool
-	// DownstreamOAuth presents the caller's IdP token to the Kubernetes API so
-	// every call is made as the caller instead of the ServiceAccount (the
-	// apiserver must trust the IdP and the token's audience). The
-	// ServiceAccount then holds no permissions, so a request whose caller has
-	// no IdP token to present is refused (401) rather than run as nobody.
+	// Settings is mcp-oauth's configuration, read from the OAUTH_* variables
+	// by oauthconfig.SettingsFromEnv.
+	Settings oauthconfig.Settings
+	// DownstreamOAuth puts the caller's IdP token on the request so
+	// Kubernetes API calls are made as the caller instead of the
+	// ServiceAccount (the apiserver must trust the IdP and the token's
+	// audience). The ServiceAccount holds no permissions then, so a request
+	// that yields no IdP token to present is refused (401).
 	DownstreamOAuth bool
 }
 
-// Validate checks required fields.
-func (c OAuthConfig) Validate() error {
-	if c.BaseURL == "" {
-		return fmt.Errorf("oauth: base URL is required")
-	}
-	if err := validateHTTPS(c.BaseURL); err != nil {
-		return err
-	}
-	switch c.provider() {
-	case ProviderDex:
-		if c.DexIssuerURL == "" || c.DexClientID == "" || c.DexClientSecret == "" {
-			return fmt.Errorf("oauth: dex issuer URL, client ID and client secret are required")
-		}
-	case ProviderGoogle:
-		if c.GoogleClientID == "" || c.GoogleClientSecret == "" {
-			return fmt.Errorf("oauth: google client ID and client secret are required")
-		}
-	default:
-		return fmt.Errorf("oauth: provider %q: want %s or %s", c.Provider, ProviderDex, ProviderGoogle)
-	}
-	for _, a := range c.TrustedAudiences {
-		if strings.TrimSpace(a) == "" {
-			return fmt.Errorf("oauth: trusted audiences must not be empty strings")
-		}
-	}
-	return nil
-}
-
-func (c OAuthConfig) provider() string {
-	if c.Provider == "" {
-		return ProviderDex
-	}
-	return c.Provider
-}
-
 type oauthRuntime struct {
-	server  *oauth.Server
-	handler *handler.Handler
-	store   *memory.Store
-	cfg     OAuthConfig
-	mcpPath string
-	log     *slog.Logger
+	server          *oauthserver.Server
+	handler         *handler.Handler
+	cleanup         func(context.Context) error
+	downstreamOAuth bool
+	issuer          string
+	mcpPath         string
+	log             *slog.Logger
 }
 
 func newOAuth(cfg OAuthConfig, mcpPath string, log *slog.Logger) (*oauthRuntime, error) {
-	if err := cfg.Validate(); err != nil {
-		return nil, err
+	settings := cfg.Settings
+	if settings.Server == nil {
+		return nil, errors.New("oauth: no server settings")
 	}
-	rootCAs, err := loadRootCAs(cfg.DexCAFile)
+	serverConfig := *settings.Server
+	serverConfig.ResourceMetadataByPath = protectedResources(&serverConfig, mcpPath)
+	settings.Server = &serverConfig
+	settings.Logger = log
+	if settings.Dex != nil {
+		dexConfig := *settings.Dex
+		dexConfig.Logger = log
+		settings.Dex = &dexConfig
+	}
+	runtime, cleanup, err := oauthconfig.Setup(settings, oauthserver.WithAuditor(security.NewAuditor(log, true)))
 	if err != nil {
 		return nil, fmt.Errorf("oauth: %w", err)
 	}
-	provider, err := newProvider(cfg, rootCAs, log)
-	if err != nil {
-		return nil, err
-	}
-	store := memory.New()
-	srv, err := oauth.NewServer(provider, store, store, store, serverConfig(cfg, rootCAs), log,
-		oauth.WithAuditor(security.NewAuditor(log, true)))
-	if err != nil {
-		return nil, fmt.Errorf("oauth: server: %w", err)
-	}
-	log.Info("OAuth resource server enabled", "provider", cfg.provider(), "issuer", cfg.BaseURL,
-		"trustedAudiences", cfg.TrustedAudiences, "downstreamOAuth", cfg.DownstreamOAuth)
-	return &oauthRuntime{server: srv, handler: handler.New(srv, log), store: store, cfg: cfg, mcpPath: mcpPath, log: log}, nil
+	log.Info("OAuth resource server enabled", "provider", providerName(settings), "issuer", serverConfig.Issuer,
+		"trustedAudiences", serverConfig.TrustedAudiences, "trustedIssuers", len(settings.TrustedIssuers),
+		"downstreamOAuth", cfg.DownstreamOAuth)
+	return &oauthRuntime{server: runtime.Server, handler: runtime.Handler, cleanup: cleanup,
+		downstreamOAuth: cfg.DownstreamOAuth, issuer: providerIssuer(settings), mcpPath: mcpPath, log: log}, nil
 }
 
-// serverConfig is the mcp-oauth server configuration for cfg: this server's
-// own issuer, the audiences it trusts as forwarded bearers and the CA bundle
-// for the issuer's JWKS.
-func serverConfig(cfg OAuthConfig, rootCAs *x509.CertPool) *oauth.ServerConfig {
-	return &oauth.ServerConfig{
-		EnableClientIDMetadataDocuments: true,
-		Issuer:                          cfg.BaseURL,
-		AllowRefreshTokenRotation:       true,
-		AllowPublicClientRegistration:   cfg.AllowPublicClientRegistration,
-		MaxClientsPerIP:                 10,
-		TrustedAudiences:                cfg.TrustedAudiences,
-		AllowPrivateIPJWKSHosts:         cfg.AllowPrivateIPJWKSHosts,
-		JWKSRootCAs:                     rootCAs,
+// protectedResources adds the REST API and the MCP endpoint to the protected
+// resources the configuration names. A path the configuration already
+// describes keeps its entry; an added one advertises the main resource's
+// authorization servers, as OAUTH_ADDITIONAL_RESOURCES entries do.
+func protectedResources(configuration *oauthserver.Config, mcpPath string) map[string]oauthserver.ProtectedResourceConfig {
+	resources := maps.Clone(configuration.ResourceMetadataByPath)
+	if resources == nil {
+		resources = map[string]oauthserver.ProtectedResourceConfig{}
 	}
-}
-
-func newProvider(cfg OAuthConfig, rootCAs *x509.CertPool, log *slog.Logger) (providers.Provider, error) {
-	redirect := strings.TrimSuffix(cfg.BaseURL, "/") + "/oauth/callback"
-	switch cfg.provider() {
-	case ProviderGoogle:
-		p, err := google.NewProvider(&google.Config{
-			ClientID:     cfg.GoogleClientID,
-			ClientSecret: cfg.GoogleClientSecret,
-			RedirectURL:  redirect,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("oauth: google provider: %w", err)
+	// Metadata lookup ignores a trailing slash, so "/mcp/" describes "/mcp".
+	described := func(path string) (oauthserver.ProtectedResourceConfig, bool) {
+		for key, resource := range resources {
+			if strings.TrimRight(key, "/") == strings.TrimRight(path, "/") {
+				return resource, true
+			}
 		}
-		return p, nil
+		return oauthserver.ProtectedResourceConfig{}, false
+	}
+	var advertised []string
+	if main, err := url.Parse(configuration.GetResourceIdentifier()); err == nil {
+		resource, _ := described(main.EscapedPath())
+		advertised = resource.AuthorizationServers
+	}
+	for _, path := range []string{api.Prefix, mcpPath} {
+		if path == "" || path == "/" {
+			continue
+		}
+		if _, ok := described(path); !ok {
+			resources[path] = oauthserver.ProtectedResourceConfig{AuthorizationServers: advertised}
+		}
+	}
+	return resources
+}
+
+func providerName(settings oauthconfig.Settings) string {
+	switch {
+	case settings.Dex != nil:
+		return "dex"
+	case settings.Google != nil:
+		return "google"
 	default:
-		p, err := dex.NewProvider(&dex.Config{
-			IssuerURL:    cfg.DexIssuerURL,
-			ClientID:     cfg.DexClientID,
-			ClientSecret: cfg.DexClientSecret,
-			RedirectURL:  redirect,
-			RootCAs:      rootCAs,
-			Logger:       log,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("oauth: dex provider: %w", err)
-		}
-		return p, nil
+		return "none"
 	}
 }
 
-// loadRootCAs is the system pool plus the PEM bundle at caFile; (nil, nil)
-// without a file, selecting the system trust everywhere the pool is used.
-func loadRootCAs(caFile string) (*x509.CertPool, error) {
-	if caFile == "" {
-		return nil, nil
+// providerIssuer is the issuer of the provider people sign in with through
+// this server's authorization server.
+func providerIssuer(settings oauthconfig.Settings) string {
+	switch {
+	case settings.Dex != nil:
+		return settings.Dex.IssuerURL
+	case settings.Google != nil:
+		return "https://accounts.google.com"
+	default:
+		return ""
 	}
-	pem, err := os.ReadFile(caFile) // #nosec G304 -- operator-provided path
-	if err != nil {
-		return nil, fmt.Errorf("read CA file %s: %w", caFile, err)
-	}
-	pool, err := x509.SystemCertPool()
-	if err != nil {
-		pool = x509.NewCertPool()
-	}
-	if !pool.AppendCertsFromPEM(pem) {
-		return nil, fmt.Errorf("no CA certificate in %s", caFile)
-	}
-	return pool, nil
 }
 
 func (o *oauthRuntime) register(mux *http.ServeMux) {
-	o.handler.RegisterAuthorizationServerMetadataRoutes(mux)
-	o.handler.RegisterProtectedResourceMetadataRoutes(mux, o.mcpPath)
-	mux.HandleFunc("/oauth/authorize", o.handler.ServeAuthorization)
-	mux.HandleFunc("/oauth/token", o.handler.ServeToken)
-	mux.HandleFunc("/oauth/callback", o.handler.ServeCallback)
-	mux.HandleFunc("/oauth/register", o.handler.ServeClientRegistration)
-	mux.HandleFunc("/oauth/revoke", o.handler.ServeTokenRevocation)
-	mux.HandleFunc("/oauth/introspect", o.handler.ServeTokenIntrospection)
+	o.handler.RegisterOAuthRoutes(mux, handler.OAuthRoutesOptions{MCPPath: o.mcpPath, IncludeMetadata: true})
 }
 
 // protect requires a valid bearer token (mcp-oauth ValidateToken: this
 // server's own access tokens, or a forwarded IdP id_token whose audience is
-// trusted) and then attaches the caller to the request.
+// trusted) and then attaches the caller and their IdP token to the request.
+// With DownstreamOAuth a request without an IdP token is refused
+// (RequireProviderIDToken): the ServiceAccount holds no permissions, so there
+// is nothing else to run it as.
 func (o *oauthRuntime) protect(next http.Handler) http.Handler {
-	return o.handler.ValidateToken(o.attachIdentity(next))
+	protected := o.attachIdentity(next)
+	if o.downstreamOAuth {
+		protected = o.handler.RequireProviderIDToken(protected)
+	}
+	return o.handler.ValidateToken(protected)
 }
 
 // attachIdentity translates the validated mcp-oauth user into the request's
-// identity and resolves the caller's IdP token: a forwarded id_token is the
-// bearer itself; for a token this server issued, the provider's id_token is
-// looked up in the store. The token is what the session operations present to
-// agentgateway and, with DownstreamOAuth, what every Kubernetes call presents.
-// With DownstreamOAuth a request that yields no IdP token is refused: the
-// ServiceAccount holds no permissions, so there is nothing else to run it as.
+// identity and puts the caller's IdP token on it when there is one: a
+// forwarded id_token is the bearer itself; for a token this server issued,
+// the provider's id_token stored with it. The token is what the session
+// operations present to agentgateway and, with DownstreamOAuth, what every
+// Kubernetes call presents.
 func (o *oauthRuntime) attachIdentity(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
@@ -249,19 +171,12 @@ func (o *oauthRuntime) attachIdentity(next http.Handler) http.Handler {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
-		id := &identity.Identity{Issuer: o.cfg.DexIssuerURL, Subject: info.ID, Email: info.Email, EmailVerified: info.EmailVerified, Name: info.Name, Groups: info.Groups, Source: identity.SourceOAuth}
-		if o.cfg.provider() == ProviderGoogle {
-			id.Issuer = "https://accounts.google.com"
-		}
+		id := &identity.Identity{Issuer: o.issuer, Subject: info.ID, Email: info.Email, EmailVerified: info.EmailVerified, Name: info.Name, Groups: info.Groups, Source: identity.SourceOAuth}
 		if info.IsSSO() {
 			id.Source = identity.SourceSSO
 		}
 		ctx = identity.ContextWith(ctx, id)
-		tok := o.downstreamToken(ctx, r, info)
-		if tok == "" && o.cfg.DownstreamOAuth {
-			o.refuse(w, r, id)
-			return
-		}
+		tok, _ := handler.ProviderIDTokenFromContext(ctx)
 		ctx = identity.ContextWithToken(ctx, tok)
 		if claims, err := oidc.ParseUnverifiedClaims(tok); err == nil {
 			if actor, exists := claims["act"]; exists && actor != nil {
@@ -276,19 +191,6 @@ func (o *oauthRuntime) attachIdentity(next http.Handler) http.Handler {
 		o.log.Debug("authenticated request", "caller", id.String(), "source", id.Source, "path", r.URL.Path)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
-}
-
-// refuse answers 401 for a caller mcp-oauth authenticated whose bearer yields
-// no IdP token to present downstream: a token this server issued with no IdP
-// id_token stored next to it. An id_token for an untrusted audience never
-// gets here; mcp-oauth refuses it and logs its aud next to the trusted
-// audiences.
-func (o *oauthRuntime) refuse(w http.ResponseWriter, r *http.Request, id *identity.Identity) {
-	const reason = "no identity token to act with towards the Kubernetes API"
-	o.log.Warn("request refused: "+reason+" — the ServiceAccount holds no permissions, nothing else can run the request",
-		"caller", id.String(), "source", id.Source, "path", r.URL.Path)
-	w.Header().Set("WWW-Authenticate", `Bearer error="invalid_token", error_description="`+reason+`"`)
-	http.Error(w, "unauthorized: "+reason, http.StatusUnauthorized)
 }
 
 // unverifiedAudience reads the aud claim (a string or a list) of a compact
@@ -319,51 +221,8 @@ func unverifiedAudience(token string) ([]string, bool) {
 	return nil, false
 }
 
-func bearerToken(r *http.Request) string {
-	return strings.TrimSpace(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))
-}
-
-func (o *oauthRuntime) downstreamToken(ctx context.Context, r *http.Request, info *providers.UserInfo) string {
-	bearer := bearerToken(r)
-	if bearer == "" {
-		return ""
-	}
-	if info.IsSSO() {
-		return bearer
-	}
-	tok, err := o.store.GetToken(ctx, bearer)
-	if err != nil || tok == nil {
-		return ""
-	}
-	// mcp-oauth keeps the provider's id_token as the oauth2 token extra.
-	idToken, _ := tok.Extra("id_token").(string)
-	return idToken
-}
-
 func (o *oauthRuntime) shutdown(ctx context.Context) {
-	// Shutdown stops the stores it was given.
-	if err := o.server.Shutdown(ctx); err != nil {
+	if err := o.cleanup(ctx); err != nil {
 		o.log.Warn("oauth server shutdown", "error", err)
-	}
-}
-
-// validateHTTPS enforces OAuth 2.1's HTTPS requirement, allowing plain HTTP
-// only for loopback development.
-func validateHTTPS(baseURL string) error {
-	u, err := url.Parse(baseURL)
-	if err != nil {
-		return fmt.Errorf("oauth: invalid base URL: %w", err)
-	}
-	switch u.Scheme {
-	case "https":
-		return nil
-	case "http":
-		host := u.Hostname()
-		if host == "localhost" || host == "127.0.0.1" || host == "::1" {
-			return nil
-		}
-		return fmt.Errorf("oauth: base URL must use https (http is allowed for loopback only): %s", baseURL)
-	default:
-		return fmt.Errorf("oauth: base URL scheme must be http or https: %s", baseURL)
 	}
 }

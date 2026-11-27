@@ -16,6 +16,7 @@ import (
 
 	apov1alpha1 "github.com/giantswarm/agent-platform-operator/api/v1alpha1"
 	"github.com/giantswarm/gitops-commit/commit"
+	"github.com/giantswarm/mcp-oauth/oauthconfig"
 	"github.com/giantswarm/mcp-toolkit/metrics"
 	"github.com/giantswarm/mcp-toolkit/tracing"
 	"github.com/spf13/cobra"
@@ -183,20 +184,20 @@ environment variable named next to it; flags win over the environment.`,
 	f.StringVar(&o.installation, "installation", envOr("AGENT_MANAGER_INSTALLATION", ""), "The installation's name in the Dev Portal, which get_info reports: a portal agent id is <installation>/<namespace>/<name> (AGENT_MANAGER_INSTALLATION)")
 	f.BoolVar(&o.mcpEnabled, "mcp-enabled", envBool("AGENT_MANAGER_MCP_ENABLED", true), "Serve the MCP streamable-HTTP endpoint (AGENT_MANAGER_MCP_ENABLED)")
 	f.StringVar(&o.mcpPath, "mcp-path", envOr("AGENT_MANAGER_MCP_PATH", "/mcp"), "MCP endpoint path (AGENT_MANAGER_MCP_PATH)")
-	f.BoolVar(&o.oauthEnabled, "enable-oauth", envBool("AGENT_MANAGER_OAUTH_ENABLED", false), "Require an OAuth 2.1 bearer token on the MCP endpoint and the REST API, validated against the platform IdP (mcp-oauth); the caller's identity travels with every request (AGENT_MANAGER_OAUTH_ENABLED)")
-	f.StringVar(&o.oauthBaseURL, "oauth-base-url", envOr("AGENT_MANAGER_OAUTH_BASE_URL", ""), "Public base URL of this server: the issuer of its OAuth metadata, https or loopback http (AGENT_MANAGER_OAUTH_BASE_URL)")
-	f.StringVar(&o.oauthProvider, "oauth-provider", envOr("AGENT_MANAGER_OAUTH_PROVIDER", server.ProviderDex), "Identity provider: dex or google (AGENT_MANAGER_OAUTH_PROVIDER)")
-	f.StringVar(&o.dexIssuerURL, "dex-issuer-url", envOr("DEX_ISSUER_URL", ""), "Dex issuer URL (DEX_ISSUER_URL)")
-	f.StringVar(&o.dexClientID, "dex-client-id", envOr("DEX_CLIENT_ID", ""), "Dex client ID (DEX_CLIENT_ID)")
-	f.StringVar(&o.dexClientSecret, "dex-client-secret", envOr("DEX_CLIENT_SECRET", ""), "Dex client secret; prefer the environment (DEX_CLIENT_SECRET)")
-	f.StringVar(&o.dexCAFile, "dex-ca-file", envOr("DEX_CA_FILE", ""), "PEM CA bundle of a Dex with a private certificate; verifies discovery, token and JWKS calls (DEX_CA_FILE)")
+	f.BoolVar(&o.oauthEnabled, "enable-oauth", envBool("AGENT_MANAGER_OAUTH_ENABLED", false), "Require an OAuth 2.1 bearer token on the MCP endpoint and the REST API (mcp-oauth, configured by the OAUTH_* variables); the caller's identity travels with every request (AGENT_MANAGER_OAUTH_ENABLED)")
+	f.StringVar(&o.oauthBaseURL, "oauth-base-url", envOr("AGENT_MANAGER_OAUTH_BASE_URL", ""), "Deprecated: set OAUTH_ISSUER, the public base URL of this server (AGENT_MANAGER_OAUTH_BASE_URL)")
+	f.StringVar(&o.oauthProvider, "oauth-provider", envOr("AGENT_MANAGER_OAUTH_PROVIDER", ""), "Deprecated: set OAUTH_PROVIDER (dex, the default, or google) (AGENT_MANAGER_OAUTH_PROVIDER)")
+	f.StringVar(&o.dexIssuerURL, "dex-issuer-url", envOr("DEX_ISSUER_URL", ""), "Deprecated: set OAUTH_DEX_ISSUER_URL (DEX_ISSUER_URL)")
+	f.StringVar(&o.dexClientID, "dex-client-id", envOr("DEX_CLIENT_ID", ""), "Deprecated: set OAUTH_DEX_CLIENT_ID (DEX_CLIENT_ID)")
+	f.StringVar(&o.dexClientSecret, "dex-client-secret", envOr("DEX_CLIENT_SECRET", ""), "Deprecated: set OAUTH_DEX_CLIENT_SECRET or OAUTH_DEX_CLIENT_SECRET_FILE (DEX_CLIENT_SECRET)")
+	f.StringVar(&o.dexCAFile, "dex-ca-file", envOr("DEX_CA_FILE", ""), "Deprecated: set OAUTH_DEX_CA_FILE, the PEM CA bundle of a Dex with a private certificate (DEX_CA_FILE)")
 	f.BoolVar(&o.dexAllowPrivateIP, "allow-private-oauth-urls", envBool("AGENT_MANAGER_OAUTH_ALLOW_PRIVATE_URLS", false), "Deprecated, no effect: the Dex client reaches private addresses and follows HTTP_PROXY, HTTPS_PROXY and NO_PROXY without it (AGENT_MANAGER_OAUTH_ALLOW_PRIVATE_URLS)")
-	f.StringVar(&o.googleClientID, "google-client-id", envOr("GOOGLE_CLIENT_ID", ""), "Google OAuth client ID (GOOGLE_CLIENT_ID)")
-	f.StringVar(&o.googleClientSecret, "google-client-secret", envOr("GOOGLE_CLIENT_SECRET", ""), "Google OAuth client secret; prefer the environment (GOOGLE_CLIENT_SECRET)")
-	f.StringVar(&o.oauthTrustedAudiences, "oauth-trusted-audiences", envOr("OAUTH_TRUSTED_AUDIENCES", ""), "Comma-separated OAuth client IDs whose IdP id_tokens are accepted as bearer tokens — the platform client and the audiences the MCPServer requires, which every forwarded token carries (OAUTH_TRUSTED_AUDIENCES)")
+	f.StringVar(&o.googleClientID, "google-client-id", envOr("GOOGLE_CLIENT_ID", ""), "Deprecated: set OAUTH_GOOGLE_CLIENT_ID (GOOGLE_CLIENT_ID)")
+	f.StringVar(&o.googleClientSecret, "google-client-secret", envOr("GOOGLE_CLIENT_SECRET", ""), "Deprecated: set OAUTH_GOOGLE_CLIENT_SECRET or OAUTH_GOOGLE_CLIENT_SECRET_FILE (GOOGLE_CLIENT_SECRET)")
+	f.StringVar(&o.oauthTrustedAudiences, "oauth-trusted-audiences", envOr("OAUTH_TRUSTED_AUDIENCES", ""), "Deprecated flag: set OAUTH_TRUSTED_AUDIENCES, the comma-separated OAuth client IDs whose IdP id_tokens are accepted as bearer tokens")
 	f.BoolVar(&o.ssoAllowPrivateIPs, "sso-allow-private-ips", envBool("SSO_ALLOW_PRIVATE_IPS", false), "Deprecated, no effect: the issuer host of the configured provider may resolve to a private address for its JWKS without it; list any other JWKS host in --sso-allow-private-ip-jwks-hosts (SSO_ALLOW_PRIVATE_IPS)")
-	f.StringVar(&o.ssoAllowPrivateIPJWKSHosts, "sso-allow-private-ip-jwks-hosts", envOr("SSO_ALLOW_PRIVATE_IP_JWKS_HOSTS", ""), "Comma-separated hosts, other than the issuer's own, whose JWKS may resolve to an RFC 1918 or RFC 4193 address: a jwks_uri the IdP's discovery document puts on another host. Loopback and link-local stay refused (SSO_ALLOW_PRIVATE_IP_JWKS_HOSTS)")
-	f.BoolVar(&o.allowPublicClientRegistration, "allow-public-client-registration", envBool("AGENT_MANAGER_OAUTH_ALLOW_PUBLIC_REGISTRATION", false), "Accept unauthenticated dynamic client registration; labs only (AGENT_MANAGER_OAUTH_ALLOW_PUBLIC_REGISTRATION)")
+	f.StringVar(&o.ssoAllowPrivateIPJWKSHosts, "sso-allow-private-ip-jwks-hosts", envOr("SSO_ALLOW_PRIVATE_IP_JWKS_HOSTS", ""), "Deprecated: set OAUTH_ALLOW_PRIVATE_IP_JWKS_HOSTS (SSO_ALLOW_PRIVATE_IP_JWKS_HOSTS)")
+	f.BoolVar(&o.allowPublicClientRegistration, "allow-public-client-registration", envBool("AGENT_MANAGER_OAUTH_ALLOW_PUBLIC_REGISTRATION", false), "Deprecated: set OAUTH_ALLOW_PUBLIC_CLIENT_REGISTRATION (AGENT_MANAGER_OAUTH_ALLOW_PUBLIC_REGISTRATION)")
 	f.BoolVar(&o.downstreamOAuth, "downstream-oauth", envBool("AGENT_MANAGER_DOWNSTREAM_OAUTH", false), "Call the Kubernetes API as the caller, with the caller's IdP token, for everything a request does — the ServiceAccount holds no permissions (the chart renders none) and nothing runs without a caller. Needs --enable-oauth and an apiserver that trusts the IdP (AGENT_MANAGER_DOWNSTREAM_OAUTH)")
 	f.StringVar(&o.githubAPIURL, "github-api-url", envOr("AGENT_MANAGER_GITHUB_API_URL", server.DefaultGitHubAPIURL), "GitHub REST API base URL for GET /user and commit mode (AGENT_MANAGER_GITHUB_API_URL)")
 	f.StringVar(&o.githubExchangeEndpoint, "github-token-exchange-endpoint", envOr("AGENT_MANAGER_GITHUB_TOKEN_EXCHANGE_ENDPOINT", ""), "RFC 8693 endpoint for obtaining the manager App user grant (AGENT_MANAGER_GITHUB_TOKEN_EXCHANGE_ENDPOINT)")
@@ -223,7 +224,14 @@ func warnDeprecatedOAuthOptions(o *serveOptions, log *slog.Logger) {
 func runServe(ctx context.Context, o *serveOptions) error {
 	log := slog.Default()
 	warnDeprecatedOAuthOptions(o, log)
-	if err := validateCredentialOptions(o); err != nil {
+	var oauthSettings oauthconfig.Settings
+	if o.oauthEnabled {
+		var err error
+		if oauthSettings, err = loadOAuthSettings(o, log); err != nil {
+			return fmt.Errorf("oauth: %w", err)
+		}
+	}
+	if err := validateCredentialOptions(o, oauthSettings); err != nil {
 		return err
 	}
 	skillsTokens, err := skillsTokenSource(o)
@@ -390,7 +398,7 @@ func runServe(ctx context.Context, o *serveOptions) error {
 	var orgs *organizations.Service
 	var resolveGitHub func(context.Context) (*identity.GitHub, error)
 	if o.githubExchangeEndpoint != "" {
-		resolveGitHub, err = server.NewGitHubExchange(server.GitHubExchangeConfig{TokenEndpoint: o.githubExchangeEndpoint, ClientID: o.githubExchangeClient, ClientIDFile: o.githubExchangeClientFile, ClientSecretFile: o.githubExchangeSecretFile, Audience: o.githubExchangeAudience, CAFile: o.githubExchangeCAFile, APIURL: o.githubAPIURL, SubjectIssuer: o.dexIssuerURL, Logger: log})
+		resolveGitHub, err = server.NewGitHubExchange(server.GitHubExchangeConfig{TokenEndpoint: o.githubExchangeEndpoint, ClientID: o.githubExchangeClient, ClientIDFile: o.githubExchangeClientFile, ClientSecretFile: o.githubExchangeSecretFile, Audience: o.githubExchangeAudience, CAFile: o.githubExchangeCAFile, APIURL: o.githubAPIURL, SubjectIssuer: dexIssuerURL(oauthSettings), Logger: log})
 		if err != nil {
 			return err
 		}
@@ -496,20 +504,7 @@ func runServe(ctx context.Context, o *serveOptions) error {
 
 	srvCfg := server.Config{Addr: o.listen, MCPEnabled: o.mcpEnabled, MCPPath: o.mcpPath}
 	if o.oauthEnabled {
-		srvCfg.OAuth = &server.OAuthConfig{
-			BaseURL:                       o.oauthBaseURL,
-			Provider:                      o.oauthProvider,
-			DexIssuerURL:                  o.dexIssuerURL,
-			DexClientID:                   o.dexClientID,
-			DexClientSecret:               o.dexClientSecret,
-			DexCAFile:                     o.dexCAFile,
-			GoogleClientID:                o.googleClientID,
-			GoogleClientSecret:            o.googleClientSecret,
-			TrustedAudiences:              splitList(o.oauthTrustedAudiences),
-			AllowPrivateIPJWKSHosts:       splitList(o.ssoAllowPrivateIPJWKSHosts),
-			AllowPublicClientRegistration: o.allowPublicClientRegistration,
-			DownstreamOAuth:               o.downstreamOAuth,
-		}
+		srvCfg.OAuth = &server.OAuthConfig{Settings: oauthSettings, DownstreamOAuth: o.downstreamOAuth}
 	}
 	srvCfg.Organizations = orgs
 	srv, err := server.New(srvCfg, svc, api.NewMCPServer(svc, build.Version, api.WithOrganizations(orgs), api.WithLifecycle(ctx)), log)
@@ -670,7 +665,7 @@ func organizationToolsEnabled(options *serveOptions) bool {
 	return options.multiTenant || options.credentialUIURL != ""
 }
 
-func validateCredentialOptions(options *serveOptions) error {
+func validateCredentialOptions(options *serveOptions, settings oauthconfig.Settings) error {
 	if options.credentialUIURL != "" {
 		if err := organizations.ValidateCredentialUIURL(options.credentialUIURL); err != nil {
 			return err
@@ -683,15 +678,24 @@ func validateCredentialOptions(options *serveOptions) error {
 		}
 	}
 	if options.githubExchangeEndpoint != "" {
-		if !options.oauthEnabled || !options.downstreamOAuth || options.oauthProvider != server.ProviderDex {
+		if !options.oauthEnabled || !options.downstreamOAuth || settings.Dex == nil {
 			return errors.New("GitHub token exchange requires Dex OAuth and downstream OAuth")
 		}
-		return (server.GitHubExchangeConfig{TokenEndpoint: options.githubExchangeEndpoint, ClientID: options.githubExchangeClient, ClientIDFile: options.githubExchangeClientFile, ClientSecretFile: options.githubExchangeSecretFile, Audience: options.githubExchangeAudience, CAFile: options.githubExchangeCAFile, APIURL: options.githubAPIURL, SubjectIssuer: options.dexIssuerURL}).Validate()
+		return (server.GitHubExchangeConfig{TokenEndpoint: options.githubExchangeEndpoint, ClientID: options.githubExchangeClient, ClientIDFile: options.githubExchangeClientFile, ClientSecretFile: options.githubExchangeSecretFile, Audience: options.githubExchangeAudience, CAFile: options.githubExchangeCAFile, APIURL: options.githubAPIURL, SubjectIssuer: dexIssuerURL(settings)}).Validate()
 	}
 	if options.githubExchangeClient != "" || options.githubExchangeClientFile != "" || options.githubExchangeSecretFile != "" || options.githubExchangeAudience != "" || options.githubExchangeCAFile != "" {
 		return errors.New("GitHub token exchange options require --github-token-exchange-endpoint")
 	}
 	return nil
+}
+
+// dexIssuerURL is the issuer of the Dex the server signs people in with, ""
+// without one.
+func dexIssuerURL(settings oauthconfig.Settings) string {
+	if settings.Dex == nil {
+		return ""
+	}
+	return settings.Dex.IssuerURL
 }
 
 // skillsTokenSource is what skills are read with: the skills GitHub App's

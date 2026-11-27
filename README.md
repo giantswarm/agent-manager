@@ -600,15 +600,25 @@ person (a token with `act`) is refused with `forbidden`.
 
 The caller, not the ServiceAccount. With `--enable-oauth` agent-manager is an
 OAuth 2.1 resource server ([mcp-oauth](https://github.com/giantswarm/mcp-oauth))
-in front of **both** the MCP endpoint and the REST API; providers `dex` (with
-`--dex-ca-file` for a Dex with a private certificate; the Dex client follows
-`HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY`) and
-`google`. Nobody logs in to agent-manager itself: muster forwards the session's
+in front of **both** the MCP endpoint and the REST API; providers `dex`
+(`OAUTH_PROVIDER=dex`, the default, with `OAUTH_DEX_CA_FILE` for a Dex with a
+private certificate; the Dex client follows `HTTP_PROXY`, `HTTPS_PROXY` and
+`NO_PROXY`) and `google` (`OAUTH_PROVIDER=google`). mcp-oauth's `OAUTH_*`
+variables configure it (`oauthconfig.SettingsFromEnv`: `OAUTH_ISSUER`,
+`OAUTH_DEX_ISSUER_URL`, `OAUTH_DEX_CLIENT_ID`, `OAUTH_DEX_CLIENT_SECRET`,
+`OAUTH_DEX_CA_FILE`, `OAUTH_TRUSTED_AUDIENCES`, …); agent-manager turns on
+client ID metadata documents unless `OAUTH_ENABLE_CLIENT_ID_METADATA_DOCUMENTS`
+says otherwise. The earlier flags and variables (`--oauth-base-url`,
+`--oauth-provider`, `--dex-*`, `--google-*`, `--oauth-trusted-audiences`,
+`--sso-allow-private-ip-jwks-hosts`, `--allow-public-client-registration` and
+their `AGENT_MANAGER_OAUTH_*`, `DEX_*`, `GOOGLE_*` and `SSO_*` variables) still
+work for one more release and log a deprecation warning naming the
+replacement; an `OAUTH_*` variable wins over them. Nobody logs in to agent-manager itself: muster forwards the session's
 IdP id_token byte-identical (MCPServer `auth: {type: oauth, forwardToken: true,
 requiredAudiences}`, rendered by the chart under `muster.mcpServer.auth`) and
 the portal sends the signed-in user's id_token through the gateway; both are
 validated against the IdP's JWKS because their audience is in
-`--oauth-trusted-audiences`. Which audience that is depends on the session:
+`OAUTH_TRUSTED_AUDIENCES`. Which audience that is depends on the session:
 muster's own sessions and MCP clients sign in through the platform OAuth
 client, a portal session forwards the id_token of the portal's own client —
 and every forwarded token carries the audiences the MCPServer requires, the
