@@ -340,6 +340,25 @@ func TestValidatedBearerWithoutIDToken(t *testing.T) {
 	assert.Equal(t, token, got.token)
 }
 
+// TestOpenIDProviderTrustedIssuer pins that the IdP as a trusted issuer
+// marked openIDProvider, as the chart renders it, admits what audience trust
+// admits: the same caller and their ID token, and no token for an audience
+// the entry does not list.
+func TestOpenIDProviderTrustedIssuer(t *testing.T) {
+	idp := newPrivateIdP(t, "")
+	token := idp.idToken(t, []string{"agent-platform"})
+
+	got := throughChain(t, idp.trustedIssuerConfig(t, true, false), token)
+	require.Equal(t, http.StatusNoContent, got.code)
+	require.NotNil(t, got.caller)
+	assert.Equal(t, "admin@lab.local", got.caller.String())
+	assert.Equal(t, token, got.token)
+
+	got = throughChain(t, idp.trustedIssuerConfig(t, true, true), idp.idToken(t, []string{"someone-else"}))
+	require.Equal(t, http.StatusUnauthorized, got.code, "an untrusted audience is refused")
+	assert.Nil(t, got.caller)
+}
+
 // TestForwardedTokenThroughTheProductionChain validates a forwarded id_token
 // against a Dex on a private address with no private-address setting: the
 // issuer host's JWKS is allowed by the library.

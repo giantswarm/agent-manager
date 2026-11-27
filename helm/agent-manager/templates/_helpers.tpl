@@ -90,8 +90,9 @@ every Kubernetes call carries the caller's token.
 {{- end }}
 
 {{/*
-Existing Secret with the provider credentials: oauth.existingSecret, else the
-platform's global.identity.existingSecret, else the chart-rendered one.
+Existing Secret with the provider credentials of the deprecated keys:
+oauth.existingSecret, else the platform's global.identity.existingSecret,
+else the chart-rendered one.
 */}}
 {{- define "agent-manager.oauthSecretName" -}}
 {{- $g := include "agent-manager.globalIdentity" . | fromJson -}}
@@ -99,68 +100,153 @@ platform's global.identity.existingSecret, else the chart-rendered one.
 {{- end }}
 
 {{/*
-Whether the chart renders its own OAuth Secret (no existing one named).
+Whether the chart renders its own OAuth Secret: no
+authorizationServer.upstream.client.secretKeyRef, no existing Secret named.
 */}}
 {{- define "agent-manager.oauthRendersSecret" -}}
 {{- $g := include "agent-manager.globalIdentity" . | fromJson -}}
-{{- if and .Values.oauth.enabled (not .Values.oauth.existingSecret) (not (dig "existingSecret" "" $g)) }}true{{ end }}
+{{- $o := .Values.oauth -}}
+{{- if and $o.enabled $o.authorizationServer.enabled (not $o.authorizationServer.upstream.client.secretKeyRef.name) (not $o.existingSecret) (not (dig "existingSecret" "" $g)) }}true{{ end }}
 {{- end }}
 
 {{/*
-OAuth base URL: oauth.baseURL, else https://<fullname>.<global.domain>.
+The provider people sign in with: authorizationServer.upstream.type, else the
+deprecated oauth.provider, else global.identity.type, else dex.
 */}}
-{{- define "agent-manager.oauthBaseURL" -}}
+{{- define "agent-manager.oauthProvider" -}}
+{{- $g := include "agent-manager.globalIdentity" . | fromJson -}}
+{{- .Values.oauth.authorizationServer.upstream.type | default .Values.oauth.provider | default (dig "type" "" $g) | default "dex" }}
+{{- end }}
+
+{{/*
+The audiences, as JSON, that muster requests at login and the forwarded ID
+token then carries for the Kubernetes API server: muster.mcpServer.auth.requiredAudiences,
+else global.identity.kubernetes.audiences.
+*/}}
+{{- define "agent-manager.requiredAudiences" -}}
+{{- $g := include "agent-manager.globalIdentity" . | fromJson -}}
+{{- .Values.muster.mcpServer.auth.requiredAudiences | default (dig "kubernetes" "audiences" list $g) | toJson }}
+{{- end }}
+
+{{/*
+The OAuth settings the Deployment renders, as JSON. Each comes from the
+shared layout (oauth.resourceServer, oauth.authorizationServer), else from
+the deprecated key it replaces, else from global.identity:
+  issuer          authorizationServer.issuer, baseURL, https://<fullname>.<global.domain>
+  provider        authorizationServer.upstream.type, provider, global.identity.type, dex
+  upstreamIssuer  authorizationServer.upstream.issuer, dex.issuerURL, global.identity.issuerUrl
+  clientID        authorizationServer.upstream.client.id, dex.clientID or google.clientID,
+                  global.identity.clientId (dex)
+  clientSecret    authorizationServer.upstream.client.secretKeyRef, existingSecret,
+                  global.identity.existingSecret, the chart-rendered Secret
+  upstreamCA      authorizationServer.upstream.certificateAuthority.secretKeyRef,
+                  dex.caSecret, global.identity.ca
+  trustedIssuers  resourceServer.trustedIssuers, else one entry for the
+                  provider people sign in with (openIDProvider), accepting its
+                  ID tokens for the union, in this order and without
+                  duplicates, of the deprecated trustedAudiences (else
+                  clientID, else global.identity.clientId) and
+                  agent-manager.requiredAudiences: every token muster
+                  forwards carries those by construction and the
+                  kube-apiserver trusts them, so a portal session's ID token
+                  is accepted too
+A CA is a mount: {volume, secret or configMap, key, dir}; caFile is dir/key.
+*/}}
+{{- define "agent-manager.oauth" -}}
+{{- $o := .Values.oauth -}}
+{{- $as := $o.authorizationServer -}}
+{{- $up := $as.upstream -}}
+{{- $rs := $o.resourceServer -}}
+{{- $g := include "agent-manager.globalIdentity" . | fromJson -}}
 {{- $domain := dig "domain" "" (.Values.global | default dict) -}}
 {{- $derived := "" -}}
 {{- if $domain }}{{ $derived = printf "https://%s.%s" (include "agent-manager.fullname" .) $domain }}{{ end -}}
-{{- required "oauth.baseURL is required when oauth.enabled (or set global.domain)" (.Values.oauth.baseURL | default $derived) }}
-{{- end }}
-
-{{/*
-Dex issuer / client id with the global.identity fallbacks.
-*/}}
-{{- define "agent-manager.oauthDexIssuerURL" -}}
-{{- $g := include "agent-manager.globalIdentity" . | fromJson -}}
-{{- required "oauth.dex.issuerURL (or global.identity.issuerUrl) is required for the dex provider" (.Values.oauth.dex.issuerURL | default (dig "issuerUrl" "" $g)) }}
-{{- end }}
-
-{{- define "agent-manager.oauthDexClientID" -}}
-{{- $g := include "agent-manager.globalIdentity" . | fromJson -}}
-{{- required "oauth.dex.clientID (or global.identity.clientId) is required for the dex provider" (.Values.oauth.dex.clientID | default (dig "clientId" "" $g)) }}
-{{- end }}
-
-{{/*
-CA Secret of a private-certificate Dex: oauth.dex.caSecret, else
-global.identity.ca. Name empty means system trust.
-*/}}
-{{- define "agent-manager.oauthDexCASecretName" -}}
-{{- $g := include "agent-manager.globalIdentity" . | fromJson -}}
-{{- .Values.oauth.dex.caSecret.name | default (dig "ca" "secretName" "" $g) }}
-{{- end }}
-
-{{- define "agent-manager.oauthDexCASecretKey" -}}
-{{- $g := include "agent-manager.globalIdentity" . | fromJson -}}
-{{- if .Values.oauth.dex.caSecret.name }}{{ .Values.oauth.dex.caSecret.key | default "ca.crt" }}{{ else }}{{ dig "ca" "key" "" $g | default .Values.oauth.dex.caSecret.key | default "ca.crt" }}{{ end }}
-{{- end }}
-
-{{/*
-Trusted audiences, comma-separated: oauth.trustedAudiences (else the platform
-client id, global.identity.clientId) plus muster.mcpServer.auth.requiredAudiences,
-de-duplicated, order kept. Every token muster forwards carries the required
-audiences by construction, and they are the audiences the kube-apiserver
-trusts — the trust anchor for a server whose only use of the token is to
-present it downstream. The platform client alone refuses a portal session:
-its id_token names the portal's own client next to the required audiences,
-never the platform client. A Google installation requires no audiences, so
-the union adds nothing there.
-*/}}
-{{- define "agent-manager.oauthTrustedAudiences" -}}
-{{- $g := include "agent-manager.globalIdentity" . | fromJson -}}
-{{- $all := .Values.oauth.trustedAudiences | default (compact (list (dig "clientId" "" $g))) -}}
-{{- range .Values.muster.mcpServer.auth.requiredAudiences -}}
-{{- $all = append $all . -}}
+{{- $r := dict "authorizationServer" $as.enabled "mounts" list -}}
+{{- $_ := set $r "issuer" (required "oauth.authorizationServer.issuer is required when oauth.enabled (or set global.domain)" ($as.issuer | default $o.baseURL | default $derived)) -}}
+{{- $provider := include "agent-manager.oauthProvider" . -}}
+{{- $_ = set $r "provider" $provider -}}
+{{- $upstreamIssuer := "" -}}
+{{- $clientID := "" -}}
+{{- if eq $provider "dex" -}}
+{{- $upstreamIssuer = $up.issuer | default $o.dex.issuerURL | default (dig "issuerUrl" "" $g) -}}
+{{- $clientID = $up.client.id | default $o.dex.clientID | default (dig "clientId" "" $g) -}}
+{{- else -}}
+{{- $upstreamIssuer = "https://accounts.google.com" -}}
+{{- $clientID = $up.client.id | default $o.google.clientID -}}
 {{- end -}}
-{{- $all | uniq | join "," -}}
+{{- $_ = set $r "upstreamIssuer" $upstreamIssuer -}}
+{{- $_ = set $r "clientID" $clientID -}}
+{{- if $up.client.secretKeyRef.name -}}
+{{- $_ = set $r "clientSecret" (dict "name" $up.client.secretKeyRef.name "key" (required "oauth.authorizationServer.upstream.client.secretKeyRef.key is required with its name" $up.client.secretKeyRef.key)) -}}
+{{- else -}}
+{{- $_ = set $r "clientSecret" (dict "name" (include "agent-manager.oauthSecretName" .) "key" (printf "%s-client-secret" $provider)) -}}
+{{- if and (eq $provider "google") (not $clientID) -}}
+{{- $_ = set $r "clientIDSecret" (dict "name" (include "agent-manager.oauthSecretName" .) "key" "google-client-id") -}}
+{{- end -}}
+{{- end -}}
+{{- if eq $provider "dex" -}}
+{{- $ca := dict -}}
+{{- if $up.certificateAuthority.secretKeyRef.name -}}
+{{- $ca = dict "secret" $up.certificateAuthority.secretKeyRef.name "key" ($up.certificateAuthority.secretKeyRef.key | default "ca.crt") -}}
+{{- else if $o.dex.caSecret.name -}}
+{{- $ca = dict "secret" $o.dex.caSecret.name "key" ($o.dex.caSecret.key | default "ca.crt") -}}
+{{- else if dig "ca" "secretName" "" $g -}}
+{{- $ca = dict "secret" (dig "ca" "secretName" "" $g) "key" (dig "ca" "key" "" $g | default $o.dex.caSecret.key | default "ca.crt") -}}
+{{- end -}}
+{{- if $ca.secret -}}
+{{- $_ = set $ca "volume" "idp-ca" -}}
+{{- $_ = set $ca "dir" "/etc/agent-manager/idp-ca" -}}
+{{- $_ = set $r "upstreamCA" $ca -}}
+{{- $_ = set $r "mounts" (append $r.mounts $ca) -}}
+{{- end -}}
+{{- end -}}
+{{- $issuers := list -}}
+{{- range $i, $entry := $rs.trustedIssuers -}}
+{{- $out := omit $entry "certificateAuthority" -}}
+{{- with $entry.certificateAuthority -}}
+{{- $ca := dict "volume" (printf "trusted-issuer-ca-%d" $i) "dir" (printf "/etc/agent-manager/trusted-issuer-ca/%d" $i) -}}
+{{- if .secretKeyRef -}}
+{{- $_ := set $ca "secret" (required (printf "oauth.resourceServer.trustedIssuers[%d].certificateAuthority.secretKeyRef.name is required" $i) .secretKeyRef.name) -}}
+{{- $_ = set $ca "key" (.secretKeyRef.key | default "ca.crt") -}}
+{{- else -}}
+{{- $_ := set $ca "configMap" (required (printf "oauth.resourceServer.trustedIssuers[%d].certificateAuthority needs secretKeyRef or configMapKeyRef" $i) (dig "configMapKeyRef" "name" "" .)) -}}
+{{- $_ = set $ca "key" (dig "configMapKeyRef" "key" "" . | default "ca.crt") -}}
+{{- end -}}
+{{- $_ := set $out "caFile" (printf "%s/%s" $ca.dir $ca.key) -}}
+{{- $_ = set $r "mounts" (append $r.mounts $ca) -}}
+{{- end -}}
+{{- $issuers = append $issuers $out -}}
+{{- end -}}
+{{- if not $issuers -}}
+{{- $audiences := list -}}
+{{- range concat ($o.trustedAudiences | default (list ($clientID | default (dig "clientId" "" $g)))) (include "agent-manager.requiredAudiences" . | fromJsonArray) -}}
+{{- if and . (not (has . $audiences)) }}{{ $audiences = append $audiences . }}{{ end -}}
+{{- end -}}
+{{- if and $audiences $upstreamIssuer -}}
+{{- $entry := dict "issuer" $upstreamIssuer "audiences" $audiences "openIDProvider" true -}}
+{{- if eq $provider "dex" -}}
+{{- /* Dex serves its JWKS at <issuer>/keys and signs ID tokens without a typ header. mcp-oauth does not imply the issuer host for private JWKS addresses, so it is listed. */ -}}
+{{- $_ := set $entry "jwksURI" (printf "%s/keys" (trimSuffix "/" $upstreamIssuer)) -}}
+{{- $_ = set $entry "acceptedTypHeaders" (list "" "JWT") -}}
+{{- $_ = set $entry "allowPrivateIPJWKSHosts" (concat (list (urlParse $upstreamIssuer).hostname) $o.sso.allowPrivateIPJWKSHosts | uniq) -}}
+{{- with $r.upstreamCA }}{{ $_ = set $entry "caFile" (printf "%s/%s" .dir .key) }}{{ end -}}
+{{- else -}}
+{{- $_ := set $entry "jwksURI" "https://www.googleapis.com/oauth2/v3/certs" -}}
+{{- $_ = set $entry "acceptedTypHeaders" (list "JWT") -}}
+{{- end -}}
+{{- $issuers = list $entry -}}
+{{- end -}}
+{{- end -}}
+{{- if not $as.enabled -}}
+{{- if not $issuers -}}
+{{- fail "oauth.authorizationServer.enabled false accepts only trusted issuer tokens: set oauth.resourceServer.trustedIssuers, or the upstream issuer and client ID it is derived from" -}}
+{{- end -}}
+{{- if not $rs.authorizationServers -}}
+{{- fail "oauth.authorizationServer.enabled false needs oauth.resourceServer.authorizationServers: MCP clients discover the authorization server from the protected resource metadata (RFC 9728), and this server then runs none" -}}
+{{- end -}}
+{{- end -}}
+{{- $_ = set $r "trustedIssuers" $issuers -}}
+{{- toJson $r -}}
 {{- end }}
 
 {{/*
@@ -336,8 +422,8 @@ connection).
 {{- if not $.Values.github.enabled }}
 {{- fail "github.tokenExchange needs github.enabled: set github.enabled to true, or unset github.tokenExchange.tokenEndpoint" }}
 {{- end }}
-{{- if not (and $.Values.oauth.enabled (eq $.Values.oauth.provider "dex") $.Values.oauth.downstream.enabled) }}
-{{- fail "github.tokenExchange exchanges the person's Dex ID token: set oauth.enabled with oauth.provider dex and oauth.downstream.enabled" }}
+{{- if not (and $.Values.oauth.enabled (eq (include "agent-manager.oauthProvider" $) "dex") $.Values.oauth.downstream.enabled) }}
+{{- fail "github.tokenExchange exchanges the person's Dex ID token: set oauth.enabled with the dex provider (oauth.authorizationServer.upstream.type) and oauth.downstream.enabled" }}
 {{- end }}
 {{- if not $.Values.muster.mcpServer.auth.forwardToken }}
 {{- fail "github.tokenExchange lists its App under the MCPServer's providerApps, which muster serves only on a forwarded token: set muster.mcpServer.auth.forwardToken" }}

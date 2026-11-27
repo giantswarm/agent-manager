@@ -171,7 +171,7 @@ tests:
           existingSecret: agent-manager-github-exchange
     asserts:
       - failedTemplate:
-          errorMessage: "github.tokenExchange exchanges the person's Dex ID token: set oauth.enabled with oauth.provider dex and oauth.downstream.enabled"
+          errorMessage: "github.tokenExchange exchanges the person's Dex ID token: set oauth.enabled with the dex provider (oauth.authorizationServer.upstream.type) and oauth.downstream.enabled"
 
   - it: refuses github.tokenExchange with the Google provider
     set:
@@ -187,7 +187,7 @@ tests:
           existingSecret: agent-manager-github-exchange
     asserts:
       - failedTemplate:
-          errorMessage: "github.tokenExchange exchanges the person's Dex ID token: set oauth.enabled with oauth.provider dex and oauth.downstream.enabled"
+          errorMessage: "github.tokenExchange exchanges the person's Dex ID token: set oauth.enabled with the dex provider (oauth.authorizationServer.upstream.type) and oauth.downstream.enabled"
 
   - it: refuses an audience muster cannot name as a provider App
     set:
