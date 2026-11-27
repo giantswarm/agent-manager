@@ -33,7 +33,7 @@ func createOnlySubjects() []createOnlySubject {
 		{ // #nosec G101 -- Secret names, no credentials
 			tool: ToolSetOrganizationConnector, name: "gh", secret: "tenant-credential-gh", file: paymentsPath + "/remotemcpserver-gh.yaml", gvr: serverGVR,
 			existing:  func() *unstructured.Unstructured { return connector("gh", "tenant-credential-gh", "token") },
-			arguments: map[string]any{"namespace": orgNS, "name": "gh", "url": "https://new.example.com/mcp", "credentialHeader": "Authorization"},
+			arguments: map[string]any{"organization": "payments", "name": "gh", "url": "https://new.example.com/mcp", "credentialHeader": "Authorization"},
 			spec: func(t *testing.T, fixture *orgFixture) any {
 				value, _, err := unstructured.NestedString(fixture.get(t, serverGVR, orgNS, "gh").Object, "spec", "url")
 				require.NoError(t, err)
@@ -45,7 +45,7 @@ func createOnlySubjects() []createOnlySubject {
 			existing: func() *unstructured.Unstructured {
 				return egressPolicy("github", map[string]any{"origin": "https://api.github.com"})
 			},
-			arguments: map[string]any{"namespace": orgNS, "name": "github", "destinations": []any{map[string]any{"origin": "https://new.example.com", "credentialHeader": "Authorization"}}},
+			arguments: map[string]any{"organization": "payments", "name": "github", "destinations": []any{map[string]any{"origin": "https://new.example.com", "credentialHeader": "Authorization"}}},
 			spec: func(t *testing.T, fixture *orgFixture) any {
 				value, _, err := unstructured.NestedSlice(fixture.get(t, egressGVR, orgNS, "github").Object, "spec", "destinations")
 				require.NoError(t, err)

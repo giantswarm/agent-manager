@@ -2,16 +2,21 @@ package agents
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	kubefake "k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/giantswarm/agent-manager/internal/kube"
 )
@@ -23,8 +28,26 @@ const (
 
 var wc1 = Target{Organization: "acme", Cluster: "wc1"}
 
-// targetFixture is an installation (mc) with the organization namespace
-// org-acme holding cluster wc1's kubeconfig Secret, and the workload cluster
+// acmeClusters is the namespace the Organization acme reports for its
+// clusters (status.namespace): not org-acme, so that a namespace computed
+// from the organization's name misses it.
+const acmeClusters = "acme-clusters"
+
+// clusterOrganization is an Organization whose clusters are in namespace ns
+// (status.namespace); none without ns.
+func clusterOrganization(name, ns string) *unstructured.Unstructured {
+	u := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "security.giantswarm.io/v1alpha1", "kind": "Organization",
+		"metadata": map[string]any{"name": name},
+	}}
+	if ns != "" {
+		u.Object["status"] = map[string]any{"namespace": ns}
+	}
+	return u
+}
+
+// targetFixture is an installation (mc) with the Organization acme, whose
+// namespace acme-clusters holds cluster wc1's kubeconfig Secret, and the workload cluster
 // (wc) running the runtime slice: a ModelConfig and the platform Harness in
 // kagent. The installation has no ModelConfig of that name, so a check on the
 // wrong cluster fails.
@@ -38,7 +61,8 @@ type targetFixture struct {
 func newTargetFixture(t *testing.T, targetMusterURL string) *targetFixture {
 	t.Helper()
 	f := &targetFixture{}
-	f.mc = dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), listKinds)
+	f.mc = dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), listKinds,
+		clusterOrganization("acme", acmeClusters), clusterOrganization("pending", ""))
 	f.wc = dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), listKinds,
 		modelConfig("kagent", "wc-model", "OpenAI", "qwen3.5:9b"),
 		harness("kagent", "kagent", "kagent"),
@@ -46,11 +70,11 @@ func newTargetFixture(t *testing.T, targetMusterURL string) *targetFixture {
 	answerDryRuns(t, f.mc)
 	answerDryRuns(t, f.wc)
 	secret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: "wc1-kubeconfig", Namespace: "org-acme"},
+		ObjectMeta: metav1.ObjectMeta{Name: "wc1-kubeconfig", Namespace: acmeClusters},
 		Data:       map[string][]byte{KubeconfigSecretKey: []byte(wcKubeconfig)},
 	}
 	mcTyped := kubefake.NewClientset(secret)
-	allowCreate(mcTyped, func(ns string) bool { return ns == "org-acme" })
+	allowCreate(mcTyped, func(ns string) bool { return ns == acmeClusters })
 	wcTyped := kubefake.NewClientset()
 	mc := kube.FromInterfaces(f.mc, mcTyped, mcTyped.Discovery())
 	wc := kube.FromInterfaces(f.wc, wcTyped, wcTyped.Discovery())
@@ -87,7 +111,7 @@ func TestCreateOnATargetClusterPlacesTheReleaseThroughItsKubeconfig(t *testing.T
 	assert.True(t, res.Created.OCIRepository)
 	assert.Equal(t, wc1, res.Agent.Target)
 
-	hr, err := f.mc.Resource(hrGVR).Namespace("org-acme").Get(ctx, "wc1-planner", metav1.GetOptions{})
+	hr, err := f.mc.Resource(hrGVR).Namespace(acmeClusters).Get(ctx, "wc1-planner", metav1.GetOptions{})
 	require.NoError(t, err, "the HelmRelease lives on the installation, in the organization namespace, named after cluster and agent")
 	spec := hr.Object["spec"].(map[string]any)
 	assert.Equal(t, map[string]any{"secretRef": map[string]any{"name": "wc1-kubeconfig", "key": "value"}}, spec["kubeConfig"])
@@ -95,7 +119,7 @@ func TestCreateOnATargetClusterPlacesTheReleaseThroughItsKubeconfig(t *testing.T
 	assert.Equal(t, "kagent", spec["targetNamespace"])
 	assert.Equal(t, "kagent", spec["storageNamespace"])
 	assert.NotContains(t, spec, "serviceAccountName", "Flux would impersonate it on the workload cluster, where it does not exist")
-	assert.Equal(t, "org-acme", spec["chartRef"].(map[string]any)["namespace"])
+	assert.Equal(t, acmeClusters, spec["chartRef"].(map[string]any)["namespace"])
 	assert.Equal(t, "wc1", hr.GetLabels()[ClusterLabel])
 	assert.Equal(t, ManagedByValue, hr.GetLabels()[ManagedByLabel])
 
@@ -103,7 +127,7 @@ func TestCreateOnATargetClusterPlacesTheReleaseThroughItsKubeconfig(t *testing.T
 	assert.Equal(t, map[string]any{"url": targetMuster}, values["muster"], "an agent on a workload cluster reaches muster at the installation's public URL")
 	assert.NotContains(t, values, SkillsGitAuthValuesKey, "the installation's skills credential exists on the installation only")
 
-	_, err = f.mc.Resource(ociGVR).Namespace("org-acme").Get(ctx, "agent", metav1.GetOptions{})
+	_, err = f.mc.Resource(ociGVR).Namespace(acmeClusters).Get(ctx, "agent", metav1.GetOptions{})
 	require.NoError(t, err, "the chart source is shared in the organization namespace")
 	list, err := f.wc.Resource(hrGVR).Namespace("kagent").List(ctx, metav1.ListOptions{})
 	require.NoError(t, err)
@@ -120,7 +144,7 @@ func TestAnAgentOnATargetClusterIsReadThere(t *testing.T) {
 	require.NoError(t, err)
 	// helm-controller renders the Agent on the workload cluster with the
 	// provenance labels of the installation's release.
-	_, err = f.wc.Resource(agentGVR).Namespace("kagent").Create(ctx, agentObject("kagent", "planner", "wc1-planner", "org-acme", true, true), metav1.CreateOptions{})
+	_, err = f.wc.Resource(agentGVR).Namespace("kagent").Create(ctx, agentObject("kagent", "planner", "wc1-planner", acmeClusters, true, true), metav1.CreateOptions{})
 	require.NoError(t, err)
 	at := Location{Namespace: "kagent", Target: wc1}
 
@@ -131,7 +155,7 @@ func TestAnAgentOnATargetClusterIsReadThere(t *testing.T) {
 	assert.True(t, *a.Ready)
 	assert.Equal(t, wc1, a.Target)
 	require.NotNil(t, a.HelmRelease)
-	assert.Equal(t, "org-acme", a.HelmRelease.Namespace)
+	assert.Equal(t, acmeClusters, a.HelmRelease.Namespace)
 	assert.Equal(t, "wc1-planner", a.HelmRelease.Name)
 
 	st, err := f.svc.Status(ctx, at, "planner")
@@ -157,7 +181,7 @@ func TestAnAgentOnATargetClusterIsReadThere(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, del.HelmReleaseDeleted)
 	assert.True(t, del.OCIRepositoryDeleted)
-	_, err = f.mc.Resource(hrGVR).Namespace("org-acme").Get(ctx, "wc1-planner", metav1.GetOptions{})
+	_, err = f.mc.Resource(hrGVR).Namespace(acmeClusters).Get(ctx, "wc1-planner", metav1.GetOptions{})
 	assert.Error(t, err)
 }
 
@@ -174,7 +198,7 @@ func TestTargetClusterRefusals(t *testing.T) {
 		},
 		"no kubeconfig Secret": {
 			spec: func() Spec { s := targetSpec("planner"); s.Cluster = "wc2"; return s }(),
-			want: "has no kubeconfig Secret org-acme/wc2-kubeconfig",
+			want: "has no kubeconfig Secret acme-clusters/wc2-kubeconfig",
 		},
 		"release name too long": {
 			spec: targetSpec(strings.Repeat("a", 60)),
@@ -193,8 +217,27 @@ func TestTargetClusterRefusals(t *testing.T) {
 		})
 	}
 
+	// The organization is read as the caller: one that does not exist, or
+	// that the caller may not read, is not found alike; one that reports no
+	// namespace for its clusters yet is not ready. Nothing is written.
+	for organization, want := range map[string]error{"ghost": ErrNotFound, "pending": ErrConflict} {
+		s := targetSpec("planner")
+		s.Organization = organization
+		_, err := f.svc.Create(ctx, s)
+		require.ErrorIs(t, err, want, organization)
+	}
+	f.mc.PrependReactor("get", "organizations", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewForbidden(schema.GroupResource{Group: "security.giantswarm.io", Resource: "organizations"}, "acme", errors.New("RBAC"))
+	})
+	_, err := f.svc.Create(ctx, targetSpec("planner"))
+	require.ErrorIs(t, err, ErrNotFound, "an organization the caller may not read answers as one that does not exist")
+	assert.EqualError(t, err, "not found: organization acme not found; list_organizations lists yours")
+	list, err := f.mc.Resource(hrGVR).Namespace(acmeClusters).List(ctx, metav1.ListOptions{})
+	require.NoError(t, err)
+	assert.Empty(t, list.Items)
+
 	noMuster := newTargetFixture(t, "")
-	_, err := noMuster.svc.Create(ctx, targetSpec("planner"))
+	_, err = noMuster.svc.Create(ctx, targetSpec("planner"))
 	require.ErrorIs(t, err, ErrInvalid)
 	assert.Contains(t, err.Error(), "no muster URL for agents on workload clusters")
 }
@@ -203,12 +246,12 @@ func TestPlaceOnClusterLeavesALocalReleaseAlone(t *testing.T) {
 	values := map[string]any{"agent": map[string]any{"name": "planner"}}
 	local := BuildHelmRelease("planner", "kagent", values, ComposeConfig{ServiceAccountName: "kagent-flux"})
 	placed := BuildHelmRelease("planner", "kagent", values, ComposeConfig{ServiceAccountName: "kagent-flux"})
-	PlaceOnCluster(placed, wc1, "planner", "kagent")
+	PlaceOnCluster(placed, wc1, acmeClusters, "planner", "kagent")
 
 	assert.Equal(t, "kagent-flux", local.Object["spec"].(map[string]any)["serviceAccountName"])
 	assert.NotContains(t, local.Object["spec"], "kubeConfig")
 	assert.Equal(t, "wc1-planner", placed.GetName())
-	assert.Equal(t, "org-acme", placed.GetNamespace())
+	assert.Equal(t, acmeClusters, placed.GetNamespace())
 	secret, ns := placedOn(placed)
 	assert.Equal(t, "wc1-kubeconfig", secret)
 	assert.Equal(t, "kagent", ns)

@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"slices"
 	"strings"
-	"time"
 
 	apov1alpha1 "github.com/giantswarm/agent-platform-operator/api/v1alpha1"
+	orgv1alpha1 "github.com/giantswarm/organization-operator/api/v1alpha1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -32,25 +32,30 @@ type Condition struct {
 	Message string `json:"message,omitempty"`
 }
 
-// Organization is an AgentPlatformOrganization as the tools report it.
+// Organization is an Organization with the Agent Platform enabled, as the
+// tools report it.
 type Organization struct {
-	Name string `json:"name"`
-	// Parent is the namespace the object lives in.
-	Parent      string `json:"parent"`
+	Name        string `json:"name"`
 	DisplayName string `json:"displayName,omitempty"`
-	// Namespace is the organization namespace, once the operator created it.
-	Namespace      string   `json:"namespace,omitempty"`
-	Harnesses      []string `json:"harnesses"`
-	WorkerReplicas int32    `json:"workerReplicas"`
-	SnapshotPrefix string   `json:"snapshotPrefix,omitempty"`
+	// Namespace is the organization namespace, once the operator reported
+	// it: the agentPlatform entry of status.namespaces.
+	Namespace string `json:"namespace,omitempty"`
+	// Admins are spec.admins: the Users and Groups the organization is
+	// handed over to, which agent-platform-operator binds to
+	// agent-platform:admin in its namespace.
+	Admins         []Subject `json:"admins"`
+	Harnesses      []string  `json:"harnesses"`
+	WorkerReplicas int32     `json:"workerReplicas"`
+	SnapshotPrefix string    `json:"snapshotPrefix,omitempty"`
 	// Ready, DefaultModelConfigured and Orphaned are the operator's
-	// conditions, absent until it set them.
+	// conditions AgentPlatformReady, AgentPlatformDefaultModelConfigured and
+	// AgentPlatformOrphaned, absent until it set them.
 	Ready                  *Condition `json:"ready,omitempty"`
 	DefaultModelConfigured *Condition `json:"defaultModelConfigured,omitempty"`
 	Orphaned               *Condition `json:"orphaned,omitempty"`
-	// LastAppliedRevision is the operator's status.lastAppliedRevision: the
-	// last source revision Flux applied the organization from, kept while it
-	// is Orphaned.
+	// LastAppliedRevision is the operator's
+	// status.capabilities.agentPlatform.lastAppliedRevision: the last source
+	// revision Flux applied the organization from, kept while it is Orphaned.
 	LastAppliedRevision string `json:"lastAppliedRevision,omitempty"`
 	// LastAppliedRevisionURL is that revision's commit on GitHub, when mode
 	// commit names the installation repository and the revision is a git
@@ -63,7 +68,8 @@ type Organization struct {
 	LastAppliedFile    string `json:"lastAppliedFile,omitempty"`
 	LastAppliedFileURL string `json:"lastAppliedFileUrl,omitempty"`
 	// Deleting: the object is deleted and the operator erases it;
-	// ErasureStep names the step it is on.
+	// ErasureStep names the step it is on, the reason of its condition
+	// AgentPlatformErasing while that is True.
 	Deleting    bool   `json:"deleting,omitempty"`
 	ErasureStep string `json:"erasureStep,omitempty"`
 	// GitOps names the Flux Kustomization that applies the object: it is
@@ -71,27 +77,74 @@ type Organization struct {
 	GitOps string `json:"gitops,omitempty"`
 }
 
-func organizationOf(u *unstructured.Unstructured) (*apov1alpha1.AgentPlatformOrganization, error) {
-	org := &apov1alpha1.AgentPlatformOrganization{}
+func organizationOf(u *unstructured.Unstructured) (*orgv1alpha1.Organization, error) {
+	org := &orgv1alpha1.Organization{}
 	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(u.Object, org); err != nil {
-		return nil, fmt.Errorf("read AgentPlatformOrganization %s/%s: %w", u.GetNamespace(), u.GetName(), err)
+		return nil, fmt.Errorf("read Organization %s: %w", u.GetName(), err)
 	}
 	return org, nil
 }
 
-func (s *Service) summary(org *apov1alpha1.AgentPlatformOrganization) Organization {
+// agentPlatformEnabled reports whether org has the Agent Platform switched
+// on (spec.capabilities.agentPlatform.enabled): the Organizations the tools
+// work on.
+func agentPlatformEnabled(org *orgv1alpha1.Organization) bool {
+	ap := org.Spec.Capabilities.AgentPlatform
+	return ap != nil && ap.Enabled
+}
+
+// agentPlatformOf is org's spec.capabilities.agentPlatform and
+// status.capabilities.agentPlatform, empty where they are not set.
+func agentPlatformOf(org *orgv1alpha1.Organization) (orgv1alpha1.AgentPlatformSpec, orgv1alpha1.AgentPlatformStatus) {
+	var spec orgv1alpha1.AgentPlatformSpec
+	var status orgv1alpha1.AgentPlatformStatus
+	if org.Spec.Capabilities.AgentPlatform != nil {
+		spec = *org.Spec.Capabilities.AgentPlatform
+	}
+	if org.Status.Capabilities.AgentPlatform != nil {
+		status = *org.Status.Capabilities.AgentPlatform
+	}
+	return spec, status
+}
+
+// namespaceOf is the organization namespace the operator reported, the
+// agentPlatform entry of status.namespaces, empty until it did.
+func namespaceOf(org *orgv1alpha1.Organization) string {
+	for _, ns := range org.Status.Namespaces {
+		if ns.Capability == orgv1alpha1.CapabilityAgentPlatform {
+			return ns.Name
+		}
+	}
+	return ""
+}
+
+// erasureStepOf is the erasure step the operator is on, the reason of org's
+// condition AgentPlatformErasing while it is True; empty otherwise.
+func erasureStepOf(org *orgv1alpha1.Organization) string {
+	c := meta.FindStatusCondition(org.Status.Conditions, orgv1alpha1.AgentPlatformErasing)
+	if c == nil || c.Status != metav1.ConditionTrue {
+		return ""
+	}
+	return c.Reason
+}
+
+func (s *Service) summary(org *orgv1alpha1.Organization) Organization {
+	spec, status := agentPlatformOf(org)
 	out := Organization{
-		Name: org.Name, Parent: org.Namespace, DisplayName: org.Annotations[apov1alpha1.DisplayNameAnnotation],
-		Namespace: org.Status.Namespace, Harnesses: slices.Clone(org.Spec.Harnesses), WorkerReplicas: org.Spec.Workers.ReplicasOrDefault(),
-		SnapshotPrefix: org.Status.SnapshotPrefix, Deleting: org.DeletionTimestamp != nil, ErasureStep: org.Status.ErasureStep,
-		GitOps: org.Labels[agents.KustomizationNameLabel], LastAppliedRevision: org.Status.LastAppliedRevision,
+		Name: org.Name, DisplayName: org.Annotations[apov1alpha1.DisplayNameAnnotation],
+		Namespace: namespaceOf(org), Admins: []Subject{}, Harnesses: slices.Clone(spec.Harnesses), WorkerReplicas: spec.Workers.ReplicasOrDefault(),
+		SnapshotPrefix: status.SnapshotPrefix, Deleting: org.DeletionTimestamp != nil, ErasureStep: erasureStepOf(org),
+		GitOps: org.Labels[agents.KustomizationNameLabel], LastAppliedRevision: status.LastAppliedRevision,
+	}
+	for _, a := range org.Spec.Admins {
+		out.Admins = append(out.Admins, Subject{Kind: a.Kind, Name: a.Name})
 	}
 	if s.cfg.Commit != nil {
 		repository := s.cfg.Commit.Objects.Repository
-		out.LastAppliedRevisionURL = commitURL(repository, org.Status.LastAppliedRevision)
+		out.LastAppliedRevisionURL = commitURL(repository, status.LastAppliedRevision)
 		if out.LastAppliedRevisionURL != "" {
-			out.LastAppliedFile = s.cfg.Commit.objectFile(org.Namespace, org.Name)
-			out.LastAppliedFileURL = fileURL(repository, org.Status.LastAppliedRevision, out.LastAppliedFile)
+			out.LastAppliedFile = s.cfg.Commit.objectFile(org.Name)
+			out.LastAppliedFileURL = fileURL(repository, status.LastAppliedRevision, out.LastAppliedFile)
 		}
 	}
 	if out.Harnesses == nil {
@@ -104,14 +157,10 @@ func (s *Service) summary(org *apov1alpha1.AgentPlatformOrganization) Organizati
 		}
 		return &Condition{Status: string(c.Status), Reason: c.Reason, Message: c.Message}
 	}
-	out.Ready = cond(apov1alpha1.ConditionReady)
-	out.DefaultModelConfigured = cond(apov1alpha1.ConditionDefaultModelConfigured)
-	out.Orphaned = cond(apov1alpha1.ConditionOrphaned)
+	out.Ready = cond(orgv1alpha1.AgentPlatformReady)
+	out.DefaultModelConfigured = cond(orgv1alpha1.AgentPlatformDefaultModelConfigured)
+	out.Orphaned = cond(orgv1alpha1.AgentPlatformOrphaned)
 	return out
-}
-
-func ready(org *apov1alpha1.AgentPlatformOrganization) bool {
-	return org.Status.Namespace != "" && meta.IsStatusConditionTrue(org.Status.Conditions, apov1alpha1.ConditionReady)
 }
 
 // ---- reads ------------------------------------------------------------------------
@@ -139,6 +188,11 @@ type Erasure struct {
 	// (agent-platform:admin, editor and user).
 	Members        []string `json:"members"`
 	SnapshotPrefix string   `json:"snapshotPrefix,omitempty"`
+	// OrganizationNamespace is organization-operator's namespace of the
+	// Organization (status.namespace, org-<name>), on an installation where
+	// it runs: it deletes that namespace, and everything in it, with the
+	// Organization.
+	OrganizationNamespace string `json:"organizationNamespace,omitempty"`
 	// Sessions counts, per Agent, the sessions of the organization the erase
 	// deletes, as the caller sees them across every creator: running ones
 	// stop, stopped ones lose their worker snapshots and cannot be resumed.
@@ -162,43 +216,65 @@ type AgentSessions struct {
 }
 
 // Get reads one organization and what deleting it erases.
-func (s *Service) Get(ctx context.Context, parent, name string) (*Details, error) {
-	c, _, org, err := s.get(ctx, parent, name)
+func (s *Service) Get(ctx context.Context, name string) (*Details, error) {
+	c, _, org, err := s.get(ctx, name)
 	if err != nil {
 		return nil, err
 	}
-	out := &Details{Organization: s.summary(org)}
-	if org.Status.Namespace != "" {
-		out.Erases = s.erasure(ctx, c.Dynamic(), org)
+	return &Details{Organization: s.summary(org), Erases: s.erases(ctx, c.Dynamic(), org)}, nil
+}
+
+// erases is what deleting org erases: its Agent Platform namespace as the
+// caller reads it, once the operator reported one, and organization-operator's
+// namespace, which goes with the Organization. Nil when it has neither.
+func (s *Service) erases(ctx context.Context, dyn dynamic.Interface, org *orgv1alpha1.Organization) *Erasure {
+	var out *Erasure
+	if namespaceOf(org) != "" {
+		out = s.erasure(ctx, dyn, org)
 	}
-	return out, nil
+	if ns := org.Status.Namespace; ns != "" {
+		if out == nil {
+			out = &Erasure{Kept: "the organization has no Agent Platform namespace yet"}
+		}
+		out.OrganizationNamespace = ns
+		out.Kept += fmt.Sprintf("; organization-operator deletes the namespace %s, and everything in it, with the Organization", ns)
+	}
+	return out
 }
 
 // get reads an organization as the caller: the object as the API server
 // sent it, which a write changes in place so that fields this version's
-// types do not know survive, and its typed view.
-func (s *Service) get(ctx context.Context, parent, name string) (kube.Client, *unstructured.Unstructured, *apov1alpha1.AgentPlatformOrganization, error) {
-	if parent == "" || name == "" {
-		return nil, nil, nil, invalidf("namespace (the parent namespace) and name are required")
+// types do not know survive, and its typed view. An Organization without the
+// Agent Platform enabled is not one of the tools' organizations.
+func (s *Service) get(ctx context.Context, name string) (kube.Client, *unstructured.Unstructured, *orgv1alpha1.Organization, error) {
+	if name == "" {
+		return nil, nil, nil, invalidf("name is required")
 	}
 	c, err := s.caller(ctx)
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	u, err := c.Dynamic().Resource(GVR).Namespace(parent).Get(ctx, name, metav1.GetOptions{})
+	u, err := c.Dynamic().Resource(GVR).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
-		return nil, nil, nil, kubeErr(err, fmt.Sprintf("get AgentPlatformOrganization %s/%s", parent, name), wayOrganizationsAdmin(parent))
+		return nil, nil, nil, kubeErr(err, "get Organization "+name, wayOrganizationsAdmin())
 	}
 	org, err := organizationOf(u)
-	return c, u, org, err
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	if !agentPlatformEnabled(org) {
+		return nil, nil, nil, fmt.Errorf("%w: Organization %s does not have the Agent Platform enabled (spec.capabilities.agentPlatform.enabled)", agents.ErrNotFound, name)
+	}
+	return c, u, org, nil
 }
 
 // erasure reads, as the caller, what a delete of org erases. An
 // organizations-admin reads the organization's contents only once bound in
 // it, so what it may not read is named, not failed.
-func (s *Service) erasure(ctx context.Context, dyn dynamic.Interface, org *apov1alpha1.AgentPlatformOrganization) *Erasure {
-	ns := org.Status.Namespace
-	out := &Erasure{Namespace: ns, SnapshotPrefix: org.Status.SnapshotPrefix,
+func (s *Service) erasure(ctx context.Context, dyn dynamic.Interface, org *orgv1alpha1.Organization) *Erasure {
+	_, status := agentPlatformOf(org)
+	ns := namespaceOf(org)
+	out := &Erasure{Namespace: ns, SnapshotPrefix: status.SnapshotPrefix,
 		Kept: "session tombstones stay in the agent runtime; everything else of the organization namespace is erased, worker snapshots and connector sign-ins included"}
 	credentials := map[string]bool{}
 	read := func(what string, gvr func() ([]unstructured.Unstructured, error), into *[]string, each func(*unstructured.Unstructured)) bool {
@@ -325,16 +401,16 @@ func sessionsRefusal(agent string, err error) string {
 
 // CreateRequest is create_organization's arguments.
 type CreateRequest struct {
-	// Parent is the namespace the object lives in.
-	Parent      string
 	Name        string
 	DisplayName string
 	Harnesses   []string
-	// WorkerReplicas is spec.workers.replicas; nil leaves the CRD's default.
+	// WorkerReplicas is spec.capabilities.agentPlatform.workers.replicas;
+	// nil leaves the CRD's default.
 	WorkerReplicas *int32
-	// AdminGroups and AdminUsers are the first admins, bound by the
-	// RoleBinding organization-admins to agent-platform:admin. A group
-	// first: membership then changes in the identity provider.
+	// AdminGroups and AdminUsers are spec.admins, which agent-platform-operator
+	// binds to agent-platform:admin in the organization namespace. A group
+	// first: membership then changes in the identity provider. None: the
+	// platform team manages the organization.
 	AdminGroups []string
 	AdminUsers  []string
 	DryRun      bool
@@ -346,16 +422,10 @@ type CreateRequest struct {
 type CreateResult struct {
 	Organization Organization `json:"organization"`
 	DryRun       bool         `json:"dryRun,omitempty"`
-	// Created: the object was written by this call; false when an earlier
-	// call wrote it and this one finishes its first admins.
+	// Created: the object was written by this call.
 	Created bool `json:"created"`
-	// FirstAdmins is the RoleBinding organization-admins, written once the
-	// organization is Ready.
-	FirstAdmins *Binding `json:"firstAdmins,omitempty"`
-	// Pending says what is left and how to finish it.
-	Pending string `json:"pending,omitempty"`
-	// Note says what this call did not do.
-	Note        string `json:"note,omitempty"`
+	// Next says what happens after the write, and how to see it.
+	Next        string `json:"next,omitempty"`
 	RequestedBy string `json:"requestedBy,omitempty"`
 	// Commit is the pull request of a create in mode commit.
 	Commit *CommitResult `json:"commit,omitempty"`
@@ -376,24 +446,24 @@ type Subject struct {
 	Namespace string `json:"namespace,omitempty"`
 }
 
-// Create writes an AgentPlatformOrganization as the caller, waits for the
-// operator to make it Ready, then writes its first admins as the caller.
-// Before any write it asks, as the caller, whether the first admins can be
-// bound (create RoleBindings and bind agent-platform:admin in the parent),
-// whether that right will reach the organization namespace
-// (requireRightReachesOrganization), and dry-runs the object, so a refusal
-// comes before the object exists. A create of an organization that exists
-// without its first admins finishes them.
+// operatorNext is what agent-platform-operator does once an organization is
+// written.
+const operatorNext = "agent-platform-operator creates the organization namespace and binds spec.admins to " + RoleAdmin + " there; list_organizations and get_organization show the namespace once it reports it"
+
+// Create writes an Organization with the Agent Platform enabled and its
+// admins in spec.admins, as the caller. It writes no RoleBinding:
+// agent-platform-operator derives the admins' binding from spec.admins.
+// Before the write it asks, as the caller, for create on Organizations, and
+// dry-runs the object, so a refusal comes before the object exists. An
+// Organization of that name that exists is refused: the tools do not turn
+// the Agent Platform on for an existing Organization.
 func (s *Service) Create(ctx context.Context, req CreateRequest) (*CreateResult, error) {
-	if req.Parent == "" || req.Name == "" {
-		return nil, invalidf("namespace (the parent namespace) and name are required")
+	if req.Name == "" {
+		return nil, invalidf("name is required")
 	}
-	subjects, err := subjectsOf(req.AdminGroups, req.AdminUsers)
+	admins, err := subjectsOf(req.AdminGroups, req.AdminUsers)
 	if err != nil {
 		return nil, err
-	}
-	if len(subjects) == 0 {
-		return nil, invalidf("the first admins are required: adminGroups (an identity provider group, preferred) or adminUsers; they are bound to %s in the organization namespace as %s", RoleAdmin, FirstAdminsBinding)
 	}
 	mode, err := s.mode(req.Mode)
 	if err != nil {
@@ -403,200 +473,105 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (*CreateResult,
 	if err != nil {
 		return nil, err
 	}
-	way := wayOrganizationsAdmin(req.Parent)
-	if err := requireAccess(ctx, c, way,
-		access{namespace: req.Parent, verb: "create", group: GVR.Group, resource: GVR.Resource},
-		access{namespace: req.Parent, verb: "create", group: rbacGVR.Group, resource: rbacGVR.Resource},
-		access{namespace: req.Parent, verb: "bind", group: rbacGVR.Group, resource: "clusterroles", name: RoleAdmin},
-	); err != nil {
+	way := wayOrganizationsAdmin()
+	if err := requireAccess(ctx, c, way, access{verb: "create", group: GVR.Group, resource: GVR.Resource}); err != nil {
 		return nil, err
 	}
-	res := &CreateResult{DryRun: req.DryRun, RequestedBy: identity.Caller(ctx)}
-	if mode == agents.ModeCommit {
-		return s.createCommit(ctx, c, req, subjects, res)
-	}
-	orgs := c.Dynamic().Resource(GVR).Namespace(req.Parent)
-	what := fmt.Sprintf("AgentPlatformOrganization %s/%s", req.Parent, req.Name)
-
-	var org *apov1alpha1.AgentPlatformOrganization
-	existing, err := orgs.Get(ctx, req.Name, metav1.GetOptions{})
+	what := "Organization " + req.Name
+	existing, err := c.Dynamic().Resource(GVR).Get(ctx, req.Name, metav1.GetOptions{})
 	switch {
 	case apierrors.IsNotFound(err):
-		if err := s.requireRightReachesOrganization(ctx, c, req.Parent); err != nil {
-			return nil, err
-		}
-		obj := s.organizationObject(req)
-		w := write{gvr: GVR, kind: orgKind, op: opCreate, obj: obj, ns: req.Parent, name: req.Name, what: what, reason: way}
-		if err := apply(ctx, c.Dynamic(), []write{w}, req.DryRun); err != nil {
-			return nil, err
-		}
-		if req.DryRun {
-			planned, err := organizationOf(unstructuredOf(obj))
-			if err != nil {
-				return nil, err
-			}
-			res.Organization = s.summary(planned)
-			res.Created = true
-			res.FirstAdmins = &Binding{Name: FirstAdminsBinding, Role: RoleAdmin, Subjects: subjects}
-			res.Pending = "dry run: nothing was written; the first admins are bound once the organization is Ready"
-			return res, nil
-		}
-		res.Created = true
-		s.log.Info("organization created", identity.LogAttr(ctx), "parent", req.Parent, "name", req.Name)
 	case err != nil:
 		return nil, kubeErr(err, "get "+what, way)
 	default:
-		org, err = organizationOf(existing)
-		if err != nil {
-			return nil, err
-		}
-		if err := refuseLive(org); err != nil {
-			return nil, err
-		}
-		if org.DeletionTimestamp != nil {
-			return nil, fmt.Errorf("%w: %s is being erased (%s); create it again once get_organization answers not_found", agents.ErrConflict, what, orDefault(org.Status.ErasureStep, "starting"))
-		}
-		if done, err := s.hasFirstAdmins(ctx, c, org); err != nil || done {
-			if err != nil {
-				return nil, err
-			}
-			return nil, fmt.Errorf("%w: %s exists with its first admins; update_organization changes it, add_organization_member adds admins", agents.ErrConflict, what)
-		}
-		if req.DryRun {
-			res.Organization = s.summary(org)
-			res.FirstAdmins = &Binding{Name: FirstAdminsBinding, Role: RoleAdmin, Subjects: subjects}
-			res.Pending = "dry run: the organization exists without its first admins; a call without dryRun binds them once it is Ready"
-			return res, nil
-		}
+		return nil, refuseExisting(existing, what)
 	}
-
-	org, err = s.waitReady(ctx, c, req.Parent, req.Name)
+	res := &CreateResult{DryRun: req.DryRun, RequestedBy: identity.Caller(ctx)}
+	if mode == agents.ModeCommit {
+		return s.createCommit(ctx, c, req, admins, res)
+	}
+	obj := s.organizationObject(req, admins)
+	if err := apply(ctx, c.Dynamic(), []write{{gvr: GVR, kind: orgKind, op: opCreate, obj: obj, name: req.Name, what: what, reason: way}}, req.DryRun); err != nil {
+		return nil, err
+	}
+	planned, err := organizationOf(unstructuredOf(obj))
 	if err != nil {
 		return nil, err
 	}
-	res.Organization = s.summary(org)
-	if !ready(org) {
-		res.Pending = fmt.Sprintf("the organization is not Ready after %s (%s), so its first admins are not bound yet; call create_organization again with the same arguments to bind them once it is", s.cfg.ReadyTimeout, describeReady(res.Organization.Ready))
+	res.Organization = s.summary(planned)
+	if req.DryRun {
+		res.Next = "dry run: nothing was written"
 		return res, nil
 	}
-	// The right in the parent was checked to reach the new namespace before
-	// the write, but the operator may not have mirrored it yet, or the
-	// caller's bindings could not be read: ask again where the binding goes,
-	// so the answer names who can finish it instead of a Forbidden write.
-	if err := requireAccess(ctx, c, wayFirstAdmins(org), firstAdminsAccess(org.Status.Namespace)...); err != nil {
-		res.Pending = fmt.Sprintf("the organization %s exists and is Ready, but its first admins are not bound: %v", what, err)
-		return res, nil
-	}
-	binding, err := s.bindFirstAdmins(ctx, c, org, subjects)
-	if err != nil {
-		return nil, fmt.Errorf("%w (the organization %s exists; call create_organization again with the same arguments to bind its first admins)", err, what)
-	}
-	res.FirstAdmins = binding
-	if !res.Created {
-		res.Note = "the organization existed, so only its first admins were bound; its display name, harnesses and worker replicas are as they were (update_organization changes them)"
-	}
+	res.Created = true
+	res.Next = operatorNext
+	s.log.Info("organization created", identity.LogAttr(ctx), "name", req.Name, "admins", len(admins))
 	return res, nil
 }
 
-func describeReady(c *Condition) string {
-	if c == nil {
-		return "the operator has not reported Ready yet"
+// refuseExisting refuses a create of an Organization that exists, live.
+func refuseExisting(existing *unstructured.Unstructured, what string) error {
+	org, err := organizationOf(existing)
+	if err != nil {
+		return err
 	}
-	out := "Ready=" + c.Status
-	if c.Reason != "" {
-		out += " " + c.Reason
+	switch {
+	case org.DeletionTimestamp != nil:
+		return fmt.Errorf("%w: %s is being erased; create it again once get_organization answers not_found", agents.ErrConflict, what)
+	case agentPlatformEnabled(org):
+		return fmt.Errorf("%w: %s exists with the Agent Platform; update_organization changes it", agents.ErrConflict, what)
 	}
-	if c.Message != "" {
-		out += ": " + c.Message
-	}
-	return out
+	return fmt.Errorf("%w: %s exists without the Agent Platform; the organization tools do not turn it on for an existing Organization", agents.ErrConflict, what)
 }
 
-func (s *Service) organizationObject(req CreateRequest) map[string]any {
-	meta := map[string]any{"name": req.Name, fieldNamespace: req.Parent}
+func (s *Service) organizationObject(req CreateRequest, admins []Subject) map[string]any {
+	meta := map[string]any{"name": req.Name}
 	if req.DisplayName != "" {
 		meta["annotations"] = map[string]any{apov1alpha1.DisplayNameAnnotation: req.DisplayName}
 	}
-	spec := map[string]any{}
+	agentPlatform := map[string]any{"enabled": true}
 	if len(req.Harnesses) > 0 {
 		h := make([]any, len(req.Harnesses))
 		for i, name := range req.Harnesses {
 			h[i] = name
 		}
-		spec["harnesses"] = h
+		agentPlatform["harnesses"] = h
 	}
 	if req.WorkerReplicas != nil {
-		spec["workers"] = map[string]any{"replicas": int64(*req.WorkerReplicas)}
+		agentPlatform["workers"] = map[string]any{"replicas": int64(*req.WorkerReplicas)}
+	}
+	spec := map[string]any{"capabilities": map[string]any{"agentPlatform": agentPlatform}}
+	if len(admins) > 0 {
+		spec["admins"] = adminsObject(admins)
 	}
 	return map[string]any{
-		"apiVersion": apov1alpha1.GroupVersion.String(), "kind": "AgentPlatformOrganization",
+		"apiVersion": orgv1alpha1.GroupVersion.String(), "kind": orgKind,
 		fieldMetadata: meta, "spec": spec,
 	}
 }
 
-// waitReady reads the organization until it is Ready or the wait ends,
-// telling the caller it is still working.
-func (s *Service) waitReady(ctx context.Context, c kube.Client, parent, name string) (*apov1alpha1.AgentPlatformOrganization, error) {
-	progress := agents.ProgressFrom(ctx)
-	deadline := time.Now().Add(s.cfg.ReadyTimeout)
-	for {
-		u, err := c.Dynamic().Resource(GVR).Namespace(parent).Get(ctx, name, metav1.GetOptions{})
-		if err != nil {
-			return nil, kubeErr(err, fmt.Sprintf("get AgentPlatformOrganization %s/%s", parent, name), wayOrganizationsAdmin(parent))
-		}
-		org, err := organizationOf(u)
-		if err != nil {
-			return nil, err
-		}
-		if ready(org) || !time.Now().Before(deadline) {
-			return org, nil
-		}
-		progress(fmt.Sprintf("waiting for organization %s/%s to be Ready (%s)", parent, name, describeReady(s.summary(org).Ready)))
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-time.After(s.cfg.ReadyPoll):
-		}
+// adminsObject is spec.admins of admins.
+func adminsObject(admins []Subject) []any {
+	out := make([]any, 0, len(admins))
+	for _, a := range admins {
+		out = append(out, map[string]any{"kind": a.Kind, "name": a.Name})
 	}
-}
-
-func (s *Service) hasFirstAdmins(ctx context.Context, c kube.Client, org *apov1alpha1.AgentPlatformOrganization) (bool, error) {
-	if org.Status.Namespace == "" {
-		return false, nil
-	}
-	_, err := c.Dynamic().Resource(rbacGVR).Namespace(org.Status.Namespace).Get(ctx, FirstAdminsBinding, metav1.GetOptions{})
-	switch {
-	case apierrors.IsNotFound(err):
-		return false, nil
-	case err != nil:
-		return false, kubeErr(err, fmt.Sprintf("get RoleBinding %s/%s", org.Status.Namespace, FirstAdminsBinding), wayOrganizationsAdmin(org.Namespace))
-	}
-	return true, nil
-}
-
-// bindFirstAdmins writes organization-admins as the caller, dry run first.
-func (s *Service) bindFirstAdmins(ctx context.Context, c kube.Client, org *apov1alpha1.AgentPlatformOrganization, subjects []Subject) (*Binding, error) {
-	ns := org.Status.Namespace
-	obj := roleBinding(ns, FirstAdminsBinding, RoleAdmin, subjects)
-	w := write{gvr: rbacGVR, kind: kindRoleBinding, op: opCreate, obj: obj, ns: ns, name: FirstAdminsBinding,
-		what: fmt.Sprintf("RoleBinding %s/%s", ns, FirstAdminsBinding), reason: wayOrganizationsAdmin(org.Namespace)}
-	if err := apply(ctx, c.Dynamic(), []write{w}, false); err != nil {
-		return nil, err
-	}
-	s.log.Info("organization first admins bound", identity.LogAttr(ctx), fieldNamespace, ns, "subjects", len(subjects))
-	return &Binding{Name: FirstAdminsBinding, Role: RoleAdmin, Subjects: subjects, Written: true}, nil
+	return out
 }
 
 // ---- update -----------------------------------------------------------------------
 
 // UpdateRequest is update_organization's arguments; nil leaves a field.
 type UpdateRequest struct {
-	Parent         string
 	Name           string
 	DisplayName    *string
 	Harnesses      *[]string
 	WorkerReplicas *int32
-	DryRun         bool
+	// AdminGroups and AdminUsers replace the Groups, or the Users, of
+	// spec.admins; nil leaves them.
+	AdminGroups *[]string
+	AdminUsers  *[]string
+	DryRun      bool
 	// Mode is apply (default) or commit.
 	Mode string
 }
@@ -619,13 +594,13 @@ func (s *Service) Update(ctx context.Context, req UpdateRequest) (*UpdateResult,
 	if err != nil {
 		return nil, err
 	}
-	c, u, org, err := s.get(ctx, req.Parent, req.Name)
+	c, u, org, err := s.get(ctx, req.Name)
 	if err != nil {
 		return nil, err
 	}
 	// After the caller's read: a caller who may not read the organization
 	// gets forbidden from get, never its state.
-	if err := s.erasing(org, req.Parent, req.Name, orDefault(org.Status.Namespace, "(none yet)")); err != nil {
+	if err := s.erasing(org, orDefault(namespaceOf(org), "(none yet)")); err != nil {
 		return nil, err
 	}
 	if mode == agents.ModeCommit {
@@ -647,13 +622,13 @@ func (s *Service) Update(ctx context.Context, req UpdateRequest) (*UpdateResult,
 	if len(res.Changed) == 0 {
 		return res, nil
 	}
-	w := write{gvr: GVR, kind: orgKind, op: opUpdate, obj: next.Object, ns: req.Parent, name: req.Name,
-		what: fmt.Sprintf("AgentPlatformOrganization %s/%s", req.Parent, req.Name), reason: wayOrganizationsAdmin(req.Parent)}
+	w := write{gvr: GVR, kind: orgKind, op: opUpdate, obj: next.Object, name: req.Name,
+		what: "Organization " + req.Name, reason: wayOrganizationsAdmin()}
 	if err := apply(ctx, c.Dynamic(), []write{w}, req.DryRun); err != nil {
 		return nil, err
 	}
 	if !req.DryRun {
-		s.log.Info("organization updated", identity.LogAttr(ctx), "parent", req.Parent, "name", req.Name, "changed", res.Changed)
+		s.log.Info("organization updated", identity.LogAttr(ctx), "name", req.Name, "changed", res.Changed)
 	}
 	return res, nil
 }
@@ -680,8 +655,9 @@ func changeOrganization(next *unstructured.Unstructured, req UpdateRequest) ([]s
 		next.SetAnnotations(annotations)
 		changed = append(changed, "displayName")
 	}
-	if req.Harnesses != nil && !slices.Equal(*req.Harnesses, cur.Spec.Harnesses) {
-		if err := unstructured.SetNestedStringSlice(next.Object, *req.Harnesses, "spec", "harnesses"); err != nil {
+	spec, _ := agentPlatformOf(cur)
+	if req.Harnesses != nil && !slices.Equal(*req.Harnesses, spec.Harnesses) {
+		if err := unstructured.SetNestedStringSlice(next.Object, *req.Harnesses, "spec", "capabilities", "agentPlatform", "harnesses"); err != nil {
 			return nil, err
 		}
 		changed = append(changed, "harnesses")
@@ -690,20 +666,56 @@ func changeOrganization(next *unstructured.Unstructured, req UpdateRequest) ([]s
 	// the request then too, so an explicit 0 is never taken for "no change".
 	// A request equal to the default is written as well: the value then stays
 	// when the operator's default changes.
-	if req.WorkerReplicas != nil && (cur.Spec.Workers.Replicas == nil || *req.WorkerReplicas != *cur.Spec.Workers.Replicas) {
-		if err := unstructured.SetNestedField(next.Object, int64(*req.WorkerReplicas), "spec", "workers", "replicas"); err != nil {
+	if req.WorkerReplicas != nil && (spec.Workers.Replicas == nil || *req.WorkerReplicas != *spec.Workers.Replicas) {
+		if err := unstructured.SetNestedField(next.Object, int64(*req.WorkerReplicas), "spec", "capabilities", "agentPlatform", "workers", "replicas"); err != nil {
 			return nil, err
 		}
 		changed = append(changed, "workerReplicas")
 	}
+	if req.AdminGroups != nil || req.AdminUsers != nil {
+		admins, err := changedAdmins(cur.Spec.Admins, req.AdminGroups, req.AdminUsers)
+		if err != nil {
+			return nil, err
+		}
+		if !slices.EqualFunc(admins, cur.Spec.Admins, func(a Subject, b orgv1alpha1.OrganizationAdmin) bool { return a.Kind == b.Kind && a.Name == b.Name }) {
+			if len(admins) == 0 {
+				unstructured.RemoveNestedField(next.Object, "spec", "admins")
+			} else if err := unstructured.SetNestedSlice(next.Object, adminsObject(admins), "spec", "admins"); err != nil {
+				return nil, err
+			}
+			changed = append(changed, "admins")
+		}
+	}
 	return changed, nil
+}
+
+// changedAdmins is spec.admins with its Groups replaced by groups and its
+// Users by users, where each is set; the Groups first.
+func changedAdmins(cur []orgv1alpha1.OrganizationAdmin, groups, users *[]string) ([]Subject, error) {
+	kept := func(kind string) []string {
+		var out []string
+		for _, a := range cur {
+			if a.Kind == kind {
+				out = append(out, a.Name)
+			}
+		}
+		return out
+	}
+	g, u := kept(orgv1alpha1.OrganizationAdminGroup), kept(orgv1alpha1.OrganizationAdminUser)
+	if groups != nil {
+		g = *groups
+	}
+	if users != nil {
+		u = *users
+	}
+	return subjectsOf(g, u)
 }
 
 // refuseLive refuses a live write to an organization Flux applies from git:
 // Flux would undo it.
-func refuseLive(org *apov1alpha1.AgentPlatformOrganization) error {
+func refuseLive(org *orgv1alpha1.Organization) error {
 	if ks := org.Labels[agents.KustomizationNameLabel]; ks != "" {
-		return fmt.Errorf("%w: AgentPlatformOrganization %s/%s is applied from git by the Flux Kustomization %s, which would revert a live change: use mode commit to change it with a pull request", agents.ErrGitOpsOwned, org.Namespace, org.Name, ks)
+		return fmt.Errorf("%w: Organization %s is applied from git by the Flux Kustomization %s, which would revert a live change: use mode commit to change it with a pull request", agents.ErrGitOpsOwned, org.Name, ks)
 	}
 	return nil
 }
@@ -712,9 +724,8 @@ func refuseLive(org *apov1alpha1.AgentPlatformOrganization) error {
 
 // DeleteRequest is delete_organization's arguments.
 type DeleteRequest struct {
-	Parent string
-	Name   string
-	// Confirm must be "<parent>/<name>" for the delete to happen; without it
+	Name string
+	// Confirm must be the organization's name for the delete to happen; without it
 	// the answer is what the delete would erase.
 	Confirm string
 	DryRun  bool
@@ -746,7 +757,7 @@ func (s *Service) Delete(ctx context.Context, req DeleteRequest) (*DeleteResult,
 	if err != nil {
 		return nil, err
 	}
-	c, u, org, err := s.get(ctx, req.Parent, req.Name)
+	c, u, org, err := s.get(ctx, req.Name)
 	if err != nil {
 		return nil, err
 	}
@@ -755,17 +766,14 @@ func (s *Service) Delete(ctx context.Context, req DeleteRequest) (*DeleteResult,
 			return nil, err
 		}
 	}
-	confirm := req.Parent + "/" + req.Name
-	res := &DeleteResult{Organization: s.summary(org), DryRun: req.DryRun, RequestedBy: identity.Caller(ctx)}
-	if org.Status.Namespace != "" {
-		res.Erases = s.erasure(ctx, c.Dynamic(), org)
-	}
+	confirm := req.Name
+	res := &DeleteResult{Organization: s.summary(org), Erases: s.erases(ctx, c.Dynamic(), org), DryRun: req.DryRun, RequestedBy: identity.Caller(ctx)}
 	if org.DeletionTimestamp != nil {
-		res.Next = "the organization is being erased already (" + orDefault(org.Status.ErasureStep, "starting") + ")"
+		res.Next = "the organization is being erased already (" + orDefault(res.Organization.ErasureStep, "starting") + ")"
 		return res, nil
 	}
-	way := wayOrganizationsAdmin(req.Parent)
-	if err := requireAccess(ctx, c, way, access{namespace: req.Parent, verb: "delete", group: GVR.Group, resource: GVR.Resource, name: req.Name}); err != nil {
+	way := wayOrganizationsAdmin()
+	if err := requireAccess(ctx, c, way, access{verb: "delete", group: GVR.Group, resource: GVR.Resource, name: req.Name}); err != nil {
 		return nil, err
 	}
 	if mode == agents.ModeCommit {
@@ -782,8 +790,8 @@ func (s *Service) Delete(ctx context.Context, req DeleteRequest) (*DeleteResult,
 		res.Next = fmt.Sprintf("nothing was deleted: show the person what is erased and, once they typed it, call delete_organization again with confirm %q", confirm)
 		return res, nil
 	}
-	what := "AgentPlatformOrganization " + confirm
-	orgs := c.Dynamic().Resource(GVR).Namespace(req.Parent)
+	what := "Organization " + req.Name
+	orgs := c.Dynamic().Resource(GVR)
 	// The delete intent comes first: the admission policy refuses a delete,
 	// a dry run of it too, of an object without it. So the delete is
 	// dry-run once the mark is written, and the mark goes again when that
@@ -797,7 +805,7 @@ func (s *Service) Delete(ctx context.Context, req DeleteRequest) (*DeleteResult,
 		}
 		annotations[PruneAnnotation] = PruneEnabled
 		next.SetAnnotations(annotations)
-		w := write{gvr: GVR, kind: orgKind, op: opUpdate, obj: next.Object, ns: req.Parent, name: req.Name, what: what + " (" + PruneAnnotation + ": " + PruneEnabled + ")", reason: way}
+		w := write{gvr: GVR, kind: orgKind, op: opUpdate, obj: next.Object, name: req.Name, what: what + " (" + PruneAnnotation + ": " + PruneEnabled + ")", reason: way}
 		if err := apply(ctx, c.Dynamic(), []write{w}, req.DryRun); err != nil {
 			return nil, err
 		}
@@ -810,7 +818,7 @@ func (s *Service) Delete(ctx context.Context, req DeleteRequest) (*DeleteResult,
 	if err := orgs.Delete(ctx, req.Name, metav1.DeleteOptions{DryRun: dryRunAll}); err != nil {
 		err = kubeErr(err, "dry run of delete "+what, way)
 		if marked {
-			if unmarkErr := s.unmarkPrune(ctx, c, req.Parent, req.Name); unmarkErr != nil {
+			if unmarkErr := s.unmarkPrune(ctx, c, req.Name); unmarkErr != nil {
 				return nil, fmt.Errorf("%w; the object keeps %s: %s, remove it: %v", err, PruneAnnotation, PruneEnabled, unmarkErr)
 			}
 		}
@@ -819,7 +827,7 @@ func (s *Service) Delete(ctx context.Context, req DeleteRequest) (*DeleteResult,
 	if err := orgs.Delete(ctx, req.Name, metav1.DeleteOptions{}); err != nil {
 		err = kubeErr(err, "delete "+what, way)
 		if marked {
-			if unmarkErr := s.unmarkPrune(ctx, c, req.Parent, req.Name); unmarkErr != nil {
+			if unmarkErr := s.unmarkPrune(ctx, c, req.Name); unmarkErr != nil {
 				return nil, fmt.Errorf("%w; the object keeps %s: %s, remove it: %v", err, PruneAnnotation, PruneEnabled, unmarkErr)
 			}
 		}
@@ -827,14 +835,14 @@ func (s *Service) Delete(ctx context.Context, req DeleteRequest) (*DeleteResult,
 	}
 	res.Deleted = true
 	res.Next = "the operator erases the organization now; get_organization reports its erasure step until it is gone"
-	s.log.Info("organization deleted", identity.LogAttr(ctx), "parent", req.Parent, "name", req.Name)
+	s.log.Info("organization deleted", identity.LogAttr(ctx), "name", req.Name)
 	return res, nil
 }
 
 // unmarkPrune takes the delete intent off an organization a delete did not
 // delete.
-func (s *Service) unmarkPrune(ctx context.Context, c kube.Client, parent, name string) error {
-	orgs := c.Dynamic().Resource(GVR).Namespace(parent)
+func (s *Service) unmarkPrune(ctx context.Context, c kube.Client, name string) error {
+	orgs := c.Dynamic().Resource(GVR)
 	u, err := orgs.Get(ctx, name, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
 		return nil

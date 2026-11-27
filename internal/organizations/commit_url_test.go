@@ -6,8 +6,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	apov1alpha1 "github.com/giantswarm/agent-platform-operator/api/v1alpha1"
 	"github.com/giantswarm/gitops-commit/provenance"
+	orgv1alpha1 "github.com/giantswarm/organization-operator/api/v1alpha1"
 )
 
 const hash = "0123456789abcdef0123456789abcdef01234567"
@@ -33,9 +33,10 @@ func TestCommitURL(t *testing.T) {
 }
 
 func TestSummaryLastAppliedRevision(t *testing.T) {
-	org := &apov1alpha1.AgentPlatformOrganization{
-		ObjectMeta: metav1.ObjectMeta{Name: "treasury", Namespace: "org-acme"},
-		Status:     apov1alpha1.AgentPlatformOrganizationStatus{LastAppliedRevision: "main@sha1:" + hash},
+	org := &orgv1alpha1.Organization{
+		ObjectMeta: metav1.ObjectMeta{Name: "treasury"},
+		Spec:       orgv1alpha1.OrganizationSpec{Capabilities: orgv1alpha1.OrganizationCapabilities{AgentPlatform: &orgv1alpha1.AgentPlatformSpec{Enabled: true}}},
+		Status:     orgv1alpha1.OrganizationStatus{Capabilities: orgv1alpha1.OrganizationCapabilitiesStatus{AgentPlatform: &orgv1alpha1.AgentPlatformStatus{LastAppliedRevision: "main@sha1:" + hash}}},
 	}
 
 	got := (&Service{}).summary(org)
@@ -48,10 +49,10 @@ func TestSummaryLastAppliedRevision(t *testing.T) {
 	commit := &CommitConfig{Objects: provenance.Location{Repository: provenance.Repository{Owner: "giantswarm", Name: "gazelle-configs"}, Branch: "main", Directory: "management-clusters/gazelle/organizations"}}
 	got = (&Service{cfg: Config{Commit: commit}}).summary(org)
 	assert.Equal(t, "https://github.com/giantswarm/gazelle-configs/commit/"+hash, got.LastAppliedRevisionURL)
-	assert.Equal(t, commit.objectFile("org-acme", "treasury"), got.LastAppliedFile)
+	assert.Equal(t, "management-clusters/gazelle/organizations/treasury.yaml", got.LastAppliedFile)
 	assert.Equal(t, "https://github.com/giantswarm/gazelle-configs/blob/"+hash+"/"+got.LastAppliedFile, got.LastAppliedFileURL)
 
-	org.Status.LastAppliedRevision = "latest@sha256:" + hash + hash[:24]
+	org.Status.Capabilities.AgentPlatform.LastAppliedRevision = "latest@sha256:" + hash + hash[:24]
 	got = (&Service{cfg: Config{Commit: commit}}).summary(org)
 	assert.Empty(t, got.LastAppliedFile, "without a commit there is no file to point at")
 	assert.Empty(t, got.LastAppliedFileURL)
@@ -59,7 +60,7 @@ func TestSummaryLastAppliedRevision(t *testing.T) {
 
 func TestFileURL(t *testing.T) {
 	repository := provenance.Repository{Owner: "giantswarm", Name: "gazelle-configs"}
-	assert.Equal(t, "https://github.com/giantswarm/gazelle-configs/blob/"+hash+"/orgs/org-acme/treasury.yaml",
-		fileURL(repository, "main@sha1:"+hash, "orgs/org-acme/treasury.yaml"))
-	assert.Empty(t, fileURL(repository, "main@sha1:"+hash[:12], "orgs/org-acme/treasury.yaml"))
+	assert.Equal(t, "https://github.com/giantswarm/gazelle-configs/blob/"+hash+"/orgs/treasury.yaml",
+		fileURL(repository, "main@sha1:"+hash, "orgs/treasury.yaml"))
+	assert.Empty(t, fileURL(repository, "main@sha1:"+hash[:12], "orgs/treasury.yaml"))
 }

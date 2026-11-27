@@ -66,9 +66,16 @@ MCP-server-writer half.
 | One session and its conversation, one turn per A2A task of its context, oldest first, within `maxBytes`: a summary per turn by default, a transcript or the raw tasks on request | `GET /api/v1/sessions/{id}[?detail=&lastTurns=&maxBytes=]` | `get_session` | no |
 | One turn of a session: its messages, paged within `maxBytes`, or one tool call whole | `GET /api/v1/sessions/{id}/turns/{turn}[?detail=&toolCall=&fromMessage=&maxBytes=]` | `get_session_turn` | no |
 | Delete one of the caller's sessions and its runtime state | `DELETE /api/v1/sessions/{id}` | `delete_session` | the kagent Session |
-| The objects of an organization namespace that read a credential Secret (ModelConfigs, RemoteMCPServers, EgressPolicies), the key each reads, a connector's URL and the origins an EgressPolicy sends it to; with `kind` and `name`, the `mode` a write for that object takes | `GET /api/v1/organizations/{parent}/{organization}/credentials/{secret}[?kind=&name=]` | — | no |
+| The objects of an organization namespace that read a credential Secret (ModelConfigs, RemoteMCPServers, EgressPolicies), the key each reads, a connector's URL and the origins an EgressPolicy sends it to; with `kind` and `name`, the `mode` a write for that object takes | `GET /api/v1/organizations/{organization}/credentials/{secret}[?kind=&name=]` | — | no |
 | Confirm, save or cancel a user-bound credential operation (see [Credential operations](docs/organization-credentials.md)) | `GET`, `POST`, `DELETE /api/v1/credential-operations/{operation}` | — | Secret and consumers, or one pull request in commit mode |
 | Health | `GET /healthz`, `GET /readyz` | — | no |
+
+The MCP tools take an organization by its name, `organization`, and never an
+organization's namespace: agent-manager finds the namespace in the
+`agentPlatform` entry of the `Organization`'s `status.namespaces`, and every
+answer about an organization's object names the organization. An agent tool's `namespace` is a
+platform namespace of the installation, or with `cluster` the namespace on the
+workload cluster. The REST paths above still take a namespace.
 
 The three writes take `dryRun` and `mode` (`apply` | `commit`, see
 [Write modes](#write-modes-apply-and-commit)); in commit mode the "Writes"
@@ -416,9 +423,13 @@ installation: `create_agent` (and `POST /api/v1/agents`) take `organization`
 and `cluster`, and every read and write tool takes the same pair (REST: the
 query parameters `organization` and `cluster`). `namespace` is then the
 namespace on the workload cluster. `get_info` reports `capabilities.targetCluster`.
+The organization's namespace on the installation is the one its `Organization`
+reports in `status.namespace` (`org-<organization>` today), read as the caller;
+an `Organization` that does not exist or that the caller may not read answers
+`not_found`, one that reports no namespace yet `conflict`.
 
-- **The HelmRelease stays on the installation**, in the organization
-  namespace `org-<organization>`, named `<cluster>-<agent>` and labelled
+- **The HelmRelease stays on the installation**, in the organization's
+  namespace (`org-<organization>`), named `<cluster>-<agent>` and labelled
   `agent-platform.giantswarm.io/cluster: <cluster>`, beside the shared
   OCIRepository of the agent chart there. It carries
   `spec.kubeConfig.secretRef` (`<cluster>-kubeconfig`, key `value`),
@@ -649,10 +660,14 @@ agentgateway JWT policy, muster) can reach.
 With `--multi-tenant` (chart `tenants.enabled`) agent-manager manages the
 organization namespaces beside `--kagent-namespace` and
 `--managed-namespaces`, and serves the organization tools. An organization is
-an `AgentPlatformOrganization` (`agent-platform.giantswarm.io/v1alpha1`, from
-[agent-platform-operator](https://github.com/giantswarm/agent-platform-operator))
-in a parent namespace; the operator creates its organization namespace,
-labelled `agent-platform.giantswarm.io/organization`, and keeps in it what an
+an `Organization` (`security.giantswarm.io/v1alpha1`, cluster-scoped, from
+[organization-operator](https://github.com/giantswarm/organization-operator))
+with the Agent Platform enabled (`spec.capabilities.agentPlatform.enabled`);
+[agent-platform-operator](https://github.com/giantswarm/agent-platform-operator)
+creates its organization namespace, labelled
+`agent-platform.giantswarm.io/organization` and reported in the
+`agentPlatform` entry of `status.namespaces`, binds the organization's admins
+(`spec.admins`) to `agent-platform:admin` there, and keeps in it what an
 agent needs there (the agent chart's OCIRepository, the Helm ServiceAccount
 bound to `agent-platform-tenant-flux`, the network policies, the curated
 copies, the WorkerPool, the object quota). A Giant Swarm Organization's
@@ -670,43 +685,37 @@ Everything else runs as the caller, which needs `--downstream-oauth`.
 
 The organization tools (every name holds `organization`):
 
-- for an `agent-platform:organizations-admin`:
-  `get_organization` (with what a delete erases), `create_organization`,
-  `update_organization` and `delete_organization`. A create asks first, with
-  SelfSubjectAccessReviews as the caller, whether the caller may create the
-  object and bind `agent-platform:admin` in the parent, then whether that
-  right will reach the new namespace: it does when the caller may bind there
-  cluster-wide, or when a RoleBinding in the parent that the operator mirrors
-  now (`adminmirror.Mirrors` of agent-platform-operator: one to
-  `agent-platform:organizations-admin`, or rbac-operator's to `cluster-admin`,
-  and not being deleted, since the operator writes no mirror of a deleting
-  binding) names the caller as one of its mirrored Users or Groups
-  (`adminmirror.MirroredSubjects`). Otherwise it
-  refuses before any write, dry run included, naming the caller's bindings
-  and the two ways out (an `agent-platform:organizations-admin` RoleBinding
-  for the caller in the parent, or a cluster-admin creating it). A caller who
-  may not list the parent's RoleBindings is not checked there. Then it
-  dry-runs the object, writes it, waits for the operator's `Ready`, asks again
-  in the new namespace, and writes the first admins as the RoleBinding
-  `organization-admins`. An organization that is not Ready in time, or whose
-  namespace the caller's right has not reached yet (`pending`), keeps its
-  first admins for a second call with the same arguments. A caller who is a
-  ServiceAccount or another `system:` name is never mirrored: only a right
-  cluster-wide reaches the namespace for it. A delete answers what it erases
-  until the caller passes `confirm: <parent>/<name>`, then marks the object
-  `kustomize.toolkit.fluxcd.io/prune: enabled` (the delete intent the
-  admission policy requires) and deletes it; the operator erases it. An
-  organization Flux applies from git is refused live (commit mode is
-  giantswarm/agent-manager#292).
+- for an `agent-platform:organizations-admin` (bound cluster-wide: an
+  `Organization` is cluster-scoped): `get_organization` (with what a delete
+  erases), `create_organization`, `update_organization` and
+  `delete_organization`. Each takes the organization's name. A create asks
+  first, with a SelfSubjectAccessReview as the caller, whether the caller may
+  create Organizations, dry-runs the object and writes one `Organization`
+  with the Agent Platform enabled and the admins it is given in
+  `spec.admins` (a group offered before a person); it writes no RoleBinding.
+  An `Organization` of that name that exists is refused. An update changes
+  the display name, `spec.capabilities.agentPlatform` (harnesses, worker replicas) and
+  `spec.admins` (`adminGroups` and `adminUsers` each replace their kind). A
+  delete answers what it erases (where organization-operator runs, also its
+  namespace of the Organization, which it deletes with it) until the caller
+  passes `confirm: <name>`,
+  then marks the object `kustomize.toolkit.fluxcd.io/prune: enabled` (the
+  delete intent the admission policy requires) and deletes it; the operator
+  erases it. An organization Flux applies from git is refused live: commit
+  mode changes it ([docs/organizations-commit-mode.md](docs/organizations-commit-mode.md)).
 - for an organization's members: `list_organization_members`, which needs
   `list` on RoleBindings in the organization namespace; every member role
   (`agent-platform:user`, `editor` or `admin`) holds it from agent-platform
-  chart 4.179.0 on, `agent-platform:admin` alone before.
+  chart 4.179.0 on, `agent-platform:admin` alone before. The admins come
+  from the operator's RoleBinding `organization-admins`, and each says that
+  it comes from the Organization's `spec.admins`.
 - for an organization's admins (`agent-platform:admin` in its namespace):
   `add_organization_member` and
-  `remove_organization_member` (a group offered before a person; members
-  of a role go into the RoleBinding `organization-<role>s`, and
-  `organization-admins` is never emptied); `set_organization_model`
+  `remove_organization_member` for the roles `editor` and `user` (a group
+  offered before a person; members of a role go into the RoleBinding
+  `organization-<role>s`); the admin role is refused, since the admins are
+  the Organization's `spec.admins`, which `update_organization` changes;
+  `set_organization_model`
   (a ModelConfig; the first model of an organization without a default
   carries `agent-platform.giantswarm.io/is-default-model-config: "true"`,
   `default: true` moves the mark, and a namespace with two marks takes no
@@ -732,9 +741,10 @@ The organization tools (every name holds `organization`):
   `replace_organization_credential` (a new value for one key of a credential
   Secret, for every object that reads it, writing the Secret only).
 - for everyone: `list_organizations`, the organizations the caller manages
-  or belongs to. agent-manager's ServiceAccount lists the
-  AgentPlatformOrganizations; SelfSubjectAccessReviews as the caller decide
-  each one's `permissions`: `manage` (update it in its parent), `member`
+  or belongs to. agent-manager's ServiceAccount lists the Organizations and
+  keeps those with the Agent Platform enabled; SelfSubjectAccessReviews as
+  the caller decide each one's `permissions`: `manage` (update the
+  Organization), `member`
   (list the Agents of its namespace, which every organization role grants)
   and `createAgents` (create on Flux HelmReleases in its namespace, the
   review `create_agent` and `get_info` `namespaces.managed` ask, because

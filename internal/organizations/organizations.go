@@ -1,6 +1,6 @@
 // Package organizations holds agent-manager's organization tools: the
-// AgentPlatformOrganizations of agent-platform-operator (create, change,
-// delete, read) for an organizations-admin, and inside an organization
+// Organizations (security.giantswarm.io) with the Agent Platform enabled
+// (create, change, delete, read) for an organizations-admin, and inside an organization
 // namespace the members, models, connectors and egress policies for the
 // organization's admins, plus the New agent picker's read path (epic
 // giantswarm/giantswarm#38891, slice giantswarm/agent-manager#291).
@@ -25,9 +25,8 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
-	"time"
 
-	apov1alpha1 "github.com/giantswarm/agent-platform-operator/api/v1alpha1"
+	orgv1alpha1 "github.com/giantswarm/organization-operator/api/v1alpha1"
 	authorizationv1 "k8s.io/api/authorization/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -48,21 +47,19 @@ const (
 	fieldMetadata  = "metadata"
 	fieldNamespace = "namespace"
 	scopePlatform  = "platform"
-	// RoleOrganizationsAdmin creates, changes and deletes
-	// AgentPlatformOrganizations, and binds members in their namespaces.
+	// RoleOrganizationsAdmin creates, changes and deletes Organizations, and
+	// binds members in their namespaces.
 	RoleOrganizationsAdmin = "agent-platform:organizations-admin"
 	// RoleAdmin, RoleEditor and RoleUser are an organization's members, by
-	// RoleBinding in its namespace.
+	// RoleBinding in its namespace: RoleAdmin from the Organization's
+	// spec.admins, which agent-platform-operator binds; the others written by
+	// the member tools.
 	RoleAdmin  = "agent-platform:admin"
 	RoleEditor = agents.RoleEditor
 	RoleUser   = "agent-platform:user"
-	// FirstAdminsBinding is the RoleBinding to RoleAdmin a create writes with
-	// the organization; an admission policy keeps it from being deleted or
-	// emptied while the namespace lives.
-	FirstAdminsBinding = "organization-admins"
 	// PruneAnnotation is Flux's prune marker, the one delete intent of an
-	// AgentPlatformOrganization: an admission policy refuses deleting one that
-	// does not carry it as PruneEnabled.
+	// Organization with the Agent Platform: an admission policy refuses
+	// deleting one that does not carry it as PruneEnabled.
 	PruneAnnotation = "kustomize.toolkit.fluxcd.io/prune"
 	PruneEnabled    = "enabled"
 	// CredentialPrefix starts the name of every credential Secret of an
@@ -70,8 +67,8 @@ const (
 	CredentialPrefix = "tenant-credential-" // #nosec G101 -- a name prefix, not a credential
 )
 
-// GVR is the AgentPlatformOrganization resource.
-var GVR = apov1alpha1.GroupVersion.WithResource("agentplatformorganizations")
+// GVR is the Organization resource, cluster-scoped.
+var GVR = orgv1alpha1.GroupVersion.WithResource("organizations")
 
 var rbacGVR = schema.GroupVersionResource{Group: "rbac.authorization.k8s.io", Version: "v1", Resource: "rolebindings"}
 
@@ -89,11 +86,6 @@ type Config struct {
 	// preview counts HelmReleases in, and whose create list_organizations
 	// asks for permissions.createAgents.
 	HelmReleaseAPIVersion string
-	// ReadyTimeout is how long a create waits for the organization's Ready
-	// before it leaves the first admins to a second call; ReadyPoll how often
-	// it looks.
-	ReadyTimeout time.Duration
-	ReadyPoll    time.Duration
 	// Commit is where mode commit writes; nil: only mode apply.
 	Commit *CommitConfig
 	// Sessions lists the sessions of the organization's Agents for the
@@ -129,12 +121,6 @@ func New(k kube.Provider, cfg Config, log *slog.Logger) *Service {
 	if cfg.HelmReleaseAPIVersion == "" {
 		cfg.HelmReleaseAPIVersion = agents.DefaultHelmReleaseAPIVersion
 	}
-	if cfg.ReadyTimeout <= 0 {
-		cfg.ReadyTimeout = 2 * time.Minute
-	}
-	if cfg.ReadyPoll <= 0 {
-		cfg.ReadyPoll = 2 * time.Second
-	}
 	return &Service{kube: k, cfg: cfg, log: log}
 }
 
@@ -160,24 +146,16 @@ func (s *Service) caller(ctx context.Context) (kube.Client, error) {
 // ---- refusals -----------------------------------------------------------------
 
 // wayOrganizationsAdmin names who can give the caller an organizations-admin's
-// rights in parent.
-func wayOrganizationsAdmin(parent string) string {
-	return fmt.Sprintf("this needs the ClusterRole %s, bound to you in namespace %s or cluster-wide; a cluster-admin, or an admin of the Giant Swarm Organization that owns %s, binds it", RoleOrganizationsAdmin, parent, parent)
-}
-
-// wayFirstAdmins names who can bind the first admins of org when the
-// creator may not: create_organization refuses before the write a creator
-// whose bindings in the parent the operator does not mirror, so what is left
-// is a mirror the operator has not written yet, or a creator it could not
-// check.
-func wayFirstAdmins(org *apov1alpha1.AgentPlatformOrganization) string {
-	return fmt.Sprintf("your right to create it in %s does not reach its namespace %s; if agent-platform-operator mirrors your binding there, call create_organization again with the same arguments once it has; else someone with %s bound in %s or cluster-wide, or a cluster-admin, calls it to bind them", org.Namespace, org.Status.Namespace, RoleOrganizationsAdmin, org.Namespace)
+// rights. An Organization is cluster-scoped, so only a ClusterRoleBinding
+// grants them.
+func wayOrganizationsAdmin() string {
+	return fmt.Sprintf("this needs the ClusterRole %s, bound to you cluster-wide; a cluster-admin binds it", RoleOrganizationsAdmin)
 }
 
 // wayOrganizationAdmin names who can make the caller an admin of the
 // organization in ns.
 func wayOrganizationAdmin(ns string) string {
-	return fmt.Sprintf("this needs %s in organization namespace %s; an admin of the organization adds you (add_organization_member), or an organizations-admin (%s) does", RoleAdmin, ns, RoleOrganizationsAdmin)
+	return fmt.Sprintf("this needs %s in organization namespace %s: an organizations-admin (%s) adds you to the Organization's spec.admins (update_organization)", RoleAdmin, ns, RoleOrganizationsAdmin)
 }
 
 // kubeErr maps an API server error onto the domain sentinels; a refusal by

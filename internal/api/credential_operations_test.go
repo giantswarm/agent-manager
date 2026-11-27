@@ -15,6 +15,7 @@ import (
 	"sync"
 	"testing"
 
+	apov1alpha1 "github.com/giantswarm/agent-platform-operator/api/v1alpha1"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -146,7 +147,7 @@ func (m contextMaps) Update(ctx context.Context, item *corev1.ConfigMap, options
 
 func prepareModelOperation(t *testing.T, fixture *orgFixture, extra map[string]any) organizations.ResourceResult {
 	t.Helper()
-	arguments := map[string]any{"namespace": orgNS, "name": "claude", "provider": "Anthropic", "model": "claude-sonnet-4-6"}
+	arguments := map[string]any{"organization": "payments", "name": "claude", "provider": "Anthropic", "model": "claude-sonnet-4-6"}
 	for key, value := range extra {
 		arguments[key] = value
 	}
@@ -213,7 +214,7 @@ func TestCredentialOperationSavesEscapedValuesOverHTTP(t *testing.T) {
 	}
 	require.NoError(t, unstructured.SetNestedSlice(consumer.Object, headers, "spec", "headersFrom"))
 	fixture := newOrgFixture(t, consumer)
-	answer, failed := fixture.call(t, ToolSetOrganizationConnector, map[string]any{"namespace": orgNS, "name": "gh"})
+	answer, failed := fixture.call(t, ToolSetOrganizationConnector, map[string]any{"organization": "payments", "name": "gh"})
 	require.False(t, failed, answer)
 	var operation organizations.ResourceResult
 	require.NoError(t, json.Unmarshal([]byte(answer), &operation))
@@ -424,7 +425,7 @@ func TestCredentialPreparationRefusesAnUnappliedGitConsumer(t *testing.T) {
 		paymentsPath + "/kustomization.yaml": []byte("resources:\n  - modelconfig-claude.yaml\n"),
 	})
 	answer, failed := fixture.call(t, ToolSetOrganizationModel, map[string]any{
-		"namespace": orgNS, "name": "claude", "provider": "Anthropic", "model": "replacement-model", "mode": "commit",
+		"organization": "payments", "name": "claude", "provider": "Anthropic", "model": "replacement-model", "mode": "commit",
 	})
 	require.True(t, failed, answer)
 	require.True(t, strings.HasPrefix(answer, "conflict:"), answer)
@@ -475,9 +476,9 @@ func TestConnectorCredentialOperationDeduplicatesSharedHeaderReferences(t *testi
 				if replace {
 					seedSecret(t, fixture, "tenant-credential-gh", "token")
 				}
-				tool, arguments := ToolSetOrganizationConnector, map[string]any{"namespace": orgNS, "name": "gh", "mode": mode}
+				tool, arguments := ToolSetOrganizationConnector, map[string]any{"organization": "payments", "name": "gh", "mode": mode}
 				if replace {
-					tool, arguments = ToolReplaceOrganizationCredential, map[string]any{"namespace": orgNS, "secret": ghSecret, "key": "token", "mode": mode}
+					tool, arguments = ToolReplaceOrganizationCredential, map[string]any{"organization": "payments", "secret": ghSecret, "key": "token", "mode": mode}
 				}
 				answer, failed := fixture.call(t, tool, arguments)
 				require.False(t, failed, answer)
@@ -511,7 +512,7 @@ func TestConnectorCredentialOperationRefusesDifferentKeysInOneSecret(t *testing.
 	headers = append(headers, map[string]any{"name": "X-API-Key", "valueFrom": map[string]any{"type": "Secret", "name": "tenant-credential-gh", "key": "apiKey"}})
 	require.NoError(t, unstructured.SetNestedSlice(consumer.Object, headers, "spec", "headersFrom"))
 	fixture := newOrgFixture(t, consumer)
-	answer, failed := fixture.call(t, ToolSetOrganizationConnector, map[string]any{"namespace": orgNS, "name": "gh"})
+	answer, failed := fixture.call(t, ToolSetOrganizationConnector, map[string]any{"organization": "payments", "name": "gh"})
 	require.True(t, failed, answer)
 	require.Contains(t, answer, "each credential Secret must contain one credential key")
 	require.Nil(t, fixture.get(t, secretGVR, orgNS, "tenant-credential-gh"))
@@ -847,7 +848,7 @@ func TestCredentialReplacementKeepsOrdinaryEditsSeparate(t *testing.T) {
 	fixture := newOrgFixture(t, model("claude", true))
 	seedSecret(t, fixture, "tenant-credential-claude", "apiKey")
 	before := len(fixture.dyn.Actions())
-	text, failed := fixture.call(t, ToolSetOrganizationModel, map[string]any{"namespace": orgNS, "name": "claude", "model": "edited"})
+	text, failed := fixture.call(t, ToolSetOrganizationModel, map[string]any{"organization": "payments", "name": "claude", "model": "edited"})
 	require.False(t, failed, text)
 	require.NotContains(t, text, "credentialOperation")
 	for _, action := range fixture.dyn.Actions()[before:] {
@@ -903,6 +904,71 @@ func TestCredentialSaveRefusesASecretCreatedSinceThePreparation(t *testing.T) {
 	require.Nil(t, fixture.get(t, mcGVR, orgNS, "claude"))
 }
 
+// labelOrganizationUID gives orgNS the organization UID label that
+// agent-platform-operator writes, as uid.
+func labelOrganizationUID(t *testing.T, fixture *orgFixture, uid string) {
+	t.Helper()
+	ns, err := fixture.sa.CoreV1().Namespaces().Get(t.Context(), orgNS, metav1.GetOptions{})
+	require.NoError(t, err)
+	ns.Labels[apov1alpha1.OrganizationUIDLabel] = uid
+	_, err = fixture.sa.CoreV1().Namespaces().Update(t.Context(), ns, metav1.UpdateOptions{})
+	require.NoError(t, err)
+}
+
+// An organization deleted and created again under the same name since the
+// preparation has a namespace of the same name and another organization UID:
+// the save is refused and writes nothing into the new organization.
+func TestCredentialSaveRefusesAnOrganizationCreatedAgain(t *testing.T) {
+	fixture := newOrgFixture(t)
+	labelOrganizationUID(t, fixture, "uid-payments")
+	result := prepareModelOperation(t, fixture, nil)
+	confirmation := confirmOperation(t, fixture, result.CredentialOperation)
+	labelOrganizationUID(t, fixture, "uid-payments-again")
+
+	status, answer, _ := operationHTTP(t, fixture, http.MethodPost, result.CredentialOperation, confirmation.Version, valuesBody(t, result, "synthetic-value"), nil)
+	require.Equal(t, http.StatusConflict, status, answer)
+	require.Nil(t, fixture.get(t, secretGVR, orgNS, "tenant-credential-claude"))
+	require.Nil(t, fixture.get(t, mcGVR, orgNS, "claude"))
+}
+
+// A save delayed past the organization's deletion and creation again, after
+// the namespace still carried the first organization's UID, is refused where
+// it writes: the Organization of that name has another UID now, and the
+// replacement receives no credential.
+func TestCredentialSaveRefusesAReplacementOrganizationAtTheWrite(t *testing.T) {
+	fixture := newOrgFixture(t, organization("payments", nil))
+	labelOrganizationUID(t, fixture, "uid-payments")
+	result := prepareModelOperation(t, fixture, nil)
+	confirmation := confirmOperation(t, fixture, result.CredentialOperation)
+
+	// The namespace's label still names the first organization; its
+	// Organization is the replacement.
+	replacement := organization("payments", nil)
+	replacement.SetUID("uid-payments-again")
+	require.NoError(t, fixture.dyn.Tracker().Update(orgGVR, replacement, ""))
+
+	status, answer, _ := operationHTTP(t, fixture, http.MethodPost, result.CredentialOperation, confirmation.Version, valuesBody(t, result, "synthetic-value"), nil)
+	require.Equal(t, http.StatusConflict, status, answer)
+	require.Nil(t, fixture.get(t, secretGVR, orgNS, "tenant-credential-claude"))
+	require.Nil(t, fixture.get(t, mcGVR, orgNS, "claude"))
+}
+
+// A save whose Organization was deleted since the preparation, while its
+// namespace still carries the recorded UID, is refused as not found: the
+// organization is gone. Nothing is written.
+func TestCredentialSaveRefusesADeletedOrganizationAtTheWrite(t *testing.T) {
+	fixture := newOrgFixture(t, organization("payments", nil))
+	labelOrganizationUID(t, fixture, "uid-payments")
+	result := prepareModelOperation(t, fixture, nil)
+	confirmation := confirmOperation(t, fixture, result.CredentialOperation)
+	require.NoError(t, fixture.dyn.Tracker().Delete(orgGVR, "", "payments"))
+
+	status, answer, _ := operationHTTP(t, fixture, http.MethodPost, result.CredentialOperation, confirmation.Version, valuesBody(t, result, "synthetic-value"), nil)
+	require.Equal(t, http.StatusNotFound, status, answer)
+	require.Nil(t, fixture.get(t, secretGVR, orgNS, "tenant-credential-claude"))
+	require.Nil(t, fixture.get(t, mcGVR, orgNS, "claude"))
+}
+
 // A Secret its ModelConfig reports without the key (kagent's ResolvedRefs
 // False, APIKeySecretKeyNotFound, for the current generation) is missing: the
 // person enters the value and the Secret is written whole. A condition of an
@@ -923,7 +989,7 @@ func TestCredentialKeyMissingFromAnExistingSecret(t *testing.T) {
 			fixture := newOrgFixture(t, live)
 			seedSecret(t, fixture, "tenant-credential-claude", "other")
 
-			text, failed := fixture.call(t, ToolSetOrganizationModel, map[string]any{"namespace": orgNS, "name": "claude", "provider": "Anthropic", "model": "claude-sonnet-4-6"})
+			text, failed := fixture.call(t, ToolSetOrganizationModel, map[string]any{"organization": "payments", "name": "claude", "provider": "Anthropic", "model": "claude-sonnet-4-6"})
 			require.False(t, failed, text)
 			var result organizations.ResourceResult
 			require.NoError(t, json.Unmarshal([]byte(text), &result))
@@ -958,7 +1024,7 @@ func TestCredentialReplacementAdmissionRefusesBeforeAValueIsEntered(t *testing.T
 		return nil
 	}
 
-	text, failed := fixture.call(t, ToolReplaceOrganizationCredential, map[string]any{"namespace": orgNS, "secret": claudeSecret, "key": "apiKey"})
+	text, failed := fixture.call(t, ToolReplaceOrganizationCredential, map[string]any{"organization": "payments", "secret": claudeSecret, "key": "apiKey"})
 	require.True(t, failed, text)
 	require.Contains(t, text, "changed in git")
 	require.NotContains(t, text, "credentialOperation")

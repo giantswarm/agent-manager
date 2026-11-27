@@ -404,6 +404,27 @@ func TestDeleteSessionRemovesTheCallersOwn(t *testing.T) {
 	require.ErrorIs(t, err, ErrNotFound, "a second delete finds nothing")
 }
 
+// A session read or deleted by its id names the organization whose agent it
+// is with, and none for an agent of a platform namespace.
+func TestASessionNamesItsOrganization(t *testing.T) {
+	svc, ctrl := newSessionFixture(t)
+	svc.cfg.Tenants = &fakeTenants{owners: map[string]string{"agents-pay-x7k2q": "pay"}}
+	ctx := identity.ContextWithToken(t.Context(), callerToken)
+	theirs := ctrl.AddSession("agents-pay-x7k2q", "sre", &a2apb.Task{Id: uuid.NewString()})
+	platform := ctrl.AddSession("kagent", "sre", &a2apb.Task{Id: uuid.NewString()})
+
+	detail, err := svc.GetSession(ctx, SessionQuery{SessionID: theirs.GetId()})
+	require.NoError(t, err)
+	assert.Equal(t, "pay", detail.Organization)
+	detail, err = svc.GetSession(ctx, SessionQuery{SessionID: platform.GetId()})
+	require.NoError(t, err)
+	assert.Empty(t, detail.Organization)
+
+	deleted, err := svc.DeleteSession(ctx, theirs.GetId())
+	require.NoError(t, err)
+	assert.Equal(t, "pay", deleted.Organization)
+}
+
 func TestDeleteSessionRefusesAnotherPersonsSession(t *testing.T) {
 	svc, ctrl := newSessionFixture(t)
 	ctx := identity.ContextWithToken(t.Context(), callerToken)

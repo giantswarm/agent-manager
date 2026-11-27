@@ -11,10 +11,9 @@ import (
 	"strconv"
 	"strings"
 
-	apov1alpha1 "github.com/giantswarm/agent-platform-operator/api/v1alpha1"
 	"github.com/giantswarm/gitops-commit/commit"
 	"github.com/giantswarm/gitops-commit/layout"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	orgv1alpha1 "github.com/giantswarm/organization-operator/api/v1alpha1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	kubeyaml "k8s.io/apimachinery/pkg/util/yaml"
@@ -24,42 +23,32 @@ import (
 	"github.com/giantswarm/agent-manager/internal/kube"
 )
 
-const orgKind = "AgentPlatformOrganization"
+// orgKind is the kind of an organization's object, Organization of
+// security.giantswarm.io.
+const orgKind = "Organization"
 
-// createCommit opens one pull request with the organization's file under its
-// parent and the organization-admins RoleBinding in its content path, after
-// the access reviews Create asked and a dry run of the object in its parent
-// as the caller. The operator mirrors the caller's organizations-admin
-// binding of the parent into the new namespace, so those reviews are the
-// right to bind the first admins there.
-func (s *Service) createCommit(ctx context.Context, c kube.Client, req CreateRequest, subjects []Subject, res *CreateResult) (*CreateResult, error) {
-	if err := segment("namespace", req.Parent); err != nil {
-		return nil, err
-	}
+// createCommit opens one pull request with the organization's file in the
+// objects path, after the access review Create asked and a dry run of the
+// object as the caller. No RoleBinding goes with it: agent-platform-operator
+// binds spec.admins in the organization namespace.
+func (s *Service) createCommit(ctx context.Context, c kube.Client, req CreateRequest, admins []Subject, res *CreateResult) (*CreateResult, error) {
 	if err := segment("name", req.Name); err != nil {
 		return nil, err
 	}
-	what := fmt.Sprintf("AgentPlatformOrganization %s/%s", req.Parent, req.Name)
-	way := wayOrganizationsAdmin(req.Parent)
-	_, err := c.Dynamic().Resource(GVR).Namespace(req.Parent).Get(ctx, req.Name, metav1.GetOptions{})
-	switch {
-	case err == nil:
-		return nil, fmt.Errorf("%w: %s exists; update_organization changes it", agents.ErrConflict, what)
-	case !apierrors.IsNotFound(err):
-		return nil, kubeErr(err, "get "+what, way)
-	}
+	what := "Organization " + req.Name
+	way := wayOrganizationsAdmin()
 	cm, err := s.newCommit(ctx)
 	if err != nil {
 		return nil, err
 	}
-	objFile := cm.objectFile(req.Parent, req.Name)
+	objFile := cm.objectFile(req.Name)
 	if ok, err := cm.exists(ctx, objFile); err != nil || ok {
 		if err != nil {
 			return nil, err
 		}
 		return nil, fmt.Errorf("%w: %s is in %s already and not applied yet: wait for Flux to apply it", agents.ErrConflict, objFile, cm.cfg.Objects.Repository)
 	}
-	content := cm.contentDir(req.Parent, req.Name)
+	content := cm.contentDir(req.Name)
 	// A new organization starts from an empty content path: files an
 	// earlier organization of that name left would come back with it.
 	if left, err := cm.list(ctx, content.Path()); err != nil || len(left) > 0 {
@@ -69,15 +58,13 @@ func (s *Service) createCommit(ctx context.Context, c kube.Client, req CreateReq
 		return nil, fmt.Errorf("%w: the content path %s in %s holds files (%s) an earlier organization left: remove them first, they would be applied into the new organization", agents.ErrConflict, content.Path(), cm.cfg.Objects.Repository, strings.Join(left, ", "))
 	}
 
-	obj := unstructuredOf(s.organizationObject(req))
+	obj := unstructuredOf(s.organizationObject(req, admins))
 	// The file never leaves git into an erase: only an explicit delete of
 	// the live object erases.
 	setAnnotation(obj, PruneAnnotation, PruneDisabled)
-	if err := apply(ctx, c.Dynamic(), []write{{gvr: GVR, kind: orgKind, op: opCreate, obj: obj.Object, ns: req.Parent, name: req.Name, what: what, reason: way}}, true); err != nil {
+	if err := apply(ctx, c.Dynamic(), []write{{gvr: GVR, kind: orgKind, op: opCreate, obj: obj.Object, name: req.Name, what: what, reason: way}}, true); err != nil {
 		return nil, err
 	}
-	binding := unstructuredOf(roleBinding("", FirstAdminsBinding, RoleAdmin, subjects))
-	setAnnotation(binding, PruneAnnotation, PruneDisabled)
 	isSecret, err := cm.secretFiles(ctx)
 	if err != nil {
 		return nil, err
@@ -85,18 +72,18 @@ func (s *Service) createCommit(ctx context.Context, c kube.Client, req CreateReq
 	if err := refusePlainAsSecret(isSecret, objFile, orgKind, req.Name); err != nil {
 		return nil, err
 	}
-	if err := refusePlainAsSecret(isSecret, contentFile(content, kindRoleBinding, FirstAdminsBinding), kindRoleBinding, FirstAdminsBinding); err != nil {
-		return nil, err
-	}
 
-	bindingFile := contentFile(content, kindRoleBinding, FirstAdminsBinding)
+	// The organization's own Kustomization applies the content path from the
+	// operator's first reconcile on: an empty kustomization.yaml makes it a
+	// path Flux can build before the organization has any content.
+	contentKustomization := path.Join(content.Path(), layout.KustomizationFile)
 	changes := []fileChange{
-		{dir: cm.objectDir(req.Parent), write: map[string][]byte{objFile: manifest(obj, true)}, create: []string{objFile}},
-		{dir: content, write: map[string][]byte{bindingFile: manifest(binding, false)}, create: []string{bindingFile}},
+		{dir: cm.objectDir(), write: map[string][]byte{objFile: manifest(obj, false)}, create: []string{objFile}, objects: true},
+		{dir: content, add: map[string][]byte{contentKustomization: []byte("resources: []\n")}, create: []string{contentKustomization}},
 	}
-	title := fmt.Sprintf("feat(organizations): add organization %s/%s", req.Parent, req.Name)
-	body := fmt.Sprintf("Adds the Agent Platform organization %s/%s: its object under its parent, and its first admins (%s, bound to %s) in its content path %s, which its own Flux Kustomization applies.", req.Parent, req.Name, FirstAdminsBinding, RoleAdmin, content.Path())
-	res.Commit, err = cm.open(ctx, changes, branch("create", req.Parent, req.Name), title, body, req.DryRun)
+	title := "feat(organizations): add organization " + req.Name
+	body := fmt.Sprintf("Adds the organization %s with the Agent Platform enabled: its Organization object in %s. Its admins are spec.admins, which agent-platform-operator binds to %s in the organization namespace. Its content path %s starts with an empty kustomization.yaml, so its own Flux Kustomization builds it before it has content.", req.Name, objFile, RoleAdmin, content.Path())
+	res.Commit, err = cm.open(ctx, changes, branch("create", req.Name), title, body, req.DryRun)
 	if err != nil {
 		return nil, err
 	}
@@ -105,13 +92,12 @@ func (s *Service) createCommit(ctx context.Context, c kube.Client, req CreateReq
 		return nil, err
 	}
 	res.Organization = s.summary(planned)
-	res.FirstAdmins = &Binding{Name: FirstAdminsBinding, Role: RoleAdmin, Subjects: subjects}
-	res.Commit.LiveSteps = []string{fmt.Sprintf("after the merge Flux applies the object; agent-platform-operator creates the organization namespace and the organization's Kustomization, which applies %s from %s", FirstAdminsBinding, content.Path())}
+	res.Commit.LiveSteps = []string{"after the merge Flux applies the object; " + operatorNext}
 	if req.DryRun {
-		res.Pending = "dry run: no pull request was opened; the files are in commit.files"
+		res.Next = "dry run: no pull request was opened; the files are in commit.files"
 	} else {
-		res.Pending = "merge the pull request " + res.Commit.PullRequest + "; " + reviewNote
-		s.log.Info("organization create committed", identity.LogAttr(ctx), "parent", req.Parent, "name", req.Name, "pullRequest", res.Commit.PullRequest)
+		res.Next = "merge the pull request " + res.Commit.PullRequest + "; " + reviewNote
+		s.log.Info("organization create committed", identity.LogAttr(ctx), "name", req.Name, "pullRequest", res.Commit.PullRequest)
 	}
 	return res, nil
 }
@@ -120,9 +106,9 @@ func (s *Service) createCommit(ctx context.Context, c kube.Client, req CreateReq
 // object was written live, or when another file defines it.
 func (s *Service) gitObject(ctx context.Context, cm *orgCommit, u *unstructured.Unstructured) (string, *unstructured.Unstructured, error) {
 	if !fromGit(u) {
-		return "", nil, fmt.Errorf("%w: AgentPlatformOrganization %s/%s was written live, not applied from git: use mode apply", agents.ErrConflict, u.GetNamespace(), u.GetName())
+		return "", nil, fmt.Errorf("%w: Organization %s was written live, not applied from git: use mode apply", agents.ErrConflict, u.GetName())
 	}
-	p := cm.objectFile(u.GetNamespace(), u.GetName())
+	p := cm.objectFile(u.GetName())
 	file, err := cm.read(ctx, p)
 	if err != nil {
 		return "", nil, err
@@ -132,7 +118,7 @@ func (s *Service) gitObject(ctx context.Context, cm *orgCommit, u *unstructured.
 
 // updateCommit changes the organization's file as an update would change
 // the object, after a dry run of the same change live as the caller.
-func (s *Service) updateCommit(ctx context.Context, c kube.Client, u *unstructured.Unstructured, org *apov1alpha1.AgentPlatformOrganization, req UpdateRequest) (*UpdateResult, error) {
+func (s *Service) updateCommit(ctx context.Context, c kube.Client, u *unstructured.Unstructured, org *orgv1alpha1.Organization, req UpdateRequest) (*UpdateResult, error) {
 	cm, err := s.newCommit(ctx)
 	if err != nil {
 		return nil, err
@@ -142,7 +128,7 @@ func (s *Service) updateCommit(ctx context.Context, c kube.Client, u *unstructur
 		return nil, err
 	}
 	if file == nil {
-		return nil, fmt.Errorf("%w: AgentPlatformOrganization %s/%s is applied from git, but not from %s in %s: change it in the file that defines it", agents.ErrConflict, req.Parent, req.Name, p, cm.cfg.Objects.Repository)
+		return nil, fmt.Errorf("%w: Organization %s is applied from git, but not from %s in %s: change it in the file that defines it", agents.ErrConflict, req.Name, p, cm.cfg.Objects.Repository)
 	}
 	res := &UpdateResult{Before: s.summary(org), DryRun: req.DryRun, RequestedBy: identity.Caller(ctx)}
 	if res.Changed, err = changeOrganization(file, req); err != nil {
@@ -172,13 +158,13 @@ func (s *Service) updateCommit(ctx context.Context, c kube.Client, u *unstructur
 	if len(res.Changed) == 0 {
 		return res, nil
 	}
-	what := fmt.Sprintf("AgentPlatformOrganization %s/%s", req.Parent, req.Name)
-	if err := apply(ctx, c.Dynamic(), []write{{gvr: GVR, kind: orgKind, op: opUpdate, obj: next.Object, ns: req.Parent, name: req.Name, what: what, reason: wayOrganizationsAdmin(req.Parent)}}, true); err != nil {
+	what := "Organization " + req.Name
+	if err := apply(ctx, c.Dynamic(), []write{{gvr: GVR, kind: orgKind, op: opUpdate, obj: next.Object, name: req.Name, what: what, reason: wayOrganizationsAdmin()}}, true); err != nil {
 		return nil, err
 	}
-	title := fmt.Sprintf("chore(organizations): update organization %s/%s", req.Parent, req.Name)
-	body := fmt.Sprintf("Changes %s of the Agent Platform organization %s/%s.", strings.Join(res.Changed, ", "), req.Parent, req.Name)
-	res.Commit, err = cm.open(ctx, []fileChange{{dir: cm.objectDir(req.Parent), write: map[string][]byte{p: manifest(file, true)}}}, branch("update", req.Parent, req.Name), title, body, req.DryRun)
+	title := "chore(organizations): update organization " + req.Name
+	body := fmt.Sprintf("Changes %s of the organization %s.", strings.Join(res.Changed, ", "), req.Name)
+	res.Commit, err = cm.open(ctx, []fileChange{{dir: cm.objectDir(), write: map[string][]byte{p: manifest(file, false)}, objects: true}}, branch("update", req.Name), title, body, req.DryRun)
 	if err != nil {
 		return nil, err
 	}
@@ -193,7 +179,7 @@ func (s *Service) updateCommit(ctx context.Context, c kube.Client, u *unstructur
 // branch, the organization is pending erase and Delete goes on to the live
 // erase (answered false). A live delete is refused while the file is in
 // git: Flux would re-create the object.
-func (s *Service) deleteCommit(ctx context.Context, c kube.Client, u *unstructured.Unstructured, org *apov1alpha1.AgentPlatformOrganization, req DeleteRequest, res *DeleteResult) (answered bool, err error) {
+func (s *Service) deleteCommit(ctx context.Context, c kube.Client, u *unstructured.Unstructured, org *orgv1alpha1.Organization, req DeleteRequest, res *DeleteResult) (answered bool, err error) {
 	cm, err := s.newCommit(ctx)
 	if err != nil {
 		return false, err
@@ -202,8 +188,8 @@ func (s *Service) deleteCommit(ctx context.Context, c kube.Client, u *unstructur
 	if err != nil {
 		return false, err
 	}
-	what := fmt.Sprintf("AgentPlatformOrganization %s/%s", req.Parent, req.Name)
-	object := branch("delete", req.Parent, req.Name)
+	what := "Organization " + req.Name
+	object := branch("delete", req.Name)
 	prURL := org.Annotations[DeletePullRequestAnnotation]
 	// merged tells only that the pull request the object names merged;
 	// whether that merge removed the file is asked of its files (changes)
@@ -247,11 +233,11 @@ func (s *Service) deleteCommit(ctx context.Context, c kube.Client, u *unstructur
 		}
 		if has {
 			if prURL != open.URL && !req.DryRun {
-				if err := s.markDelete(ctx, c, req.Parent, req.Name, open.URL, false); err != nil {
+				if err := s.markDelete(ctx, c, req.Name, open.URL, false); err != nil {
 					return false, err
 				}
 			}
-			res.Next = fmt.Sprintf("the pull request that removes the organization from git is open: %s; %s. Once it is merged, call delete_organization again with mode commit and confirm %q to erase it", open.URL, reviewNote, req.Parent+"/"+req.Name)
+			res.Next = fmt.Sprintf("the pull request that removes the organization from git is open: %s; %s. Once it is merged, call delete_organization again with mode commit and confirm %q to erase it", open.URL, reviewNote, req.Name)
 			return true, nil
 		}
 		return true, s.openDelete(ctx, c, cm, req, res, p, prURL, merged)
@@ -274,11 +260,11 @@ func (s *Service) deleteCommit(ctx context.Context, c kube.Client, u *unstructur
 	if err := removedBy(changes, pr, what, p); err != nil {
 		return false, err
 	}
-	if err := cm.stillInGit(ctx, pr, req.Parent, req.Name, what, p); err != nil {
+	if err := cm.stillInGit(ctx, pr, req.Name, what, p); err != nil {
 		return false, err
 	}
-	if req.Confirm != req.Parent+"/"+req.Name {
-		res.Next = fmt.Sprintf("pending erase: the delete pull request %s is merged and the file is gone from git. Nothing was deleted: show the person what is erased and, once they typed it, call delete_organization again with mode commit and confirm %q (Erase now)", prURL, req.Parent+"/"+req.Name)
+	if req.Confirm != req.Name {
+		res.Next = fmt.Sprintf("pending erase: the delete pull request %s is merged and the file is gone from git. Nothing was deleted: show the person what is erased and, once they typed it, call delete_organization again with mode commit and confirm %q (Erase now)", prURL, req.Name)
 		return true, nil
 	}
 	return false, nil
@@ -312,10 +298,10 @@ func removedBy(changes []commit.FileChange, pr commit.PullRequest, what, p strin
 const nextDelete = "then call delete_organization again with mode commit and no confirm to open a new delete pull request"
 
 // stillInGit refuses the erase while a file under the objects path on the
-// base branch still defines the organization parent/name: a move that
-// GitHub reports as a removal and an addition, a definition the delete pull
-// request wrote into another file, or one a later commit wrote or moved.
-// Both the erase and the answer pending erase take it. The installation's
+// base branch still defines the organization name: a move that GitHub
+// reports as a removal and an addition, a definition the delete pull request
+// wrote into another file, or one a later commit wrote or moved. Both the
+// erase and the answer pending erase take it. The installation's
 // Kustomization applies the objects path, so a definition anywhere else
 // re-creates the object only through a kustomization under the objects path
 // that loads it: such an entry (leavingEntries) refuses the erase, since the
@@ -330,19 +316,20 @@ const nextDelete = "then call delete_organization again with mode commit and no 
 // below. A read that fails, or a tree too large for one read, erases
 // nothing.
 //
-// The scan runs no Kustomize, so it fails closed on what a kustomization
-// changes, wherever that kustomization is under the objects path (a sibling
-// overlay refers to a file by ../, giantswarm/agent-manager#399): every
-// organization document that one may make parent/name counts (renamingOf).
-// A namespace of parent moves a document of any namespace there; a name
-// prefix or suffix makes a document whose name is a part of name into it;
-// a transformer, a patch, replacements, vars with configurations, a
+// An Organization is cluster-scoped: its name alone is its identity, and a
+// namespace a kustomization sets does not change it. The scan runs no
+// Kustomize, so it fails closed on what a kustomization changes of a name,
+// wherever that kustomization is under the objects path (a sibling overlay
+// refers to a file by ../, giantswarm/agent-manager#399): every organization
+// document that one may make name counts (renamingOf). A name prefix or
+// suffix makes a document whose name is a part of name into it; a
+// transformer, a patch, replacements, vars with configurations, a
 // kustomization that does not parse, or a value the scan cannot read
-// (${...}, $(...), SOPS) makes any organization document count. A namespace other than parent counts for nothing
-// (giantswarm/agent-manager#423). In a repository with such an overlay an
-// erase can be refused although Flux's build no longer holds the
-// organization: the answer names the overlay to remove or change.
-func (c *orgCommit) stillInGit(ctx context.Context, pr commit.PullRequest, parent, name, what, p string) error {
+// (${...}, $(...), SOPS) makes any organization document count. In a
+// repository with such an overlay an erase can be refused although Flux's
+// build no longer holds the organization: the answer names the overlay to
+// remove or change.
+func (c *orgCommit) stillInGit(ctx context.Context, pr commit.PullRequest, name, what, p string) error {
 	repo, base, dir := c.cfg.Objects.Repository, c.cfg.Objects.Branch, c.cfg.Objects.Directory
 	unknown := func(err error, step string) error {
 		return fmt.Errorf("%w (nothing was erased: %s could not be read, so whether the organization is still defined in git is unknown; call delete_organization again with mode commit and confirm to retry)", commitError(c.gh, err), step)
@@ -384,8 +371,7 @@ func (c *orgCommit) stillInGit(ctx context.Context, pr commit.PullRequest, paren
 		// kustomization may list it as one. A kustomization's own document
 		// never is an organization.
 		if kustomizationFiles[path.Base(f)] {
-			if k, why := renamingOf(parsed, ok, parent); why != nil {
-				r.namespace = r.namespace || k.namespace
+			if k, why := renamingOf(parsed, ok); why != nil {
 				r.affix = r.affix || k.affix
 				r.name = r.name || k.name
 				renamedBy = append(renamedBy, f+" ("+strings.Join(why, ", ")+")")
@@ -398,19 +384,19 @@ func (c *orgCommit) stillInGit(ctx context.Context, pr commit.PullRequest, paren
 	}
 	for _, f := range files {
 		for _, doc := range docs[f] {
-			if !definesOrganization(doc, parent, name, r) {
+			if !definesOrganization(doc, name, r) {
 				continue
 			}
-			if !definesOrganization(doc, parent, name, renaming{}) {
+			if !definesOrganization(doc, name, renaming{}) {
 				// The overlay alone makes the match: the document may be
 				// another organization, which must not be removed blindly.
-				return fmt.Errorf("%w: %s: its merged delete pull request %s removed %s, but %s in %s may still define it: %s may change a namespace or a name, so what the document says of its own namespace and name does not tell, and the scan, which runs no Kustomize, takes it as a definition; it is not pending erase and is not erased. Check the overlay first: if it does not make that document %s, remove that setting or the overlay from the objects path and call delete_organization again with mode commit and confirm %q; if it does, remove that definition", agents.ErrConflict, what, pr.URL, p, f, repo, strings.Join(renamedBy, ", "), parent+"/"+name, parent+"/"+name)
+				return fmt.Errorf("%w: %s: its merged delete pull request %s removed %s, but %s in %s may still define it: %s may change a name, so what the document says of its own name does not tell, and the scan, which runs no Kustomize, takes it as a definition; it is not pending erase and is not erased. Check the overlay first: if it does not make that document %s, remove that setting or the overlay from the objects path and call delete_organization again with mode commit and confirm %q; if it does, remove that definition", agents.ErrConflict, what, pr.URL, p, f, repo, strings.Join(renamedBy, ", "), name, name)
 			}
-			return fmt.Errorf("%w: %s: its merged delete pull request %s removed %s, but %s in %s still defines it (moved there, or written there by the pull request or a later commit), so the organization is still in git; it is not pending erase and is not erased; remove that definition from %s and call delete_organization again with mode commit and confirm %q, or move it back to %s, %s", agents.ErrConflict, what, pr.URL, p, f, repo, f, parent+"/"+name, p, nextDelete)
+			return fmt.Errorf("%w: %s: its merged delete pull request %s removed %s, but %s in %s still defines it (moved there, or written there by the pull request or a later commit), so the organization is still in git; it is not pending erase and is not erased; remove that definition from %s and call delete_organization again with mode commit and confirm %q, or move it back to %s, %s", agents.ErrConflict, what, pr.URL, p, f, repo, f, name, p, nextDelete)
 		}
 	}
 	if len(leaving) > 0 {
-		return fmt.Errorf("%w: %s: its merged delete pull request %s removed %s, but a kustomization under the objects path %s in %s loads files from outside it: %s. The scan reads only the objects path and runs no Kustomize, so whether what that entry loads still defines the organization is unknown; it is not pending erase and is not erased. Bring what the entry loads under the objects path, or remove the entry, then call delete_organization again with mode commit and confirm %q", agents.ErrConflict, what, pr.URL, p, dir, repo, strings.Join(leaving, ", "), parent+"/"+name)
+		return fmt.Errorf("%w: %s: its merged delete pull request %s removed %s, but a kustomization under the objects path %s in %s loads files from outside it: %s. The scan reads only the objects path and runs no Kustomize, so whether what that entry loads still defines the organization is unknown; it is not pending erase and is not erased. Bring what the entry loads under the objects path, or remove the entry, then call delete_organization again with mode commit and confirm %q", agents.ErrConflict, what, pr.URL, p, dir, repo, strings.Join(leaving, ", "), name)
 	}
 	return nil
 }
@@ -493,26 +479,25 @@ func treeOf(files []string) map[string]bool {
 var kustomizationFiles = map[string]bool{"kustomization.yaml": true, "kustomization.yml": true, "Kustomization": true}
 
 // rewriteFields are the kustomization fields that can set a resource's
-// namespace or name to any value: the scan runs no Kustomize, so it does
-// not read what they write (giantswarm/agent-manager#423).
+// name to any value: the scan runs no Kustomize, so it does not read what
+// they write (giantswarm/agent-manager#423).
 var rewriteFields = []string{"transformers", "patches", "patchesJson6902", "patchesStrategicMerge", "replacements"}
 
-// renaming is what kustomizations may change of a resource's identity on
-// its way to the organization parent/name: namespace, a document of any
-// namespace may land in parent; affix, a document whose own name is a part
+// renaming is what kustomizations may change of a resource's name on its
+// way to the organization name: affix, a document whose own name is a part
 // of name may become it (a prefix or a suffix only adds text); name, a
 // document of any name may become it.
-type renaming struct{ namespace, affix, name bool }
+type renaming struct{ affix, name bool }
 
 // renamingOf reads what the kustomization docs (ok false: it does not
-// parse) may change of a resource's identity on its way to parent, and
-// why, nil when nothing. It fails closed: a kustomization it cannot parse,
-// a field of a form it does not know, a value it cannot read (opaque) or
-// one of rewriteFields counts as changing what it may. A namespace other
-// than parent, in clear text, cannot move a document into parent.
-func renamingOf(docs []map[string]any, ok bool, parent string) (renaming, []string) {
+// parse) may change of a resource's name, and why, nil when nothing. It
+// fails closed: a kustomization it cannot parse, a field of a form it does
+// not know, a value it cannot read (opaque) or one of rewriteFields counts
+// as changing what it may. A namespace does not count: an Organization is
+// cluster-scoped.
+func renamingOf(docs []map[string]any, ok bool) (renaming, []string) {
 	if !ok {
-		return renaming{namespace: true, name: true}, []string{"it does not parse"}
+		return renaming{name: true}, []string{"it does not parse"}
 	}
 	if len(docs) == 0 {
 		return renaming{}, nil
@@ -522,17 +507,6 @@ func renamingOf(docs []map[string]any, ok bool, parent string) (renaming, []stri
 		r   renaming
 		why []string
 	)
-	switch ns := k["namespace"].(type) {
-	case nil:
-	case string:
-		if ns == parent || opaque(ns) {
-			r.namespace = true
-			why = append(why, "namespace "+ns)
-		}
-	default:
-		r.namespace = true
-		why = append(why, "namespace of a form the scan does not know")
-	}
 	for _, field := range []string{"namePrefix", "nameSuffix"} {
 		switch v := k[strings.ToLower(field)].(type) {
 		case nil:
@@ -548,14 +522,14 @@ func renamingOf(docs []map[string]any, ok bool, parent string) (renaming, []stri
 	}
 	for _, field := range rewriteFields {
 		if nonEmpty(k[strings.ToLower(field)]) {
-			r.namespace, r.name = true, true
+			r.name = true
 			why = append(why, field)
 		}
 	}
 	// A var substitutes $(NAME) in the fields a configurations file's
-	// varReference names, metadata/name and metadata/namespace among them.
+	// varReference names, metadata/name among them.
 	if nonEmpty(k["vars"]) && nonEmpty(k["configurations"]) {
-		r.namespace, r.name = true, true
+		r.name = true
 		why = append(why, "vars with configurations")
 	}
 	return r, why
@@ -628,15 +602,15 @@ func documents(raw []byte) (out []map[string]any, ok bool) {
 }
 
 // definesOrganization reports whether doc is, or as a list (kind *List)
-// holds in its items, the AgentPlatformOrganization parent/name, as
-// Kustomize applies it. A document without a namespace counts, and so does
-// one whose namespace or name r says a kustomization may change. A value
-// the scan cannot read (opaque) is not known, so it counts too.
-func definesOrganization(doc map[string]any, parent, name string, r renaming) bool {
+// holds in its items, the Organization name, as Kustomize applies it: one
+// whose name r says a kustomization may change counts. A value the scan
+// cannot read (opaque) is not known, so it counts too. Its namespace does
+// not count: an Organization is cluster-scoped.
+func definesOrganization(doc map[string]any, name string, r renaming) bool {
 	u := unstructured.Unstructured{Object: doc}
 	if items, ok := doc["items"].([]any); ok && strings.HasSuffix(u.GetKind(), "List") {
 		for _, it := range items {
-			if m, ok := it.(map[string]any); ok && definesOrganization(m, parent, name, r) {
+			if m, ok := it.(map[string]any); ok && definesOrganization(m, name, r) {
 				return true
 			}
 		}
@@ -646,20 +620,18 @@ func definesOrganization(doc map[string]any, parent, name string, r renaming) bo
 	if _, sops := doc["sops"]; sops && (sealed(u.GetKind()) || sealed(u.GetAPIVersion())) {
 		kind = true
 	}
-	ns, own := u.GetNamespace(), u.GetName()
-	return kind &&
-		(r.name || own == name || opaque(own) || (r.affix && strings.Contains(name, own))) &&
-		(r.namespace || ns == "" || ns == parent || opaque(ns))
+	own := u.GetName()
+	return kind && (r.name || own == name || opaque(own) || (r.affix && strings.Contains(name, own)))
 }
 
 // openDelete opens the pull request that removes the organization's file
 // and its whole content path, then marks the live object with it, as the
 // caller: the mark is dry-run before the pull request exists.
 func (s *Service) openDelete(ctx context.Context, c kube.Client, cm *orgCommit, req DeleteRequest, res *DeleteResult, p, earlier string, earlierMerged bool) error {
-	if err := s.markDelete(ctx, c, req.Parent, req.Name, "https://github.com/"+cm.cfg.Objects.Repository.String()+"/pull/0", true); err != nil {
+	if err := s.markDelete(ctx, c, req.Name, "https://github.com/"+cm.cfg.Objects.Repository.String()+"/pull/0", true); err != nil {
 		return err
 	}
-	content := cm.contentDir(req.Parent, req.Name)
+	content := cm.contentDir(req.Name)
 	files, err := cm.list(ctx, content.Path())
 	if err != nil {
 		return err
@@ -675,13 +647,13 @@ func (s *Service) openDelete(ctx context.Context, c kube.Client, cm *orgCommit, 
 		}
 		ch.remove = append(ch.remove, f)
 	}
-	changes := []fileChange{{dir: cm.objectDir(req.Parent), remove: []string{p}}}
+	changes := []fileChange{{dir: cm.objectDir(), remove: []string{p}, objects: true}}
 	if len(ch.remove) > 0 || len(ch.drop) > 0 {
 		changes = append(changes, ch)
 	}
-	title := fmt.Sprintf("feat(organizations): remove organization %s/%s", req.Parent, req.Name)
-	body := fmt.Sprintf("Removes the Agent Platform organization %s/%s from git: its object's file and its whole content path %s (agents, models, connectors, egress policies, members and credentials), so nothing in git re-creates them under its name. The merge erases nothing: the organization shows Pending erase, and Erase now (delete_organization with mode commit and the typed confirmation) erases it.", req.Parent, req.Name, content.Path())
-	res.Commit, err = cm.open(ctx, changes, branch("delete", req.Parent, req.Name), title, body, req.DryRun)
+	title := "feat(organizations): remove organization " + req.Name
+	body := fmt.Sprintf("Removes the organization %s from git: its Organization file and its whole content path %s (agents, models, connectors, egress policies, members and credentials), so nothing in git re-creates them under its name. The merge erases nothing: the organization shows Pending erase, and Erase now (delete_organization with mode commit and the typed confirmation) erases it.", req.Name, content.Path())
+	res.Commit, err = cm.open(ctx, changes, branch("delete", req.Name), title, body, req.DryRun)
 	if err != nil {
 		return err
 	}
@@ -692,28 +664,28 @@ func (s *Service) openDelete(ctx context.Context, c kube.Client, cm *orgCommit, 
 		res.Next += "dry run: no pull request was opened and the object was not marked; the files are in commit.files"
 		return nil
 	}
-	if err := s.markDelete(ctx, c, req.Parent, req.Name, res.Commit.PullRequest, false); err != nil {
+	if err := s.markDelete(ctx, c, req.Name, res.Commit.PullRequest, false); err != nil {
 		return fmt.Errorf("%w (the pull request %s is open; call delete_organization again with mode commit and no confirm to mark the object)", err, res.Commit.PullRequest)
 	}
-	step := fmt.Sprintf("after the merge the organization shows Pending erase (Orphaned, reason DeleteMerged); then call delete_organization with mode commit and confirm %q to erase it (Erase now). Until then nothing is erased", req.Parent+"/"+req.Name)
+	step := fmt.Sprintf("after the merge the organization shows Pending erase (AgentPlatformOrphaned, reason DeleteMerged); then call delete_organization with mode commit and confirm %q to erase it (Erase now). Until then nothing is erased", req.Name)
 	res.Commit.LiveSteps = []string{step}
 	res.Next += "the pull request " + res.Commit.PullRequest + " removes the organization from git; " + reviewNote + "; " + step
-	s.log.Info("organization delete committed", identity.LogAttr(ctx), "parent", req.Parent, "name", req.Name, "pullRequest", res.Commit.PullRequest)
+	s.log.Info("organization delete committed", identity.LogAttr(ctx), "name", req.Name, "pullRequest", res.Commit.PullRequest)
 	return nil
 }
 
 // markDelete marks the live organization with its delete pull request, as
 // the caller, on the object as it is now: dry run first, and only the dry
 // run when dryRun.
-func (s *Service) markDelete(ctx context.Context, c kube.Client, parent, name, url string, dryRun bool) error {
-	what := fmt.Sprintf("AgentPlatformOrganization %s/%s", parent, name)
-	way := wayOrganizationsAdmin(parent)
-	u, err := c.Dynamic().Resource(GVR).Namespace(parent).Get(ctx, name, metav1.GetOptions{})
+func (s *Service) markDelete(ctx context.Context, c kube.Client, name, url string, dryRun bool) error {
+	what := "Organization " + name
+	way := wayOrganizationsAdmin()
+	u, err := c.Dynamic().Resource(GVR).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
 		return kubeErr(err, "get "+what, way)
 	}
 	setAnnotation(u, DeletePullRequestAnnotation, url)
-	return apply(ctx, c.Dynamic(), []write{{gvr: GVR, kind: orgKind, op: opUpdate, obj: u.Object, ns: parent, name: name, what: what + " (" + DeletePullRequestAnnotation + ")", reason: way}}, dryRun)
+	return apply(ctx, c.Dynamic(), []write{{gvr: GVR, kind: orgKind, op: opUpdate, obj: u.Object, name: name, what: what + " (" + DeletePullRequestAnnotation + ")", reason: way}}, dryRun)
 }
 
 // mergedFiles reads whether pr is merged and, when it is, the files it

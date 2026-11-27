@@ -41,7 +41,7 @@ Generated from the registered tools (`make tools-doc`); through muster every too
 ```text
 Add a group or a person to an organization with a role, as you.
 
-Writes the RoleBinding organization-<role>s (admins: organization-admins), dry run first; a member already holding the role is left as is. Needs agent-platform:admin in the organization, or agent-platform:organizations-admin.
+Writes the RoleBinding organization-<role>s, dry run first; a member already holding the role is left as is. The admin role is refused: the admins are the Organization's spec.admins, changed with update_organization. Needs agent-platform:admin in the organization, or agent-platform:organizations-admin.
 ```
 
 ```json
@@ -63,14 +63,13 @@ Writes the RoleBinding organization-<role>s (admins: organization-admins), dry r
       ],
       "type": "string"
     },
-    "namespace": {
-      "description": "The organization namespace, e.g. agents-payments-x7k2q (list_organizations, get_organization)",
+    "organization": {
+      "description": "The organization's name (list_organizations); agent-manager finds its namespace",
       "type": "string"
     },
     "role": {
-      "description": "admin manages members, models and credentials; editor creates agents; user uses them",
+      "description": "editor creates agents; user uses them. Not admin: the admins are the Organization's spec.admins (update_organization)",
       "enum": [
-        "admin",
         "editor",
         "user"
       ],
@@ -82,7 +81,7 @@ Writes the RoleBinding organization-<role>s (admins: organization-admins), dry r
     }
   },
   "required": [
-    "namespace",
+    "organization",
     "role"
   ],
   "type": "object"
@@ -197,11 +196,11 @@ name is the DNS-1123 name the person chose, never derived from displayName. mode
       "type": "string"
     },
     "namespace": {
-      "description": "Namespace of the agent; default: the installation's kagent namespace (get_info lists the managed ones).",
+      "description": "Installation platform namespace (default kagent); with cluster, the namespace on the workload cluster. Never an organization's: use organization.",
       "type": "string"
     },
     "organization": {
-      "description": "With cluster: the organization owning the workload cluster the agent runs on. Omit both for the installation's own cluster.",
+      "description": "The organization's name (list_organizations): its agents, in the namespace agent-manager finds. With cluster: on that workload cluster of it.",
       "type": "string"
     },
     "path": {
@@ -328,23 +327,23 @@ name is the DNS-1123 name the person chose, never derived from displayName. mode
 ## `create_organization`
 
 ```text
-Create an organization as you, then bind its first admins in its namespace.
+Create an organization as you: an Organization with the Agent Platform enabled and its admins.
 
-Before any write, dry run too, refuses when you may not bind them or your right will not reach the new namespace (it does cluster-wide, or by a parent RoleBinding naming you that the operator mirrors: organizations-admin, or rbac-operator's cluster-admin). Waits for Ready, then writes organization-admins to agent-platform:admin as you. pending: call again with the same arguments. mode commit opens one pull request instead. Prefer a group as admin. Needs agent-platform:organizations-admin in the parent namespace.
+Dry-runs as you first. The admins go in spec.admins: agent-platform-operator creates the organization namespace and binds them to agent-platform:admin there; list_organizations shows the namespace once it reports it. An Organization of that name that exists is refused. mode commit opens one pull request instead. Prefer a group as admin. Needs agent-platform:organizations-admin, bound cluster-wide.
 ```
 
 ```json
 {
   "properties": {
     "adminGroups": {
-      "description": "First admins: identity provider groups, as the API server sees them (preferred)",
+      "description": "Admins: identity provider groups, as the API server sees them (preferred)",
       "items": {
         "type": "string"
       },
       "type": "array"
     },
     "adminUsers": {
-      "description": "First admins: users, as the API server sees them",
+      "description": "Admins: users, as the API server sees them",
       "items": {
         "type": "string"
       },
@@ -374,11 +373,7 @@ Before any write, dry run too, refuses when you may not bind them or your right 
       "type": "string"
     },
     "name": {
-      "description": "The organization's name (at most 50 characters, no dot)",
-      "type": "string"
-    },
-    "namespace": {
-      "description": "The parent namespace the organization lives in, e.g. org-acme",
+      "description": "The organization's name: the name of its Organization (at most 56 characters, no dot)",
       "type": "string"
     },
     "workerReplicas": {
@@ -387,7 +382,6 @@ Before any write, dry run too, refuses when you may not bind them or your right 
     }
   },
   "required": [
-    "namespace",
     "name"
   ],
   "type": "object"
@@ -434,11 +428,11 @@ The chart's shared OCIRepository goes too when nothing else in the namespace use
       "type": "string"
     },
     "namespace": {
-      "description": "Namespace of the agent; default: the installation's kagent namespace (get_info lists the managed ones).",
+      "description": "Installation platform namespace (default kagent); with cluster, the namespace on the workload cluster. Never an organization's: use organization.",
       "type": "string"
     },
     "organization": {
-      "description": "With cluster: the organization owning the workload cluster the agent runs on. Omit both for the installation's own cluster.",
+      "description": "The organization's name (list_organizations): its agents, in the namespace agent-manager finds. With cluster: on that workload cluster of it.",
       "type": "string"
     },
     "path": {
@@ -462,14 +456,14 @@ The chart's shared OCIRepository goes too when nothing else in the namespace use
 ```text
 Delete an organization as you, which erases it: its namespace, agents, sessions, snapshots and credentials.
 
-Without confirm it only answers what would be erased: show that to the person and ask them to type <parent>/<name>, then call again with confirm set to it. Marks the object kustomize.toolkit.fluxcd.io/prune: enabled, the delete intent, then deletes it; the operator erases it. mode commit: without confirm it opens the pull request removing it from git and marks the object; once merged (Pending erase), confirm erases it. Session tombstones stay. Needs agent-platform:organizations-admin.
+Without confirm it answers what is erased (erases.organizationNamespace: organization-operator's namespace, deleted too): show it to the person, who types the name; call again with that confirm. Sets the delete intent (kustomize.toolkit.fluxcd.io/prune: enabled), then deletes; the operator erases it. mode commit: without confirm it opens a pull request removing it from git; once merged (Pending erase), confirm erases it. Session tombstones stay. Needs agent-platform:organizations-admin.
 ```
 
 ```json
 {
   "properties": {
     "confirm": {
-      "description": "<parent>/<name>, as the person typed it",
+      "description": "The organization's name, as the person typed it",
       "type": "string"
     },
     "dryRun": {
@@ -485,16 +479,11 @@ Without confirm it only answers what would be erased: show that to the person an
       "type": "string"
     },
     "name": {
-      "description": "The organization's name (at most 50 characters, no dot)",
-      "type": "string"
-    },
-    "namespace": {
-      "description": "The parent namespace the organization lives in, e.g. org-acme",
+      "description": "The organization's name: the name of its Organization (at most 56 characters, no dot)",
       "type": "string"
     }
   },
   "required": [
-    "namespace",
     "name"
   ],
   "type": "object"
@@ -536,13 +525,12 @@ Dry run first. Its credential Secret stays. Deleting the default model leaves it
       "description": "Object name",
       "type": "string"
     },
-    "namespace": {
-      "description": "Organization namespace, or the configured installation namespace for cluster admins",
+    "organization": {
+      "description": "The organization's name (list_organizations); agent-manager finds its namespace; omit for the installation's models (cluster admins)",
       "type": "string"
     }
   },
   "required": [
-    "namespace",
     "kind",
     "name"
   ],
@@ -593,11 +581,11 @@ default: true is the installation's default agent, to preselect when starting a 
       "type": "string"
     },
     "namespace": {
-      "description": "Namespace of the agent; default: the installation's kagent namespace (get_info lists the managed ones).",
+      "description": "Installation platform namespace (default kagent); with cluster, the namespace on the workload cluster. Never an organization's: use organization.",
       "type": "string"
     },
     "organization": {
-      "description": "With cluster: the organization owning the workload cluster the agent runs on. Omit both for the installation's own cluster.",
+      "description": "The organization's name (list_organizations): its agents, in the namespace agent-manager finds. With cluster: on that workload cluster of it.",
       "type": "string"
     }
   },
@@ -628,11 +616,11 @@ From the Agent's conditions and warnings, the HelmRelease's conditions and histo
       "type": "string"
     },
     "namespace": {
-      "description": "Namespace of the agent; default: the installation's kagent namespace (get_info lists the managed ones).",
+      "description": "Installation platform namespace (default kagent); with cluster, the namespace on the workload cluster. Never an organization's: use organization.",
       "type": "string"
     },
     "organization": {
-      "description": "With cluster: the organization owning the workload cluster the agent runs on. Omit both for the installation's own cluster.",
+      "description": "The organization's name (list_organizations): its agents, in the namespace agent-manager finds. With cluster: on that workload cluster of it.",
       "type": "string"
     }
   },
@@ -671,16 +659,11 @@ erases lists, as you can read them in the organization namespace, its agents, He
 {
   "properties": {
     "name": {
-      "description": "The organization's name (at most 50 characters, no dot)",
-      "type": "string"
-    },
-    "namespace": {
-      "description": "The parent namespace the organization lives in, e.g. org-acme",
+      "description": "The organization's name: the name of its Organization (at most 56 characters, no dot)",
       "type": "string"
     }
   },
   "required": [
-    "namespace",
     "name"
   ],
   "type": "object"
@@ -794,11 +777,11 @@ managed: helmrelease is writable here; gitops needs mode commit; platform is rea
       "type": "boolean"
     },
     "namespace": {
-      "description": "Namespace of the agent; default: the installation's kagent namespace (get_info lists the managed ones).",
+      "description": "Installation platform namespace (default kagent); with cluster, the namespace on the workload cluster. Never an organization's: use organization.",
       "type": "string"
     },
     "organization": {
-      "description": "With cluster: the organization owning the workload cluster the agent runs on. Omit both for the installation's own cluster.",
+      "description": "The organization's name (list_organizations): its agents, in the namespace agent-manager finds. With cluster: on that workload cluster of it.",
       "type": "string"
     },
     "tags": {
@@ -830,11 +813,11 @@ Each with its origins and, where the egress gateway adds a credential, credentia
       "type": "string"
     },
     "namespace": {
-      "description": "Namespace of the agent; default: the installation's kagent namespace (get_info lists the managed ones).",
+      "description": "Installation platform namespace (default kagent); with cluster, the namespace on the workload cluster. Never an organization's: use organization.",
       "type": "string"
     },
     "organization": {
-      "description": "With cluster: the organization owning the workload cluster the agent runs on. Omit both for the installation's own cluster.",
+      "description": "The organization's name (list_organizations): its agents, in the namespace agent-manager finds. With cluster: on that workload cluster of it.",
       "type": "string"
     }
   },
@@ -859,11 +842,11 @@ Each with provider, model, its Accepted and ResolvedRefs conditions, who manages
       "type": "string"
     },
     "namespace": {
-      "description": "Namespace of the agent; default: the installation's kagent namespace (get_info lists the managed ones).",
+      "description": "Installation platform namespace (default kagent); with cluster, the namespace on the workload cluster. Never an organization's: use organization.",
       "type": "string"
     },
     "organization": {
-      "description": "With cluster: the organization owning the workload cluster the agent runs on. Omit both for the installation's own cluster.",
+      "description": "The organization's name (list_organizations): its agents, in the namespace agent-manager finds. With cluster: on that workload cluster of it.",
       "type": "string"
     }
   },
@@ -883,13 +866,13 @@ Read as you. A credential in a URL written elsewhere shows as REDACTED. curated 
 ```json
 {
   "properties": {
-    "namespace": {
-      "description": "The organization namespace, e.g. agents-payments-x7k2q (list_organizations, get_organization)",
+    "organization": {
+      "description": "The organization's name (list_organizations); agent-manager finds its namespace",
       "type": "string"
     }
   },
   "required": [
-    "namespace"
+    "organization"
   ],
   "type": "object"
 }
@@ -900,19 +883,19 @@ Read as you. A credential in a URL written elsewhere shows as REDACTED. curated 
 ```text
 List an organization's members: the groups and people bound to agent-platform:admin, editor or user, groups first.
 
-Read as you; every member role (user, editor or admin) may read them, from agent-platform chart 4.179.0 on.
+Read as you; every member role (user, editor or admin) may read them, from agent-platform chart 4.179.0 on. An admin's from says it comes from the Organization's spec.admins, which update_organization changes.
 ```
 
 ```json
 {
   "properties": {
-    "namespace": {
-      "description": "The organization namespace, e.g. agents-payments-x7k2q (list_organizations, get_organization)",
+    "organization": {
+      "description": "The organization's name (list_organizations); agent-manager finds its namespace",
       "type": "string"
     }
   },
   "required": [
-    "namespace"
+    "organization"
   ],
   "type": "object"
 }
@@ -921,19 +904,14 @@ Read as you; every member role (user, editor or admin) may read them, from agent
 ## `list_organizations`
 
 ```text
-List the organizations you manage or belong to, of one parent namespace or of all.
+List the organizations (Organizations with the Agent Platform) you manage or belong to.
 
-Each with its namespace, Orphaned condition, deleting, and permissions (manage, member, createAgents: create on HelmReleases there, what create_agent needs), asked as you; a missing createAgents is not known. Where you manage it, organization is its summary: harnesses, workers, Ready, DefaultModelConfigured, the last revision Flux applied (lastAppliedRevision) and in mode commit its commit and file (lastAppliedRevisionUrl, lastAppliedFile, lastAppliedFileUrl). none (no organization) says who can add you.
+Each with its namespace, Orphaned condition, deleting, and permissions (manage, member, createAgents: create on HelmReleases there, what create_agent needs), asked as you; a missing createAgents is not known. Where you manage it, organization is its summary (admins, harnesses, workers, Ready, DefaultModelConfigured, the last revision Flux applied (lastAppliedRevision) and in mode commit its commit and file (lastAppliedRevisionUrl, lastAppliedFile, lastAppliedFileUrl)). none says who can add you.
 ```
 
 ```json
 {
-  "properties": {
-    "namespace": {
-      "description": "Parent namespace; omit for all",
-      "type": "string"
-    }
-  },
+  "properties": {},
   "required": [],
   "type": "object"
 }
@@ -959,7 +937,11 @@ Read through agentgateway as you. allCreators includes every person's sessions, 
       "type": "string"
     },
     "namespace": {
-      "description": "Namespace of the agent; default: the installation's kagent namespace (get_info lists the managed ones).",
+      "description": "Installation platform namespace (default kagent); with cluster, the namespace on the workload cluster. Never an organization's: use organization.",
+      "type": "string"
+    },
+    "organization": {
+      "description": "The organization's name (list_organizations) whose agent it is; omit for the installation's own agents.",
       "type": "string"
     },
     "pageToken": {
@@ -1016,7 +998,7 @@ Per repository: the ref read, the commit it resolved to (what a skills entry pin
 ```text
 Remove a group or a person from an organization's roles, as you.
 
-From every binding of the role that holds them, dry run first; an emptied binding goes, except organization-admins: admission keeps its last admin. Needs agent-platform:admin in the organization.
+From every binding of the role that holds them, dry run first; an emptied binding goes. An admin stays one (note says so): the admins are the Organization's spec.admins, changed with update_organization. Needs agent-platform:admin in the organization.
 ```
 
 ```json
@@ -1038,14 +1020,13 @@ From every binding of the role that holds them, dry run first; an emptied bindin
       ],
       "type": "string"
     },
-    "namespace": {
-      "description": "The organization namespace, e.g. agents-payments-x7k2q (list_organizations, get_organization)",
+    "organization": {
+      "description": "The organization's name (list_organizations); agent-manager finds its namespace",
       "type": "string"
     },
     "role": {
-      "description": "Only this role; omit for every role",
+      "description": "Only this role; omit for editor and user",
       "enum": [
-        "admin",
         "editor",
         "user"
       ],
@@ -1057,7 +1038,7 @@ From every binding of the role that holds them, dry run first; an emptied bindin
     }
   },
   "required": [
-    "namespace"
+    "organization"
   ],
   "type": "object"
 }
@@ -1090,8 +1071,8 @@ Only the Secret is written. The form (credentials[].next) lists its consumers an
       ],
       "type": "string"
     },
-    "namespace": {
-      "description": "Organization namespace, or the configured installation namespace for cluster admins",
+    "organization": {
+      "description": "The organization's name (list_organizations); agent-manager finds its namespace; omit for the installation's models (cluster admins)",
       "type": "string"
     },
     "requestId": {
@@ -1104,7 +1085,6 @@ Only the Secret is written. The form (credentials[].next) lists its consumers an
     }
   },
   "required": [
-    "namespace",
     "secret",
     "key"
   ],
@@ -1159,13 +1139,13 @@ A credential field sets the Secret-backed header it names (default: the only one
       "description": "RemoteMCPServer name",
       "type": "string"
     },
-    "namespace": {
-      "description": "The organization namespace, e.g. agents-payments-x7k2q (list_organizations, get_organization)",
-      "type": "string"
-    },
     "noCredential": {
       "description": "Remove the credential header (default false)",
       "type": "boolean"
+    },
+    "organization": {
+      "description": "The organization's name (list_organizations); agent-manager finds its namespace",
+      "type": "string"
     },
     "requestId": {
       "description": "Idempotency key, at most 128 characters. Reuse on retries; use a fresh key for another save or a refreshed confirmation.",
@@ -1177,7 +1157,7 @@ A credential field sets the Secret-backed header it names (default: the only one
     }
   },
   "required": [
-    "namespace",
+    "organization",
     "name"
   ],
   "type": "object"
@@ -1247,8 +1227,8 @@ destinations replaces the whole list. A credentialHeader makes the egress gatewa
       "description": "EgressPolicy name",
       "type": "string"
     },
-    "namespace": {
-      "description": "The organization namespace, e.g. agents-payments-x7k2q (list_organizations, get_organization)",
+    "organization": {
+      "description": "The organization's name (list_organizations); agent-manager finds its namespace",
       "type": "string"
     },
     "requestId": {
@@ -1257,7 +1237,7 @@ destinations replaces the whole list. A credentialHeader makes the egress gatewa
     }
   },
   "required": [
-    "namespace",
+    "organization",
     "name",
     "destinations"
   ],
@@ -1336,13 +1316,13 @@ A new model becomes the default when none is set; default true moves the mark. N
       "description": "ModelConfig name",
       "type": "string"
     },
-    "namespace": {
-      "description": "Organization namespace, or the configured installation namespace for cluster admins",
-      "type": "string"
-    },
     "noCredential": {
       "description": "Installation models only: the endpoint requires no credential; never valid for Vertex AI",
       "type": "boolean"
+    },
+    "organization": {
+      "description": "The organization's name (list_organizations); agent-manager finds its namespace; omit for the installation's models (cluster admins)",
+      "type": "string"
     },
     "projectID": {
       "description": "Vertex AI Google project ID; required to create a Vertex model",
@@ -1362,7 +1342,6 @@ A new model becomes the default when none is set; default true moves the mark. N
     }
   },
   "required": [
-    "namespace",
     "name"
   ],
   "type": "object"
@@ -1389,7 +1368,7 @@ Refused with conflict while the agent has no ready revision (get_agent_status). 
       "type": "string"
     },
     "namespace": {
-      "description": "Namespace of the agent; default: the installation's kagent namespace (get_info lists the managed ones).",
+      "description": "Installation platform namespace (default kagent); with cluster, the namespace on the workload cluster. Never an organization's: use organization.",
       "type": "string"
     },
     "noToolchains": {
@@ -1399,6 +1378,10 @@ Refused with conflict while the agent has no ready revision (get_agent_status). 
     "noWorkspace": {
       "description": "Start without a workspace. With neither it nor workspaceGrant: the agent's defaultWorkspace, as you; a refusal or auth_required starts nothing.",
       "type": "boolean"
+    },
+    "organization": {
+      "description": "The organization's name (list_organizations) whose agent it is; omit for the installation's own agents.",
+      "type": "string"
     },
     "requestId": {
       "description": "Idempotency key (at most 128 characters): pass one and reuse it on a retry; without it a retry starts a second session.",
@@ -1566,11 +1549,11 @@ Lists are skills, plugins, egress and toolset. "" clears a text field back to th
       "type": "string"
     },
     "namespace": {
-      "description": "Namespace of the agent; default: the installation's kagent namespace (get_info lists the managed ones).",
+      "description": "Installation platform namespace (default kagent); with cluster, the namespace on the workload cluster. Never an organization's: use organization.",
       "type": "string"
     },
     "organization": {
-      "description": "With cluster: the organization owning the workload cluster the agent runs on. Omit both for the installation's own cluster.",
+      "description": "The organization's name (list_organizations): its agents, in the namespace agent-manager finds. With cluster: on that workload cluster of it.",
       "type": "string"
     },
     "path": {
@@ -1700,14 +1683,28 @@ Lists are skills, plugins, egress and toolset. "" clears a text field back to th
 ## `update_organization`
 
 ```text
-Change an organization's display name, harnesses or worker replicas as you.
+Change an organization's display name, admins, harnesses or worker replicas as you.
 
-An omitted field stays; harnesses replaces the whole list; displayName "" removes it. Dry-runs as you first. An organization Flux applies from git is changed with mode commit. Needs agent-platform:organizations-admin.
+An omitted field stays; harnesses replaces the whole list, adminGroups the admin groups and adminUsers the admin users ([] removes them); displayName "" removes it. Dry-runs as you first. agent-platform-operator follows spec.admins with the admins' binding. An organization Flux applies from git is changed with mode commit. Needs agent-platform:organizations-admin.
 ```
 
 ```json
 {
   "properties": {
+    "adminGroups": {
+      "description": "Admin groups, replacing the ones in spec.admins",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "adminUsers": {
+      "description": "Admin users, replacing the ones in spec.admins",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
     "displayName": {
       "description": "Name people see",
       "type": "string"
@@ -1732,11 +1729,7 @@ An omitted field stays; harnesses replaces the whole list; displayName "" remove
       "type": "string"
     },
     "name": {
-      "description": "The organization's name (at most 50 characters, no dot)",
-      "type": "string"
-    },
-    "namespace": {
-      "description": "The parent namespace the organization lives in, e.g. org-acme",
+      "description": "The organization's name: the name of its Organization (at most 56 characters, no dot)",
       "type": "string"
     },
     "workerReplicas": {
@@ -1745,7 +1738,6 @@ An omitted field stays; harnesses replaces the whole list; displayName "" remove
     }
   },
   "required": [
-    "namespace",
     "name"
   ],
   "type": "object"
@@ -1856,11 +1848,11 @@ Checks the name, modelConfig (omitted: the default), egressPolicyRefs, connector
       "type": "string"
     },
     "namespace": {
-      "description": "Namespace of the agent; default: the installation's kagent namespace (get_info lists the managed ones).",
+      "description": "Installation platform namespace (default kagent); with cluster, the namespace on the workload cluster. Never an organization's: use organization.",
       "type": "string"
     },
     "organization": {
-      "description": "With cluster: the organization owning the workload cluster the agent runs on. Omit both for the installation's own cluster.",
+      "description": "The organization's name (list_organizations): its agents, in the namespace agent-manager finds. With cluster: on that workload cluster of it.",
       "type": "string"
     },
     "plugins": {

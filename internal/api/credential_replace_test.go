@@ -45,7 +45,7 @@ func sharedEgress() *unstructured.Unstructured {
 
 func replaceCredential(t *testing.T, fixture *orgFixture, extra map[string]any) organizations.ResourceResult {
 	t.Helper()
-	arguments := map[string]any{"namespace": orgNS, "secret": sharedSecret, "key": "token"}
+	arguments := map[string]any{"organization": "payments", "secret": sharedSecret, "key": "token"}
 	for key, value := range extra {
 		arguments[key] = value
 	}
@@ -171,7 +171,7 @@ func TestReplaceCredentialRefusals(t *testing.T) {
 			if scenario.objects == nil {
 				secret = "other-secret"
 			}
-			text, failed := fixture.call(t, ToolReplaceOrganizationCredential, map[string]any{"namespace": orgNS, "secret": secret, "key": scenario.key})
+			text, failed := fixture.call(t, ToolReplaceOrganizationCredential, map[string]any{"organization": "payments", "secret": secret, "key": scenario.key})
 			require.True(t, failed, text)
 			require.True(t, strings.HasPrefix(text, scenario.prefix), text)
 			require.Contains(t, text, scenario.contains)
@@ -237,7 +237,7 @@ func TestReplaceCredentialCommitsTheSecretOnly(t *testing.T) {
 			liveEgress.SetLabels(fromGitLabels("payments"))
 			fixture, forge := commitFixture(t, base, liveModel, liveEgress)
 			if otherKeyInGit {
-				text, failed := fixture.call(t, ToolReplaceOrganizationCredential, map[string]any{"namespace": orgNS, "secret": sharedSecret, "key": "token", "mode": "commit"})
+				text, failed := fixture.call(t, ToolReplaceOrganizationCredential, map[string]any{"organization": "payments", "secret": sharedSecret, "key": "token", "mode": "commit"})
 				require.True(t, failed, text)
 				require.True(t, strings.HasPrefix(text, "conflict:"), text)
 				require.Contains(t, text, "other credential keys")
@@ -268,7 +268,7 @@ func TestReplaceCredentialCommitRefusesALiveConsumer(t *testing.T) {
 	liveModel := sharedModel("token")
 	liveModel.SetLabels(fromGitLabels("payments"))
 	fixture, forge := commitFixture(t, map[string][]byte{paymentsPath + "/modelconfig-claude.yaml": gitManifest(t, sharedModel("token"))}, liveModel, connector("gh", sharedSecret, "token"))
-	text, failed := fixture.call(t, ToolReplaceOrganizationCredential, map[string]any{"namespace": orgNS, "secret": sharedSecret, "key": "token", "mode": "commit"})
+	text, failed := fixture.call(t, ToolReplaceOrganizationCredential, map[string]any{"organization": "payments", "secret": sharedSecret, "key": "token", "mode": "commit"})
 	require.True(t, failed, text)
 	require.True(t, strings.HasPrefix(text, "conflict:"), text)
 	require.Contains(t, text, "RemoteMCPServer "+orgNS+"/gh was written live")
@@ -310,7 +310,7 @@ func TestReplaceCredentialDryRunAsksAdmission(t *testing.T) {
 		}
 		return nil
 	}
-	text, failed := fixture.call(t, ToolReplaceOrganizationCredential, map[string]any{"namespace": orgNS, "secret": sharedSecret, "key": "token", "dryRun": true})
+	text, failed := fixture.call(t, ToolReplaceOrganizationCredential, map[string]any{"organization": "payments", "secret": sharedSecret, "key": "token", "dryRun": true})
 	require.True(t, failed, text)
 	require.Contains(t, text, "changed in git")
 }
@@ -412,7 +412,7 @@ func TestReplaceCredentialCommitRefusesGitConsumersThatDifferFromLive(t *testing
 			live := connector("gh", sharedSecret, "token")
 			live.SetLabels(fromGitLabels("payments"))
 			fixture, forge := commitFixture(t, git, live)
-			text, failed := fixture.call(t, ToolReplaceOrganizationCredential, map[string]any{"namespace": orgNS, "secret": sharedSecret, "key": "token", "mode": "commit"})
+			text, failed := fixture.call(t, ToolReplaceOrganizationCredential, map[string]any{"organization": "payments", "secret": sharedSecret, "key": "token", "mode": "commit"})
 			require.True(t, failed, text)
 			require.True(t, strings.HasPrefix(text, "conflict:"), text)
 			require.Contains(t, text, "differ from the live ones")

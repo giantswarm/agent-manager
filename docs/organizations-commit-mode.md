@@ -5,7 +5,7 @@ On an installation whose configuration lives in git, the organization tools take
 change the caller could not apply live is refused before a pull request exists. Then
 agent-manager opens a pull request as the caller (the GitHub App user token) in the
 installation's repository. Each write's pull request has a head branch of its own, cut
-from the base branch: the object's branch name (`agent-manager/<verb>-<parent>-<name>`),
+from the base branch: the object's branch name (`agent-manager/<verb>-<name>`),
 an underscore and a random suffix. A second write of the same object is refused while a
 pull request of the object is open, also one on the name without a suffix that an older
 agent-manager opened. When two writes of the same object arrive at almost the same time
@@ -24,23 +24,27 @@ Secret. Commits, over MCP and REST, use the configured RFC 8693 manager App gran
 
 | What | Path | Applied by |
 |---|---|---|
-| The `AgentPlatformOrganization` | `<objectsPath>/<parent>/<name>.yaml` | the installation's Kustomization (`deletionPolicy: Orphan`) |
-| A model, connector, egress policy or member binding | `<contentPrefix>/<parent>/<name>/<kind>-<object>.yaml` (`modelconfig-claude.yaml`, `rolebinding-organization-admins.yaml`) | the organization's own Kustomization, which agent-platform-operator creates |
-| A credential Secret | `<contentPrefix>/<parent>/<name>/<secret>-secret.enc.yaml` | the organization's own Kustomization, decrypted with the installation's SOPS key |
+| The `Organization` (`security.giantswarm.io`, with `spec.capabilities.agentPlatform` and the admins in `spec.admins`) | `<objectsPath>/<name>.yaml` | the installation's Kustomization (`deletionPolicy: Orphan`) |
+| A model, connector, egress policy or member binding (`editor`, `user`) | `<contentPrefix>/<name>/<kind>-<object>.yaml` (`modelconfig-claude.yaml`, `rolebinding-organization-editors.yaml`) | the organization's own Kustomization, which agent-platform-operator creates |
+| A credential Secret | `<contentPrefix>/<name>/<secret>-secret.enc.yaml` | the organization's own Kustomization, decrypted with the installation's SOPS key |
 
 - `objectsPath` (`--organizations-objects-path`) is a directory that the installation's
-  Kustomization builds. Its `kustomization.yaml` lists one directory per parent
-  namespace. agent-manager adds a parent's directory there and removes it with the
-  parent's last organization.
+  Kustomization builds. Its `kustomization.yaml` lists one file per organization. It
+  stays, with `resources: []`, when the last organization goes, and agent-manager never
+  changes a `kustomization.yaml` above it.
+- A create writes the organization's content path with an empty `kustomization.yaml`,
+  so the organization's own Kustomization builds it before it has content. The removal
+  of the last object keeps that file, with `resources: []`.
 - `contentPrefix` (`--organizations-content-prefix`, default
   `agent-platform/organizations`) must be agent-platform-operator's `commitMode.path`
-  without its `{parent}/{name}`. The installation's Kustomization must never include it,
+  without its `{name}`. The installation's Kustomization must never include it,
   so the two directories may not contain each other (agent-manager refuses to start
   with such a configuration).
-- The organization's file and the `organization-admins` file carry
-  `kustomize.toolkit.fluxcd.io/prune: disabled`. A file that leaves git therefore never
-  erases anything; agent-platform's admission requires the annotation on
-  `organization-admins` when the organization's Flux identity applies it.
+- The admins are not a file of the content path: they are `spec.admins` of the
+  organization's file, and agent-platform-operator binds them to `agent-platform:admin`
+  in the organization namespace.
+- The organization's file carries `kustomize.toolkit.fluxcd.io/prune: disabled`. A
+  file that leaves git therefore never erases anything.
 - A Secret is never in any other file. gitops-commit treats the
   `-secret.enc.yaml` name as secret, encrypts the file for the age recipients of the
   repository's `.sops.yaml`, and refuses it when no creation rule covers its path. A
@@ -107,18 +111,18 @@ giantswarm/agent-platform-operator#15 is the long-term fix.
    its whole content path (every file listed under it, nested `kustomization.yaml`
    files included), and marks the live object with
    `agent-platform.giantswarm.io/delete-pull-request: <url>`. Nothing is erased.
-   agent-platform-operator reports the organization `Orphaned` with reason
-   `DeleteMerged` once the file has left the installation Kustomization's inventory.
+   agent-platform-operator reports the organization `AgentPlatformOrphaned` with
+   reason `DeleteMerged` once the file has left the installation Kustomization's inventory.
 2. After the merge, the organization is pending erase once agent-manager has read the
    merged pull request's files, found the object's file removed by it (a move that
    GitHub reports as a rename does not count), and found that no file under the objects
    path still defines the organization on the base branch. Without `confirm` the call
-   answers what is erased. With `confirm: <parent>/<name>` (Erase now) it sets
+   answers what is erased. With `confirm: <name>` (Erase now) it sets
    `kustomize.toolkit.fluxcd.io/prune: enabled` on the live object and deletes it; the
    operator erases it.
 
-While the operator reports the organization `Orphaned` with reason `DeleteMerged`
-(Pending erase), and while it is being erased, `update_organization` and every write
+While the operator reports the organization `AgentPlatformOrphaned` with reason
+`DeleteMerged` (Pending erase), and while it is being erased, `update_organization` and every write
 tool of its contents (members, models, connectors, egress policies and credentials), in
 both modes, answer `conflict`: Erase now, or restore its file to keep it. A caller who
 may not read the organization gets `forbidden`, not its state. Reads and `delete_organization`
@@ -130,7 +134,8 @@ The erase is refused:
   is merged (a merged pull request that did not remove the file is not the delete);
 - when the file is gone from git without a merged delete pull request (Missing from
   git): restore the file instead. `lastAppliedRevisionUrl` on the organization links the
-  last commit that held it (the operator's `status.lastAppliedRevision`), and
+  last commit that held it (the operator's
+  `status.capabilities.agentPlatform.lastAppliedRevision`), and
   `lastAppliedFileUrl` the file itself at that commit (`lastAppliedFile`, the path mode
   commit keeps it at);
 - when the merged delete pull request did not remove the file itself: it was edited
@@ -141,8 +146,9 @@ The erase is refused:
 - when a file under the objects path, whatever its name, still defines the
   organization on the base branch: a move whose content changed so much that GitHub
   reports a removal and an addition, or a definition that the pull request or a later
-  commit wrote there. A document defines it when it is an `AgentPlatformOrganization`
-  of its name in its parent or without a namespace, also as an item of a `List`. Where
+  commit wrote there. A document defines it when it is an `Organization` of its name,
+  whatever namespace it carries (the kind is cluster-scoped), also as an item of a
+  `List`. Where
   a kustomization under the objects path could make another document the organization
   (the table in "What the scan is for" below gives the rule), that document is taken
   as a match too. The answer names the file, and each kustomization that made the
@@ -182,25 +188,22 @@ read and the file reads cannot hide it (giantswarm/agent-manager#420).
 The scan reads the files as they are and does not run Kustomize. So it fails closed on
 what a kustomization changes. Every kustomization file under the objects path counts,
 wherever it is: an overlay in a sibling directory refers to the file by a path such as
-`../../base` (giantswarm/agent-manager#399). For the erase of `<parent>/<name>`, an
-`AgentPlatformOrganization` document counts as still in git when a kustomization could
-make it that organization:
+`../../base` (giantswarm/agent-manager#399). An `Organization` is cluster-scoped, so a
+`namespace` a kustomization sets changes nothing of it. For the erase of `<name>`, an
+`Organization` document counts as still in git when a kustomization could make it that
+organization:
 
 | The kustomization has | The documents that count |
 | --- | --- |
-| `namespace: <parent>`, or a `namespace` the scan cannot read: SOPS-encrypted (`ENC[...]`), or with a variable that Flux's post-build substitution (`${...}`) or a Kustomize var (`$(...)`) may replace | a document of `<name>` in any namespace |
-| `namespace` with another value in clear text | none: Kustomize writes that value, which is not `<parent>` |
-| `namePrefix` or `nameSuffix` | a document of `<parent>` whose own name is a part of `<name>`: a prefix or a suffix only adds text |
-| a non-empty `transformers`, `patches`, `patchesJson6902`, `patchesStrategicMerge` or `replacements` | every document: these can set any namespace and any name |
-| a non-empty `vars` and a non-empty `configurations` | every document: a `varReference` in a configurations file can substitute `$(VAR)` in a namespace or a name |
-| a value of a form the scan does not know (a `namespace` that is not a string, for one) | every document that the field could change |
+| `namePrefix` or `nameSuffix` | a document whose own name is a part of `<name>`: a prefix or a suffix only adds text |
+| a non-empty `transformers`, `patches`, `patchesJson6902`, `patchesStrategicMerge` or `replacements` | every document: these can set any name |
+| a non-empty `vars` and a non-empty `configurations` | every document: a `varReference` in a configurations file can substitute `$(VAR)` in a name |
+| a value of a form the scan does not know (a `nameSuffix` that is not a string, for one) | every document |
 | content that does not parse | every document |
 
-The fields combine: with `namespace: <parent>` and a `nameSuffix`, a document in any
-namespace whose name is a part of `<name>` counts. A document with no namespace, or
-whose own namespace and name are `<parent>/<name>`, always counts, and so does one
-whose own namespace or name the scan cannot read: SOPS-encrypted, or with a
-variable (`${...}` of Flux, `$(...)` of a Kustomize var). The scan reads a
+A document whose own name is `<name>` always counts, and so does one whose name the
+scan cannot read: SOPS-encrypted, or with a variable (`${...}` of Flux, `$(...)` of a
+Kustomize var). The scan reads a
 kustomization's keys in any case (`Patches:` is `patches:`), as Kustomize does.
 
 The scan reads only the files under the objects path. A kustomization there whose
@@ -223,9 +226,10 @@ erases again. The objects paths that agent-manager writes use no such overlay
 The cluster has a second guard, which follows Flux's own Kustomize build. The
 admission policy `agent-platform-organization-delete-intent`
 (giantswarm/agent-platform, `helm/agent-platform-connectivity/templates/organizations/admission.yaml`)
-permits the delete of an organization that carries an `Orphaned` condition (one that
-agent-platform-operator found applied from git) only when that condition is `True`
-with reason `DeleteMerged`. The operator sets `Orphaned=True` only when the
+permits the delete of an organization that carries an `AgentPlatformOrphaned`
+condition (one that agent-platform-operator found applied from git) only when that
+condition is `True` with reason `DeleteMerged`. The operator sets
+`AgentPlatformOrphaned=True` only when the
 installation's Flux Kustomization is settled (its generation observed, `Ready` true,
 not reconciling) and its `status.inventory` has no entry for the organization; with
 the delete annotation the reason is `DeleteMerged`. That inventory is what Flux applied
@@ -245,8 +249,7 @@ whether it is merged (one read), and its files (one read for each 100 files). It
 not read its reviews, or the commit statuses and check runs of its head. Then it reads
 the objects path on the base branch: one read of the branch's ref (its head commit),
 then, at that commit, one read of the repository's tree and two contents reads for
-each file under the objects path (about two for each organization
-and for each parent's `kustomization.yaml`). The erase is rare, so these reads are
+each file under the objects path (about two for each organization). The erase is rare, so these reads are
 taken on each erase and on each answer of pending erase. The GitHub App needs no
 permission beyond contents and pull requests. When GitHub refuses a step that only reads with 403, the answer
 names the step and the App's permissions: a new sign-in does not change them.

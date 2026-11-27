@@ -29,12 +29,19 @@ var mcRepo = commit.Repository{Owner: "giantswarm", Name: "gazelle-config"}
 
 // The layout the commit-mode tests write against: the installation's
 // Kustomization applies objectsPath, whose kustomization.yaml lists the
-// parents; each organization's own Kustomization applies its content path.
+// organizations' files; each organization's own Kustomization applies its
+// content path.
 const (
 	objectsPath  = "management-clusters/gazelle/agent-platform-organizations"
-	paymentsFile = objectsPath + "/org-acme/payments.yaml"
-	paymentsPath = "agent-platform/organizations/org-acme/payments"
+	paymentsFile = objectsPath + "/payments.yaml"
+	paymentsPath = "agent-platform/organizations/payments"
+	// aboveObjects is a kustomization above the objects path, outside it:
+	// no organization write changes it.
+	aboveObjects = "management-clusters/gazelle/kustomization.yaml"
 )
+
+// aboveObjectsContent is what aboveObjects holds on the base branch.
+const aboveObjectsContent = "resources:\n  - apps\n"
 
 // sopsCovering is a .sops.yaml whose one creation rule covers pathRegex,
 // for a fresh age key; no private key is kept and nothing is decrypted.
@@ -64,6 +71,7 @@ func commitFixtureWith(t *testing.T, base map[string][]byte, wrap func(*commit.F
 	}
 	files := map[string][]byte{
 		objectsPath + "/kustomization.yaml": []byte("resources: []\n"),
+		aboveObjects:                        []byte(aboveObjectsContent),
 		".sops.yaml":                        sopsCovering(t, `^agent-platform/organizations/.*\.enc\.yaml$`),
 	}
 	for p, c := range base {
@@ -98,43 +106,53 @@ func fromGitLabels(ks string) map[string]string {
 }
 
 // A create in commit mode opens one pull request as the person with the
-// object's file under its parent and the first admins in its content path,
-// both kept from Flux's prune; nothing is written live. What the caller's
+// Organization's file in the objects path, its admins in spec.admins, kept
+// from Flux's prune; no RoleBinding file and nothing live. What the caller's
 // RBAC refuses is refused before any pull request.
 func TestCreateOrganizationInCommitModeOpensOnePullRequest(t *testing.T) {
 	f, fake := commitFixture(t, nil)
-	args := map[string]any{"namespace": "org-acme", "name": "payments", "displayName": "Payments", "adminGroups": []any{"payments-leads"}, "mode": "commit"}
+	f.dropOrganization(t, "payments")
+	args := map[string]any{"name": "payments", "displayName": "Payments", "adminGroups": []any{"payments-leads"}, "mode": "commit"}
 
 	text, isErr := f.call(t, ToolCreateOrganization, args)
 	require.False(t, isErr, text)
 	res := decode(t, text)
-	assert.Nil(t, f.get(t, orgGVR, "org-acme", "payments"), "commit mode writes nothing live")
+	assert.Nil(t, f.get(t, orgGVR, "", "payments"), "commit mode writes nothing live")
 	require.Len(t, fake.PullRequests(), 1)
 	pr := fake.PullRequests()[0]
 	assert.Equal(t, pr.URL, res["commit"].(map[string]any)["pullRequest"])
-	assert.Equal(t, "feat(organizations): add organization org-acme/payments", pr.Title)
+	assert.Equal(t, "feat(organizations): add organization payments", pr.Title)
 	assert.Contains(t, pr.Body, "@jane")
 
 	head := fake.Files(mcRepo, pr.Head)
 	obj := parseFile(t, head[paymentsFile])
-	assert.Equal(t, "AgentPlatformOrganization", obj.GetKind())
-	assert.Equal(t, "org-acme", obj.GetNamespace())
+	assert.Equal(t, "Organization", obj.GetKind())
+	assert.Equal(t, "security.giantswarm.io/v1alpha1", obj.GetAPIVersion())
+	assert.Empty(t, obj.GetNamespace())
 	assert.Equal(t, organizations.PruneDisabled, obj.GetAnnotations()[organizations.PruneAnnotation])
-	assert.Contains(t, string(head[objectsPath+"/kustomization.yaml"]), "org-acme", "the parent's directory is listed")
-	binding := parseFile(t, head[paymentsPath+"/rolebinding-organization-admins.yaml"])
-	assert.Equal(t, organizations.FirstAdminsBinding, binding.GetName())
-	assert.Empty(t, binding.GetNamespace(), "the organization's Kustomization sets the namespace, which does not exist yet")
-	assert.Equal(t, organizations.PruneDisabled, binding.GetAnnotations()[organizations.PruneAnnotation], "admission admits the Flux identity's apply only with prune disabled")
-	assert.Equal(t, "payments-leads", binding.Object["subjects"].([]any)[0].(map[string]any)["name"])
+	assert.Equal(t, []any{map[string]any{"kind": "Group", "name": "payments-leads"}}, obj.Object["spec"].(map[string]any)["admins"])
+	enabled, _, _ := unstructured.NestedBool(obj.Object, "spec", "capabilities", "agentPlatform", "enabled")
+	assert.True(t, enabled, "the file switches the Agent Platform on in spec.capabilities.agentPlatform")
+	assert.Contains(t, string(head[objectsPath+"/kustomization.yaml"]), "payments.yaml", "the file is listed")
+	assert.Equal(t, aboveObjectsContent, string(head[aboveObjects]), "the kustomization above the objects path is not changed")
+	// The content path starts as an empty kustomization, which the
+	// organization's Kustomization builds; no admins file goes there.
+	for p := range head {
+		if strings.HasPrefix(p, "agent-platform/organizations/") {
+			assert.Equal(t, paymentsPath+"/kustomization.yaml", p)
+		}
+	}
+	assert.Equal(t, "resources: []\n", string(head[paymentsPath+"/kustomization.yaml"]))
 	var dry []string
 	for _, d := range f.dryRuns.Received() {
 		dry = append(dry, d.Object.GetKind()+"/"+d.Object.GetName())
 	}
-	assert.Equal(t, []string{"AgentPlatformOrganization/payments"}, dry, "the object is dry-run in its parent as the caller")
+	assert.Equal(t, []string{"Organization/payments"}, dry, "the object is dry-run as the caller")
 
-	// A caller who may not bind the first admins opens nothing.
+	// A caller who may not create Organizations opens nothing.
 	g, gfake := commitFixture(t, nil)
-	g.deny = func(_, verb, resource, _ string) bool { return verb == "bind" && resource == "clusterroles" }
+	g.dropOrganization(t, "payments")
+	g.deny = func(_, verb, resource, _ string) bool { return verb == "create" && resource == "organizations" }
 	text, isErr = g.call(t, ToolCreateOrganization, args)
 	require.True(t, isErr)
 	assert.True(t, strings.HasPrefix(text, "forbidden:"), text)
@@ -142,6 +160,7 @@ func TestCreateOrganizationInCommitModeOpensOnePullRequest(t *testing.T) {
 
 	// Nor one whose create the API server's dry run refuses.
 	h, hfake := commitFixture(t, nil)
+	h.dropOrganization(t, "payments")
 	h.dryRuns.Refuse = func(u *unstructured.Unstructured) error {
 		return apierrors.NewForbidden(schema.GroupResource{Resource: u.GetKind()}, u.GetName(), errors.New("denied by policy"))
 	}
@@ -152,8 +171,9 @@ func TestCreateOrganizationInCommitModeOpensOnePullRequest(t *testing.T) {
 }
 
 // gitOrganization is payments applied from git: its live object carries
-// Flux's labels, its file is under org-acme, and its content path holds the
-// first admins, a model with its credential and a nested directory.
+// Flux's labels, its file is in the objects path, and its content path holds
+// its editors, a model with its credential and a nested directory. Its
+// admins are the operator's binding organization-admins, not a file.
 func gitOrganization(t *testing.T) (*orgFixture, *commit.Fake) {
 	t.Helper()
 	return gitOrganizationWith(t, nil)
@@ -163,9 +183,9 @@ func gitOrganization(t *testing.T) (*orgFixture, *commit.Fake) {
 // forge, as commitFixtureWith.
 func gitOrganizationWith(t *testing.T, wrap func(*commit.Fake) organizations.GitHubRemote) (*orgFixture, *commit.Fake) {
 	t.Helper()
-	live := organization("org-acme", "payments", fromGitLabels("flux"))
+	live := organization("payments", fromGitLabels("flux"))
 	live.SetAnnotations(map[string]string{organizations.PruneAnnotation: organizations.PruneDisabled})
-	file := organization("org-acme", "payments", nil)
+	file := organization("payments", nil)
 	delete(file.Object, "status")
 	file.SetAnnotations(map[string]string{organizations.PruneAnnotation: organizations.PruneDisabled})
 	fileYAML, err := yaml.Marshal(file.Object)
@@ -176,29 +196,32 @@ func gitOrganizationWith(t *testing.T, wrap func(*commit.Fake) organizations.Git
 	claudeFile.SetNamespace("")
 	claudeYAML, err := yaml.Marshal(claudeFile.Object)
 	require.NoError(t, err)
-	admins := &unstructured.Unstructured{Object: map[string]any{
-		"apiVersion": "rbac.authorization.k8s.io/v1", "kind": "RoleBinding",
-		"metadata": map[string]any{"name": organizations.FirstAdminsBinding, "namespace": orgNS},
-		"roleRef":  map[string]any{"apiGroup": "rbac.authorization.k8s.io", "kind": "ClusterRole", "name": organizations.RoleAdmin},
-		"subjects": []any{map[string]any{"apiGroup": "rbac.authorization.k8s.io", "kind": "Group", "name": "payments-leads"}},
-	}}
-	adminsFile := admins.DeepCopy()
-	adminsFile.SetNamespace("")
-	adminsYAML, err := yaml.Marshal(adminsFile.Object)
+	binding := func(name, role, group string) *unstructured.Unstructured {
+		return &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "rbac.authorization.k8s.io/v1", "kind": "RoleBinding",
+			"metadata": map[string]any{"name": name, "namespace": orgNS},
+			"roleRef":  map[string]any{"apiGroup": "rbac.authorization.k8s.io", "kind": "ClusterRole", "name": role},
+			"subjects": []any{map[string]any{"apiGroup": "rbac.authorization.k8s.io", "kind": "Group", "name": group}},
+		}}
+	}
+	admins := binding("organization-admins", organizations.RoleAdmin, "payments-leads")
+	editors := binding("organization-editors", organizations.RoleEditor, "payments-team")
+	editorsFile := editors.DeepCopy()
+	editorsFile.SetNamespace("")
+	editorsYAML, err := yaml.Marshal(editorsFile.Object)
 	require.NoError(t, err)
-	admins.SetLabels(fromGitLabels("agents-payments-x7k2q"))
+	editors.SetLabels(fromGitLabels("agents-payments-x7k2q"))
 	return commitFixtureWith(t, map[string][]byte{
-		objectsPath + "/kustomization.yaml":          []byte("resources:\n  - org-acme\n"),
-		objectsPath + "/org-acme/kustomization.yaml": []byte("resources:\n  - payments.yaml\n"),
-		paymentsFile:                                                       fileYAML,
-		paymentsPath + "/kustomization.yaml":                               []byte("resources:\n  - modelconfig-claude.yaml\n  - rolebinding-organization-admins.yaml\n  - tenant-credential-claude-secret.enc.yaml\n  - agents\n"),
-		paymentsPath + "/modelconfig-claude.yaml":                          claudeYAML,
-		paymentsPath + "/rolebinding-organization-admins.yaml":             adminsYAML,
-		paymentsPath + "/tenant-credential-claude-secret.enc.yaml":         []byte("sops: {}\n"),
-		paymentsPath + "/agents/kustomization.yaml":                        []byte("resources:\n  - sre.yaml\n"),
-		paymentsPath + "/agents/sre.yaml":                                  []byte("kind: HelmRelease\n"),
-		"agent-platform/organizations/org-acme/billing/modelconfig-x.yaml": []byte("kind: ModelConfig\n"),
-	}, wrap, live, claude, admins)
+		objectsPath + "/kustomization.yaml":                        []byte("resources:\n  - payments.yaml\n"),
+		paymentsFile:                                               fileYAML,
+		paymentsPath + "/kustomization.yaml":                       []byte("resources:\n  - modelconfig-claude.yaml\n  - rolebinding-organization-editors.yaml\n  - tenant-credential-claude-secret.enc.yaml\n  - agents\n"),
+		paymentsPath + "/modelconfig-claude.yaml":                  claudeYAML,
+		paymentsPath + "/rolebinding-organization-editors.yaml":    editorsYAML,
+		paymentsPath + "/tenant-credential-claude-secret.enc.yaml": []byte("sops: {}\n"),
+		paymentsPath + "/agents/kustomization.yaml":                []byte("resources:\n  - sre.yaml\n"),
+		paymentsPath + "/agents/sre.yaml":                          []byte("kind: HelmRelease\n"),
+		"agent-platform/organizations/billing/modelconfig-x.yaml":  []byte("kind: ModelConfig\n"),
+	}, wrap, live, claude, admins, editors)
 }
 
 // Delete in commit mode, two steps: the pull request removes the object's
@@ -208,14 +231,14 @@ func gitOrganizationWith(t *testing.T, wrap func(*commit.Fake) organizations.Git
 func TestDeleteOrganizationInCommitModeTakesTwoSteps(t *testing.T) {
 	f, fake := gitOrganization(t)
 	del := func(confirm string) (string, bool) {
-		args := map[string]any{"namespace": "org-acme", "name": "payments", "mode": "commit"}
+		args := map[string]any{"name": "payments", "mode": "commit"}
 		if confirm != "" {
 			args["confirm"] = confirm
 		}
 		return f.call(t, ToolDeleteOrganization, args)
 	}
 
-	text, isErr := del("org-acme/payments")
+	text, isErr := del("payments")
 	require.True(t, isErr)
 	assert.True(t, strings.HasPrefix(text, "conflict:"), text)
 	assert.Contains(t, text, "still in git")
@@ -230,9 +253,12 @@ func TestDeleteOrganizationInCommitModeTakesTwoSteps(t *testing.T) {
 		assert.False(t, strings.HasPrefix(p, paymentsPath+"/"), "%s stays in the content path", p)
 	}
 	assert.NotContains(t, head, paymentsFile)
-	assert.NotContains(t, head, objectsPath+"/org-acme/kustomization.yaml", "the emptied parent directory goes")
-	assert.Contains(t, head, "agent-platform/organizations/org-acme/billing/modelconfig-x.yaml", "another organization's path stays")
-	live := f.get(t, orgGVR, "org-acme", "payments")
+	assert.Contains(t, head, "agent-platform/organizations/billing/modelconfig-x.yaml", "another organization's path stays")
+	// The last organization's delete keeps the objects path that the
+	// installation's Kustomization builds, and leaves the one above it.
+	assert.Equal(t, "resources: []\n", string(head[objectsPath+"/kustomization.yaml"]))
+	assert.Equal(t, aboveObjectsContent, string(head[aboveObjects]))
+	live := f.get(t, orgGVR, "", "payments")
 	require.NotNil(t, live)
 	assert.Equal(t, pr.URL, live.GetAnnotations()[organizations.DeletePullRequestAnnotation])
 	assert.Equal(t, organizations.PruneDisabled, live.GetAnnotations()[organizations.PruneAnnotation], "nothing is erased before the merge")
@@ -249,12 +275,12 @@ func TestDeleteOrganizationInCommitModeTakesTwoSteps(t *testing.T) {
 	require.False(t, isErr, text)
 	assert.Equal(t, false, decode(t, text)["deleted"])
 	assert.Contains(t, decode(t, text)["next"], "pending erase")
-	assert.NotNil(t, f.get(t, orgGVR, "org-acme", "payments"))
+	assert.NotNil(t, f.get(t, orgGVR, "", "payments"))
 
-	text, isErr = del("org-acme/payments")
+	text, isErr = del("payments")
 	require.False(t, isErr, text)
 	assert.Equal(t, true, decode(t, text)["deleted"])
-	assert.Nil(t, f.get(t, orgGVR, "org-acme", "payments"))
+	assert.Nil(t, f.get(t, orgGVR, "", "payments"))
 }
 
 // agent-manager's GitHub App has no permission for the commit statuses and
@@ -267,7 +293,7 @@ func TestTheDeleteInCommitModeReadsNoStatusesOrChecks(t *testing.T) {
 	f, fake := gitOrganization(t)
 	fake.Fail[commit.OpStatus] = &commit.AuthError{Op: commit.OpStatus, Status: http.StatusForbidden}
 	del := func(confirm string) (string, bool) {
-		args := map[string]any{"namespace": "org-acme", "name": "payments", "mode": "commit"}
+		args := map[string]any{"name": "payments", "mode": "commit"}
 		if confirm != "" {
 			args["confirm"] = confirm
 		}
@@ -283,7 +309,7 @@ func TestTheDeleteInCommitModeReadsNoStatusesOrChecks(t *testing.T) {
 	require.False(t, isErr, text)
 	assert.Contains(t, decode(t, text)["next"], "is open")
 
-	text, isErr = del("org-acme/payments")
+	text, isErr = del("payments")
 	require.True(t, isErr)
 	assert.Contains(t, text, "still in git")
 
@@ -295,7 +321,7 @@ func TestTheDeleteInCommitModeReadsNoStatusesOrChecks(t *testing.T) {
 	// A refused read of the merged files names the step and the App's
 	// permissions, erases nothing and asks for no new sign-in.
 	fake.Fail[commit.OpMergedFiles] = &commit.AuthError{Op: commit.OpMergedFiles, Status: http.StatusForbidden}
-	text, isErr = del("org-acme/payments")
+	text, isErr = del("payments")
 	require.True(t, isErr)
 	assert.True(t, strings.HasPrefix(text, "forbidden:"), text)
 	assert.Contains(t, text, commit.OpMergedFiles)
@@ -303,13 +329,13 @@ func TestTheDeleteInCommitModeReadsNoStatusesOrChecks(t *testing.T) {
 	assert.Contains(t, text, "nothing was erased")
 	assert.NotContains(t, text, "core_auth_login")
 	assert.NotContains(t, text, "push")
-	assert.NotNil(t, f.get(t, orgGVR, "org-acme", "payments"))
+	assert.NotNil(t, f.get(t, orgGVR, "", "payments"))
 
 	delete(fake.Fail, commit.OpMergedFiles)
-	text, isErr = del("org-acme/payments")
+	text, isErr = del("payments")
 	require.False(t, isErr, text)
 	assert.Equal(t, true, decode(t, text)["deleted"])
-	assert.Nil(t, f.get(t, orgGVR, "org-acme", "payments"))
+	assert.Nil(t, f.get(t, orgGVR, "", "payments"))
 }
 
 // The recovery from a listing that keeps failing, such as a delete pull
@@ -324,7 +350,7 @@ func TestARestoredFileOpensANewDeleteWhenTheListingKeepsFailing(t *testing.T) {
 	ctx := context.Background()
 	f, fake := gitOrganization(t)
 	file := fake.Files(mcRepo, "main")[paymentsFile]
-	del := map[string]any{"namespace": "org-acme", "name": "payments", "mode": "commit"}
+	del := map[string]any{"name": "payments", "mode": "commit"}
 	text, isErr := f.call(t, ToolDeleteOrganization, del)
 	require.False(t, isErr, text)
 	require.Len(t, fake.PullRequests(), 1)
@@ -332,13 +358,13 @@ func TestARestoredFileOpensANewDeleteWhenTheListingKeepsFailing(t *testing.T) {
 	require.NoError(t, fake.Merge(ctx, first.PullRequest))
 	fake.Fail[commit.OpMergedFiles] = errors.New("list merged files giantswarm/gazelle-config#1: GitHub listed 3000 of 3001 changed files (it lists at most 3000)")
 
-	erase := map[string]any{"namespace": "org-acme", "name": "payments", "mode": "commit", "confirm": "org-acme/payments"}
+	erase := map[string]any{"name": "payments", "mode": "commit", "confirm": "payments"}
 	text, isErr = f.call(t, ToolDeleteOrganization, erase)
 	require.True(t, isErr)
 	assert.Contains(t, text, "nothing was erased")
 	assert.Contains(t, text, "listed 3000 of 3001", "the cause is named")
 	assert.Contains(t, text, "restore only "+paymentsFile)
-	assert.NotNil(t, f.get(t, orgGVR, "org-acme", "payments"))
+	assert.NotNil(t, f.get(t, orgGVR, "", "payments"))
 
 	require.NoError(t, fake.Commit(ctx, mcRepo, "main", "restore", map[string][]byte{paymentsFile: file}))
 	before := fake.Files(mcRepo, "main")
@@ -354,7 +380,7 @@ func TestARestoredFileOpensANewDeleteWhenTheListingKeepsFailing(t *testing.T) {
 			assert.True(t, strings.HasPrefix(p, objectsPath+"/"), "the new delete changes the objects path only, not %s", p)
 		}
 	}
-	assert.Equal(t, second.URL, f.get(t, orgGVR, "org-acme", "payments").GetAnnotations()[organizations.DeletePullRequestAnnotation])
+	assert.Equal(t, second.URL, f.get(t, orgGVR, "", "payments").GetAnnotations()[organizations.DeletePullRequestAnnotation])
 
 	// Its files list, and it erases.
 	delete(fake.Fail, commit.OpMergedFiles)
@@ -364,41 +390,35 @@ func TestARestoredFileOpensANewDeleteWhenTheListingKeepsFailing(t *testing.T) {
 	assert.Equal(t, true, decode(t, text)["deleted"])
 }
 
-// orgDocument is payments' object as a file carries it, in namespace ns
-// (none when empty).
-func orgDocument(t *testing.T, ns string) map[string]any {
+// orgDocument is payments' object as a file carries it.
+func orgDocument(t *testing.T) map[string]any {
 	t.Helper()
-	o := organization("org-acme", "payments", nil)
+	o := organization("payments", nil)
 	delete(o.Object, "status")
-	if ns == "" {
-		unstructured.RemoveNestedField(o.Object, "metadata", "namespace")
-	} else {
-		o.SetNamespace(ns)
-	}
 	return o.Object
 }
 
 // Files under the objects path that do not define the organization do not
-// stop the erase: another organization's file, one of this name under
-// another parent, and files that do not parse, which Kustomize cannot apply.
+// stop the erase: another organization's file, another kind of the name,
+// and files that do not parse, which Kustomize cannot apply.
 func TestADeleteThatAddsOtherOrganizationsStillErases(t *testing.T) {
 	ctx := context.Background()
 	f, fake := gitOrganization(t)
-	text, isErr := f.call(t, ToolDeleteOrganization, map[string]any{"namespace": "org-acme", "name": "payments", "mode": "commit"})
+	text, isErr := f.call(t, ToolDeleteOrganization, map[string]any{"name": "payments", "mode": "commit"})
 	require.False(t, isErr, text)
 	pr := fake.PullRequests()[0]
-	other := func(ns, name string) []byte {
-		o := organization(ns, name, nil)
+	other := func(name string) []byte {
+		o := organization(name, nil)
 		delete(o.Object, "status")
 		raw, err := yaml.Marshal(o.Object)
 		require.NoError(t, err)
 		return raw
 	}
 	require.NoError(t, fake.Commit(ctx, mcRepo, pr.Head, "add others", map[string][]byte{
-		objectsPath + "/org-acme/billing.yaml":  other("org-acme", "billing"),
-		objectsPath + "/org-beta/payments.yaml": append(append([]byte("kind: ConfigMap\nmetadata:\n  name: payments\n---\n"), other("org-beta", "payments")...), []byte("---\n")...),
-		objectsPath + "/README.md":              []byte("# Organizations\n\nOne file per organization.\n"),
-		objectsPath + "/org-acme/broken.yaml":   append(other("org-acme", "payments"), []byte("---\nmetadata: [payments\n")...),
+		objectsPath + "/billing.yaml":        other("billing"),
+		objectsPath + "/settings.yaml":       []byte("kind: ConfigMap\nmetadata:\n  name: payments\n---\n"),
+		objectsPath + "/README.md":           []byte("# Organizations\n\nOne file per organization.\n"),
+		objectsPath + "/archive/broken.yaml": append(other("payments"), []byte("---\nmetadata: [payments\n")...),
 	}))
 	merge := pr.PullRequest
 	st, err := fake.Status(ctx, merge)
@@ -406,7 +426,7 @@ func TestADeleteThatAddsOtherOrganizationsStillErases(t *testing.T) {
 	merge.HeadSHA = st.HeadSHA
 	require.NoError(t, fake.Merge(ctx, merge))
 
-	text, isErr = f.call(t, ToolDeleteOrganization, map[string]any{"namespace": "org-acme", "name": "payments", "mode": "commit", "confirm": "org-acme/payments"})
+	text, isErr = f.call(t, ToolDeleteOrganization, map[string]any{"name": "payments", "mode": "commit", "confirm": "payments"})
 	require.False(t, isErr, text)
 	assert.Equal(t, true, decode(t, text)["deleted"])
 }
@@ -422,26 +442,26 @@ func TestAMergedPullRequestThatKeptTheFileIsNotTheDelete(t *testing.T) {
 	other, err := fake.OpenPullRequest(context.Background(), mcRepo, "other", "main", "docs", "")
 	require.NoError(t, err)
 	require.NoError(t, fake.Merge(context.Background(), other))
-	live := f.get(t, orgGVR, "org-acme", "payments")
+	live := f.get(t, orgGVR, "", "payments")
 	ann := live.GetAnnotations()
 	ann[organizations.DeletePullRequestAnnotation] = other.URL
 	live.SetAnnotations(ann)
-	_, err = f.dyn.Resource(orgGVR).Namespace("org-acme").Update(context.Background(), live, metav1.UpdateOptions{})
+	_, err = f.dyn.Resource(orgGVR).Update(context.Background(), live, metav1.UpdateOptions{})
 	require.NoError(t, err)
 
-	text, isErr := f.call(t, ToolDeleteOrganization, map[string]any{"namespace": "org-acme", "name": "payments", "mode": "commit", "confirm": "org-acme/payments"})
+	text, isErr := f.call(t, ToolDeleteOrganization, map[string]any{"name": "payments", "mode": "commit", "confirm": "payments"})
 	require.True(t, isErr)
 	assert.Contains(t, text, "did not remove it")
-	assert.NotNil(t, f.get(t, orgGVR, "org-acme", "payments"))
+	assert.NotNil(t, f.get(t, orgGVR, "", "payments"))
 
 	// The file gone from git by another merge, without agent-manager's
 	// delete: Missing from git, never erased.
 	g, gfake := gitOrganization(t)
 	require.NoError(t, gfake.Commit(context.Background(), mcRepo, "main", "oops", map[string][]byte{paymentsFile: nil}))
-	text, isErr = g.call(t, ToolDeleteOrganization, map[string]any{"namespace": "org-acme", "name": "payments", "mode": "commit", "confirm": "org-acme/payments"})
+	text, isErr = g.call(t, ToolDeleteOrganization, map[string]any{"name": "payments", "mode": "commit", "confirm": "payments"})
 	require.True(t, isErr)
 	assert.Contains(t, text, "Missing from git")
-	assert.NotNil(t, g.get(t, orgGVR, "org-acme", "payments"))
+	assert.NotNil(t, g.get(t, orgGVR, "", "payments"))
 }
 
 // refusedErase is a case of TestAMergedDeleteThatDidNotRemoveTheFileErasesNothing.
@@ -460,14 +480,14 @@ type refusedErase struct {
 }
 
 // siblingOverlay is a delete pull request that moved the organization's
-// file to base/<name>.yaml as the organization ns/name, where
-// overlays/prod, a sibling overlay that refers to it by ../, holds the
-// files overlay. The answer names the overlay's kustomization and why.
-func siblingOverlay(title, ns, name string, overlay map[string]string, why string) refusedErase {
+// file to base/<name>.yaml as the organization name, where overlays/prod, a
+// sibling overlay that refers to it by ../, holds the files overlay. The
+// answer names the overlay's kustomization and why.
+func siblingOverlay(title, name string, overlay map[string]string, why string) refusedErase {
 	return refusedErase{
 		name: title,
 		edit: func(t *testing.T, fake *commit.Fake, head string, _ []byte) {
-			doc := orgDocument(t, ns)
+			doc := orgDocument(t)
 			require.NoError(t, unstructured.SetNestedField(doc, name, "metadata", "name"))
 			org, err := yaml.Marshal(doc)
 			require.NoError(t, err)
@@ -511,14 +531,14 @@ func leavingOverlay(title string, overlay map[string]string, entry string) refus
 }
 
 // An overlay that cannot make a document the organization does not stop
-// the erase: a namespace other than the parent's moves no document into
-// it, and a name prefix or suffix makes no document of a name that is not
-// a part of the organization's name into it; empty patch fields change
-// nothing (giantswarm/agent-manager#423).
+// the erase: a namespace moves no document into it, since an Organization is
+// cluster-scoped, and a name prefix or suffix makes no document of a name
+// that is not a part of the organization's name into it; empty patch fields
+// change nothing (giantswarm/agent-manager#423).
 func TestAnOverlayThatCannotMakeTheOrganizationDoesNotStopTheErase(t *testing.T) {
 	ctx := context.Background()
-	org := func(t *testing.T, ns, name string) []byte {
-		doc := orgDocument(t, ns)
+	org := func(t *testing.T, name string) []byte {
+		doc := orgDocument(t)
 		require.NoError(t, unstructured.SetNestedField(doc, name, "metadata", "name"))
 		raw, err := yaml.Marshal(doc)
 		require.NoError(t, err)
@@ -529,21 +549,12 @@ func TestAnOverlayThatCannotMakeTheOrganizationDoesNotStopTheErase(t *testing.T)
 		files func(t *testing.T) map[string][]byte
 	}{
 		{
-			name: "another parent sets its own namespace and has an organization of the name",
+			name: "a sibling overlay sets a namespace on another organization",
 			files: func(t *testing.T) map[string][]byte {
 				return map[string][]byte{
-					objectsPath + "/org-beta/payments.yaml":      org(t, "org-beta", "payments"),
-					objectsPath + "/org-beta/kustomization.yaml": []byte("namespace: org-beta\nresources:\n  - payments.yaml\n"),
-				}
-			},
-		},
-		{
-			name: "a sibling overlay sets namespace org-other on a base that has the name",
-			files: func(t *testing.T) map[string][]byte {
-				return map[string][]byte{
-					objectsPath + "/base/payments.yaml":               org(t, "org-template", "payments"),
-					objectsPath + "/base/kustomization.yaml":          []byte("resources:\n  - payments.yaml\n"),
-					objectsPath + "/overlays/prod/kustomization.yaml": []byte("namespace: org-other\nnamePrefix: x-\nresources:\n  - ../../base\npatches: []\ntransformers: []\nreplacements: []\npatchesJson6902: []\npatchesStrategicMerge: []\n"),
+					objectsPath + "/base/billing.yaml":                org(t, "billing"),
+					objectsPath + "/base/kustomization.yaml":          []byte("resources:\n  - billing.yaml\n"),
+					objectsPath + "/overlays/prod/kustomization.yaml": []byte("namespace: payments\nresources:\n  - ../../base\npatches: []\ntransformers: []\nreplacements: []\npatchesJson6902: []\npatchesStrategicMerge: []\n"),
 				}
 			},
 		},
@@ -551,7 +562,7 @@ func TestAnOverlayThatCannotMakeTheOrganizationDoesNotStopTheErase(t *testing.T)
 			name: "a sibling overlay sets a name suffix on an organization whose name is not a part of the name",
 			files: func(t *testing.T) map[string][]byte {
 				return map[string][]byte{
-					objectsPath + "/base/billing.yaml":                org(t, "org-acme", "billing"),
+					objectsPath + "/base/billing.yaml":                org(t, "billing"),
 					objectsPath + "/overlays/prod/kustomization.yaml": []byte("nameSuffix: -prod\nnamePrefix: x-\nresources:\n  - ../../base/billing.yaml\n"),
 				}
 			},
@@ -559,16 +570,16 @@ func TestAnOverlayThatCannotMakeTheOrganizationDoesNotStopTheErase(t *testing.T)
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f, fake := gitOrganization(t)
-			text, isErr := f.call(t, ToolDeleteOrganization, map[string]any{"namespace": "org-acme", "name": "payments", "mode": "commit"})
+			text, isErr := f.call(t, ToolDeleteOrganization, map[string]any{"name": "payments", "mode": "commit"})
 			require.False(t, isErr, text)
 			pr := fake.PullRequests()[0]
 			require.NoError(t, fake.Merge(ctx, pr.PullRequest))
 			require.NoError(t, fake.Commit(ctx, mcRepo, "main", "overlays", tc.files(t)))
 
-			text, isErr = f.call(t, ToolDeleteOrganization, map[string]any{"namespace": "org-acme", "name": "payments", "mode": "commit"})
+			text, isErr = f.call(t, ToolDeleteOrganization, map[string]any{"name": "payments", "mode": "commit"})
 			require.False(t, isErr, text)
 			assert.Contains(t, text, "pending erase:")
-			text, isErr = f.call(t, ToolDeleteOrganization, map[string]any{"namespace": "org-acme", "name": "payments", "mode": "commit", "confirm": "org-acme/payments"})
+			text, isErr = f.call(t, ToolDeleteOrganization, map[string]any{"name": "payments", "mode": "commit", "confirm": "payments"})
 			require.False(t, isErr, text)
 			assert.Equal(t, true, decode(t, text)["deleted"])
 		})
@@ -581,12 +592,12 @@ func TestAnOverlayThatCannotMakeTheOrganizationDoesNotStopTheErase(t *testing.T)
 // (giantswarm/agent-manager#437).
 func TestAnEntryThatStaysUnderTheObjectsPathDoesNotStopTheErase(t *testing.T) {
 	ctx := context.Background()
-	doc := orgDocument(t, "org-acme")
+	doc := orgDocument(t)
 	require.NoError(t, unstructured.SetNestedField(doc, "billing", "metadata", "name"))
 	billing, err := yaml.Marshal(doc)
 	require.NoError(t, err)
 	f, fake := gitOrganization(t)
-	text, isErr := f.call(t, ToolDeleteOrganization, map[string]any{"namespace": "org-acme", "name": "payments", "mode": "commit"})
+	text, isErr := f.call(t, ToolDeleteOrganization, map[string]any{"name": "payments", "mode": "commit"})
 	require.False(t, isErr, text)
 	require.NoError(t, fake.Merge(ctx, fake.PullRequests()[0].PullRequest))
 	require.NoError(t, fake.Commit(ctx, mcRepo, "main", "overlays", map[string][]byte{
@@ -596,10 +607,10 @@ func TestAnEntryThatStaysUnderTheObjectsPathDoesNotStopTheErase(t *testing.T) {
 		objectsPath + "/overlays/prod/kustomization.yaml":     []byte("resources:\n  - ../../base\n  - ../../base/billing.yaml\n  - .\ncomponents:\n  - ../../components/labels\nbases:\n  - ../../base\n"),
 	}))
 
-	text, isErr = f.call(t, ToolDeleteOrganization, map[string]any{"namespace": "org-acme", "name": "payments", "mode": "commit"})
+	text, isErr = f.call(t, ToolDeleteOrganization, map[string]any{"name": "payments", "mode": "commit"})
 	require.False(t, isErr, text)
 	assert.Contains(t, text, "pending erase:")
-	text, isErr = f.call(t, ToolDeleteOrganization, map[string]any{"namespace": "org-acme", "name": "payments", "mode": "commit", "confirm": "org-acme/payments"})
+	text, isErr = f.call(t, ToolDeleteOrganization, map[string]any{"name": "payments", "mode": "commit", "confirm": "payments"})
 	require.False(t, isErr, text)
 	assert.Equal(t, true, decode(t, text)["deleted"])
 }
@@ -655,9 +666,9 @@ func TestAMergedDeleteThatDidNotRemoveTheFileErasesNothing(t *testing.T) {
 			noConfirm: true,
 		},
 		{
-			name: "the file was moved into a list without a namespace",
+			name: "the file was moved into a list",
 			edit: func(t *testing.T, fake *commit.Fake, head string, _ []byte) {
-				list, err := yaml.Marshal(map[string]any{"apiVersion": "v1", "kind": "List", "items": []any{orgDocument(t, "")}})
+				list, err := yaml.Marshal(map[string]any{"apiVersion": "v1", "kind": "List", "items": []any{orgDocument(t)}})
 				require.NoError(t, err)
 				require.NoError(t, fake.Commit(ctx, mcRepo, head, "move it", map[string][]byte{objectsPath + "/archive/bundle.yaml": list}))
 			},
@@ -665,16 +676,18 @@ func TestAMergedDeleteThatDidNotRemoveTheFileErasesNothing(t *testing.T) {
 			noConfirm: true,
 		},
 		{
-			name: "the file was moved under a kustomization that sets its namespace",
+			// A namespace does not change an Organization's identity: the
+			// moved file still defines it.
+			name: "the file was moved under a kustomization that sets a namespace",
 			edit: func(t *testing.T, fake *commit.Fake, head string, _ []byte) {
-				org, err := yaml.Marshal(orgDocument(t, "org-template"))
+				org, err := yaml.Marshal(orgDocument(t))
 				require.NoError(t, err)
 				require.NoError(t, fake.Commit(ctx, mcRepo, head, "move it", map[string][]byte{
 					objectsPath + "/archive/payments.manifest":  org,
 					objectsPath + "/archive/kustomization.yaml": []byte("namespace: org-acme\nresources:\n  - payments.manifest\n"),
 				}))
 			},
-			want:      []string{"conflict:", objectsPath + "/archive/payments.manifest", "may still define it", objectsPath + "/archive/kustomization.yaml", "Check the overlay first"},
+			want:      []string{"conflict:", objectsPath + "/archive/payments.manifest", "still defines it"},
 			noConfirm: true,
 		},
 		{
@@ -682,7 +695,7 @@ func TestAMergedDeleteThatDidNotRemoveTheFileErasesNothing(t *testing.T) {
 			// as a resource file.
 			name: "the file was moved into a resource file named kustomization.yaml",
 			edit: func(t *testing.T, fake *commit.Fake, head string, _ []byte) {
-				org, err := yaml.Marshal(orgDocument(t, "org-acme"))
+				org, err := yaml.Marshal(orgDocument(t))
 				require.NoError(t, err)
 				require.NoError(t, fake.Commit(ctx, mcRepo, head, "move it", map[string][]byte{objectsPath + "/archive/kustomization.yaml": org}))
 			},
@@ -690,26 +703,9 @@ func TestAMergedDeleteThatDidNotRemoveTheFileErasesNothing(t *testing.T) {
 			noConfirm: true,
 		},
 		{
-			// The overlay is not above the file: it refers to it by ../, so
-			// any kustomization under the objects path that sets a
-			// namespace counts (giantswarm/agent-manager#399).
-			name: "a sibling overlay sets the namespace of the moved file",
-			edit: func(t *testing.T, fake *commit.Fake, head string, _ []byte) {
-				org, err := yaml.Marshal(orgDocument(t, "org-template"))
-				require.NoError(t, err)
-				require.NoError(t, fake.Commit(ctx, mcRepo, head, "move it", map[string][]byte{
-					objectsPath + "/base/payments.yaml":               org,
-					objectsPath + "/base/kustomization.yaml":          []byte("resources:\n  - payments.yaml\n"),
-					objectsPath + "/overlays/prod/kustomization.yaml": []byte("namespace: org-acme\nresources:\n  - ../../base\n"),
-				}))
-			},
-			want:      []string{"conflict:", objectsPath + "/base/payments.yaml", "may still define it", objectsPath + "/overlays/prod/kustomization.yaml", "Check the overlay first", "remove that setting or the overlay"},
-			noConfirm: true,
-		},
-		{
 			name: "a sibling overlay sets a name suffix of the moved file",
 			edit: func(t *testing.T, fake *commit.Fake, head string, _ []byte) {
-				doc := orgDocument(t, "org-acme")
+				doc := orgDocument(t)
 				require.NoError(t, unstructured.SetNestedField(doc, "pay", "metadata", "name"))
 				org, err := yaml.Marshal(doc)
 				require.NoError(t, err)
@@ -721,78 +717,50 @@ func TestAMergedDeleteThatDidNotRemoveTheFileErasesNothing(t *testing.T) {
 			want:      []string{"conflict:", objectsPath + "/base/pay.yaml", "may still define it", objectsPath + "/overlays/prod/kustomization.yaml"},
 			noConfirm: true,
 		},
-		{
-			// The cost of failing closed: another organization of the name
-			// counts while an overlay sets the parent's namespace anywhere,
-			// and the answer sends the person to the overlay, not to that
-			// file.
-			name: "an overlay sets the parent's namespace while another parent has an organization of the name",
-			after: func(t *testing.T, fake *commit.Fake) {
-				org, err := yaml.Marshal(orgDocument(t, "org-beta"))
-				require.NoError(t, err)
-				require.NoError(t, fake.Commit(ctx, mcRepo, "main", "another parent", map[string][]byte{
-					objectsPath + "/org-beta/payments.yaml":      org,
-					objectsPath + "/org-beta/kustomization.yaml": []byte("resources:\n  - payments.yaml\n"),
-					objectsPath + "/org-acme/kustomization.yaml": []byte("namespace: org-acme\nresources:\n  - billing.yaml\n"),
-				}))
-			},
-			want:      []string{"conflict:", objectsPath + "/org-beta/payments.yaml", "may still define it", objectsPath + "/org-acme/kustomization.yaml (namespace org-acme)", "Check the overlay first"},
-			notWant:   []string{"remove that definition from", "moved there", objectsPath + "/org-beta/kustomization.yaml"},
-			noConfirm: true,
-		},
-		siblingOverlay("a sibling overlay moves the file's organization by a patch", "org-template", "payments", map[string]string{
-			"kustomization.yaml": "resources:\n  - ../../base\npatches:\n  - target:\n      kind: AgentPlatformOrganization\n    patch: |-\n      - op: replace\n        path: /metadata/namespace\n        value: org-acme\n",
+		siblingOverlay("a sibling overlay renames the file's organization by a patch", "legacy", map[string]string{
+			"kustomization.yaml": "resources:\n  - ../../base\npatches:\n  - target:\n      kind: Organization\n    patch: |-\n      - op: replace\n        path: /metadata/name\n        value: payments\n",
 		}, "patches"),
-		siblingOverlay("a sibling overlay renames the file's organization by a JSON 6902 patch", "org-acme", "legacy", map[string]string{
-			"kustomization.yaml": "resources:\n  - ../../base\npatchesJson6902:\n  - target:\n      group: " + orgGVR.Group + "\n      version: v1alpha1\n      kind: AgentPlatformOrganization\n      name: legacy\n    path: rename.yaml\n",
+		siblingOverlay("a sibling overlay renames the file's organization by a JSON 6902 patch", "legacy", map[string]string{
+			"kustomization.yaml": "resources:\n  - ../../base\npatchesJson6902:\n  - target:\n      group: " + orgGVR.Group + "\n      version: v1alpha1\n      kind: Organization\n      name: legacy\n    path: rename.yaml\n",
 			"rename.yaml":        "- op: replace\n  path: /metadata/name\n  value: payments\n",
 		}, "patchesJson6902"),
-		siblingOverlay("a sibling overlay has a strategic merge patch", "org-template", "payments", map[string]string{
+		siblingOverlay("a sibling overlay has a strategic merge patch", "legacy", map[string]string{
 			"kustomization.yaml": "resources:\n  - ../../base\npatchesStrategicMerge:\n  - labels.yaml\n",
 			"labels.yaml":        "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: settings\n  labels:\n    tier: prod\n",
 		}, "patchesStrategicMerge"),
-		siblingOverlay("a sibling overlay moves the file's organization by a transformer", "org-template", "payments", map[string]string{
-			"kustomization.yaml": "resources:\n  - ../../base\ntransformers:\n  - namespace.yaml\n",
-			"namespace.yaml":     "apiVersion: builtin\nkind: NamespaceTransformer\nmetadata:\n  name: move\n  namespace: org-acme\n",
+		siblingOverlay("a sibling overlay renames the file's organization by a transformer", "legacy", map[string]string{
+			"kustomization.yaml": "resources:\n  - ../../base\ntransformers:\n  - prefix.yaml\n",
+			"prefix.yaml":        "apiVersion: builtin\nkind: PrefixSuffixTransformer\nmetadata:\n  name: rename\nprefix: pay\n",
 		}, "transformers"),
-		siblingOverlay("a sibling overlay has replacements", "org-template", "payments", map[string]string{
+		siblingOverlay("a sibling overlay has replacements", "legacy", map[string]string{
 			"kustomization.yaml": "resources:\n  - ../../base\nreplacements:\n  - path: replace.yaml\n",
 		}, "replacements"),
-		siblingOverlay("a sibling overlay sets a SOPS-encrypted namespace", "org-template", "payments", map[string]string{
-			"kustomization.yaml": "namespace: ENC[AES256_GCM,data:abc,type:str]\nresources:\n  - ../../base\n",
-		}, "namespace ENC["),
-		siblingOverlay("a sibling overlay sets a namespace that Flux's post-build substitution may replace", "org-template", "payments", map[string]string{
-			"kustomization.yaml": "namespace: ${org_ns}\nresources:\n  - ../../base\n",
-		}, "namespace ${org_ns}"),
-		siblingOverlay("a sibling overlay writes a patch field's key in another case", "org-template", "payments", map[string]string{
+		siblingOverlay("a sibling overlay writes a patch field's key in another case", "legacy", map[string]string{
 			"kustomization.yaml": "resources:\n  - ../../base\nPatches:\n  - path: move.yaml\n",
 		}, "patches"),
-		siblingOverlay("a sibling overlay sets the namespace twice in two cases", "org-template", "payments", map[string]string{
-			"kustomization.yaml": "namespace: org-other\nNamespace: org-acme\nresources:\n  - ../../base\n",
-		}, "namespace of a form the scan does not know"),
-		siblingOverlay("a sibling overlay sets a name suffix of a form the scan does not know", "org-acme", "legacy", map[string]string{
+		siblingOverlay("a sibling overlay sets a name suffix twice in two cases", "legacy", map[string]string{
+			"kustomization.yaml": "nameSuffix: -a\nNameSuffix: -b\nresources:\n  - ../../base\n",
+		}, "nameSuffix of a form the scan does not know"),
+		siblingOverlay("a sibling overlay sets a name suffix of a form the scan does not know", "legacy", map[string]string{
 			"kustomization.yaml": "nameSuffix: [a]\nresources:\n  - ../../base\n",
 		}, "nameSuffix of a form the scan does not know"),
-		siblingOverlay("a sibling overlay sets transformers of a form the scan does not know", "org-template", "payments", map[string]string{
-			"kustomization.yaml": "transformers: namespace.yaml\nresources:\n  - ../../base\n",
+		siblingOverlay("a sibling overlay sets transformers of a form the scan does not know", "legacy", map[string]string{
+			"kustomization.yaml": "transformers: prefix.yaml\nresources:\n  - ../../base\n",
 		}, "transformers"),
-		siblingOverlay("a sibling overlay does not parse", "org-template", "payments", map[string]string{
+		siblingOverlay("a sibling overlay does not parse", "legacy", map[string]string{
 			"kustomization.yaml": "resources: [../../base\n",
 		}, "it does not parse"),
-		siblingOverlay("a sibling overlay sets a namespace of a form the scan does not know", "org-template", "payments", map[string]string{
-			"kustomization.yaml": "namespace:\n  name: org-acme\nresources:\n  - ../../base\n",
-		}, "namespace of a form the scan does not know"),
-		siblingOverlay("a sibling overlay substitutes the name by vars with configurations", "org-acme", "legacy", map[string]string{
+		siblingOverlay("a sibling overlay substitutes the name by vars with configurations", "legacy", map[string]string{
 			"kustomization.yaml": "resources:\n  - ../../base\nconfigurations:\n  - varreference.yaml\nvars:\n  - name: ORG\n    objref:\n      kind: ConfigMap\n      name: org\n      apiVersion: v1\n    fieldref:\n      fieldpath: data.name\n",
-			"varreference.yaml":  "varReference:\n  - path: metadata/name\n    kind: AgentPlatformOrganization\n",
+			"varreference.yaml":  "varReference:\n  - path: metadata/name\n    kind: Organization\n",
 		}, "vars with configurations"),
-		siblingOverlay("a sibling overlay writes the vars and configurations keys in another case", "org-acme", "legacy", map[string]string{
+		siblingOverlay("a sibling overlay writes the vars and configurations keys in another case", "legacy", map[string]string{
 			"kustomization.yaml": "resources:\n  - ../../base\nConfigurations:\n  - varreference.yaml\nVars:\n  - name: ORG\n",
 		}, "vars with configurations"),
 		{
 			name: "the file was moved to a document named by a Kustomize var",
 			edit: func(t *testing.T, fake *commit.Fake, head string, _ []byte) {
-				doc := orgDocument(t, "org-acme")
+				doc := orgDocument(t)
 				require.NoError(t, unstructured.SetNestedField(doc, "$(ORG)", "metadata", "name"))
 				org, err := yaml.Marshal(doc)
 				require.NoError(t, err)
@@ -865,7 +833,7 @@ func TestAMergedDeleteThatDidNotRemoveTheFileErasesNothing(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			f, fake := gitOrganization(t)
 			file := fake.Files(mcRepo, "main")[paymentsFile]
-			text, isErr := f.call(t, ToolDeleteOrganization, map[string]any{"namespace": "org-acme", "name": "payments", "mode": "commit"})
+			text, isErr := f.call(t, ToolDeleteOrganization, map[string]any{"name": "payments", "mode": "commit"})
 			require.False(t, isErr, text)
 			require.Len(t, fake.PullRequests(), 1)
 			pr := fake.PullRequests()[0]
@@ -882,12 +850,12 @@ func TestAMergedDeleteThatDidNotRemoveTheFileErasesNothing(t *testing.T) {
 			}
 			require.NotContains(t, fake.Files(mcRepo, "main"), paymentsFile, "the file is gone from git")
 			if tc.noConfirm {
-				text, isErr = f.call(t, ToolDeleteOrganization, map[string]any{"namespace": "org-acme", "name": "payments", "mode": "commit"})
+				text, isErr = f.call(t, ToolDeleteOrganization, map[string]any{"name": "payments", "mode": "commit"})
 				require.True(t, isErr, text)
 				assert.NotContains(t, text, "pending erase:")
 			}
 
-			text, isErr = f.call(t, ToolDeleteOrganization, map[string]any{"namespace": "org-acme", "name": "payments", "mode": "commit", "confirm": "org-acme/payments"})
+			text, isErr = f.call(t, ToolDeleteOrganization, map[string]any{"name": "payments", "mode": "commit", "confirm": "payments"})
 			require.True(t, isErr, text)
 			for _, w := range tc.want {
 				assert.Contains(t, text, w)
@@ -895,7 +863,7 @@ func TestAMergedDeleteThatDidNotRemoveTheFileErasesNothing(t *testing.T) {
 			for _, w := range tc.notWant {
 				assert.NotContains(t, text, w)
 			}
-			live := f.get(t, orgGVR, "org-acme", "payments")
+			live := f.get(t, orgGVR, "", "payments")
 			require.NotNil(t, live, "nothing is erased")
 			assert.Equal(t, organizations.PruneDisabled, live.GetAnnotations()[organizations.PruneAnnotation], "the delete intent is not written")
 		})
@@ -928,7 +896,7 @@ func (r *movingRemote) ListFiles(ctx context.Context, repo commit.Repository, re
 func TestACommitDuringTheScanDoesNotHideTheDefinition(t *testing.T) {
 	ctx := context.Background()
 	archived := objectsPath + "/archive/payments.yaml"
-	for _, confirm := range []string{"", "org-acme/payments"} {
+	for _, confirm := range []string{"", "payments"} {
 		t.Run("confirm "+confirm, func(t *testing.T) {
 			remote := &movingRemote{}
 			f, fake := gitOrganizationWith(t, func(fake *commit.Fake) organizations.GitHubRemote {
@@ -936,7 +904,7 @@ func TestACommitDuringTheScanDoesNotHideTheDefinition(t *testing.T) {
 				return remote
 			})
 			file := fake.Files(mcRepo, "main")[paymentsFile]
-			text, isErr := f.call(t, ToolDeleteOrganization, map[string]any{"namespace": "org-acme", "name": "payments", "mode": "commit"})
+			text, isErr := f.call(t, ToolDeleteOrganization, map[string]any{"name": "payments", "mode": "commit"})
 			require.False(t, isErr, text)
 			pr := fake.PullRequests()[0]
 			// The delete pull request moved the file and changed it, which
@@ -950,7 +918,7 @@ func TestACommitDuringTheScanDoesNotHideTheDefinition(t *testing.T) {
 
 			moved := fake.Files(mcRepo, "main")[archived]
 			remote.move = map[string][]byte{archived: nil, objectsPath + "/old/current": moved}
-			args := map[string]any{"namespace": "org-acme", "name": "payments", "mode": "commit"}
+			args := map[string]any{"name": "payments", "mode": "commit"}
 			if confirm != "" {
 				args["confirm"] = confirm
 			}
@@ -961,7 +929,7 @@ func TestACommitDuringTheScanDoesNotHideTheDefinition(t *testing.T) {
 			assert.True(t, strings.HasPrefix(text, "conflict:"), text)
 			assert.Contains(t, text, archived+" in "+mcRepo.String()+" still defines it", "the file as the commit the scan read has it")
 			assert.NotContains(t, text, "pending erase:")
-			live := f.get(t, orgGVR, "org-acme", "payments")
+			live := f.get(t, orgGVR, "", "payments")
 			require.NotNil(t, live, "nothing is erased")
 			assert.Equal(t, organizations.PruneDisabled, live.GetAnnotations()[organizations.PruneAnnotation])
 		})
@@ -975,12 +943,12 @@ func TestACommitDuringTheScanDoesNotHideTheDefinition(t *testing.T) {
 func TestContentToolsCommitIntoTheContentPath(t *testing.T) {
 	f, fake := gitOrganization(t)
 	seedSecret(t, f, "tenant-credential-haiku", "apiKey")
-	text, isErr := f.call(t, ToolSetOrganizationModel, map[string]any{"namespace": orgNS, "name": "haiku", "provider": "Anthropic", "model": "claude-haiku", "default": true})
+	text, isErr := f.call(t, ToolSetOrganizationModel, map[string]any{"organization": "payments", "name": "haiku", "provider": "Anthropic", "model": "claude-haiku", "default": true})
 	require.True(t, isErr)
 	assert.True(t, strings.HasPrefix(text, "gitops_owned:"), text)
 	assert.Contains(t, text, "mode commit")
 
-	text, isErr = f.call(t, ToolSetOrganizationModel, map[string]any{"namespace": orgNS, "name": "haiku", "provider": "Anthropic", "model": "claude-haiku", "default": true, "mode": "commit"})
+	text, isErr = f.call(t, ToolSetOrganizationModel, map[string]any{"organization": "payments", "name": "haiku", "provider": "Anthropic", "model": "claude-haiku", "default": true, "mode": "commit"})
 	require.False(t, isErr, text)
 	require.Len(t, fake.PullRequests(), 1)
 	head := fake.Files(mcRepo, fake.PullRequests()[0].Head)
@@ -993,20 +961,18 @@ func TestContentToolsCommitIntoTheContentPath(t *testing.T) {
 	assert.Contains(t, string(head[paymentsPath+"/kustomization.yaml"]), "modelconfig-haiku.yaml")
 	assert.Nil(t, f.get(t, mcGVR, orgNS, "haiku"), "nothing live")
 
-	// The first admins' file keeps Flux from pruning it, which admission
-	// requires of the organization's Flux identity.
-	text, isErr = f.call(t, ToolAddOrganizationMember, map[string]any{"namespace": orgNS, "role": "admin", "group": "payments-oncall", "mode": "commit"})
+	// A member's binding is a file of the content path; the admins are not.
+	text, isErr = f.call(t, ToolAddOrganizationMember, map[string]any{"organization": "payments", "role": "editor", "group": "payments-oncall", "mode": "commit"})
 	require.False(t, isErr, text)
 	require.Len(t, fake.PullRequests(), 2)
-	admins := parseFile(t, fake.Files(mcRepo, fake.PullRequests()[1].Head)[paymentsPath+"/rolebinding-organization-admins.yaml"])
-	assert.Len(t, admins.Object["subjects"], 2)
-	assert.Equal(t, organizations.PruneDisabled, admins.GetAnnotations()[organizations.PruneAnnotation])
+	editors := parseFile(t, fake.Files(mcRepo, fake.PullRequests()[1].Head)[paymentsPath+"/rolebinding-organization-editors.yaml"])
+	assert.Len(t, editors.Object["subjects"], 2)
 
-	text, isErr = f.call(t, ToolUpdateOrganization, map[string]any{"namespace": "org-acme", "name": "payments", "workerReplicas": 3, "mode": "commit"})
+	text, isErr = f.call(t, ToolUpdateOrganization, map[string]any{"name": "payments", "workerReplicas": 3, "mode": "commit"})
 	require.False(t, isErr, text)
 	require.Len(t, fake.PullRequests(), 3)
 	obj := parseFile(t, fake.Files(mcRepo, fake.PullRequests()[2].Head)[paymentsFile])
-	replicas, _, _ := unstructured.NestedFieldNoCopy(obj.Object, "spec", "workers", "replicas")
+	replicas, _, _ := unstructured.NestedFieldNoCopy(obj.Object, "spec", "capabilities", "agentPlatform", "workers", "replicas")
 	assert.EqualValues(t, 3, replicas)
 	assert.Equal(t, organizations.PruneDisabled, obj.GetAnnotations()[organizations.PruneAnnotation])
 	assert.NotContains(t, obj.Object, "status")
@@ -1017,14 +983,14 @@ func TestContentToolsCommitIntoTheContentPath(t *testing.T) {
 // default of 1.
 func TestUpdateOrganizationCommitsAnExplicitZeroWorkerReplicas(t *testing.T) {
 	f, fake := gitOrganization(t)
-	text, isErr := f.call(t, ToolUpdateOrganization, map[string]any{"namespace": "org-acme", "name": "payments", "workerReplicas": 0, "mode": "commit"})
+	text, isErr := f.call(t, ToolUpdateOrganization, map[string]any{"name": "payments", "workerReplicas": 0, "mode": "commit"})
 	require.False(t, isErr, text)
 	res := decode(t, text)
 	assert.Equal(t, []any{"workerReplicas"}, res["changed"])
 	assert.EqualValues(t, 0, res["after"].(map[string]any)["workerReplicas"])
 	require.Len(t, fake.PullRequests(), 1)
 	obj := parseFile(t, fake.Files(mcRepo, fake.PullRequests()[0].Head)[paymentsFile])
-	replicas, found, _ := unstructured.NestedFieldNoCopy(obj.Object, "spec", "workers", "replicas")
+	replicas, found, _ := unstructured.NestedFieldNoCopy(obj.Object, "spec", "capabilities", "agentPlatform", "workers", "replicas")
 	require.True(t, found, "an explicit 0 is written into the file")
 	assert.EqualValues(t, 0, replicas)
 }
@@ -1042,13 +1008,13 @@ func TestEveryContentToolCommits(t *testing.T) {
 		{ToolSetOrganizationConnector, map[string]any{"name": "gh", "url": "https://mcp.example.com/mcp", "credentialHeader": "Authorization"}, "remotemcpserver-gh.yaml", "add"},
 		{ToolSetOrganizationEgress, map[string]any{"name": "github", "destinations": []any{map[string]any{"origin": "https://api.github.com"}}}, "egresspolicy-github.yaml", "add"},
 		{ToolDeleteOrganizationObject, map[string]any{"kind": "model", "name": "claude"}, "modelconfig-claude.yaml", "remove"},
-		{ToolRemoveOrganizationMember, map[string]any{"group": "payments-leads"}, "rolebinding-organization-admins.yaml", "remove"},
+		{ToolRemoveOrganizationMember, map[string]any{"group": "payments-team"}, "rolebinding-organization-editors.yaml", "remove"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.tool, func(t *testing.T) {
 			f, fake := gitOrganization(t)
 			seedSecret(t, f, "tenant-credential-gh", "token")
-			args := map[string]any{"namespace": orgNS, "mode": "commit", "dryRun": true}
+			args := map[string]any{"organization": "payments", "mode": "commit", "dryRun": true}
 			for k, v := range tc.args {
 				args[k] = v
 			}
@@ -1076,14 +1042,43 @@ func TestEveryContentToolCommits(t *testing.T) {
 	}
 }
 
+// The removal of the last object of an organization's content path keeps
+// its kustomization.yaml, with an empty list: the organization's
+// Kustomization builds that path, and would fail on one that does not exist.
+func TestRemovingTheLastContentObjectKeepsTheContentPath(t *testing.T) {
+	editors := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "rbac.authorization.k8s.io/v1", "kind": "RoleBinding",
+		"metadata": map[string]any{"name": "organization-editors"},
+		"roleRef":  map[string]any{"apiGroup": "rbac.authorization.k8s.io", "kind": "ClusterRole", "name": organizations.RoleEditor},
+		"subjects": []any{map[string]any{"apiGroup": "rbac.authorization.k8s.io", "kind": "Group", "name": "payments-team"}},
+	}}
+	file, err := yaml.Marshal(editors.Object)
+	require.NoError(t, err)
+	live := editors.DeepCopy()
+	live.SetNamespace(orgNS)
+	live.SetLabels(fromGitLabels("agents-payments-x7k2q"))
+	f, fake := commitFixture(t, map[string][]byte{
+		paymentsPath + "/kustomization.yaml":                    []byte("resources:\n  - rolebinding-organization-editors.yaml\n"),
+		paymentsPath + "/rolebinding-organization-editors.yaml": file,
+	}, live)
+
+	text, isErr := f.call(t, ToolRemoveOrganizationMember, map[string]any{"organization": "payments", "group": "payments-team", "mode": "commit"})
+	require.False(t, isErr, text)
+	require.Len(t, fake.PullRequests(), 1)
+	head := fake.Files(mcRepo, fake.PullRequests()[0].Head)
+	assert.NotContains(t, head, paymentsPath+"/rolebinding-organization-editors.yaml")
+	assert.Equal(t, "resources: []\n", string(head[paymentsPath+"/kustomization.yaml"]))
+}
+
 // A .sops.yaml rule that makes a plain object's file secret is refused:
 // gitops-commit would encrypt the file once and never update it.
 func TestAPlainFileTheRepositoryWouldEncryptIsRefused(t *testing.T) {
-	f, fake := commitFixture(t, map[string][]byte{".sops.yaml": sopsCovering(t, `^agent-platform/organizations/.*`)})
-	text, isErr := f.call(t, ToolCreateOrganization, map[string]any{"namespace": "org-acme", "name": "payments", "adminGroups": []any{"g"}, "mode": "commit"})
+	f, fake := commitFixture(t, map[string][]byte{".sops.yaml": sopsCovering(t, `^management-clusters/gazelle/agent-platform-organizations/.*`)})
+	f.dropOrganization(t, "payments")
+	text, isErr := f.call(t, ToolCreateOrganization, map[string]any{"name": "payments", "adminGroups": []any{"g"}, "mode": "commit"})
 	require.True(t, isErr)
 	assert.True(t, strings.HasPrefix(text, "invalid"), text)
-	assert.Contains(t, text, "rolebinding-organization-admins.yaml")
+	assert.Contains(t, text, paymentsFile)
 	assert.Empty(t, fake.PullRequests())
 }
 
@@ -1092,24 +1087,24 @@ func TestAPlainFileTheRepositoryWouldEncryptIsRefused(t *testing.T) {
 func TestAFailedDeleteMarkIsWrittenByTheNextCall(t *testing.T) {
 	f, fake := gitOrganization(t)
 	failed := false
-	f.dyn.PrependReactor("update", "agentplatformorganizations", func(a k8stesting.Action) (bool, runtime.Object, error) {
+	f.dyn.PrependReactor("update", "organizations", func(a k8stesting.Action) (bool, runtime.Object, error) {
 		u := a.(k8stesting.UpdateActionImpl)
 		obj := u.GetObject().(*unstructured.Unstructured)
 		if len(u.UpdateOptions.DryRun) == 0 && obj.GetAnnotations()[organizations.DeletePullRequestAnnotation] != "" && !failed {
 			failed = true
-			return true, nil, apierrors.NewConflict(schema.GroupResource{Resource: "agentplatformorganizations"}, obj.GetName(), errors.New("the object has been modified"))
+			return true, nil, apierrors.NewConflict(schema.GroupResource{Resource: "organizations"}, obj.GetName(), errors.New("the object has been modified"))
 		}
 		return false, nil, nil
 	})
-	args := map[string]any{"namespace": "org-acme", "name": "payments", "mode": "commit"}
+	args := map[string]any{"name": "payments", "mode": "commit"}
 	text, isErr := f.call(t, ToolDeleteOrganization, args)
 	require.True(t, isErr)
 	assert.Contains(t, text, "call delete_organization again")
 	require.Len(t, fake.PullRequests(), 1)
-	assert.NotContains(t, f.get(t, orgGVR, "org-acme", "payments").GetAnnotations(), organizations.DeletePullRequestAnnotation)
+	assert.NotContains(t, f.get(t, orgGVR, "", "payments").GetAnnotations(), organizations.DeletePullRequestAnnotation)
 
 	text, isErr = f.call(t, ToolDeleteOrganization, args)
 	require.False(t, isErr, text)
 	assert.Len(t, fake.PullRequests(), 1)
-	assert.Equal(t, fake.PullRequests()[0].URL, f.get(t, orgGVR, "org-acme", "payments").GetAnnotations()[organizations.DeletePullRequestAnnotation])
+	assert.Equal(t, fake.PullRequests()[0].URL, f.get(t, orgGVR, "", "payments").GetAnnotations()[organizations.DeletePullRequestAnnotation])
 }

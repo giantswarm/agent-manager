@@ -46,25 +46,25 @@ func seedSecret(t *testing.T, f *orgFixture, name, key string) {
 // none of them carries a credential Secret's value, whether the Secret is
 // present or replaced.
 func TestNoOrganizationToolAnswerCarriesASecretValue(t *testing.T) {
-	f := newOrgFixture(t, organization("org-acme", "payments", nil), model("claude", true))
+	f := newOrgFixture(t, organization("payments", nil), model("claude", true))
 	seedSecret(t, f, "tenant-credential-claude", "apiKey")
 	seedSecret(t, f, "tenant-credential-gh", "token")
 	args := map[string]map[string]any{
-		ToolListOrganizations:         {"namespace": "org-acme"},
-		ToolGetOrganization:           {"namespace": "org-acme", "name": "payments"},
-		ToolCreateOrganization:        {"namespace": "org-acme", "name": "billing", "adminGroups": []any{"billing-leads"}, "dryRun": true},
-		ToolUpdateOrganization:        {"namespace": "org-acme", "name": "payments", "displayName": "Payments"},
-		ToolDeleteOrganization:        {"namespace": "org-acme", "name": "payments"},
-		ToolListOrganizationMembers:   {"namespace": orgNS},
-		ToolAddOrganizationMember:     {"namespace": orgNS, "group": "payments-devs", "role": "editor"},
-		ToolRemoveOrganizationMember:  {"namespace": orgNS, "group": "payments-devs"},
-		ToolSetOrganizationModel:      {"namespace": orgNS, "name": "claude"},
-		ToolListOrganizationConnector: {"namespace": orgNS},
-		ToolSetOrganizationConnector:  {"namespace": orgNS, "name": "gh", "url": "https://mcp.github.example/mcp", "credentialHeader": "Authorization"},
-		ToolSetOrganizationEgress: {"namespace": orgNS, "name": "github", "destinations": []any{map[string]any{
+		ToolListOrganizations:         {},
+		ToolGetOrganization:           {"name": "payments"},
+		ToolCreateOrganization:        {"name": "billing", "adminGroups": []any{"billing-leads"}, "dryRun": true},
+		ToolUpdateOrganization:        {"name": "payments", "displayName": "Payments"},
+		ToolDeleteOrganization:        {"name": "payments"},
+		ToolListOrganizationMembers:   {"organization": "payments"},
+		ToolAddOrganizationMember:     {"organization": "payments", "group": "payments-devs", "role": "editor"},
+		ToolRemoveOrganizationMember:  {"organization": "payments", "group": "payments-devs"},
+		ToolSetOrganizationModel:      {"organization": "payments", "name": "claude"},
+		ToolListOrganizationConnector: {"organization": "payments"},
+		ToolSetOrganizationConnector:  {"organization": "payments", "name": "gh", "url": "https://mcp.github.example/mcp", "credentialHeader": "Authorization"},
+		ToolSetOrganizationEgress: {"organization": "payments", "name": "github", "destinations": []any{map[string]any{
 			"origin": "https://api.github.com", "credentialHeader": "Authorization", "credentialSecret": "tenant-credential-gh"}}}, // #nosec G101 -- a Secret's name
-		ToolDeleteOrganizationObject:      {"namespace": orgNS, "kind": organizations.KindConnector, "name": "gh"},
-		ToolReplaceOrganizationCredential: {"namespace": orgNS, "secret": "tenant-credential-claude", "key": "apiKey"}, // #nosec G101 -- a Secret's name
+		ToolDeleteOrganizationObject:      {"organization": "payments", "kind": organizations.KindConnector, "name": "gh"},
+		ToolReplaceOrganizationCredential: {"organization": "payments", "secret": "tenant-credential-claude", "key": "apiKey"}, // #nosec G101 -- a Secret's name
 	}
 	for _, tool := range OrganizationToolNames() {
 		in, ok := args[tool]
@@ -174,7 +174,7 @@ func resultText(t *testing.T, res map[string]any) string {
 // it; a client without URL elicitation gets the link as text. No shape
 // carries a value.
 func TestAMissingCredentialIsAURLElicitation(t *testing.T) {
-	arguments := map[string]any{"namespace": orgNS, "name": "claude", "provider": "Anthropic", "model": "claude-sonnet-4-6"}
+	arguments := map[string]any{"organization": "payments", "name": "claude", "provider": "Anthropic", "model": "claude-sonnet-4-6"}
 	for _, modern := range []bool{false, true} {
 		t.Run(fmt.Sprintf("modern=%v", modern), func(t *testing.T) {
 			fixture := newOrgFixture(t)
@@ -242,7 +242,7 @@ func TestCredentialInputCanBeCancelledWithoutWriting(t *testing.T) {
 	for action, outcome := range map[string]string{"decline": "declined", "cancel": "cancelled"} {
 		t.Run(action, func(t *testing.T) {
 			fixture := newOrgFixture(t)
-			arguments := map[string]any{"namespace": orgNS, "name": "claude", "provider": "Anthropic", "model": "claude-sonnet-4-6"}
+			arguments := map[string]any{"organization": "payments", "name": "claude", "provider": "Anthropic", "model": "claude-sonnet-4-6"}
 			response := rawCall(t, fixture.ctx, fixture.srv, toolCall(ToolSetOrganizationModel, arguments, modernMeta(true)))
 			requests := response["result"].(map[string]any)["inputRequests"].(map[string]any)
 			key := ""
@@ -267,14 +267,14 @@ func TestCredentialFallbackAndDryRun(t *testing.T) {
 	require.NotEmpty(t, result.Credentials[0].FormURL)
 	require.Contains(t, result.Credentials[0].Next, "Never send the value")
 	fixture = newOrgFixture(t)
-	text, failed := fixture.call(t, ToolSetOrganizationModel, map[string]any{"namespace": orgNS, "name": "claude", "provider": "Anthropic", "model": "claude-sonnet-4-6", "dryRun": true})
+	text, failed := fixture.call(t, ToolSetOrganizationModel, map[string]any{"organization": "payments", "name": "claude", "provider": "Anthropic", "model": "claude-sonnet-4-6", "dryRun": true})
 	require.False(t, failed, text)
 	require.NotContains(t, text, "credentialOperation")
 	require.Nil(t, fixture.get(t, mcGVR, orgNS, "claude"))
 }
 
 func TestCredentialWithoutURLElicitationIsAStructuredResultWithAResourceLink(t *testing.T) {
-	arguments := map[string]any{"namespace": orgNS, "name": "claude", "provider": "Anthropic", "model": "claude-sonnet-4-6"}
+	arguments := map[string]any{"organization": "payments", "name": "claude", "provider": "Anthropic", "model": "claude-sonnet-4-6"}
 
 	t.Run("apply", func(t *testing.T) {
 		fixture := newOrgFixture(t)

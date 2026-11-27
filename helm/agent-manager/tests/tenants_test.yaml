@@ -71,8 +71,8 @@ tests:
             - apiGroups: [""]
               resources: ["namespaces"]
               verbs: ["get", "list"]
-            - apiGroups: ["agent-platform.giantswarm.io"]
-              resources: ["agentplatformorganizations"]
+            - apiGroups: ["security.giantswarm.io"]
+              resources: ["organizations"]
               verbs: ["get", "list"]
 
   - it: binds the namespace read to the ServiceAccount

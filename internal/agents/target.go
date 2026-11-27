@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	orgv1alpha1 "github.com/giantswarm/organization-operator/api/v1alpha1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -23,8 +24,9 @@ import (
 
 // Target names the workload cluster an agent runs on: both fields or none.
 type Target struct {
-	// Organization owns the cluster: its namespace org-<organization> on the
-	// installation holds the Cluster and its kubeconfig Secret.
+	// Organization owns the cluster: the namespace its Organization
+	// reports in status.namespace on the installation holds the Cluster and
+	// its kubeconfig Secret.
 	Organization string `json:"organization,omitempty"`
 	// Cluster is the workload cluster's name.
 	Cluster string `json:"cluster,omitempty"`
@@ -47,9 +49,6 @@ const (
 	KubeconfigSecretSuffix = "-kubeconfig" // #nosec G101 -- a Secret name suffix, not a credential
 	// KubeconfigSecretKey is the key holding the kubeconfig.
 	KubeconfigSecretKey = "value"
-	// OrganizationNamespacePrefix: an organization's namespace on the
-	// installation is org-<organization>.
-	OrganizationNamespacePrefix = "org-"
 	// ClusterLabel marks the HelmRelease of an agent placed on a workload
 	// cluster with the cluster's name.
 	ClusterLabel = "agent-platform.giantswarm.io/cluster"
@@ -74,10 +73,6 @@ func (t Target) Validate() error {
 	return nil
 }
 
-// FluxNamespace is the installation namespace the agent's HelmRelease lives
-// in: the organization's.
-func (t Target) FluxNamespace() string { return OrganizationNamespacePrefix + t.Organization }
-
 // KubeconfigSecret is the name of the cluster's kubeconfig Secret.
 func (t Target) KubeconfigSecret() string { return t.Cluster + KubeconfigSecretSuffix }
 
@@ -96,13 +91,13 @@ func (t Target) ValidateReleaseName(agent string) error {
 }
 
 // PlaceOnCluster turns an agent's HelmRelease into one that installs on the
-// target cluster: named after cluster and agent in the organization
-// namespace, installing the release named after the agent into ns there
-// through the kubeconfig Secret. The chart source stays beside it. Flux
-// impersonates spec.serviceAccountName on the remote cluster, where no such
-// account exists, so it is dropped: the kubeconfig is the identity.
-func PlaceOnCluster(hr *unstructured.Unstructured, t Target, agent, ns string) {
-	fluxNS := t.FluxNamespace()
+// target cluster: named after cluster and agent in fluxNS, the organization's
+// namespace on the installation, installing the release named after the
+// agent into ns there through the kubeconfig Secret. The chart source stays
+// beside it. Flux impersonates spec.serviceAccountName on the remote
+// cluster, where no such account exists, so it is dropped: the kubeconfig is
+// the identity.
+func PlaceOnCluster(hr *unstructured.Unstructured, t Target, fluxNS, agent, ns string) {
 	hr.SetName(t.ReleaseName(agent))
 	hr.SetNamespace(fluxNS)
 	labels := hr.GetLabels()
@@ -181,7 +176,7 @@ func (st *site) releaseName(agent string) string {
 func (st *site) helmRelease(agent string, values map[string]any) *unstructured.Unstructured {
 	hr := BuildHelmRelease(agent, st.ns(), values, st.compose)
 	if st.loc.IsSet() {
-		PlaceOnCluster(hr, st.loc.Target, agent, st.ns())
+		PlaceOnCluster(hr, st.loc.Target, st.fluxNS, agent, st.ns())
 	}
 	return hr
 }
@@ -236,7 +231,9 @@ func (s *Service) site(ctx context.Context, loc Location) (*site, error) {
 		}
 		return st, nil
 	}
-	st.fluxNS = loc.FluxNamespace()
+	if st.fluxNS, err = clusterNamespace(ctx, dyn, loc.Organization); err != nil {
+		return nil, err
+	}
 	st.compose = s.cfg.Compose.ForTarget()
 	secret, err := client.Typed().CoreV1().Secrets(st.fluxNS).Get(ctx, loc.KubeconfigSecret(), metav1.GetOptions{})
 	switch {
@@ -258,4 +255,27 @@ func (s *Service) site(ctx context.Context, loc Location) (*site, error) {
 	}
 	st.agent, st.agentClient = remote.Dynamic(), remote
 	return st, nil
+}
+
+// organizationGVR is the Organization (security.giantswarm.io), cluster-scoped.
+var organizationGVR = orgv1alpha1.GroupVersion.WithResource("organizations")
+
+// clusterNamespace is the namespace on the installation that holds the
+// workload clusters of organization: what its Organization reports in
+// status.namespace, read as the caller, never computed from the name. An
+// Organization that does not exist and one the caller may not read answer
+// alike, so the answer never shows an organization the caller may not see.
+func clusterNamespace(ctx context.Context, dyn dynamic.Interface, organization string) (string, error) {
+	obj, err := dyn.Resource(organizationGVR).Get(ctx, organization, metav1.GetOptions{})
+	switch {
+	case apierrors.IsNotFound(err), apierrors.IsForbidden(err):
+		return "", fmt.Errorf("%w: organization %s not found; list_organizations lists yours", ErrNotFound, organization)
+	case err != nil:
+		return "", wrapKube(err, "get Organization "+organization)
+	}
+	ns, _, _ := unstructured.NestedString(obj.Object, "status", "namespace")
+	if ns == "" {
+		return "", fmt.Errorf("%w: organization %s is not ready yet: organization-operator has not reported the namespace of its clusters (status.namespace); nothing was written, try again shortly", ErrConflict, organization)
+	}
+	return ns, nil
 }

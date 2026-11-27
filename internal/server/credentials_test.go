@@ -18,6 +18,7 @@ import (
 	authorizationv1 "k8s.io/api/authorization/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
@@ -46,10 +47,14 @@ func TestTheCredentialBodyIsInNoTraceOrLog(t *testing.T) {
 	}
 	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{
 		kagent("modelconfigs"): "ModelConfigList", kagent("remotemcpservers"): "RemoteMCPServerList", kagent("egresspolicies"): "EgressPolicyList",
-	})
+	}, &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "security.giantswarm.io/v1alpha1", "kind": "Organization", "metadata": map[string]any{"name": "payments"},
+		"spec":   map[string]any{"capabilities": map[string]any{"agentPlatform": map[string]any{"enabled": true}}},
+		"status": map[string]any{"namespaces": []any{map[string]any{"name": "agents-payments-x7k2q", "capability": "agentPlatform"}}},
+	}})
 	kubetest.AnswerDryRuns(dyn)
 	typed := kubefake.NewClientset(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "agents-payments-x7k2q",
-		Labels: map[string]string{apov1alpha1.OrganizationLabel: "payments", apov1alpha1.ParentLabel: "org-acme"}}})
+		Labels: map[string]string{apov1alpha1.OrganizationLabel: "payments"}}})
 	typed.PrependReactor("create", "selfsubjectaccessreviews", func(action k8stesting.Action) (bool, runtime.Object, error) {
 		review := action.(k8stesting.CreateAction).GetObject().(*authorizationv1.SelfSubjectAccessReview)
 		review.Status.Allowed = true
@@ -66,7 +71,7 @@ func TestTheCredentialBodyIsInNoTraceOrLog(t *testing.T) {
 	person := &identity.Identity{Issuer: "https://dex.example.com", Subject: "sub-admin", Client: "fixture"}
 	ctx := identity.ContextWith(t.Context(), person)
 	ctx = organizations.ContextWithCredentialRequest(ctx, api.ToolSetOrganizationModel, "fixture-arguments", "fixture-client")
-	prepared, err := orgs.SetModel(ctx, organizations.ModelRequest{Namespace: "agents-payments-x7k2q", Name: "claude", Provider: "Anthropic", Model: "claude-sonnet-4-6"})
+	prepared, err := orgs.SetModel(ctx, organizations.ModelRequest{Organization: "payments", Name: "claude", Provider: "Anthropic", Model: "claude-sonnet-4-6"})
 	require.NoError(t, err)
 	confirmation, err := orgs.ReadCredentialOperation(ctx, prepared.CredentialOperation)
 	require.NoError(t, err)

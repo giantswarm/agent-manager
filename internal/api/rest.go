@@ -65,7 +65,7 @@ func (h *REST) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET "+Prefix+"/sessions/{id}/turns/{turn}", h.getSessionTurn)
 	mux.HandleFunc("DELETE "+Prefix+"/sessions/{id}", h.deleteSession)
 	mux.HandleFunc("GET "+Prefix+"/toolchains/{name}/users", h.toolchainUsers)
-	mux.HandleFunc("GET "+Prefix+"/organizations/{parent}/{organization}/credentials/{secret}", h.getCredential)
+	mux.HandleFunc("GET "+Prefix+"/organizations/{organization}/credentials/{secret}", h.getCredential)
 	mux.HandleFunc("GET "+Prefix+"/credential-operations/{operation}", h.getCredentialOperation)
 	mux.HandleFunc("POST "+Prefix+"/credential-operations/{operation}", h.saveCredentialOperation)
 	mux.HandleFunc("DELETE "+Prefix+"/credential-operations/{operation}", h.cancelCredentialOperation)

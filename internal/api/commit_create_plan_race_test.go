@@ -82,9 +82,9 @@ func planRaceSubjects() []planRaceSubject {
 		}
 	}
 	return append(subjects, planRaceSubject{
-		name: ToolCreateOrganization, tool: ToolCreateOrganization, branch: "agent-manager/create-org-acme-payments",
-		arguments: map[string]any{"namespace": "org-acme", "name": "payments", "adminGroups": []any{"payments-leads"}, "mode": "commit"},
-		seed:      func(*testing.T, *orgFixture) {},
+		name: ToolCreateOrganization, tool: ToolCreateOrganization, branch: "agent-manager/create-payments",
+		arguments: map[string]any{"name": "payments", "adminGroups": []any{"payments-leads"}, "mode": "commit"},
+		seed:      func(t *testing.T, fixture *orgFixture) { fixture.dropOrganization(t, "payments") },
 		prefix:    "conflict:",
 	})
 }

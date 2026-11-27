@@ -15,7 +15,7 @@ import (
 // Each write gets a head branch of its own: the object's branch name, the
 // separator and a suffix, valid for git and new on every call.
 func TestHeadIsTheObjectNameAndASuffixOfItsOwn(t *testing.T) {
-	object := branch("model-claude", "org-acme", "payments")
+	object := branch("model-claude", "payments")
 	first, second := head(object), head(object)
 	require.NotEqual(t, first, second)
 	for _, h := range []string{first, second} {

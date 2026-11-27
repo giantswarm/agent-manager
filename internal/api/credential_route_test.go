@@ -18,7 +18,7 @@ import (
 	"github.com/giantswarm/agent-manager/internal/organizations"
 )
 
-const credentialsPath = Prefix + "/organizations/org-acme/payments/credentials/"
+const credentialsPath = Prefix + "/organizations/payments/credentials/"
 
 // routeFixture serves the REST API over f's organization tools, logging at
 // debug level into logs.
@@ -114,7 +114,7 @@ func TestTheCredentialRouteNeedsTheOrganizationTools(t *testing.T) {
 
 	rec = httptest.NewRecorder()
 	mux.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, Prefix+"/openapi.yaml", nil))
-	assert.Contains(t, rec.Body.String(), "  /api/v1/organizations/{parent}/{organization}/credentials/{secret}:")
+	assert.Contains(t, rec.Body.String(), "  /api/v1/organizations/{organization}/credentials/{secret}:")
 	assert.Contains(t, rec.Body.String(), "operationId: saveCredentialOperation")
 	assert.Contains(t, rec.Body.String(), "operationId: getCredentialReferences")
 }
