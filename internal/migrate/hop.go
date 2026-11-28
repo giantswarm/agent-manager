@@ -100,8 +100,8 @@ func (h *hop) String() string { return fmt.Sprintf("%d.x -> %d.x", h.from, h.to)
 // Supported grammar, the same in agent-manager, the agent-platform-operator
 // and the agent-platform chart: a Masterminds semver range as Flux reads it
 // (x-ranges, carets, tildes, comparisons, hyphen ranges, `||` alternatives)
-// over release majors 0-99. A range that names or admits a version of major
-// 100 or more is refused as unsupported: the probes stop at major 99, so its
+// over release majors 0-99. A range that admits a version of major 100 or
+// more is refused as unsupported: the probes stop at major 99, so its
 // majors would be read short. These are finite probes, not a general semver
 // intersection.
 func TargetMajor(constraint string) (uint64, error) {
@@ -111,7 +111,7 @@ func TargetMajor(constraint string) (uint64, error) {
 	}
 	majors := majorsOf(c, constraint)
 	if len(majors) <= 1 && beyondProbes(c, constraint) {
-		return 0, fmt.Errorf("target chart range %q names or admits a chart major of %d or more, which migrate does not read: name a range of one major below %d", constraint, maxProbedMajor+1, maxProbedMajor+1)
+		return 0, fmt.Errorf("target chart range %q admits a chart major of %d or more, which migrate does not read: name a range of one major below %d", constraint, maxProbedMajor+1, maxProbedMajor+1)
 	}
 	switch len(majors) {
 	case 0:
@@ -176,12 +176,26 @@ func majorsOf(c *semver.Constraints, constraint string) []uint64 {
 // maxProbedMajor is the last major majorsOf probes.
 const maxProbedMajor = 99
 
-// beyondProbes reports a range that names a version of a major above
-// maxProbedMajor or admits one: majorsOf would read its majors short.
+// beyondProbes reports a range that admits a version of a major above
+// maxProbedMajor (one it names, or any of major 100): majorsOf would read its majors short.
 func beyondProbes(c *semver.Constraints, constraint string) bool {
 	for _, lit := range versionLiteral.FindAllStringSubmatch(constraint, -1) {
-		if maj, err := strconv.ParseUint(lit[1], 10, 64); err != nil || maj > maxProbedMajor {
+		maj, err := strconv.ParseUint(lit[1], 10, 64)
+		if err != nil {
 			return true
+		}
+		if maj <= maxProbedMajor {
+			continue
+		}
+		minor, err2 := strconv.ParseUint("0"+lit[2], 10, 64)
+		patch, err3 := strconv.ParseUint("0"+lit[3], 10, 64)
+		if err2 != nil || err3 != nil {
+			return true
+		}
+		for _, v := range []*semver.Version{semver.New(maj, minor, patch, "", ""), semver.New(maj, minor, patch+1, "", ""), semver.New(maj, minor+1, 0, "", "")} {
+			if c.Check(v) {
+				return true
+			}
 		}
 	}
 	return admitsMajor(c, maxProbedMajor+1)

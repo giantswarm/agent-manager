@@ -339,7 +339,7 @@ func TestV2ReleaseOn0xIsRefused(t *testing.T) {
 func TestTargetMajor(t *testing.T) {
 	for constraint, want := range map[string]uint64{
 		"2.x": 2, ">=2.0.0-0 <3.0.0-0": 2, "~2.1": 2, "^2.3.0": 2, "2.0.0": 2,
-		"1.x": 1, v1Range: 1, ">=0.2.1 <1.0.0": 0,
+		"1.x": 1, v1Range: 1, ">=0.2.1 <1.0.0": 0, ">=99.0.0 <100.0.0": 99,
 	} {
 		got, err := TargetMajor(constraint)
 		require.NoError(t, err, constraint)
