@@ -934,7 +934,12 @@ func (s *Service) bindSession(ctx context.Context, token string, ref kagent.Ref,
 	}
 	s.log.InfoContext(ctx, "session bound in muster", identity.LogAttr(ctx), "session", session.GetId(), "actor", binding.Actor, "providers", binding.Providers, "toolset", binding.Toolset, "agent", binding.Agent, "approval", binding.Approval != nil)
 	if approval != nil {
-		s.recheckBoundGrants(ctx, approval)
+		if err := s.recheckBoundGrants(ctx, approval); err != nil {
+			if unbindErr := s.cfg.Bindings.Unbind(ctx, token, binding.Actor); unbindErr != nil {
+				s.log.WarnContext(ctx, "session whose grants could not be rechecked could not be unbound", identity.LogAttr(ctx), "actor", binding.Actor, "error", unbindErr.Error())
+			}
+			return nil, err
+		}
 	}
 	return binding.Toolset, nil
 }

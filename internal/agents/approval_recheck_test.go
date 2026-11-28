@@ -251,3 +251,54 @@ func TestARecheckComparesTheMarksTools(t *testing.T) {
 }
 
 var _ = apiv1alpha1.SessionProvider{}
+
+// recheckFaults fails the grants store's reads, or answers every write with a
+// conflict, once switched on (after the bind).
+type recheckFaults struct {
+	approvalgrants.Store
+	failGet, conflict bool
+}
+
+func (f *recheckFaults) Get(ctx context.Context, agent approvalgrants.Agent) (approvalgrants.Record, error) {
+	if f.failGet {
+		return approvalgrants.Record{}, errors.New("grants store unavailable")
+	}
+	return f.Store.Get(ctx, agent)
+}
+
+func (f *recheckFaults) Replace(ctx context.Context, r approvalgrants.Record) error {
+	if f.conflict {
+		return approvalgrants.ErrConflict
+	}
+	return f.Store.Replace(ctx, r)
+}
+
+// QB-03: a save drops the grant and tells muster before this start's
+// stale bind lands; a recheck that cannot establish the current grants
+// refuses the start, unbinds the Session and deletes it, never hands it
+// out with the dropped grant.
+func TestAStartWhoseRecheckFailsIsRefusedAndUnbound(t *testing.T) {
+	for name, fault := range map[string]func(*recheckFaults){
+		"the final read fails":       func(f *recheckFaults) { f.failGet = true },
+		"the pending mark conflicts": func(f *recheckFaults) { f.conflict = true },
+	} {
+		t.Run(name, func(t *testing.T) {
+			a := newApprovalFixture(t, nil)
+			a.grantMerge()
+			faults := &recheckFaults{Store: a.grants}
+			a.svc.cfg.Grants = faults
+			a.bindings.onBind = func() {
+				a.bindings.onBind = nil
+				// The concurrent save: grant dropped, muster told (PATCH
+				// done, nothing pending), then the stale bind lands.
+				_ = a.grants.Delete(context.Background(), alertUID)
+				fault(faults)
+			}
+			err := a.startErr(t)
+			require.ErrorIs(t, err, ErrApprovalUnavailable)
+			require.Len(t, a.bindings.Bound, 1)
+			require.Len(t, a.bindings.Unbound, 1, "the Session bound with the dropped grant is unbound")
+			assert.Equal(t, a.bindings.Bound[0].Binding.Actor, a.bindings.Unbound[0].Binding.Actor)
+		})
+	}
+}

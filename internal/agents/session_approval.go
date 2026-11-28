@@ -323,16 +323,19 @@ func (s *Service) bindWithApproval(ctx context.Context, token string, binding *m
 // recheckBoundGrants reads the agent's grants again after a bind: a save
 // that ran meanwhile may have dropped one this bind still carried. muster is
 // then told the grants left (marked pending first, so a failed call is sent
-// again), this Session included; no lock across replicas is needed.
-func (s *Service) recheckBoundGrants(ctx context.Context, bound *boundApproval) {
+// again), this Session included; no lock across replicas is needed. When the
+// grants cannot be read again, or the pending mark cannot be written, the
+// Session may still hold a grant a save just dropped and nothing would send
+// that drop again: it answers an error, and the caller unbinds and abandons
+// the Session (fail closed, as bindWithApproval does for its settings).
+func (s *Service) recheckBoundGrants(ctx context.Context, bound *boundApproval) error {
 	if s.cfg.Grants == nil || bound == nil || len(bound.binding.Grants) == 0 {
-		return
+		return nil
 	}
 	for attempt := 0; attempt < 3; attempt++ {
 		rec, err := s.cfg.Grants.Get(ctx, bound.agent)
 		if err != nil {
-			s.log.WarnContext(ctx, "approval grants unreadable after a bind; the session keeps the grants it was bound with", "agent", bound.agent.Key(), "error", err.Error())
-			return
+			return approvalUnavailablef("agent %s's approval grants could not be read again after the session was bound, so a grant a concurrent save dropped could stay with the session: %v", bound.agent.Key(), err)
 		}
 		// Compared as muster compares marks: entry, server, uid and the
 		// sorted tools (a regrant that narrowed the tools changed the mark).
@@ -341,17 +344,18 @@ func (s *Service) recheckBoundGrants(ctx context.Context, bound *boundApproval) 
 			return slices.ContainsFunc(kept, func(k muster.Grant) bool { return markKey(k) == markKey(m) })
 		}
 		if !slices.ContainsFunc(bound.binding.Grants, func(m muster.Grant) bool { return !held(m) }) {
-			return
+			return nil
 		}
 		rec.PendingSessionSync = true
 		if err := s.cfg.Grants.Replace(ctx, rec); errors.Is(err, approvalgrants.ErrConflict) {
 			continue
 		} else if err != nil {
-			s.log.WarnContext(ctx, "approval grants could not be marked for muster after a bind", "agent", bound.agent.Key(), "error", err.Error())
+			return approvalUnavailablef("agent %s's approval grants changed while the session was bound, and the change could not be marked for muster: %v", bound.agent.Key(), err)
 		}
 		s.syncSessions(ctx, "start_session", rec, false)
-		return
+		return nil
 	}
+	return approvalUnavailablef("agent %s's approval grants kept changing while the session was bound, so the session's grants could not be checked", bound.agent.Key())
 }
 
 // requireApprovalBinds reports whether release values carry
