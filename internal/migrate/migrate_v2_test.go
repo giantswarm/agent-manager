@@ -349,6 +349,11 @@ func TestTargetMajor(t *testing.T) {
 		">=1.0.0":        "spans majors [1 2 3",
 		">=1.5.0 <3.0.0": "spans majors [1 2]",
 		"not a range":    `target chart range "not a range"`,
+		// QB-07: majors past the probes are refused, not read short.
+		">=100.0.0 <102.0.0": "chart major of 100 or more",
+		"100.x":              "chart major of 100 or more",
+		">=99.5.0":           "chart major of 100 or more",
+		"^2.0.0 || 150.0.0":  "spans majors [2 150]",
 	} {
 		_, err := TargetMajor(constraint)
 		require.ErrorContains(t, err, msg, constraint)

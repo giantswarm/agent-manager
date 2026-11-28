@@ -96,12 +96,23 @@ func (h *hop) String() string { return fmt.Sprintf("%d.x -> %d.x", h.from, h.to)
 // version or versions of two majors is refused. majorsOf reads every
 // alternative of a `||` range, as the agent-platform chart's guard reads it
 // (agent-platform.agentChart.majors).
+//
+// Supported grammar, the same in agent-manager, the agent-platform-operator
+// and the agent-platform chart: a Masterminds semver range as Flux reads it
+// (x-ranges, carets, tildes, comparisons, hyphen ranges, `||` alternatives)
+// over release majors 0-99. A range that names or admits a version of major
+// 100 or more is refused as unsupported: the probes stop at major 99, so its
+// majors would be read short. These are finite probes, not a general semver
+// intersection.
 func TargetMajor(constraint string) (uint64, error) {
 	c, err := semver.NewConstraint(constraint)
 	if err != nil {
 		return 0, fmt.Errorf("target chart range %q: %w", constraint, err)
 	}
 	majors := majorsOf(c, constraint)
+	if len(majors) <= 1 && beyondProbes(c, constraint) {
+		return 0, fmt.Errorf("target chart range %q names or admits a chart major of %d or more, which migrate does not read: name a range of one major below %d", constraint, maxProbedMajor+1, maxProbedMajor+1)
+	}
 	switch len(majors) {
 	case 0:
 		return 0, fmt.Errorf("target chart range %q admits no release version", constraint)
@@ -153,13 +164,27 @@ func majorsOf(c *semver.Constraints, constraint string) []uint64 {
 			}
 		}
 	}
-	for m := range uint64(100) {
+	for m := range uint64(maxProbedMajor + 1) {
 		if admitsMajor(c, m) {
 			add(m)
 		}
 	}
 	slices.Sort(majors)
 	return majors
+}
+
+// maxProbedMajor is the last major majorsOf probes.
+const maxProbedMajor = 99
+
+// beyondProbes reports a range that names a version of a major above
+// maxProbedMajor or admits one: majorsOf would read its majors short.
+func beyondProbes(c *semver.Constraints, constraint string) bool {
+	for _, lit := range versionLiteral.FindAllStringSubmatch(constraint, -1) {
+		if maj, err := strconv.ParseUint(lit[1], 10, 64); err != nil || maj > maxProbedMajor {
+			return true
+		}
+	}
+	return admitsMajor(c, maxProbedMajor+1)
 }
 
 func parseOrZero(s string) (uint64, error) {
