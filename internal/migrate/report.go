@@ -2,6 +2,7 @@ package migrate
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"maps"
 	"slices"
@@ -46,16 +47,43 @@ const OrganizationReadyAnnotation = "agent-platform.giantswarm.io/agent-chart-re
 // (agent-platform-operator's MigrationReadyReleasesAnnotation).
 const OrganizationReadyReleasesAnnotation = "agent-platform.giantswarm.io/agent-chart-ready-releases"
 
+// OrganizationReadyVersionsAnnotation is set beside
+// OrganizationReadyReleasesAnnotation to a JSON object of each release the
+// run found on target values, by name, to the UID and metadata.generation
+// the run left it at ({"hand":{"uid":"…","generation":4}}). The operator
+// moves the source only while every HelmRelease on it matches its entry: a
+// release recreated under the same name (another UID) or whose spec changed
+// after the run (another generation) holds the move until migrate runs again
+// (agent-platform-operator's MigrationReadyVersionsAnnotation).
+const OrganizationReadyVersionsAnnotation = "agent-platform.giantswarm.io/agent-chart-ready-release-versions"
+
+// ReleaseVersion is the version of one release a ready mark covers.
+type ReleaseVersion struct {
+	UID        string `json:"uid"`
+	Generation int64  `json:"generation"`
+}
+
 // readyMark is what a run marks an organization's report with.
 type readyMark struct {
 	major    string
-	releases []string
+	releases map[string]ReleaseVersion
 }
 
-func (m *readyMark) annotations() map[string]string {
-	names := slices.Clone(m.releases)
-	slices.Sort(names)
-	return map[string]string{OrganizationReadyAnnotation: m.major, OrganizationReadyReleasesAnnotation: strings.Join(names, ",")}
+func (m *readyMark) annotations() (map[string]string, error) {
+	names := slices.Sorted(maps.Keys(m.releases))
+	versions := m.releases
+	if versions == nil {
+		versions = map[string]ReleaseVersion{}
+	}
+	raw, err := json.Marshal(versions)
+	if err != nil {
+		return nil, fmt.Errorf("encode the ready mark's release versions: %w", err)
+	}
+	return map[string]string{
+		OrganizationReadyAnnotation:         m.major,
+		OrganizationReadyReleasesAnnotation: strings.Join(names, ","),
+		OrganizationReadyVersionsAnnotation: string(raw),
+	}, nil
 }
 
 // Report ConfigMap data keys.
@@ -290,6 +318,13 @@ func (r *Report) String() string {
 // ready annotations, and nil removes them.
 func writeReport(ctx context.Context, typed kubernetes.Interface, name string, r *Report, mark *readyMark) error {
 	data := map[string]string{ReportKeyPhase: r.Phase, ReportKeySummary: r.Summary, ReportKeyReport: r.YAML()}
+	var marked map[string]string
+	if mark != nil {
+		var err error
+		if marked, err = mark.annotations(); err != nil {
+			return err
+		}
+	}
 	cms := typed.CoreV1().ConfigMaps(r.Namespace)
 	existing, err := cms.Get(ctx, name, metav1.GetOptions{})
 	switch {
@@ -298,9 +333,7 @@ func writeReport(ctx context.Context, typed kubernetes.Interface, name string, r
 			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: r.Namespace, Labels: map[string]string{agents.ManagedByLabel: agents.ManagedByValue}},
 			Data:       data,
 		}
-		if mark != nil {
-			cm.Annotations = mark.annotations()
-		}
+		cm.Annotations = marked
 		_, err = cms.Create(ctx, cm, metav1.CreateOptions{FieldManager: agents.FieldManager})
 	case err == nil:
 		existing.Data = data
@@ -312,10 +345,11 @@ func writeReport(ctx context.Context, typed kubernetes.Interface, name string, r
 			if existing.Annotations == nil {
 				existing.Annotations = map[string]string{}
 			}
-			maps.Copy(existing.Annotations, mark.annotations())
+			maps.Copy(existing.Annotations, marked)
 		} else {
 			delete(existing.Annotations, OrganizationReadyAnnotation)
 			delete(existing.Annotations, OrganizationReadyReleasesAnnotation)
+			delete(existing.Annotations, OrganizationReadyVersionsAnnotation)
 		}
 		_, err = cms.Update(ctx, existing, metav1.UpdateOptions{FieldManager: agents.FieldManager})
 	}

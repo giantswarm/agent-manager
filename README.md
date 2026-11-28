@@ -1019,13 +1019,17 @@ agent-manager owns is rewritten, a git-applied one gets its diff and holds its
 siblings. The run writes its report in every organization namespace and, when
 every release there is on 3.x values, annotates it
 `agent-platform.giantswarm.io/agent-chart-ready-major: "3"` with
-`.../agent-chart-ready-releases` naming them (removed again while one is
+`.../agent-chart-ready-releases` naming them and
+`.../agent-chart-ready-release-versions` recording each one's UID and
+`metadata.generation` as the run left it (all removed again while one is
 pending). The operator moves a source across a major only while that
-annotation names the new major (or no HelmRelease uses the source), so a
+annotation names the new major and every HelmRelease on the source matches
+its recorded UID and generation (or no HelmRelease uses the source), so a
 namespace with a release still on 2.x values stays on its 2.x chart, asking
 as before, until the release is fixed and migrate runs again
 (`kubectl create job --from=cronjob/<release>-agent-manager-migrate`). A
-release created on the 2.x source after the run read the namespace, or a
+release created on the 2.x source after the run read the namespace, one
+recreated under the same name or whose spec changed after the run, or a
 failed write, holds the source the same way. Between the run's write and the
 operator's move (within a minute of its next reconcile) a rewritten release's
 2.x upgrade fails and it keeps its deployed revision, which still asks. The

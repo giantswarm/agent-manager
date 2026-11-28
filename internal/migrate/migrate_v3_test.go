@@ -17,6 +17,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/giantswarm/agent-manager/internal/agents"
@@ -409,6 +410,15 @@ func (c *cluster) reportReleases(t *testing.T, ns string) (string, bool) {
 	return v, ok
 }
 
+// reportAnnotation is one annotation of the report in ns.
+func (c *cluster) reportAnnotation(t *testing.T, ns, key string) (string, bool) {
+	t.Helper()
+	cm, err := c.typed.CoreV1().ConfigMaps(ns).Get(t.Context(), DefaultReportConfigMap, metav1.GetOptions{})
+	require.NoError(t, err)
+	v, ok := cm.Annotations[key]
+	return v, ok
+}
+
 // reportReady is the OrganizationReadyAnnotation on the report in ns; ok is
 // false when no report exists.
 func (c *cluster) reportReady(t *testing.T, ns string) (string, bool) {
@@ -463,6 +473,43 @@ func TestV3OrganizationReleasesAreRewrittenAndMarkTheNamespaceReady(t *testing.T
 	require.Empty(t, ready, "a managed namespace's report carries no mark: its source is the run's own")
 }
 
+// versioned sets a release's UID and generation as the API server would.
+func versioned(hr *unstructured.Unstructured, uid string, generation int64) *unstructured.Unstructured {
+	hr.SetUID(types.UID(uid))
+	hr.SetGeneration(generation)
+	return hr
+}
+
+// The ready mark records each release's UID and generation as the run left
+// it: a release the run rewrote at the generation its write produced, so the
+// operator can tell a release recreated or edited after the run.
+func TestV3OrganizationMarkRecordsEachReleaseVersion(t *testing.T) {
+	c := newCluster(
+		ociRepository(kagentNS, v3Target),
+		ociRepository("org-acme", v2Range),
+		versioned(helmRelease("org-acme", "hand", approvalValues(), "2.6.1"), "uid-hand", 4),
+		versioned(helmRelease("org-acme", "composed", narrowRewritten(), "2.6.1"), "uid-composed", 7),
+	)
+	// The API server bumps metadata.generation on a spec write.
+	c.dyn.PrependReactor("update", "helmreleases", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		obj := a.(k8stesting.UpdateAction).GetObject().(*unstructured.Unstructured)
+		obj.SetGeneration(obj.GetGeneration() + 1)
+		return false, nil, nil
+	})
+	_, err := c.runnerV3(t, Options{Namespaces: []string{kagentNS}, OrganizationNamespaces: []string{"org-acme"}}, v3Latest).Run(t.Context())
+	require.NoError(t, err)
+	ready, _ := c.reportReady(t, "org-acme")
+	require.Equal(t, "3", ready)
+	raw, ok := c.reportAnnotation(t, "org-acme", OrganizationReadyVersionsAnnotation)
+	require.True(t, ok, "the mark carries the release versions")
+	var got map[string]ReleaseVersion
+	require.NoError(t, json.Unmarshal([]byte(raw), &got))
+	require.Equal(t, map[string]ReleaseVersion{
+		"hand":     {UID: "uid-hand", Generation: 5},
+		"composed": {UID: "uid-composed", Generation: 7},
+	}, got, "the rewritten release at its written generation, the unchanged one as read")
+}
+
 // A GitOps-owned release in an organization gets the diff and holds its
 // writable siblings; the namespace's report is not marked (a stale mark of an
 // earlier run is removed), so the operator keeps the source on 2.x.
@@ -475,7 +522,7 @@ func TestV3OrganizationGitOpsReleaseHoldsTheMark(t *testing.T) {
 		helmRelease("org-acme", "hand", approvalValues(), "2.6.1"),
 	)
 	_, err := c.typed.CoreV1().ConfigMaps("org-acme").Create(ctx, &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{
-		Name: DefaultReportConfigMap, Namespace: "org-acme", Annotations: map[string]string{OrganizationReadyAnnotation: "3", OrganizationReadyReleasesAnnotation: "hand"},
+		Name: DefaultReportConfigMap, Namespace: "org-acme", Annotations: map[string]string{OrganizationReadyAnnotation: "3", OrganizationReadyReleasesAnnotation: "hand", OrganizationReadyVersionsAnnotation: `{"hand":{"uid":"u","generation":1}}`},
 	}}, metav1.CreateOptions{})
 	require.NoError(t, err)
 	res, err := c.runnerV3(t, Options{Namespaces: []string{kagentNS}, OrganizationNamespaces: []string{"org-acme"}}, v3Latest).Run(ctx)
@@ -497,6 +544,8 @@ func TestV3OrganizationGitOpsReleaseHoldsTheMark(t *testing.T) {
 	require.Empty(t, ready, "the stale mark is removed")
 	_, ok = c.reportReleases(t, "org-acme")
 	require.False(t, ok, "with its release list")
+	_, ok = c.reportAnnotation(t, "org-acme", OrganizationReadyVersionsAnnotation)
+	require.False(t, ok, "and its release versions")
 	require.Equal(t, PhaseExpand, org.Phase)
 	require.Equal(t, PhaseExpand, kagent.Phase, "a pending organization release holds the run's state")
 	require.Contains(t, strings.Join(kagent.Pending, "\n"), "organization namespace org-acme: release org-acme/git")

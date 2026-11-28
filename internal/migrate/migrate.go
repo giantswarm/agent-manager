@@ -258,9 +258,9 @@ func (r *Runner) Run(ctx context.Context) (*Result, error) {
 		}
 		var mark *readyMark
 		if st.org && st.expandDone {
-			mark = &readyMark{major: strconv.FormatUint(r.hop.to, 10)}
+			mark = &readyMark{major: strconv.FormatUint(r.hop.to, 10), releases: map[string]ReleaseVersion{}}
 			for _, rel := range st.releases {
-				mark.releases = append(mark.releases, rel.name)
+				mark.releases[rel.name] = rel.version
 			}
 		}
 		if err := writeReport(ctx, r.client.Typed(), r.opts.ReportConfigMap, st.report, mark); err != nil {
@@ -399,6 +399,9 @@ type release struct {
 	write             bool
 	// onTarget: the values are the target major's after this run.
 	onTarget bool
+	// version is the UID and generation the release is at after this run:
+	// as read, or as this run's write left it.
+	version ReleaseVersion
 }
 
 // leftover is an agent object of the old line.
@@ -626,7 +629,8 @@ func (r *Runner) sourceOfIn(obj *unstructured.Unstructured, external, byName boo
 }
 
 func (st *nsState) addRelease(hr *unstructured.Unstructured, src *source, external bool) *release {
-	rel := &release{obj: hr, ns: hr.GetNamespace(), name: hr.GetName(), source: src, gitops: gitOpsOwned(hr), external: external, platform: agents.PlatformOwnedRelease(hr)}
+	rel := &release{obj: hr, ns: hr.GetNamespace(), name: hr.GetName(), source: src, gitops: gitOpsOwned(hr), external: external, platform: agents.PlatformOwnedRelease(hr),
+		version: ReleaseVersion{UID: string(hr.GetUID()), Generation: hr.GetGeneration()}}
 	if rel.platform {
 		src.platform = true // moving it would move the platform's chart
 	}
@@ -968,7 +972,7 @@ func (r *Runner) writeRelease(ctx context.Context, st *nsState, dyn dynamic.Inte
 		return
 	}
 	to := r.hop.to
-	if err := updateOnConflict(ctx, dyn.Resource(r.helmReleaseGVR()).Namespace(rel.ns), rel.name, func(hr *unstructured.Unstructured) error {
+	written, err := updateOnConflict(ctx, dyn.Resource(r.helmReleaseGVR()).Namespace(rel.ns), rel.name, func(hr *unstructured.Unstructured) error {
 		if current, _, _ := unstructured.NestedMap(hr.Object, "spec", "values"); !reflect.DeepEqual(orEmpty(current), rel.values) {
 			return errors.New("spec.values changed since they were read; the next run rewrites the current values")
 		}
@@ -976,12 +980,14 @@ func (r *Runner) writeRelease(ctx context.Context, st *nsState, dyn dynamic.Inte
 			removeDriftIgnore(hr)
 		}
 		return unstructured.SetNestedMap(hr.Object, rel.rewritten, "spec", "values")
-	}); err != nil {
+	})
+	if err != nil {
 		rel.onTarget = false
 		rep.Action, rep.Reason = ActionFailed, fmt.Sprintf("update refused: %v", err)
 		st.fail(fmt.Errorf("update HelmRelease %s: %w", rel.id(), err))
 		return
 	}
+	rel.version = ReleaseVersion{UID: string(written.GetUID()), Generation: written.GetGeneration()}
 	st.report.Changed = true
 	r.log.Info("release rewritten", "release", rel.id(), "path", r.hop.String(), "removed", rep.Changes.Removed, "renamed", rep.Changes.Renamed, "skills", len(rep.Changes.Skills))
 }
@@ -1052,7 +1058,7 @@ func (r *Runner) moveSource(ctx context.Context, st *nsState, dyn dynamic.Interf
 		rep.Reason = "dry run: would be moved"
 		return rep
 	}
-	if err := updateOnConflict(ctx, dyn.Resource(r.ociRepositoryGVR()).Namespace(src.ns), src.name, func(o *unstructured.Unstructured) error {
+	if _, err := updateOnConflict(ctx, dyn.Resource(r.ociRepositoryGVR()).Namespace(src.ns), src.name, func(o *unstructured.Unstructured) error {
 		r.setTargetRef(o, rep.ToSemverFilter)
 		return nil
 	}); err != nil {
@@ -1097,8 +1103,9 @@ func setRef(o *unstructured.Unstructured, semver, filter string) {
 // object's status between the read and the write — is retried instead of
 // failing the object for this run. An error from mutate and any other error
 // of the API server end the attempts at once.
-func updateOnConflict(ctx context.Context, res dynamic.ResourceInterface, name string, mutate func(*unstructured.Unstructured) error) error {
-	return retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+func updateOnConflict(ctx context.Context, res dynamic.ResourceInterface, name string, mutate func(*unstructured.Unstructured) error) (*unstructured.Unstructured, error) {
+	var written *unstructured.Unstructured
+	err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
 		obj, err := res.Get(ctx, name, metav1.GetOptions{})
 		if err != nil {
 			return err
@@ -1106,9 +1113,10 @@ func updateOnConflict(ctx context.Context, res dynamic.ResourceInterface, name s
 		if err := mutate(obj); err != nil {
 			return err
 		}
-		_, err = res.Update(ctx, obj, metav1.UpdateOptions{FieldManager: agents.FieldManager})
+		written, err = res.Update(ctx, obj, metav1.UpdateOptions{FieldManager: agents.FieldManager})
 		return err
 	})
+	return written, err
 }
 
 // orEmpty is the values map of a release, never nil.

@@ -43,7 +43,7 @@ func ConvergeSources(ctx context.Context, dyn dynamic.Interface, namespaces []st
 		rep.FromSemverFilter, _, _ = unstructured.NestedString(obj.Object, "spec", "ref", "semverFilter")
 		rep.Action, rep.Reason = convergeAction(obj, url, rep)
 		if rep.Action == SourceMoved {
-			if err := updateOnConflict(ctx, res.Namespace(ns), rep.Name, func(o *unstructured.Unstructured) error {
+			if _, err := updateOnConflict(ctx, res.Namespace(ns), rep.Name, func(o *unstructured.Unstructured) error {
 				setRef(o, semver, filter)
 				return nil
 			}); err != nil {
